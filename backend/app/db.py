@@ -64,8 +64,14 @@ def session() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    """Aplica schema.sql na primeira execução (idempotente — schema é contrato,
+    sem IF NOT EXISTS, então verificamos se já foi aplicado)."""
     with connect() as conn:
-        conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        applied = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='scenarios'"
+        ).fetchone()
+        if not applied:
+            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 # ----------------------------------------------------------- serialização
