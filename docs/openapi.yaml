@@ -1,0 +1,981 @@
+openapi: 3.0.3
+info:
+  title: AI Dungeon Local — API
+  version: 0.1.0
+  description: |
+    API REST do clone local do AI Dungeon (PLANO.md §4.4).
+
+    Convenções gerais:
+    - Todos os endpoints respondem JSON (`application/json`), exceto:
+      - os endpoints de geração (`/action`, `/continue`, `/retry`), que respondem
+        `text/event-stream` (SSE) — ver tag `generation`;
+      - `/api/adventures/{id}/export`, que responde `application/zip`.
+    - Booleans do banco (INTEGER 0/1) são expostos como `true/false`.
+    - Campos `tags` e `triggers` são TEXT JSON no banco, expostos como arrays.
+    - Timestamps em ISO-8601 UTC.
+    - Erros seguem o schema `Error`.
+  contact:
+    name: AI Dungeon Local (self-hosted)
+servers:
+  - url: http://127.0.0.1:8000
+    description: backend local (FastAPI)
+
+tags:
+  - name: scenarios
+  - name: adventures
+  - name: generation
+    description: Endpoints que geram texto via LLM e streamam por SSE.
+  - name: actions
+  - name: cards
+  - name: memory
+  - name: import-export
+  - name: health
+
+paths:
+  # ---------------------------------------------------------------- scenarios
+  /api/scenarios:
+    post:
+      tags: [scenarios]
+      summary: Criar scenario
+      operationId: createScenario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioCreate'
+      responses:
+        '201':
+          description: Scenario criado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [scenarios]
+      summary: Listar scenarios (biblioteca, com busca por tag)
+      operationId: listScenarios
+      parameters:
+        - name: tag
+          in: query
+          description: Filtra scenarios que contêm a tag.
+          schema:
+            type: string
+        - name: q
+          in: query
+          description: Busca textual em título/descrição.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lista de scenarios.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Scenario'
+
+  /api/scenarios/{scenarioId}:
+    get:
+      tags: [scenarios]
+      summary: Obter scenario por id
+      operationId: getScenario
+      parameters:
+        - $ref: '#/components/parameters/ScenarioId'
+      responses:
+        '200':
+          description: Scenario encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --------------------------------------------------------------- adventures
+  /api/adventures:
+    post:
+      tags: [adventures]
+      summary: Nova aventura (a partir de scenario ou vazia)
+      operationId: createAdventure
+      description: |
+        Com `scenario_id`, copia os campos do scenario para a aventura e grava
+        a action inicial (`type=start`, texto = `opening_text` do scenario).
+        Sem `scenario_id`, cria aventura em branco.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdventureCreate'
+      responses:
+        '201':
+          description: Aventura criada (estado completo).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [adventures]
+      summary: Listar aventuras (home)
+      operationId: listAdventures
+      responses:
+        '200':
+          description: Cards da home, mais recentes primeiro.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdventureSummary'
+
+  /api/adventures/{adventureId}:
+    get:
+      tags: [adventures]
+      summary: Estado completo da aventura (para a UI)
+      operationId: getAdventure
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Aventura + ações + cards + memórias.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --------------------------------------------------------------- generation
+  /api/adventures/{adventureId}/action:
+    post:
+      tags: [generation]
+      summary: Enviar ação do jogador (Do/Say/Story) — SSE
+      operationId: postAction
+      description: |
+        Persiste a ação do jogador e gera a continuação via LLM.
+
+        Formatação aplicada antes de enviar ao modelo (PLANO.md §4.2):
+        - `do`    → `\n> You {text}\n`
+        - `say`   → `\n> You say "{text}"\n`
+        - `story` → prosa pura
+
+        **Resposta SSE (`text/event-stream`)** — sequência de eventos:
+        ```
+        event: token
+        data: {"token": "You"}
+
+        event: token
+        data: {"token": " draw"}
+
+        event: done
+        data: {"player_action": {Action}, "action": {Action}}
+        ```
+        Em falha do LLM, o stream termina com:
+        ```
+        event: error
+        data: {"message": "llm unreachable"}
+        ```
+        O evento `done` traz a action `continue` persistida (em `action`) e a
+        ação do jogador persistida (em `player_action`).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionRequest'
+      responses:
+        '200':
+          description: Stream SSE de tokens (`token`), encerrando com `done` ou `error`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseStream'
+              example: "event: token\ndata: {\"token\": \"You\"}\n\nevent: done\ndata: {\"action\": {\"id\": 42, \"type\": \"continue\"}}\n\n"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Já existe uma geração em andamento para esta aventura.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/continue:
+    post:
+      tags: [generation]
+      summary: IA continua sozinha — SSE
+      operationId: postContinue
+      description: |
+        Gera a continuação sem nova entrada do jogador. Mesmo formato SSE de
+        `/action`; o evento `done` traz apenas `{"action": {Action}}`
+        (a action `continue` persistida).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Stream SSE de tokens, encerrando com `done` ou `error`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseStream'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Geração em andamento.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/retry:
+    post:
+      tags: [generation]
+      summary: Regenerar última resposta da IA — SSE
+      operationId: postRetry
+      description: |
+        Substitui a última action `continue` por uma nova geração (mesmo
+        contexto anterior a ela). Se a última ação não for da IA, responde 409.
+        Mesmo formato SSE de `/action`; o evento `done` traz a action
+        `continue` substituta (mesmo `seq`, novo `id`).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Stream SSE de tokens, encerrando com `done` ou `error`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseStream'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Última ação não é regenerável ou geração em andamento.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/undo:
+    post:
+      tags: [adventures]
+      summary: Desfazer último turno
+      operationId: postUndo
+      description: |
+        Remove o último turno (a resposta da IA e, se houver, a ação do jogador
+        que a originou) e devolve o que foi removido. Nunca remove a action
+        `start` — nesse caso responde 409.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Turno removido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UndoResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Nada a desfazer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ------------------------------------------------------------------ actions
+  /api/actions/{actionId}:
+    patch:
+      tags: [actions]
+      summary: Editar texto de qualquer ação (Edit)
+      operationId: patchAction
+      description: Atualiza `text` e marca `edited_at`. Vale também para respostas da IA.
+      parameters:
+        - $ref: '#/components/parameters/ActionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionPatch'
+      responses:
+        '200':
+          description: Ação atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Action'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # -------------------------------------------------------------------- cards
+  /api/adventures/{adventureId}/cards:
+    post:
+      tags: [cards]
+      summary: Criar story card
+      operationId: createCard
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoryCardUpsert'
+      responses:
+        '201':
+          description: Card criado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [cards]
+      summary: Listar story cards da aventura
+      operationId: listCards
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Lista de cards (pinned primeiro).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/cards/{cardId}:
+    get:
+      tags: [cards]
+      summary: Obter story card
+      operationId: getCard
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Card encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [cards]
+      summary: Atualizar story card (parcial)
+      operationId: updateCard
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoryCardUpsert'
+      responses:
+        '200':
+          description: Card atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [cards]
+      summary: Remover story card
+      operationId: deleteCard
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '204':
+          description: Card removido.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ------------------------------------------------------------------- memory
+  /api/adventures/{adventureId}/memory:
+    get:
+      tags: [memory]
+      summary: Ler Plot Essentials + Author's Note
+      operationId: getMemory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Estado de memória editável (+ story_summary somente leitura).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [memory]
+      summary: Gravar Plot Essentials + Author's Note
+      operationId: putMemory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryUpdate'
+      responses:
+        '200':
+          description: Memória atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ------------------------------------------------------------ import/export
+  /api/import/aidungeon:
+    post:
+      tags: [import-export]
+      summary: Importar backup do AI Dungeon (.zip)
+      operationId: importAidungeon
+      description: |
+        Recebe o `.zip` do backup oficial (multipart). O importador
+        (PLANO.md §2.1/§4.6) lê `metadata.json` + `actions-*.json` (ordenados
+        por `partNumber`), cria scenario implícito + aventura, e insere ações
+        na ordem do array (`seq` 0..N), story cards (triggers = split/trim de
+        `keys`) e memórias. Um JSON solto de story cards pode acompanhar o zip
+        para merge/validação.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Backup .zip exportado do AI Dungeon.
+      responses:
+        '201':
+          description: Importação concluída (relatório).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReport'
+        '400':
+          description: Arquivo inválido ou formato não reconhecido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/export:
+    get:
+      tags: [import-export]
+      summary: Exportar aventura NO MESMO FORMATO do backup
+      operationId: exportAdventure
+      description: |
+        Gera um `.zip` byte-compatível com o formato de backup do AI Dungeon
+        (`metadata.json` + `actions-001.json`, ...), permitindo round-trip
+        import → export → import.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Zip no formato de backup do AI Dungeon.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ------------------------------------------------------------------- health
+  /api/health/llm:
+    get:
+      tags: [health]
+      summary: Status do KoboldCpp + modelo carregado
+      operationId: healthLlm
+      responses:
+        '200':
+          description: Sempre 200; o campo `status` informa a saúde do LLM.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmHealth'
+
+components:
+  parameters:
+    ScenarioId:
+      name: scenarioId
+      in: path
+      required: true
+      schema:
+        type: string
+    AdventureId:
+      name: adventureId
+      in: path
+      required: true
+      schema:
+        type: string
+    ActionId:
+      name: actionId
+      in: path
+      required: true
+      schema:
+        type: integer
+    CardId:
+      name: cardId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    NotFound:
+      description: Recurso não encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Payload inválido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    # ------------------------------------------------------------- entities
+    Scenario:
+      type: object
+      required: [id, title]
+      properties:
+        id:
+          type: string
+          description: UUID.
+        title:
+          type: string
+        description:
+          type: string
+          default: ''
+        ai_instructions:
+          type: string
+          default: ''
+          description: Prompt/instruções de estilo do scenario (bloco 1 do sanduíche).
+        plot_essentials:
+          type: string
+          default: ''
+          description: '"Memory" fixo: quem é você, mundo, regras (bloco 2).'
+        authors_note:
+          type: string
+          default: ''
+          description: Nota de estilo injetada perto do fim do contexto (bloco 7).
+        opening_text:
+          type: string
+          default: ''
+          description: Texto de abertura — vira a action `start` da aventura.
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+        third_person:
+          type: boolean
+          default: false
+          description: Narração em 3ª pessoa (padrão AI Dungeon é 2ª pessoa).
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ScenarioCreate:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        ai_instructions:
+          type: string
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        opening_text:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        third_person:
+          type: boolean
+          default: false
+
+    Adventure:
+      type: object
+      required: [id, title, source]
+      properties:
+        id:
+          type: string
+          description: UUID.
+        scenario_id:
+          type: string
+          nullable: true
+          description: Scenario de origem (null em aventuras importadas/vazias sem vínculo).
+        title:
+          type: string
+        description:
+          type: string
+          default: ''
+        ai_instructions:
+          type: string
+          default: ''
+        plot_essentials:
+          type: string
+          default: ''
+        authors_note:
+          type: string
+          default: ''
+        story_summary:
+          type: string
+          default: ''
+          description: Resumo rolante (bloco 5), mantido pelo summarizer.
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+        third_person:
+          type: boolean
+          default: false
+        source:
+          type: string
+          enum: [new, import]
+          default: new
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdventureCreate:
+      type: object
+      properties:
+        scenario_id:
+          type: string
+          nullable: true
+          description: Se presente, herda campos do scenario e cria a action `start`.
+        title:
+          type: string
+          description: Sobrescreve o título herdado do scenario.
+        tags:
+          type: array
+          items:
+            type: string
+
+    AdventureSummary:
+      type: object
+      description: Card da home.
+      required: [id, title, source]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          enum: [new, import]
+        action_count:
+          type: integer
+        last_excerpt:
+          type: string
+          description: Último trecho da história (preview no card).
+        updated_at:
+          type: string
+          format: date-time
+
+    AdventureState:
+      allOf:
+        - $ref: '#/components/schemas/Adventure'
+        - type: object
+          properties:
+            actions:
+              type: array
+              description: Histórico completo, ordenado por `seq`.
+              items:
+                $ref: '#/components/schemas/Action'
+            story_cards:
+              type: array
+              items:
+                $ref: '#/components/schemas/StoryCard'
+            memories:
+              type: array
+              items:
+                $ref: '#/components/schemas/Memory'
+
+    Action:
+      type: object
+      required: [id, adventure_id, seq, type, text]
+      properties:
+        id:
+          type: integer
+          description: PK autoincrement (não confundir com o id do backup).
+        adventure_id:
+          type: string
+        seq:
+          type: integer
+          description: Ordem absoluta dentro da aventura (0..N, sem buracos).
+        type:
+          type: string
+          enum: [start, continue, do, say, story, see]
+          description: |
+            `start` abertura · `do` ação física · `say` fala · `story` narração
+            injetada · `continue` resposta da IA · `see` imagem (fase opcional).
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        edited_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ActionRequest:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [do, say, story]
+          description: Tipos que o jogador pode enviar.
+        text:
+          type: string
+          minLength: 1
+
+    ActionPatch:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+
+    UndoResult:
+      type: object
+      properties:
+        removed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Action'
+          description: Ações removidas (resposta da IA + ação do jogador, se houve).
+        last_action:
+          $ref: '#/components/schemas/Action'
+        action_count:
+          type: integer
+
+    StoryCard:
+      type: object
+      required: [id, adventure_id]
+      properties:
+        id:
+          type: string
+          description: UUID.
+        adventure_id:
+          type: string
+        title:
+          type: string
+          default: ''
+        type:
+          type: string
+          default: other
+          description: Categoria livre (ex. location, character, item, faction, concept).
+        triggers:
+          type: array
+          items:
+            type: string
+          default: []
+          description: Palavras-chave (case-insensitive) que injetam o card no contexto.
+        entry:
+          type: string
+          default: ''
+          description: Texto injetado quando um trigger dispara (ou sempre, se pinned).
+        pinned:
+          type: boolean
+          default: false
+          description: Pinned = sempre presente no contexto.
+        use_for_character_creation:
+          type: boolean
+          default: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StoryCardUpsert:
+      type: object
+      properties:
+        title:
+          type: string
+        type:
+          type: string
+        triggers:
+          type: array
+          items:
+            type: string
+        entry:
+          type: string
+        pinned:
+          type: boolean
+        use_for_character_creation:
+          type: boolean
+
+    Memory:
+      type: object
+      description: Entrada do Memory Bank (resumo automático de eventos antigos).
+      required: [id, adventure_id, text]
+      properties:
+        id:
+          type: integer
+        adventure_id:
+          type: string
+        text:
+          type: string
+        seq_start:
+          type: integer
+          nullable: true
+          description: Primeiro `seq` coberto pelo resumo.
+        seq_end:
+          type: integer
+          nullable: true
+          description: Último `seq` coberto pelo resumo.
+        created_at:
+          type: string
+          format: date-time
+
+    MemoryState:
+      type: object
+      properties:
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        story_summary:
+          type: string
+          readOnly: true
+          description: Mantido automaticamente pelo summarizer (não editável aqui).
+
+    MemoryUpdate:
+      type: object
+      properties:
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+
+    ImportReport:
+      type: object
+      properties:
+        adventure_id:
+          type: string
+        title:
+          type: string
+        actions_imported:
+          type: integer
+        cards_imported:
+          type: integer
+        memories_imported:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Divergências não fatais (ex. card sem título, id fora de sequência).
+
+    LlmHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, unreachable, error]
+        provider:
+          type: string
+          example: koboldcpp
+        base_url:
+          type: string
+          example: http://127.0.0.1:5001/v1
+        model_alias:
+          type: string
+          example: local
+        model_loaded:
+          type: boolean
+        details:
+          type: string
+          nullable: true
+          description: Mensagem de erro ou informação extra do runtime.
+
+    SseStream:
+      type: string
+      description: |
+        Fluxo `text/event-stream`. Eventos possíveis:
+        - `token`: `data: {"token": "<trecho>"}` — um por token gerado;
+        - `done`:  `data: {"player_action"?: {Action}, "action": {Action}}` —
+          fim da geração, com a(s) action(s) persistida(s);
+        - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: not_found
+            message:
+              type: string
+              example: adventure 3f2a... not found

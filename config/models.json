@@ -1,0 +1,27 @@
+{
+  "active": "qwen2.5-7b-instruct-q4_k_m",
+  "models": {
+    "qwen2.5-7b-instruct-q4_k_m": {
+      "name": "Qwen2.5-7B-Instruct",
+      "quant": "Q4_K_M",
+      "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "path": "data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "hf_repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+      "context_size": 8192,
+      "threads": 8,
+      "role": "narrador principal",
+      "ram_estimate_gb": 5.0
+    },
+    "qwen2.5-3b-instruct-q5_k_m": {
+      "name": "Qwen2.5-3B-Instruct",
+      "quant": "Q5_K_M",
+      "file": "Qwen2.5-3B-Instruct-Q5_K_M.gguf",
+      "path": "data/models/Qwen2.5-3B-Instruct-Q5_K_M.gguf",
+      "hf_repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+      "context_size": 8192,
+      "threads": 8,
+      "role": "modo rápido",
+      "ram_estimate_gb": 2.5
+    }
+  }
+}

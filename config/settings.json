@@ -1,0 +1,39 @@
+{
+  "sampler": {
+    "temperature": 0.85,
+    "top_p": 0.95,
+    "repetition_penalty": 1.08,
+    "max_tokens": 300,
+    "max_tokens_slider": { "min": 100, "max": 600 }
+  },
+  "context": {
+    "context_size": 8192,
+    "budgets": {
+      "ai_instructions": 700,
+      "plot_essentials": 400,
+      "story_cards": 1200,
+      "memory_bank": 600,
+      "story_summary": 400,
+      "recent_window": 3800,
+      "authors_note": 300,
+      "last_action": 200,
+      "response_reserve": 512
+    }
+  },
+  "llm": {
+    "provider": "koboldcpp",
+    "base_url": "http://127.0.0.1:5001/v1",
+    "model_alias": "local"
+  },
+  "stop_sequences": ["\n> You", "\n> you"],
+  "memory_bank": {
+    "trigger_tokens": 1500,
+    "summary_max_words": 120,
+    "summary_temperature": 0.3,
+    "top_k": 5
+  },
+  "story_cards": {
+    "scan_chars": 1000,
+    "budget_por_card": 150
+  }
+}
