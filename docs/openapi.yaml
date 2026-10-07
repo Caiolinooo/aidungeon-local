@@ -1017,6 +1017,10 @@ components:
         streaming:
           type: boolean
           default: true
+        disable_thinking:
+          type: boolean
+          default: true
+          description: Envia chat_template_kwargs.enable_thinking=false (obrigatório p/ modelos Qwen3.x híbridos; senão content volta vazio).
         timeout_seconds:
           type: integer
           example: 180
@@ -1042,6 +1046,8 @@ components:
           minimum: 100
           maximum: 600
         streaming:
+          type: boolean
+        disable_thinking:
           type: boolean
         timeout_seconds:
           type: integer

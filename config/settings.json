@@ -35,6 +35,8 @@
     },
     "context_size": 8192,
     "context_size_limits": { "min": 4096, "max": 131072 },
+    "disable_thinking": true,
+    "disable_thinking_note": "OBRIGATORIO p/ Qwen3.x hibrido: llm_client DEVE enviar chat_template_kwargs={\"enable_thinking\": false} em toda chamada; sem isso content volta vazio (tokens viram reasoning_content). Validado contra a VM em 2026-10-07.",
     "streaming": true,
     "timeout_seconds": 180
   },
