@@ -8,6 +8,7 @@
   },
   "context": {
     "context_size": 8192,
+    "recent_window_rule": "recent_window = context_size - soma(demais budgets) - response_reserve; budgets fixos sao pisos, a janela recente absorve a diferenca",
     "budgets": {
       "ai_instructions": 700,
       "plot_essentials": 400,
@@ -21,9 +22,25 @@
     }
   },
   "llm": {
-    "provider": "koboldcpp",
-    "base_url": "http://127.0.0.1:5001/v1",
-    "model_alias": "local"
+    "provider": "llamacpp",
+    "base_url": "http://vm.groupabz.com:1234/v1",
+    "api_key": "",
+    "api_key_env": "LLM_API_KEY",
+    "model_alias": "auto",
+    "model_discovery": {
+      "enabled": true,
+      "endpoint": "/models",
+      "pick": "first",
+      "note": "auto = GET {base_url}/models em runtime usa o modelo que o servidor tem carregado; model_alias explicito sobrescreve"
+    },
+    "context_size": 8192,
+    "context_size_limits": { "min": 4096, "max": 131072 },
+    "streaming": true,
+    "timeout_seconds": 180
+  },
+  "server_config_area": {
+    "description": "Todos os campos de 'llm' + sampler sao expostos em GET/PUT /api/settings/llm e na aba Config da UI",
+    "adjustable": ["base_url", "api_key", "model_alias", "context_size", "sampler.max_tokens", "sampler.temperature", "sampler.top_p", "sampler.repetition_penalty", "streaming"]
   },
   "stop_sequences": ["\n> You", "\n> you"],
   "memory_bank": {

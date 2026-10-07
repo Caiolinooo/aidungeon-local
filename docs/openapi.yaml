@@ -29,6 +29,8 @@ tags:
   - name: cards
   - name: memory
   - name: import-export
+  - name: settings
+    description: Área de configuração do servidor LLM (endpoint, chave, modelo, tokens).
   - name: health
 
 paths:
@@ -520,12 +522,58 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ------------------------------------------------------------------ settings
+  /api/settings/llm:
+    get:
+      tags: [settings]
+      summary: Ler configuração do servidor LLM
+      operationId: getLlmSettings
+      description: |
+        Devolve a config efetiva (arquivo `config/settings.json` + overrides
+        persistidos na tabela `settings` do banco). `api_key` nunca é devolvida
+        em claro — vem mascarada (`"sk-…1234"`) ou `null`.
+      responses:
+        '200':
+          description: Configuração atual do LLM.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmSettings'
+    put:
+      tags: [settings]
+      summary: Atualizar configuração do servidor LLM
+      operationId: putLlmSettings
+      description: |
+        Persiste overrides na tabela `settings` (prevalecem sobre o arquivo).
+        Campos omitidos permanecem. Após mudar `base_url`/`model_alias`, o
+        backend refaz a descoberta de modelo (`GET {base_url}/models`).
+        `api_key` é armazenada localmente e nunca exposta em logs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LlmSettingsUpdate'
+      responses:
+        '200':
+          description: Configuração aplicada (com modelo redescoberto).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmSettings'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   # ------------------------------------------------------------------- health
   /api/health/llm:
     get:
       tags: [health]
-      summary: Status do KoboldCpp + modelo carregado
+      summary: Status do servidor LLM + modelo descoberto
       operationId: healthLlm
+      description: |
+        Sonda `GET {base_url}/models` em tempo real: confirma alcance, auth e
+        devolve o modelo que será usado na geração (descoberta automática
+        quando `model_alias = "auto"`).
       responses:
         '200':
           description: Sempre 200; o campo `status` informa a saúde do LLM.
@@ -934,21 +982,89 @@ components:
             type: string
           description: Divergências não fatais (ex. card sem título, id fora de sequência).
 
+    LlmSettings:
+      type: object
+      description: Área de configuração do servidor LLM (config/settings.json + overrides do banco).
+      properties:
+        provider:
+          type: string
+          example: llamacpp
+        base_url:
+          type: string
+          example: http://vm.groupabz.com:1234/v1
+        api_key:
+          type: string
+          nullable: true
+          example: "sk-…9f2a"
+          description: Sempre mascarada nas respostas.
+        model_alias:
+          type: string
+          example: auto
+          description: '"auto" = descobre via GET {base_url}/models; ou id explícito do modelo.'
+        model_discovered:
+          type: string
+          nullable: true
+          example: Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf
+          description: Modelo que será usado de fato na geração (preenchido pela descoberta).
+        context_size:
+          type: integer
+          example: 8192
+          description: Janela total de contexto; a janela recente absorve a diferença (regra em settings.json).
+        max_tokens:
+          type: integer
+          example: 300
+          description: Tamanho máximo da resposta da IA (slider 100–600 na UI).
+        streaming:
+          type: boolean
+          default: true
+        timeout_seconds:
+          type: integer
+          example: 180
+
+    LlmSettingsUpdate:
+      type: object
+      description: Todos os campos opcionais; omitidos permanecem.
+      properties:
+        base_url:
+          type: string
+        api_key:
+          type: string
+          nullable: true
+          description: Enviar string vazia remove a chave; omitir mantém.
+        model_alias:
+          type: string
+        context_size:
+          type: integer
+          minimum: 4096
+          maximum: 131072
+        max_tokens:
+          type: integer
+          minimum: 100
+          maximum: 600
+        streaming:
+          type: boolean
+        timeout_seconds:
+          type: integer
+
     LlmHealth:
       type: object
       properties:
         status:
           type: string
-          enum: [ok, unreachable, error]
+          enum: [ok, unreachable, auth_error, error]
         provider:
           type: string
-          example: koboldcpp
+          example: llamacpp
         base_url:
           type: string
-          example: http://127.0.0.1:5001/v1
+          example: http://vm.groupabz.com:1234/v1
         model_alias:
           type: string
-          example: local
+          example: auto
+        model_discovered:
+          type: string
+          nullable: true
+          example: Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf
         model_loaded:
           type: boolean
         details:

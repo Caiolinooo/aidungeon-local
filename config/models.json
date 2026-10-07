@@ -1,6 +1,20 @@
 {
-  "active": "qwen2.5-7b-instruct-q4_k_m",
-  "models": {
+  "active": "auto",
+  "auto": {
+    "description": "Descoberta automatica: backend chama GET {llm.base_url}/models na inicializacao (e sob demanda via /api/health/llm) e usa o modelo que o servidor tem carregado. Nenhum download local e necessario.",
+    "last_discovered": {
+      "id": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf",
+      "owned_by": "llamacpp",
+      "n_params": 34660610688,
+      "n_ctx_train": 262144,
+      "ftype": "IQ2_M - 2.7 bpw",
+      "capabilities": ["completion", "multimodal"],
+      "discovered_at": "2026-10-07",
+      "via": "http://vm.groupabz.com:1234/v1/models"
+    }
+  },
+  "local_fallbacks": {
+    "note": "Somente se a VM ficar indisponivel: rodar KoboldCpp local com um destes GGUFs em data/models e trocar llm.base_url em /api/settings/llm.",
     "qwen2.5-7b-instruct-q4_k_m": {
       "name": "Qwen2.5-7B-Instruct",
       "quant": "Q4_K_M",
@@ -9,7 +23,7 @@
       "hf_repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
       "context_size": 8192,
       "threads": 8,
-      "role": "narrador principal",
+      "role": "fallback local (CPU)",
       "ram_estimate_gb": 5.0
     },
     "qwen2.5-3b-instruct-q5_k_m": {
@@ -20,7 +34,7 @@
       "hf_repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
       "context_size": 8192,
       "threads": 8,
-      "role": "modo rápido",
+      "role": "fallback local rapido (CPU)",
       "ram_estimate_gb": 2.5
     }
   }
