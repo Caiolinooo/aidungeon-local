@@ -12,8 +12,13 @@ POST {base_url}/chat/completions com stream=true e mede:
 
 Veredito de velocidade:  >= 15 tok/s ÓTIMO · 8-15 BOM · < 8 LENTO
 
-Pré-requisito: API key configurada (--api-key, env LLM_API_KEY, settings
-ou aba Config da UI). Sem chave o script NÃO chama o servidor (exit 2).
+Modelo Qwen3.x híbrido (thinking): quando llm.disable_thinking=true (padrão),
+o script envia chat_template_kwargs={"enable_thinking": false} em TODA chamada —
+sem isso os tokens viram reasoning_content e content volta VAZIO na VM.
+
+Pré-requisito: API key configurada (--api-key, env LLM_API_KEY, arquivo .env na
+raiz do repo, settings ou aba Config da UI). Sem chave o script NÃO chama o
+servidor (exit 2). A chave nunca é impressa nem versionada (.env está no .gitignore).
 
 Apenas biblioteca padrão. Exit codes: 0=ok · 2=FALTA_API_KEY · 3=INALCANÇÁVEL · 1=erro.
 """
@@ -66,13 +71,38 @@ def load_settings(config_path: Path) -> dict:
         return json.load(fh)
 
 
-def resolve_api_key(cli_api_key: str | None, llm_cfg: dict) -> tuple[str, str | None]:
+def load_dotenv_key(env_name: str, dotenv_path: Path) -> str:
+    """Le env_name de um .env simples (KEY=valor), sem dependências.
+    Nunca imprime o valor; retorna '' se ausente."""
+    try:
+        if not dotenv_path.is_file():
+            return ""
+        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            if k.startswith("export "):
+                k = k[len("export "):].strip()
+            if k == env_name:
+                return v.strip().strip('"').strip("'").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_api_key(cli_api_key: str | None, llm_cfg: dict, dotenv_path: Path) -> tuple[str, str | None]:
+    """Precedência: --api-key > env real > .env da raiz > settings."""
     if cli_api_key:
         return cli_api_key, "--api-key"
     env_name = llm_cfg.get("api_key_env") or "LLM_API_KEY"
     env_val = os.environ.get(env_name, "").strip()
     if env_val:
         return env_val, f"env {env_name}"
+    dot_val = load_dotenv_key(env_name, dotenv_path)
+    if dot_val:
+        return dot_val, f".env ({env_name})"
     cfg_val = (llm_cfg.get("api_key") or "").strip()
     if cfg_val:
         return cfg_val, "config/settings.json -> llm.api_key"
@@ -113,15 +143,16 @@ def discover_model(base_url: str, api_key: str, timeout: float) -> str | None:
 
 def print_key_help() -> None:
     print(" Configure a API key por UMA das vias e rode de novo:")
-    print('   1. env:  $env:LLM_API_KEY = "sua-chave"   (sessão atual do PowerShell)')
-    print('   2. backend: PUT /api/settings/llm  {"api_key": "sua-chave"}')
-    print("   3. UI: aba Config -> campo API key")
+    print('   1. .env na raiz do repo:  LLM_API_KEY=sua-chave   (gitignored, já lido automaticamente)')
+    print('   2. env:  $env:LLM_API_KEY = "sua-chave"   (sessão atual do PowerShell)')
+    print('   3. backend: PUT /api/settings/llm  {"api_key": "sua-chave"}')
+    print("   4. UI: aba Config -> campo API key")
     print(" Ou passe direto:  python tools\\bench_llm.py --api-key SUA_CHAVE")
 
 
 def run_bench(base_url: str, api_key: str, model: str, messages: list[dict],
               max_tokens: int, temperature: float, top_p: float,
-              timeout: float) -> dict:
+              timeout: float, disable_thinking: bool = True) -> dict:
     url = base_url.rstrip("/") + "/chat/completions"
     body = {
         "model": model,
@@ -132,6 +163,10 @@ def run_bench(base_url: str, api_key: str, model: str, messages: list[dict],
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if disable_thinking:
+        # OBRIGATÓRIO p/ Qwen3.x híbrido: sem isso os tokens viram
+        # reasoning_content e content volta VAZIO (validado na VM).
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "text/event-stream")
@@ -221,12 +256,13 @@ def run_bench(base_url: str, api_key: str, model: str, messages: list[dict],
 def build_parser() -> argparse.ArgumentParser:
     epilog = (
         "veredito de velocidade:  >= 15 tok/s ÓTIMO · 8-15 BOM · < 8 LENTO\n"
+        "api_key: --api-key > env LLM_API_KEY > .env (raiz) > settings — nunca impressa\n"
         "\n"
         "exemplos:\n"
         "  python tools\\bench_llm.py --api-key SUA_CHAVE\n"
         "  $env:LLM_API_KEY = \"SUA_CHAVE\"; python tools\\bench_llm.py\n"
         "  python tools\\bench_llm.py --base-url http://127.0.0.1:5001/v1   (fallback local, sem key)\n"
-        "  python tools\\bench_llm.py --max-tokens 256\n"
+        "  python tools\\bench_llm.py --max-tokens 256 --thinking on\n"
     )
     p = argparse.ArgumentParser(
         prog="bench_llm.py",
@@ -241,6 +277,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", type=float, default=None,
                    help="padrão: sampler.temperature do settings (0.85)")
     p.add_argument("--prompt", help="prompt customizado (padrão: cena curta estilo AI Dungeon)")
+    p.add_argument("--thinking", choices=["on", "off"], default=None,
+                   help="'off' envia chat_template_kwargs enable_thinking=false (padrão: "
+                        "llm.disable_thinking do settings, true). Obrigatório 'off' p/ Qwen3.x híbrido.")
     p.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config" / "settings.json"),
                    help="caminho do settings.json")
     p.add_argument("--timeout", type=float, default=None,
@@ -268,8 +307,16 @@ def main(argv=None) -> int:
     temperature = args.temperature if args.temperature is not None else float(sampler.get("temperature", 0.85))
     top_p = float(sampler.get("top_p", 0.95))
 
+    # thinking híbrido (Qwen3.x): default vem de llm.disable_thinking (true)
+    disable_thinking = bool(llm_cfg.get("disable_thinking", True))
+    if args.thinking == "on":
+        disable_thinking = False
+    elif args.thinking == "off":
+        disable_thinking = True
+
     # --- api key: sem chave, NÃO toca na rede ------------------------------- #
-    api_key, key_src = resolve_api_key(args.api_key, llm_cfg)
+    dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    api_key, key_src = resolve_api_key(args.api_key, llm_cfg, dotenv_path)
     print("=" * 72)
     print(" AI Dungeon Local - benchmark do LLM (stream)")
     print("=" * 72)
@@ -295,6 +342,10 @@ def main(argv=None) -> int:
             return EXIT_INALCANCAVEL
     print(f" modelo   : {model}")
     print(f" sampler  : temperature={temperature} top_p={top_p} max_tokens={args.max_tokens}")
+    if disable_thinking:
+        print(" thinking : DESABILITADO (chat_template_kwargs enable_thinking=false)")
+    else:
+        print(" thinking : nativo do modelo (sem override)")
     print("-" * 72)
 
     # --- benchmark ----------------------------------------------------------- #
@@ -304,7 +355,7 @@ def main(argv=None) -> int:
     ]
     print(" Gerando (stream)...")
     r = run_bench(base_url, api_key, model, messages, args.max_tokens,
-                  temperature, top_p, timeout)
+                  temperature, top_p, timeout, disable_thinking)
 
     if not r["ok"]:
         print("-" * 72)

@@ -4,8 +4,8 @@
 check_llm.py -- Diagnóstico CLI do servidor LLM (AI Dungeon Local).
 
 Lê a configuração efetiva (config\\settings.json; override de api_key por
-variável de ambiente ou --api-key), chama os endpoints PÚBLICOS
-GET {base_url}/health e GET {base_url}/models e imprime tabela com:
+variável de ambiente, arquivo .env na raiz ou --api-key), chama os endpoints
+PÚBLICOS GET {base_url}/health e GET {base_url}/models e imprime tabela com:
 alcance, auth necessária?, modelos descobertos (id, n_params, n_ctx_train,
 ftype) e o veredito final:
 
@@ -54,14 +54,38 @@ def load_settings(config_path: Path) -> dict:
         return json.load(fh)
 
 
-def resolve_api_key(cli_api_key: str | None, llm_cfg: dict) -> tuple[str, str | None]:
-    """Precedência: --api-key > env (llm.api_key_env) > settings llm.api_key."""
+def load_dotenv_key(env_name: str, dotenv_path: Path) -> str:
+    """Le env_name de um .env simples (KEY=valor), sem dependências.
+    Nunca imprime o valor; retorna '' se ausente."""
+    try:
+        if not dotenv_path.is_file():
+            return ""
+        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            if k.startswith("export "):
+                k = k[len("export "):].strip()
+            if k == env_name:
+                return v.strip().strip('"').strip("'").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_api_key(cli_api_key: str | None, llm_cfg: dict, dotenv_path: Path) -> tuple[str, str | None]:
+    """Precedência: --api-key > env real > .env da raiz > settings."""
     if cli_api_key:
         return cli_api_key, "--api-key"
     env_name = llm_cfg.get("api_key_env") or "LLM_API_KEY"
     env_val = os.environ.get(env_name, "").strip()
     if env_val:
         return env_val, f"env {env_name}"
+    dot_val = load_dotenv_key(env_name, dotenv_path)
+    if dot_val:
+        return dot_val, f".env ({env_name})"
     cfg_val = (llm_cfg.get("api_key") or "").strip()
     if cfg_val:
         return cfg_val, "config/settings.json -> llm.api_key"
@@ -236,7 +260,8 @@ def main(argv=None) -> int:
         print("ERRO: base_url vazio (nem --base-url nem llm.base_url no settings).")
         return EXIT_ERRO
 
-    api_key, key_src = resolve_api_key(args.api_key, llm_cfg)
+    api_key, key_src = resolve_api_key(args.api_key, llm_cfg,
+                                       Path(__file__).resolve().parent.parent / ".env")
     models_url, health_urls = endpoint_urls(base_url)
 
     print("=" * TABLE_W)
@@ -299,9 +324,26 @@ def main(argv=None) -> int:
             print(f" {i:<2} {trunc(m['id'], 44):<44} {fmt_params(m['n_params']):>9} "
                   f"{fmt_ctx(m['n_ctx_train']):>12}  {m.get('ftype') or '-'}{caps}")
 
+    # ---- aviso: modelo híbrido Qwen3 (thinking) ---------------------------- #
+    qwen3_hybrid = any("qwen3" in str(m.get("id", "")).lower() for m in models)
+    disable_thinking = bool(llm_cfg.get("disable_thinking", True))
+
     print(hr())
     print(" NOTA: /v1/chat/completions e /props exigem API key (não testados aqui;")
     print("       o benchmark autenticado é feito por tools\\bench_llm.py).")
+    if qwen3_hybrid:
+        print(hr("!"))
+        print(" AVISO: modelo Qwen3.x HÍBRIDO (thinking) detectado no servidor.")
+        if disable_thinking:
+            print("   llm.disable_thinking=true no settings: clientes DEVEM enviar")
+            print('   chat_template_kwargs={"enable_thinking": false} em TODA chamada a')
+            print("   /chat/completions. Sem isso os tokens viram reasoning_content e")
+            print("   content volta VAZIO (validado contra esta VM em 2026-10-07).")
+            print("   tools\\bench_llm.py já envia esse parâmetro automaticamente.")
+        else:
+            print("   ATENÇÃO: llm.disable_thinking está FALSE no settings - sem")
+            print('   chat_template_kwargs={"enable_thinking": false} o content volta')
+            print("   VAZIO (tokens viram reasoning_content). Reative o campo.")
     print(hr())
 
     # ---- veredito ---------------------------------------------------------- #
@@ -317,9 +359,10 @@ def main(argv=None) -> int:
         print(" VEREDITO: FALTA_API_KEY")
         print(" Servidor acessível, mas nenhuma API key configurada.")
         print(" Configure por UMA das vias:")
-        print("   1. env:  $env:LLM_API_KEY = \"sua-chave\"   (sessão atual do PowerShell)")
-        print("   2. backend: PUT /api/settings/llm  {\"api_key\": \"sua-chave\"}")
-        print("   3. UI: aba Config -> campo API key")
+        print("   1. .env na raiz do repo:  LLM_API_KEY=sua-chave   (gitignored, lido automaticamente)")
+        print("   2. env:  $env:LLM_API_KEY = \"sua-chave\"   (sessão atual do PowerShell)")
+        print("   3. backend: PUT /api/settings/llm  {\"api_key\": \"sua-chave\"}")
+        print("   4. UI: aba Config -> campo API key")
         print(" Ou teste já:  python tools\\check_llm.py --api-key SUA_CHAVE")
         return EXIT_FALTA_API_KEY
 

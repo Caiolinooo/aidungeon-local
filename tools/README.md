@@ -1,0 +1,118 @@
+# tools — utilitários do LLM (AI Dungeon Local)
+
+Scripts de diagnóstico e benchmark do servidor LLM, mais o setup do **fallback local**.
+Todos rodam com Python padrão (sem dependências externas).
+
+| Script | Função |
+|---|---|
+| `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
+| `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
+| `setup_llm_local.ps1` | **Somente fallback local**: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
+
+---
+
+## 1. check_llm.py — diagnóstico
+
+Chama os endpoints **públicos** `GET {base_url}/health` e `GET {base_url}/models`
+e imprime alcance, necessidade de auth, modelos descobertos (id, n_params,
+n_ctx_train, ftype) e o veredito final.
+
+```powershell
+python tools\check_llm.py                                  # usa config\settings.json
+python tools\check_llm.py --api-key SUA_CHAVE              # override pontual da chave
+python tools\check_llm.py --base-url http://127.0.0.1:5001/v1   # testa o fallback local
+python tools\check_llm.py --help
+```
+
+Vereditos (e exit codes):
+
+| Veredito | Exit | Significado |
+|---|---|---|
+| `PRONTO` | 0 | servidor acessível **e** API key configurada |
+| `FALTA_API_KEY` | 2 | servidor acessível, falta API key |
+| `INALCANÇÁVEL` | 3 | `/health` e `/models` não responderam |
+
+## 2. bench_llm.py — benchmark de geração
+
+Envia um prompt narrativo curto (estilo AI Dungeon, 2ª pessoa) via
+`POST {base_url}/chat/completions` com `stream=true` e mede **TTFT** (tempo até
+o 1º token), **tok/s** e **total de tokens**. Veredito: `>= 15 tok/s` ÓTIMO ·
+`8-15` BOM · `< 8` LENTO.
+
+**Pré-requisito: API key configurada** (o script se recusa a rodar sem chave —
+sem chave ele nem toca na rede). A chave do projeto está no `.env` da raiz e é
+lida automaticamente.
+
+```powershell
+python tools\bench_llm.py                                   # lê a chave do .env
+python tools\bench_llm.py --api-key SUA_CHAVE               # override pontual
+# ou, na sessão atual do PowerShell:
+$env:LLM_API_KEY = "SUA_CHAVE"; python tools\bench_llm.py
+python tools\bench_llm.py --max-tokens 256
+python tools\bench_llm.py --help
+```
+
+Se retornar `HTTP 401`, a chave está errada/ausente — configure por uma das vias abaixo.
+
+## 3. Onde configurar a API key
+
+Precedência usada pelos dois scripts: **`--api-key` > env `LLM_API_KEY` > `.env` (raiz do repo) > `config\settings.json` (`llm.api_key`)**.
+O valor da chave nunca é impresso nos logs nem versionado (`.env` está no `.gitignore`).
+
+| Via | Como |
+|---|---|
+| `.env` na raiz (recomendado) | linha `LLM_API_KEY=sua-chave` — lido automaticamente pelos scripts e pelo backend |
+| Variável de ambiente | `$env:LLM_API_KEY = "sua-chave"` (sessão atual) ou `setx LLM_API_KEY "sua-chave"` (permanente, abrir novo terminal) |
+| Backend (persistente) | `PUT /api/settings/llm` com corpo `{"api_key": "sua-chave"}` |
+| UI | Aba **Config** → campo **API key** |
+
+> O nome da variável de ambiente é configurável em `settings.json` → `llm.api_key_env` (padrão `LLM_API_KEY`).
+
+### 3.1 `llm.disable_thinking` (OBRIGATÓRIO p/ o modelo da VM)
+
+O modelo servido na VM é um **Qwen3.x híbrido (thinking)**. Sem o parâmetro
+`chat_template_kwargs={"enable_thinking": false}` em cada chamada a
+`/chat/completions`, o modelo consome os tokens como `reasoning_content` e
+devolve `content` **VAZIO** (validado contra a VM em 2026-10-07).
+
+- `config\settings.json` → `llm.disable_thinking: true` (padrão) é o contrato do projeto:
+  todo cliente (backend `llm_client`, `bench_llm.py`) **deve** enviar
+  `chat_template_kwargs={"enable_thinking": false}` quando o campo estiver `true`.
+- `bench_llm.py` faz isso automaticamente; `--thinking on` desliga o override (só p/ experimentos).
+- `check_llm.py` avisa no relatório quando detecta modelo `qwen3*` no servidor.
+
+## 4. Fallback local (quando a VM estiver fora)
+
+Cenário padrão: LLM remoto na VM (`http://vm.groupabz.com:1234/v1`, llama.cpp).
+Se a VM ficar indisponível, rode um servidor local com **KoboldCpp** + GGUF em
+`data\models\` (conforme `config\models.json` → `local_fallbacks`):
+
+| Perfil | Modelo | Quant | Arquivo em `data\models\` | Fonte (HF) | RAM | ctx | threads |
+|---|---|---|---|---|---|---|---|
+| Fallback local | Qwen2.5-7B-Instruct | Q4_K_M | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | `bartowski/Qwen2.5-7B-Instruct-GGUF` | ~5 GB | 8192 | 8 |
+| Fallback rápido | Qwen2.5-3B-Instruct | Q5_K_M | `Qwen2.5-3B-Instruct-Q5_K_M.gguf` | `bartowski/Qwen2.5-3B-Instruct-GGUF` | ~2,5 GB | 8192 | 8 |
+
+Passo a passo:
+
+```powershell
+# 1. baixa KoboldCpp (release estável Win x64) + GGUF e gera start_llm_local.bat
+powershell -ExecutionPolicy Bypass -File tools\setup_llm_local.ps1
+#    (para o modelo rápido: ... -Model qwen2.5-3b-instruct-q5_k_m ; -Force refaz downloads)
+
+# 2. sobe o servidor local na porta 5001 (ctx 8192, 8 threads)
+.\start_llm_local.bat
+
+# 3. aponta o backend para o LLM local (uma das opções):
+#    - UI aba Config:  base_url = http://127.0.0.1:5001/v1
+#    - ou via API:
+curl -X PUT http://127.0.0.1:8000/api/settings/llm -H "Content-Type: application/json" -d "{\"base_url\":\"http://127.0.0.1:5001/v1\"}"
+
+# 4. valida e mede
+python tools\check_llm.py --base-url http://127.0.0.1:5001/v1
+python tools\bench_llm.py --base-url http://127.0.0.1:5001/v1   # KoboldCpp não exige key por padrão
+```
+
+Para voltar à VM, restaure `base_url = http://vm.groupabz.com:1234/v1` pela mesma via.
+
+> Expectativa de velocidade no hardware local (i5-1145G7, CPU): ~5-12 tok/s com
+> 7B Q4_K_M — jogável graças ao streaming. Para partidas mais ágeis, use o 3B.
