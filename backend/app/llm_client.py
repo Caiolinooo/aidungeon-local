@@ -217,3 +217,50 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
                     "verifique llm.disable_thinking (chat_template_kwargs.enable_thinking)")
         raise LlmError("config_error: resposta com content vazio (só reasoning_content); "
                        "ative llm.disable_thinking para modelos Qwen3.x híbridos")
+
+
+def chat_completion(cfg: dict, messages: list[dict], *, temperature: float = 0.3,
+                    max_tokens: int = 200, stop: list[str] | None = None,
+                    transport: httpx.BaseTransport | None = None) -> str:
+    """Chamada única SEM stream (usada pelo summarizer do memory bank).
+
+    Mesmas regras de erro/descoberta do stream; devolve
+    `choices[0].message.content` (stripped). Levanta LlmError subclasses.
+    """
+    model = resolve_model(cfg, transport)
+    if not model:
+        raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "temperature": temperature,
+        "max_tokens": int(max_tokens),
+        "stop": list(stop or []),
+    }
+    if cfg.get("disable_thinking", True):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    base = cfg["base_url"].rstrip("/")
+    timeout = float(cfg.get("timeout_seconds", 180))
+
+    try:
+        with _make_client(cfg, transport, timeout) as client:
+            resp = client.post(f"{base}/chat/completions",
+                               json=payload, headers=_headers(cfg))
+    except httpx.TransportError as exc:
+        raise LlmUnreachable(f"llm unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /chat/completions")
+    if resp.status_code != 200:
+        raise LlmError(f"HTTP {resp.status_code} em /chat/completions:"
+                       f" {resp.text[:200]}")
+    try:
+        data = resp.json()
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+    except (ValueError, IndexError, AttributeError) as exc:
+        raise LlmError("resposta de /chat/completions inválida (sem choices[0].message)") from exc
+    content = (msg.get("content") or "").strip()
+    if not content and msg.get("reasoning_content"):
+        raise LlmError("config_error: resposta com content vazio (só reasoning_content); "
+                       "ative llm.disable_thinking para modelos Qwen3.x híbridos")
+    return content
