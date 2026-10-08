@@ -141,4 +141,41 @@ export const api = {
   getLlmSettings: () => request('/settings/llm'),
   putLlmSettings: (payload) => request('/settings/llm', { method: 'PUT', body: payload }),
   healthLlm: () => request('/health/llm'),
+
+  // --------------------------------------------------------- assistant (v2)
+  // Gera rascunho estruturado de cenário a partir de uma ideia (não persiste).
+  assistantScenario: ({ brief, language } = {}) =>
+    request('/assistant/scenario', {
+      method: 'POST',
+      body: language ? { brief, language } : { brief },
+    }),
+  // Regenera um campo do rascunho (resposta: {field, value} ou {field, story_cards}).
+  assistantField: ({ field, brief, current, draft } = {}) =>
+    request('/assistant/field', { method: 'POST', body: { field, brief, current, draft } }),
+
+  // ------------------------------------------------------------ images (v2)
+  // Ação "See": gera imagem da cena (JSON, não-SSE — pode levar minutos).
+  see: (advId, { action_seq, extra_prompt } = {}) =>
+    request(`/adventures/${advId}/see`, {
+      method: 'POST',
+      body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
+    }),
+  // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
+  getChoices: (advId) => request(`/adventures/${advId}/choices`, { method: 'POST' }),
+  getImageSettings: () => request('/settings/image'),
+  putImageSettings: (payload) => request('/settings/image', { method: 'PUT', body: payload }),
+  // Fetch autenticado da imagem (<img> não envia o header Bearer — ver downloadExport).
+  fetchImageBlob: async (imageId) => {
+    let res
+    try {
+      res = await fetch(`${API_BASE}/api/images/${imageId}`, { headers: authHeaders() })
+    } catch {
+      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+    }
+    if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized()
+      throw await parseError(res)
+    }
+    return res.blob()
+  },
 }

@@ -98,6 +98,13 @@
     "max_tokens": 1400,
     "field_max_tokens": 400,
     "temperature": 0.7,
-    "note": "Assistente de criacao de cenarios: POST /api/assistant/scenario (draft completo estruturado) e /api/assistant/field (regenera um campo). Sempre via LLM da VM."
+    "note": "Assistente de criacao de cenarios: POST /api/assistant/scenario (draft completo estruturado) e POST /api/assistant/field (regenera um campo). Sempre via LLM da VM."
+  },
+  "choices": {
+    "enabled": true,
+    "count": 3,
+    "max_tokens": 220,
+    "temperature": 0.8,
+    "note": "POST /api/adventures/{id}/choices: LLM sugere 'count' opcoes curtas de proxima acao (type do/say/story, texto <= 120 chars, EN) como array JSON. enabled=false -> 200 {\"choices\": []}."
   }
 }

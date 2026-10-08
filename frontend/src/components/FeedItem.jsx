@@ -4,12 +4,17 @@
 //   start / continue / story → prosa corrida (story = narração injetada, itálico sutil)
 //   do                     → "**You do**" + blockquote (destaque do jogador)
 //   say                    → "**You say**" + blockquote com aspas
+//   see                    → card de imagem (ação "See", v2): action.image = {id, url, prompt}
 // Hover revela o botão Edit (qualquer bloco, inclusive respostas da IA).
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api.js'
+import Modal from './Modal.jsx'
 import { playerDisplayText } from '../utils.js'
 
 export default function FeedItem({ action, onEdit, disabled }) {
   const { type, text, edited_at } = action
   const isPlayer = type === 'do' || type === 'say'
+  const isSee = type === 'see'
   // do/say vêm formatados do backend ("\n> You ...\n") — exibe sem o wrapper
   const display = isPlayer ? playerDisplayText(type, text) : text
 
@@ -24,7 +29,9 @@ export default function FeedItem({ action, onEdit, disabled }) {
         ✏ Edit
       </button>
 
-      {isPlayer ? (
+      {isSee ? (
+        <SeeImageCard action={action} />
+      ) : isPlayer ? (
         <blockquote className="border-l-4 border-emerald-700/70 pl-4">
           <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-emerald-400">
             You {type}
@@ -47,5 +54,90 @@ export default function FeedItem({ action, onEdit, disabled }) {
         <div className="mt-1 text-[10px] uppercase tracking-wide text-zinc-600">edited</div>
       )}
     </div>
+  )
+}
+
+// Card de imagem da ação "See": lazy-load via IntersectionObserver (fetch
+// autenticado → blob → objectURL, pois <img> não envia o header Bearer).
+// objectURL é revogado no unmount. Clique abre a imagem em tamanho full (Modal).
+function SeeImageCard({ action }) {
+  const image = action.image
+  const [objUrl, setObjUrl] = useState(null)
+  const [failed, setFailed] = useState(false)
+  const [fullOpen, setFullOpen] = useState(false)
+  const holderRef = useRef(null)
+
+  useEffect(() => {
+    if (!image?.id) return undefined
+    let cancelled = false
+    let url = null
+
+    const load = async () => {
+      try {
+        const blob = await api.fetchImageBlob(image.id)
+        if (cancelled) return
+        url = URL.createObjectURL(blob)
+        setObjUrl(url)
+      } catch {
+        if (!cancelled) setFailed(true)
+      }
+    }
+
+    // Lazy: só baixa quando o card se aproxima da viewport.
+    const el = holderRef.current
+    if (!el || !('IntersectionObserver' in window)) {
+      load()
+    } else {
+      const obs = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            obs.disconnect()
+            load()
+          }
+        },
+        { rootMargin: '300px' },
+      )
+      obs.observe(el)
+      return () => {
+        cancelled = true
+        obs.disconnect()
+        if (url) URL.revokeObjectURL(url)
+      }
+    }
+    return () => {
+      cancelled = true
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [image?.id])
+
+  const caption = image?.prompt || action.text
+
+  return (
+    <figure ref={holderRef} className="my-1">
+      <button
+        type="button"
+        onClick={() => objUrl && setFullOpen(true)}
+        title={objUrl ? 'Open full size' : undefined}
+        className="block w-full cursor-pointer overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60"
+      >
+        {objUrl ? (
+          <img src={objUrl} alt={caption} className="max-h-96 w-full object-contain" />
+        ) : (
+          <div className="flex h-48 items-center justify-center text-sm text-zinc-600">
+            {failed || !image?.id ? 'Could not load the image.' : 'Loading image…'}
+          </div>
+        )}
+      </button>
+      {caption && (
+        <figcaption className="mt-1 line-clamp-2 text-xs italic text-zinc-500">{caption}</figcaption>
+      )}
+
+      {fullOpen && objUrl && (
+        <Modal title="See — scene image" onClose={() => setFullOpen(false)} wide>
+          <img src={objUrl} alt={caption} className="w-full rounded-lg object-contain" />
+          {caption && <p className="mt-2 text-xs italic text-zinc-500">{caption}</p>}
+        </Modal>
+      )}
+    </figure>
   )
 }

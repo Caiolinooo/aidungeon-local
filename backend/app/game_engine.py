@@ -37,11 +37,13 @@ def _lock_for(adventure_id: str) -> threading.Lock:
         return _locks.setdefault(adventure_id, threading.Lock())
 
 
-def _acquire(adventure_id: str) -> bool:
+def acquire_generation_lock(adventure_id: str) -> bool:
+    """Lock por aventura (não-bloqueante) — compartilhado por geração de texto,
+    imagem (see) e choices, que não podem rodar concorrentemente."""
     return _lock_for(adventure_id).acquire(blocking=False)
 
 
-def _release(adventure_id: str) -> None:
+def release_generation_lock(adventure_id: str) -> None:
     _lock_for(adventure_id).release()
 
 
@@ -123,7 +125,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
             yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         finally:
-            _release(adventure_id)
+            release_generation_lock(adventure_id)
 
     return events()
 
@@ -134,7 +136,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
     _adventure_or_404(adventure_id)
     if type_ not in db.PLAYER_TYPES:
         raise GameError.conflict("invalid_action_type", f"type must be one of {db.PLAYER_TYPES}")
-    if not _acquire(adventure_id):
+    if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     try:
@@ -145,7 +147,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
                                              type_, _format_player_text(type_, text))
             db.touch_adventure(conn, adventure_id)
     except Exception:
-        _release(adventure_id)
+        release_generation_lock(adventure_id)
         raise
     return _stream_generation(adventure_id, player_action=player_action,
                               retry_of=None, transport=transport)
@@ -154,7 +156,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
 def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
     """POST /continue: a IA segue sozinha (sem nova entrada do jogador)."""
     _adventure_or_404(adventure_id)
-    if not _acquire(adventure_id):
+    if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     return _stream_generation(adventure_id, player_action=None,
@@ -170,7 +172,7 @@ def handle_retry(adventure_id: str, transport: Any = None) -> Iterator[dict]:
         raise GameError.conflict("not_regenerable",
                                  "last action is not an AI response (continue)")
     old = actions[-1]
-    if not _acquire(adventure_id):
+    if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     return _stream_generation(adventure_id, player_action=None,

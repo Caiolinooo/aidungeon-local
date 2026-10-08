@@ -31,6 +31,9 @@ def _settings_response(conn, transport: Any = None) -> dict:
         "streaming": cfg["streaming"],
         "disable_thinking": cfg["disable_thinking"],
         "timeout_seconds": cfg["timeout_seconds"],
+        "temperature": cfg["temperature"],
+        "top_p": cfg["top_p"],
+        "repetition_penalty": cfg["repetition_penalty"],
     }
 
 

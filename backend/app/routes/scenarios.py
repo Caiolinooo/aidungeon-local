@@ -19,7 +19,10 @@ def create_scenario(body: ScenarioCreate) -> dict:
                                   plot_essentials=body.plot_essentials,
                                   authors_note=body.authors_note,
                                   opening_text=body.opening_text,
-                                  tags=body.tags, third_person=body.third_person)
+                                  tags=body.tags,
+                                  story_cards=[c.model_dump(exclude_none=True)
+                                               for c in body.story_cards],
+                                  third_person=body.third_person)
 
 
 @router.get("")

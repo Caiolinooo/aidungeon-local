@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AI Dungeon Local — API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     API REST do clone local do AI Dungeon (PLANO.md §4.4).
 
@@ -737,6 +737,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/adventures/{adventureId}/choices:
+    post:
+      tags: [generation]
+      summary: Sugerir próximas ações para o jogador
+      operationId: postChoices
+      description: |
+        Após ler a cena recente, o LLM sugere `settings.choices.count`
+        (default 3) opções curtas de próxima ação — array JSON de
+        {type: do|say|story, text ≤ 120 chars}, textos em inglês.
+        Sem body. Quando `settings.choices.enabled=false` devolve
+        200 {"choices": []}. Usa o mesmo lock por aventura da geração
+        (action/continue/retry/see).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Opções sugeridas (ou lista vazia se desabilitado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChoicesResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Geração em andamento para a aventura.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: LLM indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/images/{imageId}:
     get:
       tags: [images]
@@ -919,6 +955,12 @@ components:
           items:
             type: string
           default: []
+        story_cards:
+          type: array
+          default: []
+          description: Cards iniciais do rascunho do assistente (v2) — herdados como story_cards da aventura criada a partir deste scenario.
+          items:
+            $ref: '#/components/schemas/StoryCardUpsert'
         third_person:
           type: boolean
           default: false
@@ -950,6 +992,11 @@ components:
           type: array
           items:
             type: string
+        story_cards:
+          type: array
+          description: Opcional (v2) — cards do rascunho revisado do assistente; persistidos no scenario e herdados pela aventura.
+          items:
+            $ref: '#/components/schemas/StoryCardUpsert'
         third_person:
           type: boolean
           default: false
@@ -1300,6 +1347,16 @@ components:
         timeout_seconds:
           type: integer
           example: 180
+        temperature:
+          type: number
+          example: 0.85
+          description: Sampler efetivo (override sampler.temperature > settings.json sampler).
+        top_p:
+          type: number
+          example: 0.95
+        repetition_penalty:
+          type: number
+          example: 1.08
 
     LlmSettingsUpdate:
       type: object
@@ -1327,6 +1384,21 @@ components:
           type: boolean
         timeout_seconds:
           type: integer
+        temperature:
+          type: number
+          minimum: 0.0
+          maximum: 2.0
+          description: Persistido como override sampler.temperature.
+        top_p:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Persistido como override sampler.top_p.
+        repetition_penalty:
+          type: number
+          minimum: 1.0
+          maximum: 2.0
+          description: Persistido como override sampler.repetition_penalty.
 
     LlmHealth:
       type: object
@@ -1364,6 +1436,25 @@ components:
         - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
 
     # ------------------------------------------------------- v2: assistant/images
+    ChoicesResponse:
+      type: object
+      required: [choices]
+      properties:
+        choices:
+          type: array
+          description: Exatamente settings.choices.count itens (default 3); vazio quando desabilitado.
+          items:
+            type: object
+            required: [type, text]
+            properties:
+              type:
+                type: string
+                enum: [do, say, story]
+              text:
+                type: string
+                maxLength: 120
+                description: Sugestão curta em inglês.
+
     AssistantScenarioRequest:
       type: object
       required: [brief]

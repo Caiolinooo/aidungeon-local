@@ -30,6 +30,17 @@ def create_adventure(body: AdventureCreate) -> dict:
                 third_person=sc["third_person"], source="new",
             )
             db.insert_action(conn, adv["id"], 0, "start", sc["opening_text"])
+            # v2: cards do rascunho do assistente trilham scenario → aventura
+            for card in sc["story_cards"]:
+                if not isinstance(card, dict):
+                    continue
+                db.insert_card(
+                    conn, adv["id"],
+                    title=card.get("title") or "", type=card.get("type") or "other",
+                    triggers=card.get("triggers") or [], entry=card.get("entry") or "",
+                    pinned=bool(card.get("pinned")),
+                    use_for_character_creation=bool(card.get("use_for_character_creation")),
+                )
         else:
             adv = db.insert_adventure(conn, title=body.title or "Untitled Adventure",
                                       tags=body.tags or [], source="new")

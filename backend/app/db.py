@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -20,6 +21,7 @@ from typing import Any, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schema.sql"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "aidungeon.db"
 
 PLAYER_TYPES = ("do", "say", "story")
@@ -63,15 +65,64 @@ def session() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# ------------------------------------------------------------- migrations
+def _migration_files() -> list[tuple[int, Path]]:
+    """Arquivos backend/migrations/00X_*.sql ordenados pelo número X."""
+    out: list[tuple[int, Path]] = []
+    if MIGRATIONS_DIR.is_dir():
+        for path in MIGRATIONS_DIR.glob("*.sql"):
+            match = re.match(r"(\d+)_.*\.sql$", path.name)
+            if match:
+                out.append((int(match.group(1)), path))
+    return sorted(out)
+
+
+def _apply_migration(conn: sqlite3.Connection, path: Path) -> None:
+    """Aplica um arquivo de migração statement a statement.
+
+    `ALTER TABLE ... ADD COLUMN` não tem IF NOT EXISTS no SQLite: statements
+    desse tipo são pulados quando a coluna já existe (pragma table_info).
+    Linhas de comentário `--` são removidas antes do split por ';'.
+    """
+    sql = path.read_text(encoding="utf-8")
+    sql = "\n".join(line for line in sql.splitlines()
+                    if not line.strip().startswith("--"))
+    for stmt in sql.split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        match = re.search(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)",
+                          stmt, re.IGNORECASE)
+        if match:
+            table, column = match.group(1), match.group(2)
+            cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+            if column in cols:
+                continue
+        conn.execute(stmt)
+
+
 def init_db() -> None:
     """Aplica schema.sql na primeira execução (idempotente — schema é contrato,
-    sem IF NOT EXISTS, então verificamos se já foi aplicado)."""
+    sem IF NOT EXISTS, então verificamos se já foi aplicado) e depois roda as
+    migrations versionadas (PRAGMA user_version): aplica 00X_*.sql quando
+    user_version < X e grava user_version=X após cada uma. Bancos frescos já
+    recebem os objetos v2 pelo schema.sql, então só marcam a versão mais alta."""
     with connect() as conn:
         applied = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scenarios'"
         ).fetchone()
+        migrations = _migration_files()
+        latest = migrations[-1][0] if migrations else 0
         if not applied:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            conn.execute(f"PRAGMA user_version = {latest}")
+            return
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        for number, path in migrations:
+            if version < number:
+                _apply_migration(conn, path)
+                conn.execute(f"PRAGMA user_version = {number}")
+                version = number
 
 
 # ----------------------------------------------------------- serialização
@@ -102,6 +153,7 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "authors_note": row["authors_note"] or "",
         "opening_text": row["opening_text"] or "",
         "tags": _loads(row["tags"], []),
+        "story_cards": _loads(row["story_cards"], []),
         "third_person": bool(row["third_person"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -118,6 +170,7 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "plot_essentials": row["plot_essentials"] or "",
         "authors_note": row["authors_note"] or "",
         "story_summary": row["story_summary"] or "",
+        "image_style": row["image_style"] or "",
         "tags": _loads(row["tags"], []),
         "third_person": bool(row["third_person"]),
         "source": row["source"] or "new",
@@ -135,6 +188,8 @@ def action_to_dict(row: sqlite3.Row) -> dict:
         "text": row["text"],
         "created_at": row["created_at"],
         "edited_at": row["edited_at"],
+        # imagem vinculada (actions type=see) — preenchido por list/get_action
+        "image": None,
     }
 
 
@@ -168,16 +223,18 @@ def memory_to_dict(row: sqlite3.Row) -> dict:
 def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = "",
                     ai_instructions: str = "", plot_essentials: str = "",
                     authors_note: str = "", opening_text: str = "",
-                    tags: list | None = None, third_person: bool = False,
+                    tags: list | None = None, story_cards: list | None = None,
+                    third_person: bool = False,
                     created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     sid = new_id()
     conn.execute(
         "INSERT INTO scenarios(id, title, description, ai_instructions, plot_essentials,"
-        " authors_note, opening_text, tags, third_person, created_at, updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        " authors_note, opening_text, tags, story_cards, third_person, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (sid, title, description, ai_instructions, plot_essentials, authors_note,
-         opening_text, _dumps(tags, []), int(third_person), created_at or now, updated_at or now),
+         opening_text, _dumps(tags, []), _dumps(story_cards, []), int(third_person),
+         created_at or now, updated_at or now),
     )
     return scenario_to_dict(conn.execute("SELECT * FROM scenarios WHERE id=?", (sid,)).fetchone())
 
@@ -204,18 +261,19 @@ def list_scenarios(conn: sqlite3.Connection, tag: str | None = None,
 def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str | None = None,
                      description: str = "", ai_instructions: str = "",
                      plot_essentials: str = "", authors_note: str = "",
-                     story_summary: str = "", tags: list | None = None,
+                     story_summary: str = "", image_style: str = "",
+                     tags: list | None = None,
                      third_person: bool = False, source: str = "new",
                      created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     aid = new_id()
     conn.execute(
         "INSERT INTO adventures(id, scenario_id, title, description, ai_instructions,"
-        " plot_essentials, authors_note, story_summary, tags, third_person, source,"
-        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " plot_essentials, authors_note, story_summary, image_style, tags, third_person,"
+        " source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (aid, scenario_id, title, description, ai_instructions, plot_essentials,
-         authors_note, story_summary, _dumps(tags, []), int(third_person), source,
-         created_at or now, updated_at or now),
+         authors_note, story_summary, image_style, _dumps(tags, []), int(third_person),
+         source, created_at or now, updated_at or now),
     )
     return adventure_to_dict(conn.execute("SELECT * FROM adventures WHERE id=?", (aid,)).fetchone())
 
@@ -292,14 +350,30 @@ def insert_action(conn: sqlite3.Connection, adventure_id: str, seq: int, type: s
 
 def get_action(conn: sqlite3.Connection, action_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM actions WHERE id=?", (action_id,)).fetchone()
-    return action_to_dict(row) if row else None
+    if not row:
+        return None
+    action = action_to_dict(row)
+    img = conn.execute(
+        "SELECT * FROM images WHERE adventure_id=? AND action_seq=?",
+        (action["adventure_id"], action["seq"])).fetchone()
+    if img:
+        action["image"] = image_ref(image_to_dict(img))
+    return action
 
 
 def list_actions(conn: sqlite3.Connection, adventure_id: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT * FROM actions WHERE adventure_id=? ORDER BY seq ASC", (adventure_id,),
+        "SELECT * FROM actions WHERE adventure_id=? ORDER BY seq ASC", (adventure_id,)
     ).fetchall()
-    return [action_to_dict(r) for r in rows]
+    images = _images_by_seq(conn, adventure_id)
+    out = []
+    for r in rows:
+        action = action_to_dict(r)
+        img = images.get(action["seq"])
+        if img:
+            action["image"] = image_ref(img)
+        out.append(action)
+    return out
 
 
 def delete_action(conn: sqlite3.Connection, action_id: int) -> None:
@@ -315,6 +389,56 @@ def max_seq(conn: sqlite3.Connection, adventure_id: str) -> int | None:
     row = conn.execute("SELECT MAX(seq) AS m FROM actions WHERE adventure_id=?",
                        (adventure_id,)).fetchone()
     return row["m"]
+
+
+# ------------------------------------------------------------------ images
+def image_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "adventure_id": row["adventure_id"],
+        "action_seq": row["action_seq"],
+        "prompt": row["prompt"] or "",
+        "negative_prompt": row["negative_prompt"] or "",
+        "file_path": row["file_path"],
+        "provider": row["provider"] or "",
+        "width": row["width"],
+        "height": row["height"],
+        "created_at": row["created_at"],
+        "url": f"/api/images/{row['id']}",
+    }
+
+
+def image_ref(image: dict | None) -> dict | None:
+    """Recorte público embutido na Action (schema Action.image do openapi)."""
+    if not image:
+        return None
+    return {"id": image["id"], "url": image["url"], "prompt": image["prompt"]}
+
+
+def _images_by_seq(conn: sqlite3.Connection, adventure_id: str) -> dict[int, dict]:
+    rows = conn.execute("SELECT * FROM images WHERE adventure_id=?",
+                        (adventure_id,)).fetchall()
+    return {r["action_seq"]: image_to_dict(r) for r in rows}
+
+
+def insert_image(conn: sqlite3.Connection, *, adventure_id: str, action_seq: int,
+                 file_path: str, prompt: str = "", negative_prompt: str = "",
+                 provider: str = "", width: int | None = None,
+                 height: int | None = None, image_id: str | None = None,
+                 created_at: str | None = None) -> dict:
+    iid = image_id or new_id()
+    conn.execute(
+        "INSERT INTO images(id, adventure_id, action_seq, prompt, negative_prompt,"
+        " file_path, provider, width, height, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
+         provider, width, height, created_at or utcnow()),
+    )
+    return image_to_dict(conn.execute("SELECT * FROM images WHERE id=?", (iid,)).fetchone())
+
+
+def get_image(conn: sqlite3.Connection, image_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM images WHERE id=?", (image_id,)).fetchone()
+    return image_to_dict(row) if row else None
 
 
 # ------------------------------------------------------------------- cards

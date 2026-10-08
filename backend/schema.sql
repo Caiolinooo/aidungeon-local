@@ -6,6 +6,7 @@ CREATE TABLE scenarios(
   ai_instructions TEXT DEFAULT '', plot_essentials TEXT DEFAULT '',
   authors_note TEXT DEFAULT '', opening_text TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', third_person INTEGER DEFAULT 0,
+  story_cards TEXT DEFAULT '[]',       -- v2: cards do rascunho do assistente (JSON)
   created_at TEXT, updated_at TEXT);
 
 CREATE TABLE adventures(

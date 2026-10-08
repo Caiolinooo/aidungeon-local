@@ -17,6 +17,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class StoryCardUpsert(BaseModel):
+    title: str | None = None
+    type: str | None = None
+    triggers: list[str] | None = None
+    entry: str | None = None
+    pinned: bool | None = None
+    use_for_character_creation: bool | None = None
+
+
 class ScenarioCreate(BaseModel):
     title: str
     description: str = ""
@@ -25,6 +34,8 @@ class ScenarioCreate(BaseModel):
     authors_note: str = ""
     opening_text: str = ""
     tags: list[str] = Field(default_factory=list)
+    # cards iniciais do rascunho do assistente (v2) — herdados pela aventura
+    story_cards: list[StoryCardUpsert] = Field(default_factory=list)
     third_person: bool = False
 
 
@@ -43,15 +54,6 @@ class ActionPatch(BaseModel):
     text: str
 
 
-class StoryCardUpsert(BaseModel):
-    title: str | None = None
-    type: str | None = None
-    triggers: list[str] | None = None
-    entry: str | None = None
-    pinned: bool | None = None
-    use_for_character_creation: bool | None = None
-
-
 class MemoryUpdate(BaseModel):
     plot_essentials: str | None = None
     authors_note: str | None = None
@@ -67,3 +69,44 @@ class LlmSettingsUpdate(BaseModel):
     streaming: bool | None = None
     disable_thinking: bool | None = None
     timeout_seconds: int | None = None
+    # sampler (persistidos como overrides sampler.*)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    repetition_penalty: float | None = Field(default=None, ge=1.0, le=2.0)
+
+
+# ------------------------------------------------------------------ v2: see
+class SeeRequest(BaseModel):
+    action_seq: int
+    extra_prompt: str = ""
+
+
+# ------------------------------------------------------------- v2: settings
+class ImageSettingsUpdate(BaseModel):
+    """Todos os campos opcionais; omitidos permanecem (openai_api_key="" remove)."""
+    enabled: bool | None = None
+    provider: Literal["sdwebui", "openai_compatible"] | None = None
+    sdwebui_base_url: str | None = None
+    sdwebui_steps: int | None = Field(default=None, ge=1, le=150)
+    sdwebui_width: int | None = Field(default=None, ge=64, le=4096)
+    sdwebui_height: int | None = Field(default=None, ge=64, le=4096)
+    negative_prompt: str | None = None
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str | None = None
+    openai_size: str | None = None
+    style_suffix: str | None = None
+
+
+# ------------------------------------------------------------ v2: assistant
+class AssistantScenarioRequest(BaseModel):
+    brief: str = Field(min_length=3)
+    language: str = "en"
+
+
+class AssistantFieldRequest(BaseModel):
+    field: Literal["title", "description", "ai_instructions", "plot_essentials",
+                   "authors_note", "opening_text", "tags", "story_cards"]
+    brief: str | None = None
+    current: str | None = None
+    draft: dict | None = None

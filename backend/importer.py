@@ -7,6 +7,7 @@ Mapeamento (backup → banco):
       adventure.authorsNote   → adventures.authors_note
       state.instructions.scenario → adventures.ai_instructions
       state.storySummary      → adventures.story_summary
+      state.imageStyle        → adventures.image_style (v2)
       state.storyCards[]      → story_cards
          .keys (", Baldur's Gate ,") → triggers (split ',' + trim, ignora vazios)
          .value / .description  → entry
@@ -117,6 +118,7 @@ def import_dir(root: str | Path, cards_payload: Any | None = None) -> dict:
     plot_essentials = src_adv.get("memory") or ""
     authors_note = src_adv.get("authorsNote") or ""
     story_summary = state.get("storySummary") or ""
+    image_style = state.get("imageStyle") or ""
     opening_text = ""
     if raw_actions and raw_actions[0].get("type") == "start":
         opening_text = raw_actions[0].get("text") or ""
@@ -134,6 +136,7 @@ def import_dir(root: str | Path, cards_payload: Any | None = None) -> dict:
             conn, scenario_id=scenario["id"], title=title, description=description,
             ai_instructions=ai_instructions, plot_essentials=plot_essentials,
             authors_note=authors_note, story_summary=story_summary,
+            image_style=image_style,
             tags=tags, third_person=third_person, source="import",
             created_at=src_adv.get("createdAt"), updated_at=src_adv.get("updatedAt"),
         )

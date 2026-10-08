@@ -28,6 +28,11 @@ export default function Play() {
   const [gen, setGen] = useState(null) // { kind: 'action'|'continue'|'retry', text }
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editing, setEditing] = useState(null) // action em edição
+  const [seeing, setSeeing] = useState(false) // geração de imagem ("See") em andamento
+  const [seeOpen, setSeeOpen] = useState(false) // popover do extra_prompt
+  const [seePrompt, setSeePrompt] = useState('')
+  const [choices, setChoices] = useState([]) // sugestões de próxima ação (v2)
+  const [inputDirty, setInputDirty] = useState(false) // usuário digitando → esconde chips
 
   const abortRef = useRef(null)
   const feedRef = useRef(null)
@@ -58,15 +63,27 @@ export default function Play() {
   useEffect(() => {
     const el = feedRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [actions?.length, gen?.text])
+  }, [actions?.length, gen?.text, seeing])
 
   // ------------------------------------------------------------ geração SSE
+  // Choices (v2): busca sugestões após cada turno concluído. Chips são
+  // opcionais — erros (409/503) só limpam as sugestões, sem toast.
+  const fetchChoices = useCallback(async () => {
+    try {
+      const r = await api.getChoices(id)
+      setChoices(Array.isArray(r?.choices) ? r.choices : [])
+    } catch {
+      setChoices([])
+    }
+  }, [id])
+
   const runStream = useCallback(
     (kind, path, body, applyDone) => {
       if (generating) return
       const ctrl = new AbortController()
       abortRef.current = ctrl
       setGen({ kind, text: '' })
+      setChoices([])
       streamGeneration(path, {
         body,
         signal: ctrl.signal,
@@ -74,6 +91,7 @@ export default function Play() {
         onDone: (data) => {
           setActions((prev) => applyDone(prev ?? [], data).sort(bySeq))
           setGen(null)
+          fetchChoices() // input está idle após o envio → novas sugestões
         },
         onError: (msg) => {
           toast(msg)
@@ -81,7 +99,7 @@ export default function Play() {
         },
       })
     },
-    [generating, toast],
+    [generating, toast, fetchChoices],
   )
 
   const sendAction = (type, text) =>
@@ -118,10 +136,41 @@ export default function Play() {
       const res = await api.undo(id)
       const removedIds = new Set((res.removed ?? []).map((a) => a.id))
       setActions((prev) => (prev ?? []).filter((a) => !removedIds.has(a.id)))
+      setChoices([])
       toast('Last turn undone.', 'ok')
     } catch (e) {
       toast(e.message)
     }
+  }
+
+  // --------------------------------------------------------------- see (v2)
+  // Gera imagem da cena da ÚLTIMA action (JSON, não-SSE — pode levar minutos).
+  // Em sucesso a action type=see retornada entra no feed; 409/503 → toast.
+  const doSee = async () => {
+    const last = actions?.[actions.length - 1]
+    if (!last || seeing || generating) return
+    setSeeing(true)
+    setSeeOpen(false)
+    try {
+      const extra = seePrompt.trim()
+      const r = await api.see(id, { action_seq: last.seq, extra_prompt: extra || undefined })
+      if (r.action) setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
+      setSeePrompt('')
+      toast('Image generated.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setSeeing(false)
+    }
+  }
+
+  // ----------------------------------------------------------- choices (v2)
+  // Clique num chip envia imediatamente como aquela action type (mesmo caminho
+  // do InputBar). Os chips somem ao iniciar a geração (setChoices([]) no runStream).
+  const pickChoice = (choice) => {
+    if (generating || seeing) return
+    if (!['do', 'say', 'story'].includes(choice.type) || !choice.text?.trim()) return
+    sendAction(choice.type, choice.text.trim())
   }
 
   // ------------------------------------------------------------------- edit
@@ -167,6 +216,9 @@ export default function Play() {
   const lastAction = actions[actions.length - 1]
   const canRetry = !generating && lastAction?.type === 'continue'
   const canUndo = !generating && actions.some((a) => a.type !== 'start')
+  // "See" exige ao menos uma resposta da IA e nenhuma geração em andamento
+  const canSee = !generating && !seeing && actions.some((a) => a.type === 'continue')
+  const showChoices = !generating && !seeing && !inputDirty && choices.length > 0
 
   return (
     <div className="flex h-full flex-col">
@@ -221,6 +273,56 @@ export default function Play() {
               >
                 ▶ Continue
               </button>
+              <div className="relative">
+                <button
+                  onClick={() => canSee && setSeeOpen((o) => !o)}
+                  disabled={!canSee}
+                  title={
+                    canSee
+                      ? 'Generate an image of the current scene'
+                      : seeing
+                        ? 'Image generation in progress…'
+                        : 'See is available after the AI writes at least one response'
+                  }
+                  className="flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="m21 15-5-5L5 21" />
+                  </svg>
+                  {seeing ? 'Seeing…' : 'See'}
+                </button>
+                {seeOpen && canSee && (
+                  <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Extra detail (optional)
+                    </label>
+                    <textarea
+                      value={seePrompt}
+                      onChange={(e) => setSeePrompt(e.target.value)}
+                      rows={2}
+                      autoFocus
+                      placeholder='e.g. "at sunset, storm approaching"'
+                      className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600"
+                    />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        onClick={() => setSeeOpen(false)}
+                        className="rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={doSee}
+                        className="rounded-md bg-emerald-700 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
+                      >
+                        Generate image
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -252,11 +354,50 @@ export default function Play() {
               </p>
             </div>
           )}
+
+          {/* placeholder da geração de imagem ("See") — pode levar minutos */}
+          {seeing && (
+            <div className="rounded-lg bg-zinc-900/50 px-3 py-2">
+              <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-emerald-500">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                Generating image… (this can take a few minutes)
+              </div>
+              <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-600">
+                Painting the scene…
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
+      {/* choices (v2): sugestões clicáveis acima da InputBar — clicar envia já */}
+      {showChoices && (
+        <div className="border-t border-zinc-800/60 bg-zinc-950/95 px-3 pt-2 backdrop-blur">
+          <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+              Suggested
+            </span>
+            {choices.map((c, i) => (
+              <button
+                key={i}
+                onClick={() => pickChoice(c)}
+                title={`Send as "${c.type}"`}
+                className="max-w-full truncate rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-300 hover:border-emerald-700 hover:text-emerald-300"
+              >
+                <span className="mr-1 font-semibold uppercase text-zinc-500">{c.type}</span>
+                {c.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* barra de entrada fixa embaixo */}
-      <InputBar disabled={generating} onSend={sendAction} />
+      <InputBar
+        disabled={generating}
+        onSend={sendAction}
+        onTextChange={(t) => setInputDirty(t.trim().length > 0)}
+      />
 
       {/* drawer lateral */}
       <Drawer

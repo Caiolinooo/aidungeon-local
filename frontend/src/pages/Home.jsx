@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { clearToken } from '../auth.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
+import GenerateAdventureModal from '../components/GenerateAdventureModal.jsx'
 import { fmtDate } from '../utils.js'
 
 // Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
@@ -15,6 +16,7 @@ export default function Home() {
   const [error, setError] = useState(null) // backend fora do ar / erro de API
   const [showNew, setShowNew] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showGenerate, setShowGenerate] = useState(false)
 
   const load = useCallback(async () => {
     setError(null)
@@ -50,6 +52,13 @@ export default function Home() {
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
           >
             ⬆ Import AI Dungeon backup
+          </button>
+          <button
+            onClick={() => setShowGenerate(true)}
+            title="Describe an idea and let the AI draft a full scenario for you"
+            className="rounded-lg border border-emerald-800 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50"
+          >
+            Generate with AI
           </button>
           <button
             onClick={() => setShowNew(true)}
@@ -126,6 +135,7 @@ export default function Home() {
 
       {showNew && <NewAdventureModal onClose={() => setShowNew(false)} />}
       {showImport && <ImportModal onClose={() => setShowImport(false)} onImported={load} />}
+      {showGenerate && <GenerateAdventureModal onClose={() => setShowGenerate(false)} />}
     </div>
   )
 }

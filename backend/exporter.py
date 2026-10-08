@@ -69,7 +69,7 @@ def build_metadata(adv: dict, actions: list[dict], cards: list[dict],
             "storySummary": adv["story_summary"],
             "storyCardInstructions": "",
             "storyCardStoryInformation": "",
-            "imageStyle": "",
+            "imageStyle": adv.get("image_style") or "",
             "instructions": {
                 "type": "scenario",
                 "scenario": adv["ai_instructions"],

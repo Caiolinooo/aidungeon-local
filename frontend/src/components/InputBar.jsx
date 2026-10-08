@@ -9,7 +9,9 @@ const TABS = [
 // Barra de entrada fixa no rodapé: tabs [Do | Say | Story], textarea
 // (Enter envia, Shift+Enter quebra linha) e botão Send.
 // Desabilitada durante a geração (backend também responde 409).
-export default function InputBar({ disabled, onSend }) {
+// onTextChange(text) (opcional): avisa o pai quando o usuário digita/limpa —
+// usado pelo Play p/ esconder as "choices" enquanto há texto no input.
+export default function InputBar({ disabled, onSend, onTextChange }) {
   const [tab, setTab] = useState('do')
   const [text, setText] = useState('')
   const areaRef = useRef(null)
@@ -21,6 +23,7 @@ export default function InputBar({ disabled, onSend }) {
     if (!t || disabled) return
     onSend(tab, t)
     setText('')
+    onTextChange?.('')
   }
 
   // auto-resize da textarea (2..10 linhas)
@@ -54,7 +57,10 @@ export default function InputBar({ disabled, onSend }) {
           <textarea
             ref={areaRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value)
+              onTextChange?.(e.target.value)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault() // Enter envia; Shift+Enter quebra linha
