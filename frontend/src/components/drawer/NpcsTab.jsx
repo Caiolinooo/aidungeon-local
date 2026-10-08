@@ -18,6 +18,18 @@ function initials(title) {
   return words.slice(0, 2).map((w) => w[0].toUpperCase()).join('')
 }
 
+// Frase curta p/ o preview de voz do NPC (v0.4.0): primeira sentença do
+// entry/description (cap 200 chars); fallback com o nome quando vazio.
+function previewText(form) {
+  const src = (form.entry || '').trim()
+  if (src) {
+    const m = src.match(/^[\s\S]{1,200}?[.!?](?:\s|$)/)
+    return (m ? m[0] : src.slice(0, 200)).trim()
+  }
+  const name = (form.title || '').trim()
+  return name ? `Greetings, traveler. I am ${name}.` : 'Greetings, traveler.'
+}
+
 // Miniatura do retrato. <img> não envia o header Bearer, então a imagem é
 // baixada via fetch autenticado (api.fetchImageBlob) e exibida como blob URL.
 function PortraitThumb({ card, activeJob }) {
@@ -66,12 +78,47 @@ function PortraitThumb({ card, activeJob }) {
 
 // Linha de um NPC: retrato + campos editáveis inline + ações.
 function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
+  const toast = useToast()
   const [form, setForm] = useState({
     title: card.title ?? '',
     entry: card.entry ?? '',
     portrait_prompt: card.portrait_prompt ?? '',
     voice: card.voice ?? '',
   })
+  const [previewing, setPreviewing] = useState(false)
+  const previewAudioRef = useRef(null)
+
+  // Para o preview de voz pendurado se a linha desmontar no meio do play.
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.onended = null
+        previewAudioRef.current.pause()
+        URL.revokeObjectURL(previewAudioRef.current.src)
+      }
+    }
+  }, [])
+
+  // Preview TTS (v0.4.0): sintetiza uma frase curta do NPC com a voz do card.
+  const previewVoice = async () => {
+    if (previewing || form.voice === '') return
+    setPreviewing(true)
+    try {
+      const blob = await api.voice.tts(previewText(form), form.voice)
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      previewAudioRef.current = audio
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        previewAudioRef.current = null
+      }
+      await audio.play()
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setPreviewing(false)
+    }
+  }
 
   // Recria o form quando o card muda no backend (ex.: após salvar/reload).
   useEffect(() => {
@@ -128,6 +175,14 @@ function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
                 <option key={v} value={v}>{v === '' ? 'No voice' : v}</option>
               ))}
             </select>
+            <button
+              onClick={previewVoice}
+              disabled={form.voice === '' || previewing}
+              title={form.voice === '' ? 'Pick a voice to preview' : `Preview voice ${form.voice}`}
+              className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {previewing ? '⏳' : '▶'}
+            </button>
           </label>
         </div>
       </div>

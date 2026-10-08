@@ -11,8 +11,22 @@ OpenAI-compatível.
 
 ---
 
-## Funcionalidades (v0.3.0)
+## Funcionalidades (v0.4.0)
 
+- **Voz (TTS/STT)**: narração e falas de NPC em áudio via stack OpenAI-compatível
+  da VM — **Supertonic** (TTS, vozes M1–M3/F1–F3) e **Whisper** (STT, fale a ação
+  pelo microfone). `POST /api/tts` devolve bytes `audio/mpeg` em passthrough;
+  `POST /api/stt` recebe multipart e devolve `{"text": ...}`. Voz por NPC na ficha
+  (aba NPCs), voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
+  (chave via `VOICE_API_KEY` no `.env`, sempre mascarada na API).
+- **Avatares VRM 3D**: aba "Avatars" no painel lateral — avatar VRM 1.0
+  (three.js + `@pixiv/three-vrm`, modelo base redistribuível em
+  `frontend/public/vrm/` com licença) por NPC, com customização persistida na
+  ficha (`vrm_id` em JSON): cor de cabelo, olhos, pele e roupa (tints MToon por
+  heurística de nome de material/mesh) e emoções (presets de expressão VRM com
+  transição suave, blink e respiração idle). O modo "seguir a história" detecta
+  a emoção do NPC a partir da narrativa mais recente (menção do nome + palavras
+  de emoção PT/EN); override manual vence por 60s.
 - **Pipeline assíncrono de assets**: ao criar uma aventura a partir de um cenário,
   os retratos dos NPCs já começam a gerar em background (fila de jobs + worker no
   backend) — você joga enquanto os assets ficam prontos e a UI aplica cada um ao
@@ -198,9 +212,9 @@ AIDungeon_Local\
 │  ├─ models\*.gguf          pesos dos modelos (git-ignored)
 │  └─ koboldcpp\             runtime local do LLM (git-ignored)
 ├─ tools\                    check_llm.py, bench_llm.py, setup_llm_local.ps1
-├─ tests\                    suíte pytest (104 testes: engine, contexto, memória, auth,
+├─ tests\                    suíte pytest (117 testes: engine, contexto, memória, auth,
 │                           replay E2E do backup, smoke VM, v2 imagens/assistente,
-│                           v0.3.0 jobs/retratos)
+│                           v0.3.0 jobs/retratos, v0.4.0 voz TTS/STT)
 ├─ docs\
 │  ├─ openapi.yaml           contrato REST completo (PLANO.md §4.4), incl. SSE
 │  └─ DEPLOY_VERCEL.md       deploy do frontend na Vercel

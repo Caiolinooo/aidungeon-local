@@ -102,6 +102,24 @@ class ImageSettingsUpdate(BaseModel):
     style_suffix: str | None = None
 
 
+# ------------------------------------------------------------------ v4: voice
+class TtsRequest(BaseModel):
+    """POST /api/tts — voice omitida (null) usa narrator_voice da config."""
+    text: str
+    voice: str | None = None
+
+
+class VoiceSettingsUpdate(BaseModel):
+    """Todos os campos opcionais; omitidos permanecem (api_key="" remove a chave)."""
+    enabled: bool | None = None
+    base_url: str | None = None
+    tts_model: str | None = None
+    stt_model: str | None = None
+    narrator_voice: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    api_key: str | None = None
+
+
 # ------------------------------------------------------------ v2: assistant
 class AssistantScenarioRequest(BaseModel):
     brief: str = Field(min_length=3)

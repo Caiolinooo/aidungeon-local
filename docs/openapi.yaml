@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AI Dungeon Local — API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     API REST do clone local do AI Dungeon (PLANO.md §4.4).
 
@@ -39,6 +39,8 @@ tags:
     description: Geração de imagens da cena (ação "See") — provedor sdwebui local/LAN ou endpoint OpenAI-compatible.
   - name: assets
     description: Pipeline assíncrono de assets (v0.3.0) — fila de jobs que gera retratos de NPCs em background; a UI faz polling e aplica cada asset ao concluir.
+  - name: voice
+    description: Voz (v0.4.0) — TTS Supertonic e STT Whisper via stack OpenAI-compatível da VM; /tts devolve bytes audio/mpeg (não JSON).
   - name: health
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
@@ -944,6 +946,148 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  # ------------------------------------------------------------------- voice
+  /api/voices:
+    get:
+      tags: [voice]
+      summary: Listar vozes TTS disponíveis + voz do narrador
+      operationId: listVoices
+      responses:
+        '200':
+          description: Vozes da config efetiva (settings.voice).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceList'
+
+  /api/tts:
+    post:
+      tags: [voice]
+      summary: Sintetizar texto em áudio (mp3)
+      operationId: postTts
+      description: |
+        Chama `POST {voice.base_url}/audio/speech` (Supertonic, formato OpenAI
+        TTS) e devolve os bytes em passthrough. `voice` omitida (null) usa
+        `narrator_voice` da config. Validações: `voice_disabled` (400),
+        `invalid_payload` (texto vazio, 400), `text_too_long` (acima de
+        max_text_chars, 400), `invalid_voice` (fora da lista ou '', 400).
+        Provider indisponível → 502 (`unreachable`/`auth_error`/`error`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TtsRequest'
+      responses:
+        '200':
+          description: Áudio sintetizado (bytes mp3, NÃO JSON).
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Validação (voice_disabled/invalid_payload/text_too_long/invalid_voice).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Provider de voz indisponível ou erro.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/stt:
+    post:
+      tags: [voice]
+      summary: Transcrever áudio (Whisper)
+      operationId: postStt
+      description: |
+        Multipart campo `file` (webm/ogg/mp3/wav/m4a). Repassa ao provider
+        `POST {voice.base_url}/audio/transcriptions` com model=stt_model e
+        devolve `{"text": ...}` (formato OpenAI whisper). Validações:
+        arquivo ausente → 400 `invalid_payload`; Content-Length acima de
+        stt_max_bytes → 413 `audio_too_large`; enabled=false → 400
+        `voice_disabled`. Provider → 502 como no /tts.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Arquivo de áudio (webm/ogg/mp3/wav/m4a).
+      responses:
+        '200':
+          description: Transcrição.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SttResult'
+        '400':
+          description: Arquivo ausente ou voz desabilitada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Áudio acima de stt_max_bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Provider de voz indisponível ou erro.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/settings/voice:
+    get:
+      tags: [voice]
+      summary: Ler configuração de voz (TTS/STT)
+      operationId: getVoiceSettings
+      responses:
+        '200':
+          description: Config efetiva (api_key mascarada).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceSettings'
+    put:
+      tags: [voice]
+      summary: Atualizar configuração de voz (TTS/STT)
+      operationId: putVoiceSettings
+      description: narrator_voice fora da lista → 400 invalid_voice.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceSettingsUpdate'
+      responses:
+        '200':
+          description: Configuração aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceSettings'
+        '400':
+          description: narrator_voice inválida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   # ------------------------------------------------------------------- health
   /api/health/llm:
     get:
@@ -1422,7 +1566,7 @@ components:
         result:
           type: object
           nullable: true
-          description: character_portrait done → {"image": {id, url, prompt}, "card_id", "prompt"}.
+          description: 'character_portrait done → {"image": {id, url, prompt}, "card_id", "prompt"}.'
         error:
           type: string
           nullable: true
@@ -1815,6 +1959,94 @@ components:
           type: string
         style_suffix:
           type: string
+
+    VoiceList:
+      type: object
+      properties:
+        voices:
+          type: array
+          items:
+            type: string
+          example: [M1, M2, M3, F1, F2, F3]
+        narrator_voice:
+          type: string
+          example: M1
+
+    TtsRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Texto a sintetizar (até max_text_chars).
+        voice:
+          type: string
+          nullable: true
+          description: Voz TTS (M1–M3, F1–F3); omitida usa narrator_voice.
+
+    SttResult:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Transcrição do áudio (formato OpenAI whisper).
+
+    VoiceSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        base_url:
+          type: string
+          example: https://vm.groupabz.com/voice/v1
+        tts_model:
+          type: string
+          example: supertonic-3
+        stt_model:
+          type: string
+          example: whisper-1
+        narrator_voice:
+          type: string
+          example: M1
+        voices:
+          type: array
+          items:
+            type: string
+        timeout_seconds:
+          type: integer
+        max_text_chars:
+          type: integer
+        stt_max_bytes:
+          type: integer
+        api_key:
+          type: string
+          nullable: true
+          description: Sempre mascarada.
+        api_key_set:
+          type: boolean
+          description: true se há chave efetiva (override ou env VOICE_API_KEY).
+
+    VoiceSettingsUpdate:
+      type: object
+      description: Campos omitidos permanecem.
+      properties:
+        enabled:
+          type: boolean
+        base_url:
+          type: string
+        tts_model:
+          type: string
+        stt_model:
+          type: string
+        narrator_voice:
+          type: string
+          description: Fora da lista voices → 400 invalid_voice.
+        timeout_seconds:
+          type: integer
+        api_key:
+          type: string
+          nullable: true
+          description: String vazia remove; omitir mantém.
 
     Error:
       type: object

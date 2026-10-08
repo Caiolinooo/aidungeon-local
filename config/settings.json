@@ -94,6 +94,18 @@
       "note": "LLM (cliente existente, disable_thinking) resume a cena recente em prompt de imagem EN; adventures.image_style entra como prefixo de estilo"
     }
   },
+  "voice": {
+    "enabled": true,
+    "base_url": "https://vm.groupabz.com/voice/v1",
+    "api_key_env": "VOICE_API_KEY",
+    "tts_model": "supertonic-3",
+    "stt_model": "whisper-1",
+    "narrator_voice": "M1",
+    "voices": ["M1", "M2", "M3", "F1", "F2", "F3"],
+    "timeout_seconds": 60,
+    "max_text_chars": 2000,
+    "stt_max_bytes": 10485760
+  },
   "assistant": {
     "max_tokens": 1400,
     "field_max_tokens": 400,

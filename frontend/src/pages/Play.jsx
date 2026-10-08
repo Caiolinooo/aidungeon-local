@@ -399,12 +399,14 @@ export default function Play() {
         onTextChange={(t) => setInputDirty(t.trim().length > 0)}
       />
 
-      {/* drawer lateral */}
+      {/* drawer lateral — storyText (última narrativa da IA) alimenta o
+          auto-detect de emoção dos avatares VRM (v0.4.0) */}
       <Drawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         adventure={adventure}
         onAdventureChange={setAdventure}
+        storyText={[...(actions || [])].reverse().find((a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see')?.text}
       />
 
       {/* modal de edição de ação */}

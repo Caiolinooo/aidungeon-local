@@ -29,7 +29,7 @@ from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
                         generation, health, images, import_export, jobs as jobs_routes,
-                        memory, scenarios, settings)
+                        memory, scenarios, settings, voice)
 from app.routes import auth as auth_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         jobs.stop_worker(app)
 
 
-app = FastAPI(title="AI Dungeon Local — API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="AI Dungeon Local — API", version="0.4.0", lifespan=lifespan)
 
 # CORS: lista vem de config/settings.json (cors_origins) — adicionar lá o
 # domínio da Vercel quando o frontend for publicado.
@@ -117,6 +117,8 @@ app.include_router(memory.router, prefix="/api/adventures", tags=["memory"],
 app.include_router(import_export.router, prefix="/api", tags=["import-export"],
                    dependencies=_protected)
 app.include_router(settings.router, prefix="/api", tags=["settings"],
+                   dependencies=_protected)
+app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)
 app.include_router(health.router, prefix="/api", tags=["health"],
                    dependencies=_protected)

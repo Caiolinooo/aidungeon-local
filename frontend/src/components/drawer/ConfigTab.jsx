@@ -276,6 +276,199 @@ export default function ConfigTab() {
 
       {/* v2 — seção Images: config do provedor de geração de imagens ("See") */}
       <ImageSettingsSection inputCls={inputCls} labelCls={labelCls} />
+
+      {/* v0.4.0 — seção Voice: TTS (Supertonic) + STT (Whisper) da stack da VM */}
+      <VoiceSettingsSection inputCls={inputCls} labelCls={labelCls} />
+    </div>
+  )
+}
+
+// Seção "Voice" (v0.4.0): GET/PUT /api/settings/voice. Espelha a seção
+// Images: api_key é write-only (em branco mantém; Clear envia "") e
+// narrator_voice é um select das vozes da config efetiva.
+function VoiceSettingsSection({ inputCls, labelCls }) {
+  const toast = useToast()
+  const [loaded, setLoaded] = useState(null) // VoiceSettings efetiva (api_key mascarada)
+  const [form, setForm] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const s = await api.voice.getSettings()
+      setLoaded(s)
+      setForm({
+        enabled: !!s.enabled,
+        base_url: s.base_url ?? '',
+        tts_model: s.tts_model ?? '',
+        stt_model: s.stt_model ?? '',
+        narrator_voice: s.narrator_voice ?? '',
+        timeout_seconds: s.timeout_seconds ?? 60,
+        api_key: '', // write-only: vazio = manter a chave atual
+      })
+    } catch (e) {
+      toast(e.message)
+      setLoaded({})
+    }
+  }, [toast])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const payload = {
+        enabled: form.enabled,
+        base_url: form.base_url,
+        tts_model: form.tts_model,
+        stt_model: form.stt_model,
+        narrator_voice: form.narrator_voice,
+        timeout_seconds: Number(form.timeout_seconds),
+      }
+      if (form.api_key) payload.api_key = form.api_key // só envia se digitado
+      setLoaded(await api.voice.putSettings(payload))
+      toast('Voice settings saved.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const clearKey = async () => {
+    try {
+      await api.voice.putSettings({ api_key: '' }) // string vazia remove a chave (contrato)
+      toast('Voice API key cleared.', 'ok')
+      load()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  if (loaded === null || form === null) {
+    return (
+      <div className="border-t border-zinc-800 pt-4">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</h3>
+        <p className="text-sm text-zinc-500">Loading…</p>
+      </div>
+    )
+  }
+
+  // Garante a narrator_voice atual nas opções mesmo se a lista vier incompleta.
+  const voiceOptions = loaded.voices?.length
+    ? loaded.voices
+    : form.narrator_voice
+      ? [form.narrator_voice]
+      : []
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-zinc-800 pt-4">
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</h3>
+        <p className="mt-0.5 text-xs text-zinc-600">
+          Text-to-speech narration and speech-to-text dictation (OpenAI-compatible provider).
+        </p>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <input
+          type="checkbox"
+          checked={form.enabled}
+          onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+          className="accent-emerald-600"
+        />
+        Enabled
+      </label>
+
+      <label className="block">
+        <span className={labelCls}>Base URL (OpenAI-compatible)</span>
+        <input
+          value={form.base_url}
+          onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+          placeholder="https://host/voice/v1"
+          className={inputCls}
+        />
+      </label>
+
+      <label className="block">
+        <span className={labelCls}>
+          API key {loaded.api_key ? `(current: ${loaded.api_key})` : '(none set)'} — write-only
+        </span>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={form.api_key}
+            onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+            placeholder={loaded.api_key ? `Current: ${loaded.api_key}` : 'Leave blank to keep current key'}
+            className={inputCls}
+          />
+          {loaded.api_key && (
+            <button
+              onClick={clearKey}
+              className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className={labelCls}>TTS model</span>
+          <input
+            value={form.tts_model}
+            onChange={(e) => setForm({ ...form, tts_model: e.target.value })}
+            placeholder="supertonic-3"
+            className={inputCls}
+          />
+        </label>
+        <label className="block">
+          <span className={labelCls}>STT model</span>
+          <input
+            value={form.stt_model}
+            onChange={(e) => setForm({ ...form, stt_model: e.target.value })}
+            placeholder="whisper-1"
+            className={inputCls}
+          />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className={labelCls}>Narrator voice</span>
+          <select
+            value={form.narrator_voice}
+            onChange={(e) => setForm({ ...form, narrator_voice: e.target.value })}
+            className={inputCls}
+          >
+            {voiceOptions.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className={labelCls}>Timeout (s)</span>
+          <input
+            type="number"
+            min={1}
+            value={form.timeout_seconds}
+            onChange={(e) => setForm({ ...form, timeout_seconds: e.target.value })}
+            className={inputCls}
+          />
+        </label>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save voice settings'}
+        </button>
+      </div>
     </div>
   )
 }

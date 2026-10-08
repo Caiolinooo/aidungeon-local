@@ -9,7 +9,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import Modal from './Modal.jsx'
+import { useToast } from './Toast.jsx'
 import { playerDisplayText } from '../utils.js'
+
+// Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
+// durante a sessão — evita um GET /api/voices a cada clique no 🔊.
+let narratorVoiceCache = null
+
+async function getNarratorVoice() {
+  if (narratorVoiceCache === null) {
+    const { narrator_voice } = await api.voice.list()
+    narratorVoiceCache = narrator_voice
+  }
+  return narratorVoiceCache
+}
 
 export default function FeedItem({ action, onEdit, disabled }) {
   const { type, text, edited_at } = action
@@ -28,6 +41,8 @@ export default function FeedItem({ action, onEdit, disabled }) {
       >
         ✏ Edit
       </button>
+
+      {!isPlayer && !isSee && <NarrateButton text={display} />}
 
       {isSee ? (
         <SeeImageCard action={action} />
@@ -54,6 +69,69 @@ export default function FeedItem({ action, onEdit, disabled }) {
         <div className="mt-1 text-[10px] uppercase tracking-wide text-zinc-600">edited</div>
       )}
     </div>
+  )
+}
+
+// Botão 🔊 (v0.4.0) das entradas narrativas da IA: sintetiza o texto com a
+// voz do narrador (TTS) e toca o mp3 retornado. Clique durante o play = stop.
+// objectURL e Audio são limpos no stop/ended/unmount.
+function NarrateButton({ text }) {
+  const toast = useToast()
+  const [state, setState] = useState('idle') // idle | loading | playing
+  const audioRef = useRef(null)
+  const urlRef = useRef(null)
+
+  const stop = () => {
+    if (audioRef.current) {
+      audioRef.current.onended = null
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+    setState('idle')
+  }
+
+  // Sem áudio pendurado após o unmount (ex.: undo remove a entrada tocando).
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.onended = null
+        audioRef.current.pause()
+      }
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    }
+  }, [])
+
+  const play = async () => {
+    setState('loading')
+    try {
+      const voice = await getNarratorVoice()
+      const blob = await api.voice.tts(text, voice)
+      const url = URL.createObjectURL(blob)
+      urlRef.current = url
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.onended = stop
+      await audio.play()
+      setState('playing')
+    } catch (e) {
+      stop()
+      toast(e.message)
+    }
+  }
+
+  return (
+    <button
+      onClick={state === 'playing' ? stop : play}
+      disabled={state === 'loading'}
+      title={state === 'playing' ? 'Stop narration' : 'Narrate (text-to-speech)'}
+      className="absolute right-16 top-2 hidden rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 group-hover:block"
+    >
+      {state === 'loading' ? '⏳' : state === 'playing' ? '⏹' : '🔊'}
+    </button>
   )
 }
 

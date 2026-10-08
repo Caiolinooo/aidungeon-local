@@ -196,4 +196,40 @@ export const api = {
     }
     return res.blob()
   },
+
+  // ------------------------------------------------------------- voice (v0.4.0)
+  // TTS (Supertonic) + STT (Whisper) via stack de voz da VM — contrato v0.4.0.
+  voice: {
+    // GET /voices → {voices: [...], narrator_voice: "M1"} (config efetiva).
+    list: () => request('/voices'),
+    // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
+    // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
+    tts: async (text, voice) => {
+      let res
+      try {
+        res = await fetch(`${API_BASE}/api/tts`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          // voice omitida → backend usa narrator_voice (contrato)
+          body: JSON.stringify(voice ? { text, voice } : { text }),
+        })
+      } catch {
+        throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+      }
+      const contentType = res.headers.get('content-type') || ''
+      if (!res.ok || !contentType.includes('audio/mpeg')) {
+        if (res.status === 401) notifyUnauthorized()
+        throw await parseError(res)
+      }
+      return res.blob()
+    },
+    // POST /stt: multipart (campo 'file', nome 'audio.webm') → {"text": "..."}.
+    stt: (blob) => {
+      const fd = new FormData()
+      fd.append('file', blob, 'audio.webm')
+      return request('/stt', { method: 'POST', body: fd })
+    },
+    getSettings: () => request('/settings/voice'),
+    putSettings: (patch) => request('/settings/voice', { method: 'PUT', body: patch }),
+  },
 }

@@ -33,6 +33,10 @@ OVERRIDE_KEYS = (
     "image.negative_prompt", "image.openai_base_url", "image.openai_api_key",
     "image.openai_model", "image.openai_size", "image.style_suffix",
     "image.storage_dir", "image.timeout_seconds",
+    # voz (v0.4.0; voices/max_text_chars/stt_max_bytes são internos — não saem no PUT)
+    "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
+    "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
+    "voice.max_text_chars", "voice.stt_max_bytes",
 )
 
 _file_cache: dict | None = None
@@ -237,6 +241,67 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         else:
             _set_override(conn, "image.openai_api_key", update["openai_api_key"])
         changed.add("openai_api_key")
+    return changed
+
+
+# --------------------------------------------------------- config de voz (v4)
+def effective_voice_settings(conn: sqlite3.Connection) -> dict:
+    """Config efetiva de voz TTS/STT (arquivo + overrides + env/.env).
+
+    As chaves públicas seguem o schema VoiceSettings do openapi.yaml; as
+    internas (max_text_chars, stt_max_bytes) são consumidas pelas rotas e
+    não saem no PUT (mas saem no GET, para a UI validar antes de enviar).
+
+    Precedência da api_key: override do banco > env/.env nomeada por
+    voice.api_key_env (default VOICE_API_KEY) > None.
+    """
+    cfg = load_file_settings()
+    voice = cfg.get("voice", {})
+
+    def ov(key: str, default: Any) -> Any:
+        value = _get_override(conn, key)
+        return default if value is None else value
+
+    api_key = _get_override(conn, "voice.api_key")
+    if not api_key:
+        api_key = resolve_env_value(voice.get("api_key_env", "VOICE_API_KEY")) or None
+
+    return {
+        "enabled": bool(ov("voice.enabled", voice.get("enabled", True))),
+        "base_url": ov("voice.base_url", voice.get("base_url", "")),
+        "api_key": api_key,
+        "tts_model": ov("voice.tts_model", voice.get("tts_model", "")),
+        "stt_model": ov("voice.stt_model", voice.get("stt_model", "")),
+        "narrator_voice": ov("voice.narrator_voice", voice.get("narrator_voice", "M1")),
+        "voices": list(voice.get("voices", [])),
+        "timeout_seconds": int(ov("voice.timeout_seconds",
+                                  voice.get("timeout_seconds", 60))),
+        "max_text_chars": int(ov("voice.max_text_chars",
+                                 voice.get("max_text_chars", 2000))),
+        "stt_max_bytes": int(ov("voice.stt_max_bytes",
+                                voice.get("stt_max_bytes", 10485760))),
+    }
+
+
+def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
+    """Persiste overrides de voz (campos omitidos permanecem).
+
+    `api_key=""` remove o override (cai para a env); omitir mantém.
+    """
+    changed: set[str] = set()
+    for field, key in (("enabled", "voice.enabled"), ("base_url", "voice.base_url"),
+                       ("tts_model", "voice.tts_model"), ("stt_model", "voice.stt_model"),
+                       ("narrator_voice", "voice.narrator_voice"),
+                       ("timeout_seconds", "voice.timeout_seconds")):
+        if field in update and update[field] is not None:
+            _set_override(conn, key, update[field])
+            changed.add(field)
+    if "api_key" in update and update["api_key"] is not None:
+        if update["api_key"] == "":
+            db.delete_setting(conn, "voice.api_key")
+        else:
+            _set_override(conn, "voice.api_key", update["api_key"])
+        changed.add("api_key")
     return changed
 
 
