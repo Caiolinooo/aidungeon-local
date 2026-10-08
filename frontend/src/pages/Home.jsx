@@ -1,0 +1,323 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { api } from '../api.js'
+import { useToast } from '../components/Toast.jsx'
+import Modal from '../components/Modal.jsx'
+import { fmtDate } from '../utils.js'
+
+// Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
+// (escolher scenario existente ou em branco) + "Import AI Dungeon backup".
+export default function Home() {
+  const toast = useToast()
+  const [adventures, setAdventures] = useState(null)
+  const [error, setError] = useState(null) // backend fora do ar / erro de API
+  const [showNew, setShowNew] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      setAdventures(await api.listAdventures())
+    } catch (e) {
+      setError(e)
+      setAdventures([])
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  return (
+    <div className="mx-auto flex min-h-full max-w-5xl flex-col px-4 py-8">
+      <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
+            AI Dungeon <span className="text-emerald-500">Local</span>
+          </h1>
+          <p className="mt-1 text-sm text-zinc-500">Self-hosted interactive storytelling — 100% local LLM.</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
+          >
+            ⬆ Import AI Dungeon backup
+          </button>
+          <button
+            onClick={() => setShowNew(true)}
+            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+          >
+            + New Adventure
+          </button>
+        </div>
+      </header>
+
+      {error && (
+        <div className="mb-6 flex items-center justify-between rounded-lg border border-red-900 bg-red-950/60 px-4 py-3 text-sm text-red-200">
+          <span>
+            {error.status === 0
+              ? 'Cannot reach the backend server (http://127.0.0.1:8000). Is it running?'
+              : error.message}
+          </span>
+          <button
+            onClick={load}
+            className="rounded-md border border-red-800 px-3 py-1 text-xs font-semibold hover:bg-red-900"
+          >
+            ↻ Retry
+          </button>
+        </div>
+      )}
+
+      {adventures === null ? (
+        <p className="text-zinc-500">Loading…</p>
+      ) : adventures.length === 0 && !error ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 p-16 text-center">
+          <p className="text-lg text-zinc-400">No adventures yet.</p>
+          <p className="max-w-md text-sm text-zinc-600">
+            Start a new adventure from a scenario, or import your AI Dungeon backup (.zip) to
+            continue an existing story from the exact point where you stopped.
+          </p>
+        </div>
+      ) : (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Your Adventures</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {adventures.map((a) => (
+              <Link
+                key={a.id}
+                to={`/play/${a.id}`}
+                className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-900 p-4 transition-colors hover:border-emerald-700 hover:bg-zinc-900/80"
+              >
+                <div className="mb-1 flex items-start justify-between gap-2">
+                  <h3 className="font-semibold text-zinc-100">{a.title}</h3>
+                  {a.source === 'import' && (
+                    <span className="shrink-0 rounded bg-zinc-700 px-1.5 py-0.5 text-[10px] uppercase text-zinc-300">
+                      imported
+                    </span>
+                  )}
+                </div>
+                <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-zinc-400">
+                  {a.last_excerpt || a.description || '…'}
+                </p>
+                <div className="flex items-center justify-between text-xs text-zinc-600">
+                  <span>{a.action_count ?? 0} actions</span>
+                  <span>{fmtDate(a.updated_at)}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {showNew && <NewAdventureModal onClose={() => setShowNew(false)} />}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImported={load} />}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Modal "New Adventure": escolher um scenario existente (GET /api/scenarios)
+// ou começar em branco → POST /api/adventures → navega p/ /play/:id.
+function NewAdventureModal({ onClose }) {
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [scenarios, setScenarios] = useState(null)
+  const [selected, setSelected] = useState('blank') // 'blank' | scenario.id
+  const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    api.listScenarios().then(setScenarios).catch((e) => {
+      toast(e.message)
+      setScenarios([])
+    })
+  }, [toast])
+
+  const start = async () => {
+    setCreating(true)
+    try {
+      const payload = selected === 'blank' ? {} : { scenario_id: selected }
+      const adv = await api.createAdventure(payload)
+      navigate(`/play/${adv.id}`)
+    } catch (e) {
+      toast(e.message)
+      setCreating(false)
+    }
+  }
+
+  return (
+    <Modal title="New Adventure" onClose={onClose} wide>
+      {scenarios === null ? (
+        <p className="text-sm text-zinc-500">Loading scenarios…</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <label
+            className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
+              selected === 'blank' ? 'border-emerald-600 bg-emerald-950/30' : 'border-zinc-800 hover:border-zinc-700'
+            }`}
+          >
+            <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => setSelected('blank')} className="mt-1 accent-emerald-600" />
+            <div>
+              <div className="font-semibold text-zinc-100">Blank adventure</div>
+              <div className="text-sm text-zinc-500">Start with an empty story — you set the scene.</div>
+            </div>
+          </label>
+
+          {scenarios.map((s) => (
+            <label
+              key={s.id}
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
+                selected === s.id ? 'border-emerald-600 bg-emerald-950/30' : 'border-zinc-800 hover:border-zinc-700'
+              }`}
+            >
+              <input type="radio" name="scenario" checked={selected === s.id} onChange={() => setSelected(s.id)} className="mt-1 accent-emerald-600" />
+              <div className="min-w-0">
+                <div className="font-semibold text-zinc-100">{s.title}</div>
+                {s.description && <div className="line-clamp-2 text-sm text-zinc-500">{s.description}</div>}
+                {s.tags?.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {s.tags.map((t) => (
+                      <span key={t} className="rounded-full bg-zinc-700 px-2 py-0.5 text-[10px] text-zinc-300">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </label>
+          ))}
+
+          <div className="mt-3 flex items-center justify-between">
+            <Link to="/scenarios/new" className="text-sm text-emerald-400 hover:underline" onClick={onClose}>
+              + Create a new scenario
+            </Link>
+            <button
+              onClick={start}
+              disabled={creating}
+              className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              {creating ? 'Creating…' : 'Start adventure'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Modal "Import AI Dungeon backup": upload do .zip (multipart) → ImportReport
+// (actions/cards/memories importados + warnings) → botão p/ abrir a aventura.
+function ImportModal({ onClose, onImported }) {
+  const toast = useToast()
+  const navigate = useNavigate()
+  const fileRef = useRef(null)
+  const [file, setFile] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [report, setReport] = useState(null)
+
+  const doImport = async () => {
+    if (!file) return
+    setImporting(true)
+    try {
+      const r = await api.importBackup(file)
+      setReport(r)
+      onImported?.()
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <Modal title="Import AI Dungeon backup" onClose={onClose}>
+      {!report ? (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-zinc-400">
+            Select the <code className="text-zinc-300">.zip</code> exported from AI Dungeon
+            (contains <code className="text-zinc-300">metadata.json</code> +{' '}
+            <code className="text-zinc-300">actions-*.json</code>). The story continues from the
+            exact point where it stopped.
+          </p>
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="rounded-lg border border-dashed border-zinc-700 p-6 text-center text-sm text-zinc-400 hover:border-zinc-500"
+          >
+            {file ? (
+              <span className="text-zinc-200">
+                📦 {file.name} <span className="text-zinc-500">({(file.size / 1024).toFixed(0)} KB)</span>
+              </span>
+            ) : (
+              'Click to choose the .zip file'
+            )}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+              Cancel
+            </button>
+            <button
+              onClick={doImport}
+              disabled={!file || importing}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
+            <h3 className="font-semibold text-emerald-300">Import complete — “{report.title}”</h3>
+            <ul className="mt-2 grid grid-cols-3 gap-2 text-center text-sm">
+              <li className="rounded bg-zinc-800/60 p-2">
+                <div className="text-xl font-bold text-zinc-100">{report.actions_imported ?? 0}</div>
+                <div className="text-xs text-zinc-500">actions</div>
+              </li>
+              <li className="rounded bg-zinc-800/60 p-2">
+                <div className="text-xl font-bold text-zinc-100">{report.cards_imported ?? 0}</div>
+                <div className="text-xs text-zinc-500">story cards</div>
+              </li>
+              <li className="rounded bg-zinc-800/60 p-2">
+                <div className="text-xl font-bold text-zinc-100">{report.memories_imported ?? 0}</div>
+                <div className="text-xs text-zinc-500">memories</div>
+              </li>
+            </ul>
+          </div>
+
+          {report.warnings?.length > 0 && (
+            <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-3">
+              <h4 className="mb-1 text-sm font-semibold text-amber-300">
+                Warnings ({report.warnings.length})
+              </h4>
+              <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-amber-200/80">
+                {report.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+              Close
+            </button>
+            <button
+              onClick={() => navigate(`/play/${report.adventure_id}`)}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+            >
+              ▶ Open adventure
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}

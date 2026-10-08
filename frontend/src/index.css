@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tema escuro padrão (réplica da experiência do AI Dungeon) */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-200 antialiased;
+}
+
+/* Cursor animado do bloco "AI is writing..." (streaming token a token) */
+.streaming-cursor::after {
+  content: '▍';
+  @apply text-emerald-400;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Scrollbar discreta no tema escuro */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full border-2 border-zinc-950 bg-zinc-700;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
