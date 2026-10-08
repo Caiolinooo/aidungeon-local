@@ -1,8 +1,18 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../../api.js'
+import { clearToken } from '../../auth.js'
+import { useToast } from '../Toast.jsx'
 import { fmtDate } from '../../utils.js'
 
 // Aba Detalhes: metadados da aventura (título, descrição, tags, datas).
 // Somente leitura: o contrato v1 não tem PATCH /api/adventures/:id.
+// Também concentra as ações de sessão: Export backup e Sair (logout).
 export default function DetailsTab({ adventure }) {
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [exporting, setExporting] = useState(false)
+
   const rows = [
     ['Source', adventure.source === 'import' ? 'Imported backup' : 'New'],
     ['Actions', adventure.actions?.length ?? '—'],
@@ -12,6 +22,33 @@ export default function DetailsTab({ adventure }) {
     ['Created', fmtDate(adventure.created_at)],
     ['Updated', fmtDate(adventure.updated_at)],
   ]
+
+  // Download autenticado: <a href> não leva o header Authorization (Bearer),
+  // então baixamos como blob via api.js e disparamos o save no navegador.
+  const doExport = async () => {
+    setExporting(true)
+    try {
+      const blob = await api.downloadExport(adventure.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const safeTitle = (adventure.title || 'adventure').replace(/[^\w\- ]+/g, '').trim() || 'adventure'
+      a.href = url
+      a.download = `${safeTitle}-backup.zip`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const logout = () => {
+    clearToken()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -46,13 +83,20 @@ export default function DetailsTab({ adventure }) {
         ))}
       </dl>
 
-      <a
-        href={`/api/adventures/${adventure.id}/export`}
-        download
-        className="mt-2 rounded-lg border border-zinc-700 px-4 py-2 text-center text-sm text-zinc-300 hover:bg-zinc-800"
+      <button
+        onClick={doExport}
+        disabled={exporting}
+        className="mt-2 rounded-lg border border-zinc-700 px-4 py-2 text-center text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
       >
-        ⬇ Export backup (.zip — AI Dungeon format)
-      </a>
+        {exporting ? 'Exporting…' : '⬇ Export backup (.zip — AI Dungeon format)'}
+      </button>
+
+      <button
+        onClick={logout}
+        className="rounded-lg border border-red-900 px-4 py-2 text-center text-sm text-red-300 hover:bg-red-950/60"
+      >
+        Sair (encerrar sessão)
+      </button>
 
       <p className="text-xs text-zinc-600">
         Read-only in v1: the API contract has no adventure update endpoint.

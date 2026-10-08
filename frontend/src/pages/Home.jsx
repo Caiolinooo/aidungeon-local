@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
+import { clearToken } from '../auth.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
 import { fmtDate } from '../utils.js'
@@ -9,6 +10,7 @@ import { fmtDate } from '../utils.js'
 // (escolher scenario existente ou em branco) + "Import AI Dungeon backup".
 export default function Home() {
   const toast = useToast()
+  const navigate = useNavigate()
   const [adventures, setAdventures] = useState(null)
   const [error, setError] = useState(null) // backend fora do ar / erro de API
   const [showNew, setShowNew] = useState(false)
@@ -27,6 +29,11 @@ export default function Home() {
   useEffect(() => {
     load()
   }, [load])
+
+  const logout = () => {
+    clearToken()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="mx-auto flex min-h-full max-w-5xl flex-col px-4 py-8">
@@ -49,6 +56,13 @@ export default function Home() {
             className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
           >
             + New Adventure
+          </button>
+          <button
+            onClick={logout}
+            title="Encerrar a sessão e voltar ao login"
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          >
+            Sair
           </button>
         </div>
       </header>

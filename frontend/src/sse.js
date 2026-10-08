@@ -6,13 +6,22 @@
 // Eventos: "token" (trecho gerado), "done" (Action persistida), "error" (falha).
 // Cancelamento: AbortController — interrompe o stream localmente (o backend
 // pode concluir a geração e persistir a action; ela aparece ao recarregar).
+//
+// Auth: mesmo esquema do api.js — header Bearer em toda chamada; 401 →
+// clearToken() + evento 'aidl:unauthorized' (AuthGate volta ao /login).
+
+import { getToken } from './auth.js'
+import { notifyUnauthorized } from './api.js'
 
 export async function streamGeneration(path, { body, signal, onToken, onDone, onError } = {}) {
   let res
   try {
+    const headers = body != null ? { 'Content-Type': 'application/json' } : {}
+    const token = getToken()
+    if (token) headers.Authorization = `Bearer ${token}`
     res = await fetch(`/api${path}`, {
       method: 'POST',
-      headers: body != null ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: body != null ? JSON.stringify(body) : undefined,
       signal,
     })
@@ -22,8 +31,9 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
     return { aborted: false }
   }
 
-  // Respostas de erro (404/409/422) vêm como JSON no shape Error do contrato
+  // Respostas de erro (401/404/409/422) vêm como JSON no shape Error do contrato
   if (!res.ok || !res.body) {
+    if (res.status === 401) notifyUnauthorized()
     let msg = `Request failed (${res.status})`
     try {
       const d = await res.json()

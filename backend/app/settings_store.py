@@ -58,13 +58,18 @@ def _read_dotenv_key(name: str) -> str | None:
     return None
 
 
+def resolve_env_value(name: str) -> str | None:
+    """Valor de `name` no ambiente ou no .env da raiz (nunca logar o valor)."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    return _read_dotenv_key(name)
+
+
 def resolve_env_api_key() -> str | None:
     """LLM_API_KEY do ambiente ou do .env da raiz (nunca logar o valor)."""
     env_name = load_file_settings().get("llm", {}).get("api_key_env", "LLM_API_KEY")
-    value = os.environ.get(env_name)
-    if value:
-        return value
-    return _read_dotenv_key(env_name)
+    return resolve_env_value(env_name)
 
 
 # -------------------------------------------------------------- overrides

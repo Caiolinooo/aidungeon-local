@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -13,7 +14,14 @@ BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app import auth as auth_core  # noqa: E402
 from app import db, llm_client  # noqa: E402
+
+# Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
+# `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
+TEST_AUTH_USER = "tester"
+TEST_AUTH_PASSWORD = "correct-horse-battery-staple"
+TEST_AUTH_SECRET = "test-secret-0123456789abcdef"
 
 
 @pytest.fixture()
@@ -34,12 +42,32 @@ def _clean_llm_state(monkeypatch):
     llm_client.invalidate_discovery_cache()
 
 
+@pytest.fixture(autouse=True)
+def _auth_env(monkeypatch):
+    """Auth configurada com credenciais de teste (todas as rotas /api, exceto
+    login, exigem Bearer — sem isto os testes existentes tomariam 401)."""
+    monkeypatch.setenv("AUTH_USER", TEST_AUTH_USER)
+    monkeypatch.setenv(
+        "AUTH_PASSWORD_HASH",
+        hashlib.sha256(TEST_AUTH_PASSWORD.encode("utf-8")).hexdigest(),
+    )
+    monkeypatch.setenv("AUTH_SECRET", TEST_AUTH_SECRET)
+
+
 @pytest.fixture()
-def client(tmp_db):
+def auth_token() -> str:
+    """Bearer token válido emitido com as credenciais de teste."""
+    return auth_core.make_token(TEST_AUTH_USER, TEST_AUTH_SECRET, ttl_h=1)
+
+
+@pytest.fixture()
+def client(tmp_db, auth_token):
+    """TestClient autenticado (Authorization: Bearer em todas as chamadas)."""
     from fastapi.testclient import TestClient
 
     from app.main import app
     with TestClient(app) as c:
+        c.headers["Authorization"] = f"Bearer {auth_token}"
         yield c
 
 

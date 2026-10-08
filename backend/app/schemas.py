@@ -12,6 +12,11 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 class ScenarioCreate(BaseModel):
     title: str
     description: str = ""

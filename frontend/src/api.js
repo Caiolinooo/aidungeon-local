@@ -2,6 +2,12 @@
 // baseURL '/api': em dev o Vite faz proxy p/ http://127.0.0.1:8000; em produção
 // o próprio FastAPI serve o build na mesma origem.
 // Erros seguem o shape {"error": {"code", "message"}} do contrato.
+//
+// Auth: toda chamada leva "Authorization: Bearer <token>" (localStorage, ver
+// auth.js). Em 401 (fora do próprio login): clearToken() + evento
+// 'aidl:unauthorized', que o AuthGate escuta para voltar ao /login.
+
+import { clearToken, getToken } from './auth.js'
 
 export class ApiError extends Error {
   constructor(status, code, message) {
@@ -10,6 +16,22 @@ export class ApiError extends Error {
     this.status = status // 0 = backend fora do ar / falha de rede
     this.code = code
   }
+}
+
+// 401 em qualquer rota (exceto o login): sessão inválida/expirada → derruba
+// o token e avisa o AuthGate (que navega para /login).
+export function notifyUnauthorized() {
+  clearToken()
+  try {
+    window.dispatchEvent(new Event('aidl:unauthorized'))
+  } catch { /* ignora */ }
+}
+
+function authHeaders(extra) {
+  const headers = { ...(extra || {}) }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
 }
 
 function qs(params) {
@@ -21,13 +43,26 @@ function qs(params) {
   return s ? `?${s}` : ''
 }
 
+async function parseError(res) {
+  let code = 'http_error'
+  let message = `Request failed (${res.status})`
+  try {
+    const data = await res.json()
+    if (data?.error?.code) code = data.error.code
+    if (data?.error?.message) message = data.error.message
+  } catch { /* resposta não-JSON: mantém mensagem padrão */ }
+  return new ApiError(res.status, code, message)
+}
+
 async function request(path, { method = 'GET', body, signal } = {}) {
   let res
   try {
     res = await fetch(`/api${path}`, {
       method,
       // FormData (upload multipart) define o próprio Content-Type com boundary
-      headers: body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
+      headers: body instanceof FormData
+        ? authHeaders()
+        : authHeaders({ 'Content-Type': 'application/json' }),
       body: body instanceof FormData ? body : body != null ? JSON.stringify(body) : undefined,
       signal,
     })
@@ -36,20 +71,19 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
   }
   if (!res.ok) {
-    let code = 'http_error'
-    let message = `Request failed (${res.status})`
-    try {
-      const data = await res.json()
-      if (data?.error?.code) code = data.error.code
-      if (data?.error?.message) message = data.error.message
-    } catch { /* resposta não-JSON: mantém mensagem padrão */ }
-    throw new ApiError(res.status, code, message)
+    if (res.status === 401 && !path.startsWith('/auth/login')) notifyUnauthorized()
+    throw await parseError(res)
   }
   if (res.status === 204) return null
   return res.json()
 }
 
 export const api = {
+  // ------------------------------------------------------------------ auth
+  login: (username, password) =>
+    request('/auth/login', { method: 'POST', body: { username, password } }),
+  checkAuth: () => request('/auth/check'),
+
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),
   getScenario: (id) => request(`/scenarios/${id}`),
@@ -60,7 +94,20 @@ export const api = {
   getAdventure: (id) => request(`/adventures/${id}`),
   createAdventure: (payload) => request('/adventures', { method: 'POST', body: payload }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
-  exportUrl: (id) => `/api/adventures/${id}/export`, // download direto (zip)
+  // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).
+  downloadExport: async (id) => {
+    let res
+    try {
+      res = await fetch(`/api/adventures/${id}/export`, { headers: authHeaders() })
+    } catch {
+      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+    }
+    if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized()
+      throw await parseError(res)
+    }
+    return res.blob()
+  },
 
   // --------------------------------------------------------------- actions
   patchAction: (id, text) => request(`/actions/${id}`, { method: 'PATCH', body: { text } }),
