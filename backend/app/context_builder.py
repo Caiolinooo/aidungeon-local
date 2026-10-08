@@ -1,19 +1,33 @@
 """Montador de contexto — o "sanduíche" do PLANO.md §4.2.
 
-Ordem EXATA dos blocos (budgets de config/settings.json):
+Ordem lógica EXATA dos blocos (budgets de config/settings.json):
 
-    1. system: instrução base de narrador em 2ª pessoa + ai_instructions  (≤ 700)
-    2. system: plot_essentials                                            (≤ 400)
-    3. system: story cards (pinned + disparados)                          (≤ 1200)
-    4. system: memory bank (top-k)                                        (≤ 600)
-    5. system: story_summary                                              (≤ 400)
+    1. instrução base de narrador em 2ª pessoa + ai_instructions  (≤ 700)
+    2. plot_essentials                                            (≤ 400)
+    3. story cards (pinned + disparados)                          (≤ 1200)
+    4. memory bank (top-k)                                        (≤ 600)
+    5. story_summary                                              (≤ 400)
     6. user:   janela recente verbatim (dinâmica, trunca POR AÇÃO INTEIRA)
-    7. system: authors_note                                               (≤ 300)
-    8. user:   última ação formatada                                      (≤ 200)
-    reserva de resposta                                                   (512)
+    7. authors_note                                               (≤ 300)
+    8. user:   última ação formatada                              (≤ 200)
+    reserva de resposta                                           (512)
 
-Regra da janela recente (dinâmica): context_size − soma(demais budgets) −
-response_reserve — os budgets fixos são pisos, a janela absorve a diferença.
+FORMATO NO WIRE (chat template Qwen3 do llama.cpp — validado contra a VM):
+o template exige a mensagem system NO INÍCIO e rejeita (HTTP 500 "System
+message must be at the beginning") qualquer system após a primeira posição.
+Por isso os blocos 1–5 viram UMA ÚNICA mensagem system na posição 0,
+concatenados com "\\n\\n" e cabeçalhos sóbrios que preservam a semântica:
+    bloco 1  sem cabeçalho (é a diretiva central do narrador)
+    bloco 2  "[Plot]"        — quem é você, mundo, regras (Plot Essentials)
+    bloco 3  "[World info]"  — story cards disparados/pinned (lorebook)
+    bloco 4  "[Memories]"    — memory bank (resumos de eventos antigos)
+    bloco 5  "[Summary]"     — story summary rolante
+A author's note (bloco 7) vai DENTRO da mensagem user final, como linha
+própria imediatamente ANTES da última ação, no formato clássico
+"[Author's note: {texto}]" — preserva a influência por recência sem
+system fora da 1ª posição. A ordem lógica, os budgets e a regra dinâmica
+da janela recente (context_size − soma(demais budgets) − response_reserve;
+budgets fixos são pisos) NÃO mudam.
 
 Formatação das ações do jogador (byte a byte como no backup):
     do   → "\\n> You {text}\\n"
@@ -130,13 +144,14 @@ def _render_card(card: dict, per_card_budget: int) -> str:
     return f"{title}\n{entry}".strip() if title else entry
 
 
-def _select_memories(conn: sqlite3.Connection, adventure_id: str,
+def _select_memories(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
                      budget_tokens: int, mem_cfg: dict) -> list[dict]:
     """Memory bank do bloco 4. Usa memory.retrieval quando disponível."""
     mod = _memory_module("retrieval")
     if mod is not None and hasattr(mod, "select_memories"):
         try:
-            mems = mod.select_memories(conn, adventure_id, budget_tokens=budget_tokens)
+            mems = mod.select_memories(conn, adventure_id, recent_text,
+                                       budget_tokens=budget_tokens)
             if mems is not None:
                 return list(mems)
         except Exception:
@@ -179,28 +194,27 @@ def recent_window_budget(cfg: dict) -> int:
 # ---------------------------------------------------------------- builder
 def build_context(adventure: dict, actions: list[dict], cfg: dict,
                   conn: sqlite3.Connection) -> BuiltContext:
-    """Monta as mensagens na ordem exata do sanduíche (PLANO.md §4.2)."""
+    """Monta as mensagens na ordem do sanduíche (PLANO.md §4.2), no formato
+    do template Qwen3: UMA system na posição 0 (blocos 1–5) + users."""
     budgets = cfg["budgets"]
-    messages: list[dict] = []
     meta: dict[str, Any] = {"budgets": {}}
 
-    def system(content: str) -> None:
-        if content:
-            messages.append({"role": "system", "content": content})
+    # ---- system único (posição 0): blocos 1–5 concatenados ----------------
+    system_parts: list[str] = []
 
-    # 1 — system: narrador em 2ª pessoa + ai_instructions
+    # 1 — narrador em 2ª pessoa + ai_instructions (sem cabeçalho)
     block1 = BASE_SYSTEM_PROMPT
     ai = (adventure.get("ai_instructions") or "").strip()
     if ai:
         block1 += "\n\n" + _fit_budget(ai, int(budgets.get("ai_instructions", 700)))
-    system(block1)
+    system_parts.append(block1)
 
-    # 2 — system: plot_essentials
+    # 2 — plot_essentials
     plot = (adventure.get("plot_essentials") or "").strip()
     if plot:
-        system(_fit_budget(plot, int(budgets.get("plot_essentials", 400))))
+        system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 400))))
 
-    # 3 — system: story cards (pinned + disparados)
+    # 3 — story cards (pinned + disparados)
     cards_cfg = cfg.get("story_cards", {})
     scan_chars = int(cards_cfg.get("scan_chars", 1000))
     recent_text = "".join(format_action_text(a["type"], a["text"]) for a in actions)
@@ -208,20 +222,24 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                           int(budgets.get("story_cards", 1200)), cards_cfg)
     if cards:
         per_card = int(cards_cfg.get("budget_por_card", 150))
-        system("\n\n".join(_render_card(c, per_card) for c in cards))
+        system_parts.append("[World info]\n"
+                            + "\n\n".join(_render_card(c, per_card) for c in cards))
         meta["cards_included"] = [c.get("id") for c in cards]
 
-    # 4 — system: memory bank (top-k)
-    mems = _select_memories(conn, adventure["id"], int(budgets.get("memory_bank", 600)),
+    # 4 — memory bank (top-k)
+    mems = _select_memories(conn, adventure["id"], recent_text[-scan_chars:],
+                            int(budgets.get("memory_bank", 600)),
                             cfg.get("memory_bank", {}))
     if mems:
-        system("\n\n".join(m["text"] for m in mems))
+        system_parts.append("[Memories]\n" + "\n\n".join(m["text"] for m in mems))
         meta["memories_included"] = [m.get("id") for m in mems]
 
-    # 5 — system: story_summary
+    # 5 — story_summary
     summary = (adventure.get("story_summary") or "").strip()
     if summary:
-        system(_fit_budget(summary, int(budgets.get("story_summary", 400))))
+        system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 400))))
+
+    messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 
     # 6 — user: janela recente verbatim (trunca POR AÇÃO INTEIRA)
     window_budget = recent_window_budget(cfg)
@@ -242,19 +260,20 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
 
-    # 7 — system(final): author's note (perto do fim = alta influência)
+    # 7+8 — user(final): author's note como linha própria + última ação
     note = (adventure.get("authors_note") or "").strip()
     if note:
-        system(_fit_budget(note, int(budgets.get("authors_note", 300))))
-
-    # 8 — user(final): última ação formatada
+        note = _fit_budget(note, int(budgets.get("authors_note", 300)))
     if actions:
         last = actions[-1]
         last_txt = _fit_budget(format_action_text(last["type"], last["text"]),
                                int(budgets.get("last_action", 200)))
-        messages.append({"role": "user", "content": last_txt})
     else:
-        messages.append({"role": "user", "content": "Begin the story."})
+        last_txt = "Begin the story."
+    if note:
+        messages.append({"role": "user", "content": f"[Author's note: {note}]\n{last_txt}"})
+    else:
+        messages.append({"role": "user", "content": last_txt})
 
     return BuiltContext(messages=messages,
                         stop_sequences=list(cfg.get("stop_sequences",

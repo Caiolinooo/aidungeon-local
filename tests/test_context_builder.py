@@ -49,19 +49,37 @@ def test_sandwich_order_exact(tmp_db):
         cfg = _cfg(conn)
     built = _build(adv, actions, cfg)
 
+    # wire format Qwen3: UMA system (blocos 1–5) + user janela + user final
     roles = [m["role"] for m in built.messages]
-    assert roles == ["system", "system", "system", "system", "system",
-                     "user", "system", "user"]
-    m = built.messages
-    assert cb.BASE_SYSTEM_PROMPT in m[0]["content"]
-    assert "Sandbox em Faerûn" in m[0]["content"]          # 1 ai_instructions
-    assert "Name: Caio" in m[1]["content"]                 # 2 plot_essentials
-    assert "Baldur's Gate" in m[2]["content"]              # 3 story cards
-    assert "Zhentarim" in m[3]["content"]                  # 4 memory bank
-    assert "Calimport" in m[4]["content"]                  # 5 story_summary
-    assert "You stand in Calimport." in m[5]["content"]    # 6 janela verbatim
-    assert "Mundo vivo" in m[6]["content"]                 # 7 authors_note
-    assert "The market is busy." in m[7]["content"]        # 8 última ação
+    assert roles == ["system", "user", "user"]
+    assert roles[0] == "system" and all(r != "system" for r in roles[1:])
+
+    # ordem dos blocos 1–5 preservada DENTRO da system única
+    sys_msg = built.messages[0]["content"]
+    order = [
+        cb.BASE_SYSTEM_PROMPT,          # 1a base
+        "Sandbox em Faerûn",            # 1b ai_instructions
+        "[Plot]",                       # 2 plot_essentials
+        "Name: Caio",
+        "[World info]",                 # 3 story cards
+        "Baldur's Gate",
+        "[Memories]",                   # 4 memory bank
+        "Zhentarim",
+        "[Summary]",                    # 5 story_summary
+        "Caio chegou a Calimport",
+    ]
+    positions = [sys_msg.index(fragment) for fragment in order]
+    assert positions == sorted(positions)
+
+    # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
+    window = built.messages[1]["content"]
+    assert "You stand in Calimport." in window
+    assert "\n> You look around\n" in window
+
+    # 7+8 — user final: author's note em linha própria ANTES da última ação
+    final = built.messages[2]["content"]
+    assert final == ("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                     "The market is busy.")
 
 
 def test_empty_blocks_are_skipped(tmp_db):
@@ -70,10 +88,11 @@ def test_empty_blocks_are_skipped(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    # sem plot/cards/memórias/summary/note: system base + user(start? não—
-    # start é a última ação → bloco 8; janela vazia)
+    # sem plot/cards/memórias/summary/note: system só com a base; start é a
+    # última ação → vai para a user final (janela vazia)
     roles = [m["role"] for m in built.messages]
     assert roles == ["system", "user"]
+    assert built.messages[0]["content"] == cb.BASE_SYSTEM_PROMPT
     assert built.messages[1]["content"] == "Once upon a time."
 
 
@@ -115,14 +134,14 @@ def test_block_budget_truncation(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    plot_block = built.messages[1]["content"]
-    assert cb.estimate_tokens(plot_block) <= 400 + 1
-    # sem cards/memórias e janela vazia: [base, plot, summary, note, user]
-    note_block = built.messages[3]["content"]
-    assert cb.estimate_tokens(note_block) <= 300 + 1
-    instr_block = built.messages[0]["content"]
-    assert cb.estimate_tokens(instr_block) <= \
-        cb.estimate_tokens(cb.BASE_SYSTEM_PROMPT) + 700 + 2
+    sys_msg = built.messages[0]["content"]
+    assert "z" * 2800 in sys_msg and "z" * 2801 not in sys_msg  # instr ≤ 700 tk
+    assert "x" * 1600 in sys_msg and "x" * 1601 not in sys_msg  # plot ≤ 400 tk
+    # author's note truncada a 300 tk dentro da user final
+    final = built.messages[-1]["content"]
+    assert final.startswith("[Author's note: " + "y" * 1200 + "]\n")
+    assert "y" * 1201 not in final
+    assert final.endswith("Intro.")
 
 
 def test_recent_window_dynamic_rule(tmp_db):
