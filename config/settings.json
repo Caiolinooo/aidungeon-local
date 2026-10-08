@@ -44,6 +44,15 @@
     "description": "Todos os campos de 'llm' + sampler sao expostos em GET/PUT /api/settings/llm e na aba Config da UI",
     "adjustable": ["base_url", "api_key", "model_alias", "context_size", "sampler.max_tokens", "sampler.temperature", "sampler.top_p", "sampler.repetition_penalty", "streaming"]
   },
+  "auth": {
+    "enabled": true,
+    "username_env": "AUTH_USER",
+    "password_hash_env": "AUTH_PASSWORD_HASH",
+    "secret_env": "AUTH_SECRET",
+    "token_ttl_hours": 168,
+    "note": "Credenciais SOMENTE via .env (gitignored): AUTH_USER, AUTH_PASSWORD_HASH (sha256 hex da senha), AUTH_SECRET (hex aleatorio 32 bytes). Token = HMAC-SHA256(user.exp, AUTH_SECRET). Middleware Bearer protege TODAS as rotas /api exceto POST /api/auth/login. Estaticos da SPA ficam publicos (a pagina de login precisa carregar)."
+  },
+  "cors_origins": ["http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:5173"],
   "stop_sequences": ["\n> You", "\n> you"],
   "memory_bank": {
     "trigger_tokens": 1500,

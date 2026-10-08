@@ -21,6 +21,8 @@ servers:
     description: backend local (FastAPI)
 
 tags:
+  - name: auth
+    description: Login e verificação de token. Todas as demais rotas /api exigem Bearer.
   - name: scenarios
   - name: adventures
   - name: generation
@@ -33,7 +35,64 @@ tags:
     description: Área de configuração do servidor LLM (endpoint, chave, modelo, tokens).
   - name: health
 
+# Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
+# Arquivos estáticos da SPA (fora de /api) são públicos — a página de login precisa carregar.
+security:
+  - bearerAuth: []
+
 paths:
+  # --------------------------------------------------------------------- auth
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Login — devolve token Bearer
+      operationId: login
+      security: []
+      description: |
+        Valida username/senha contra AUTH_USER e AUTH_PASSWORD_HASH (sha256)
+        do ambiente. Sucesso devolve token HMAC-SHA256 assinado com AUTH_SECRET
+        (TTL de settings.auth.token_ttl_hours). Falha devolve 401 genérico
+        (não distingue usuário de senha).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/check:
+    get:
+      tags: [auth]
+      summary: Verificar se o token atual é válido
+      operationId: checkAuth
+      responses:
+        '200':
+          description: Token válido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  user:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+
   # ---------------------------------------------------------------- scenarios
   /api/scenarios:
     post:
@@ -583,6 +642,12 @@ paths:
                 $ref: '#/components/schemas/LlmHealth'
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token devolvido por POST /api/auth/login (HMAC-SHA256, TTL de settings.auth.token_ttl_hours).
+
   parameters:
     ScenarioId:
       name: scenarioId
@@ -616,6 +681,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Token ausente/inválido/expirado, ou credenciais inválidas no login.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     ValidationError:
       description: Payload inválido.
       content:
@@ -624,6 +695,28 @@ components:
             $ref: '#/components/schemas/Error'
 
   schemas:
+    # ------------------------------------------------------------------ auth
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      required: [token, expires_at]
+      properties:
+        token:
+          type: string
+          description: Bearer token (formato base64url(user).base64url(exp).assinatura_hex).
+        expires_at:
+          type: string
+          format: date-time
+
+
     # ------------------------------------------------------------- entities
     Scenario:
       type: object
