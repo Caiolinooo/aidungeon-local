@@ -63,5 +63,41 @@
   "story_cards": {
     "scan_chars": 1000,
     "budget_por_card": 150
+  },
+  "image": {
+    "enabled": true,
+    "provider": "sdwebui",
+    "storage_dir": "data/images",
+    "timeout_seconds": 300,
+    "providers": {
+      "sdwebui": {
+        "base_url": "http://127.0.0.1:7860",
+        "txt2img_path": "/sdapi/v1/txt2img",
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "negative_prompt": "text, watermark, signature, low quality, deformed, blurry",
+        "note": "A1111/SD.Next/Forge local ou LAN; API precisa estar com --api"
+      },
+      "openai_compatible": {
+        "base_url": "",
+        "api_key_env": "IMAGE_API_KEY",
+        "model": "",
+        "size": "512x512",
+        "note": "qualquer endpoint com POST {base_url}/images/generations (OpenAI, Together, SD.Next openai-mode etc.)"
+      }
+    },
+    "prompt_builder": {
+      "max_scene_chars": 1200,
+      "style_suffix": "fantasy art, detailed, atmospheric lighting",
+      "max_tokens": 120,
+      "note": "LLM (cliente existente, disable_thinking) resume a cena recente em prompt de imagem EN; adventures.image_style entra como prefixo de estilo"
+    }
+  },
+  "assistant": {
+    "max_tokens": 1400,
+    "field_max_tokens": 400,
+    "temperature": 0.7,
+    "note": "Assistente de criacao de cenarios: POST /api/assistant/scenario (draft completo estruturado) e /api/assistant/field (regenera um campo). Sempre via LLM da VM."
   }
 }

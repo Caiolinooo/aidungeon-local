@@ -41,3 +41,19 @@ CREATE TABLE memories(
   created_at TEXT);
 
 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT);
+
+-- v2 (2026-10-08): imagens geradas pela ação "See"
+CREATE TABLE images(
+  id TEXT PRIMARY KEY,
+  adventure_id TEXT NOT NULL REFERENCES adventures(id),
+  action_seq INTEGER NOT NULL,
+  prompt TEXT DEFAULT '',
+  negative_prompt TEXT DEFAULT '',
+  file_path TEXT NOT NULL,
+  provider TEXT DEFAULT '',
+  width INTEGER,
+  height INTEGER,
+  created_at TEXT);
+
+-- v2: estilo visual da aventura (vem de state.imageStyle no backup)
+ALTER TABLE adventures ADD COLUMN image_style TEXT DEFAULT '';

@@ -33,6 +33,10 @@ tags:
   - name: import-export
   - name: settings
     description: Área de configuração do servidor LLM (endpoint, chave, modelo, tokens).
+  - name: assistant
+    description: Assistente de criação de cenários (geração estruturada via LLM).
+  - name: images
+    description: Geração de imagens da cena (ação "See") — provedor sdwebui local/LAN ou endpoint OpenAI-compatible.
   - name: health
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
@@ -623,6 +627,170 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  # ------------------------------------------------------------------ assistant
+  /api/assistant/scenario:
+    post:
+      tags: [assistant]
+      summary: Gerar rascunho completo de cenário a partir de uma ideia
+      operationId: assistantScenario
+      description: |
+        Recebe uma ideia em linguagem natural (`brief`, PT ou EN) e devolve um
+        rascunho ESTRUTURADO completo (título, descrição, ai_instructions,
+        plot_essentials, authors_note, opening_text, tags e story cards
+        iniciais). NÃO persiste nada — o frontend revisa e depois chama
+        POST /api/scenarios. Campos de texto narrativo são gerados em inglês
+        (convenção do jogo); `brief` pode ser em qualquer idioma.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantScenarioRequest'
+      responses:
+        '200':
+          description: Rascunho gerado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioDraft'
+        '503':
+          description: LLM indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/assistant/field:
+    post:
+      tags: [assistant]
+      summary: Regenerar um campo do rascunho (ou sugerir story cards)
+      operationId: assistantField
+      description: |
+        Regenera UM campo mantendo coerência com o resto do rascunho enviado.
+        `field=story_cards` devolve array de cards (merge/substituição é
+        decisão do frontend).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantFieldRequest'
+      responses:
+        '200':
+          description: Campo regenerado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantFieldResponse'
+        '503':
+          description: LLM indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # -------------------------------------------------------------------- images
+  /api/adventures/{adventureId}/see:
+    post:
+      tags: [images]
+      summary: Gerar imagem da cena (ação "See")
+      operationId: postSee
+      description: |
+        Fluxo: (1) o LLM resume a cena recente (até settings.image.prompt_builder
+        .max_scene_chars) em um prompt de imagem EN, prefixado por
+        adventures.image_style; (2) chama o provedor configurado
+        (settings.image.provider: `sdwebui` → POST {base_url}/sdapi/v1/txt2img;
+        `openai_compatible` → POST {base_url}/images/generations com Bearer);
+        (3) salva o arquivo em settings.image.storage_dir/<adventure_id>/;
+        (4) grava linha em `images` e uma action `type=see` (text = prompt
+        resumido) vinculada pelo mesmo seq; (5) devolve a imagem.
+        Resposta JSON (não-SSE); geração local pode levar minutos — o frontend
+        mostra spinner. 503 se provider inalcançável; 409 se geração de imagem
+        já em andamento para a aventura.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeeRequest'
+      responses:
+        '200':
+          description: Imagem gerada e vinculada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Geração de imagem em andamento.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Provedor de imagem indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/images/{imageId}:
+    get:
+      tags: [images]
+      summary: Servir arquivo de imagem gerado
+      operationId: getImage
+      parameters:
+        - name: imageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Arquivo da imagem.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/settings/image:
+    get:
+      tags: [settings]
+      summary: Ler configuração de geração de imagens
+      operationId: getImageSettings
+      responses:
+        '200':
+          description: Config efetiva (api_key mascarada).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageSettings'
+    put:
+      tags: [settings]
+      summary: Atualizar configuração de geração de imagens
+      operationId: putImageSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageSettingsUpdate'
+      responses:
+        '200':
+          description: Configuração aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageSettings'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   # ------------------------------------------------------------------- health
   /api/health/llm:
     get:
@@ -815,6 +983,10 @@ components:
           type: string
           default: ''
           description: Resumo rolante (bloco 5), mantido pelo summarizer.
+        image_style:
+          type: string
+          default: ''
+          description: Prefixo de estilo visual para o prompt_builder de imagens (state.imageStyle no backup).
         tags:
           type: array
           items:
@@ -922,6 +1094,17 @@ components:
           type: string
           format: date-time
           nullable: true
+        image:
+          type: object
+          nullable: true
+          description: Presente em actions type=see — imagem vinculada.
+          properties:
+            id:
+              type: string
+            url:
+              type: string
+            prompt:
+              type: string
 
     ActionRequest:
       type: object
@@ -1179,6 +1362,173 @@ components:
         - `done`:  `data: {"player_action"?: {Action}, "action": {Action}}` —
           fim da geração, com a(s) action(s) persistida(s);
         - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
+
+    # ------------------------------------------------------- v2: assistant/images
+    AssistantScenarioRequest:
+      type: object
+      required: [brief]
+      properties:
+        brief:
+          type: string
+          minLength: 3
+          description: Ideia em linguagem natural (qualquer idioma). Ex. "pirata steampunk caçando um leviatã".
+        language:
+          type: string
+          default: en
+          description: Idioma dos textos gerados (padrão en, convenção do jogo).
+
+    ScenarioDraft:
+      type: object
+      description: Rascunho estruturado de cenário (não persistido — revisar e depois POST /api/scenarios).
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        ai_instructions:
+          type: string
+        plot_essentials:
+          type: string
+          description: "Ficha do protagonista + premissa (formato '[Name: ...]' como o backup real)."
+        authors_note:
+          type: string
+        opening_text:
+          type: string
+          description: Abertura em 2ª pessoa — vira a action start.
+        tags:
+          type: array
+          items:
+            type: string
+        story_cards:
+          type: array
+          description: 3–8 cards iniciais (NPCs, locais, facções) com triggers coerentes.
+          items:
+            $ref: '#/components/schemas/StoryCardUpsert'
+
+    AssistantFieldRequest:
+      type: object
+      required: [field]
+      properties:
+        field:
+          type: string
+          enum: [title, description, ai_instructions, plot_essentials, authors_note, opening_text, tags, story_cards]
+        brief:
+          type: string
+          description: Ideia original (contexto primário).
+        current:
+          type: string
+          description: Valor atual do campo (para regenerar mantendo direção).
+        draft:
+          $ref: '#/components/schemas/ScenarioDraft'
+          description: Rascunho atual completo (coerência cruzada).
+
+    AssistantFieldResponse:
+      type: object
+      properties:
+        field:
+          type: string
+        value:
+          type: string
+          description: Presente para campos de texto; tags vem como string separada por vírgula.
+        story_cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoryCardUpsert'
+          description: Presente quando field=story_cards.
+
+    SeeRequest:
+      type: object
+      required: [action_seq]
+      properties:
+        action_seq:
+          type: integer
+          description: Seq da ação cuja cena será ilustrada (normalmente a última continue).
+        extra_prompt:
+          type: string
+          description: Detalhe extra do jogador para a imagem (opcional).
+
+    ImageResult:
+      type: object
+      required: [id, url, prompt]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          description: /api/images/{id} — servir com Bearer.
+        prompt:
+          type: string
+          description: Prompt final enviado ao provedor (após prompt_builder).
+        provider:
+          type: string
+        action:
+          $ref: '#/components/schemas/Action'
+          description: A action type=see persistida e vinculada.
+
+    ImageSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [sdwebui, openai_compatible]
+        sdwebui_base_url:
+          type: string
+          example: http://127.0.0.1:7860
+        sdwebui_steps:
+          type: integer
+        sdwebui_width:
+          type: integer
+        sdwebui_height:
+          type: integer
+        negative_prompt:
+          type: string
+        openai_base_url:
+          type: string
+        openai_api_key:
+          type: string
+          nullable: true
+          description: Sempre mascarada.
+        openai_model:
+          type: string
+        openai_size:
+          type: string
+          example: 512x512
+        style_suffix:
+          type: string
+
+    ImageSettingsUpdate:
+      type: object
+      description: Campos omitidos permanecem.
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [sdwebui, openai_compatible]
+        sdwebui_base_url:
+          type: string
+        sdwebui_steps:
+          type: integer
+        sdwebui_width:
+          type: integer
+        sdwebui_height:
+          type: integer
+        negative_prompt:
+          type: string
+        openai_base_url:
+          type: string
+        openai_api_key:
+          type: string
+          nullable: true
+          description: String vazia remove; omitir mantém.
+        openai_model:
+          type: string
+        openai_size:
+          type: string
+        style_suffix:
+          type: string
 
     Error:
       type: object
