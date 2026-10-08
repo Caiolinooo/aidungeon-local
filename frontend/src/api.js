@@ -81,6 +81,14 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     throw await parseError(res)
   }
   if (res.status === 204) return null
+  // 200 com corpo não-JSON = backend antigo servindo o index.html do fallback SPA
+  // (rota inexistente cai no StaticFiles). Sem este guarda o usuário via o erro
+  // críptico "Unexpected token '<' ... is not valid JSON".
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(res.status, 'invalid_response',
+      'Backend returned a non-JSON response — it is probably running an older version. Restart it (parar.bat → iniciar.bat).')
+  }
   return res.json()
 }
 
