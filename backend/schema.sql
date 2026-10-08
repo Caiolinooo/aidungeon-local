@@ -58,3 +58,26 @@ CREATE TABLE images(
 
 -- v2: estilo visual da aventura (vem de state.imageStyle no backup)
 ALTER TABLE adventures ADD COLUMN image_style TEXT DEFAULT '';
+
+-- v0.3.0 (2026-10-08): assets por NPC nos story cards
+ALTER TABLE story_cards ADD COLUMN portrait_image_id TEXT;
+ALTER TABLE story_cards ADD COLUMN portrait_prompt TEXT DEFAULT '';
+ALTER TABLE story_cards ADD COLUMN voice TEXT DEFAULT '';
+ALTER TABLE story_cards ADD COLUMN vrm_id TEXT DEFAULT '';
+
+-- v0.3.0: kind='portrait' + ref_id=card_id para retratos (action_seq=-1: retrato
+-- não pertence ao feed de ações)
+ALTER TABLE images ADD COLUMN kind TEXT DEFAULT 'scene';
+ALTER TABLE images ADD COLUMN ref_id TEXT DEFAULT '';
+
+-- v0.3.0: fila do pipeline assíncrono de assets (worker em app/jobs.py)
+CREATE TABLE jobs(
+  id TEXT PRIMARY KEY,
+  adventure_id TEXT NOT NULL REFERENCES adventures(id),
+  type TEXT NOT NULL,                -- 'character_portrait'
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|error|canceled
+  ref_id TEXT DEFAULT '',            -- story_card alvo
+  payload TEXT DEFAULT '{}',         -- JSON de entrada
+  result TEXT,                       -- JSON de saída (ex.: {"image": {...}})
+  error TEXT,
+  created_at TEXT, started_at TEXT, finished_at TEXT);

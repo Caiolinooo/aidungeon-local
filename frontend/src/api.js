@@ -134,6 +134,16 @@ export const api = {
   deleteCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}`, { method: 'DELETE' }),
 
+  // ----------------------------------------------------- assets / jobs (v0.3.0)
+  // Fila assíncrona de assets (retratos de NPC etc.) — ver docs do pipeline.
+  listJobs: (advId, status) => request(`/adventures/${advId}/jobs${qs({ status })}`),
+  cancelJob: (advId, jobId) =>
+    request(`/adventures/${advId}/jobs/${jobId}`, { method: 'DELETE' }),
+  regeneratePortrait: (advId, cardId) =>
+    request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'POST' }),
+  generateAllPortraits: (advId) =>
+    request(`/adventures/${advId}/portraits`, { method: 'POST' }),
+
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),
   putMemory: (advId, payload) => request(`/adventures/${advId}/memory`, { method: 'PUT', body: payload }),

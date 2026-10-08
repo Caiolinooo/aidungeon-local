@@ -21,26 +21,31 @@ def _adventure_or_404(adventure_id: str) -> None:
 def create_card(adventure_id: str, body: StoryCardUpsert) -> dict:
     _adventure_or_404(adventure_id)
     with db.session() as conn:
-        return db.insert_card(
+        card = db.insert_card(
             conn, adventure_id,
             title=body.title or "", type=body.type or "other",
             triggers=body.triggers or [], entry=body.entry or "",
             pinned=bool(body.pinned),
             use_for_character_creation=bool(body.use_for_character_creation),
+            portrait_prompt=body.portrait_prompt or "",
+            voice=body.voice or "", vrm_id=body.vrm_id or "",
         )
+        return db.attach_portrait(conn, card)
 
 
 @router.get("/{adventure_id}/cards")
 def list_cards(adventure_id: str) -> list[dict]:
     _adventure_or_404(adventure_id)
     with db.session() as conn:
-        return db.list_cards(conn, adventure_id)
+        return [db.attach_portrait(conn, c) for c in db.list_cards(conn, adventure_id)]
 
 
 @router.get("/{adventure_id}/cards/{card_id}")
 def get_card(adventure_id: str, card_id: str) -> dict:
     with db.session() as conn:
         card = db.get_card(conn, adventure_id, card_id)
+        if card:
+            db.attach_portrait(conn, card)
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
     return card
@@ -51,6 +56,8 @@ def update_card(adventure_id: str, card_id: str, body: StoryCardUpsert) -> dict:
     fields = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         card = db.update_card(conn, adventure_id, card_id, fields)
+        if card:
+            db.attach_portrait(conn, card)
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
     return card

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AI Dungeon Local — API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     API REST do clone local do AI Dungeon (PLANO.md §4.4).
 
@@ -37,6 +37,8 @@ tags:
     description: Assistente de criação de cenários (geração estruturada via LLM).
   - name: images
     description: Geração de imagens da cena (ação "See") — provedor sdwebui local/LAN ou endpoint OpenAI-compatible.
+  - name: assets
+    description: Pipeline assíncrono de assets (v0.3.0) — fila de jobs que gera retratos de NPCs em background; a UI faz polling e aplica cada asset ao concluir.
   - name: health
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
@@ -483,6 +485,121 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ------------------------------------------------------------------- assets
+  # Pipeline assíncrono (v0.3.0): enfileira gerações; o worker (backend) executa
+  # em background e a UI faz polling em GET .../jobs, aplicando cada asset ao
+  # concluir. Criar aventura a partir de cenário já enfileira retratos dos NPCs.
+  /api/adventures/{adventureId}/portraits:
+    post:
+      tags: [assets]
+      summary: Enfileirar geração de retrato para todos os NPCs (cards type=character)
+      operationId: enqueueAllPortraits
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '202':
+          description: Jobs enfileirados (dedupe — jobs ativos são reaproveitados).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/cards/{cardId}/portrait:
+    post:
+      tags: [assets]
+      summary: (Re)gerar retrato de um NPC
+      operationId: enqueuePortrait
+      description: |
+        Enfileira um job character_portrait. Se o card não tiver portrait_prompt,
+        o LLM escreve um a partir de entry + contexto da aventura (e o persiste no
+        card). Prompt final = image_style da aventura + portrait_prompt + style_suffix
+        (mesma config efetiva da ação "See").
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '202':
+          description: Job enfileirado (ou job ativo existente — dedupe).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/jobs:
+    get:
+      tags: [assets]
+      summary: Listar jobs da aventura (polling da UI)
+      operationId: listJobs
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, running, done, error, canceled]
+      responses:
+        '200':
+          description: Fila em ordem de criação.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/jobs/{jobId}:
+    get:
+      tags: [assets]
+      summary: Obter job
+      operationId: getJob
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [assets]
+      summary: Cancelar job pendente
+      operationId: cancelJob
+      description: Jobs running são devolvidos sem alteração (cancelamento cooperativo — v1); jobs finalizados dão 409 job_not_cancelable.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job cancelado (ou running, sem alteração).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Job já finalizado (error.code = job_not_cancelable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ------------------------------------------------------------------- memory
   /api/adventures/{adventureId}/memory:
     get:
@@ -877,6 +994,12 @@ components:
       required: true
       schema:
         type: string
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
 
   responses:
     NotFound:
@@ -1218,6 +1341,33 @@ components:
         use_for_character_creation:
           type: boolean
           default: false
+        portrait_image_id:
+          type: string
+          nullable: true
+          description: v0.3.0 — id da imagem de retrato atual (definido pelo job character_portrait; não editável via PATCH).
+        portrait_prompt:
+          type: string
+          default: ''
+          description: v0.3.0 — prompt do retrato; se vazio, o LLM escreve um a partir de entry + contexto da aventura (e persiste aqui).
+        voice:
+          type: string
+          default: ''
+          description: v0.3.0 — voz TTS do NPC ('', M1, M2, M3, F1, F2, F3 — Supertonic).
+        vrm_id:
+          type: string
+          default: ''
+          description: v0.3.0 — avatar VRM do NPC (reservado p/ fase 2 — painel 3D).
+        portrait:
+          type: object
+          nullable: true
+          description: v0.3.0 — retrato atual do NPC (mesmo recorte de Action.image).
+          properties:
+            id:
+              type: string
+            url:
+              type: string
+            prompt:
+              type: string
         created_at:
           type: string
           format: date-time
@@ -1242,6 +1392,51 @@ components:
           type: boolean
         use_for_character_creation:
           type: boolean
+        portrait_prompt:
+          type: string
+        voice:
+          type: string
+        vrm_id:
+          type: string
+
+    Job:
+      type: object
+      description: Job do pipeline assíncrono de assets (v0.3.0).
+      required: [id, adventure_id, type, status]
+      properties:
+        id:
+          type: string
+        adventure_id:
+          type: string
+        type:
+          type: string
+          enum: [character_portrait]
+        status:
+          type: string
+          enum: [pending, running, done, error, canceled]
+        ref_id:
+          type: string
+          description: Alvo do job (character_portrait → id do story card).
+        payload:
+          type: object
+        result:
+          type: object
+          nullable: true
+          description: character_portrait done → {"image": {id, url, prompt}, "card_id", "prompt"}.
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
 
     Memory:
       type: object

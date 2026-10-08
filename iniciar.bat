@@ -42,7 +42,7 @@ set "LOGFILE=%ROOT%logs\backend-%LOGDATE%.log"
 rem ---- sobe o uvicorn (janela minimizada, cwd = backend\) ------------------
 echo Subindo backend... log: %LOGFILE%
 cd /d "%ROOT%backend"
-start "AI Dungeon Local - backend" /min cmd /c ".\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 >> "%LOGFILE%" 2>&1"
+start "AI Dungeon Local - backend" /min cmd /c ".\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 >> "%LOGFILE%" 2>&1"
 cd /d "%ROOT%"
 
 rem ---- espera o health: qualquer resposta HTTP = no ar ---------------------
@@ -62,7 +62,7 @@ echo        %LOGFILE%
 exit /b 1
 
 :health_ok
-echo Backend no ar em http://127.0.0.1:8000
+echo Backend no ar em http://0.0.0.0:8000
 echo Login: usuario/senha definidos no .env. Para encerrar: parar.bat
 
 :open_browser

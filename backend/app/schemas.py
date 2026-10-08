@@ -24,6 +24,10 @@ class StoryCardUpsert(BaseModel):
     entry: str | None = None
     pinned: bool | None = None
     use_for_character_creation: bool | None = None
+    # v0.3.0: assets do NPC (portrait_image_id é interno — definido pelo job)
+    portrait_prompt: str | None = None
+    voice: str | None = None
+    vrm_id: str | None = None
 
 
 class ScenarioCreate(BaseModel):

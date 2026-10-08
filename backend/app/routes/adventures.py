@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app import db, game_engine
+from app import db, game_engine, jobs
 from app.errors import GameError
 from app.schemas import AdventureCreate
 
@@ -41,6 +41,9 @@ def create_adventure(body: AdventureCreate) -> dict:
                     pinned=bool(card.get("pinned")),
                     use_for_character_creation=bool(card.get("use_for_character_creation")),
                 )
+            # v0.3.0: pipeline assíncrono — retratos dos NPCs começam a gerar
+            # em background; a UI aplica cada um quando o job conclui.
+            jobs.enqueue_all_portraits(conn, adv["id"])
         else:
             adv = db.insert_adventure(conn, title=body.title or "Untitled Adventure",
                                       tags=body.tags or [], source="new")

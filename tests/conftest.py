@@ -54,6 +54,13 @@ def _auth_env(monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", TEST_AUTH_SECRET)
 
 
+@pytest.fixture(autouse=True)
+def _jobs_worker_off(monkeypatch):
+    """Worker de jobs desligado nos testes — a fila é drenada explicitamente
+    via jobs.process_pending(transport) para determinismo."""
+    monkeypatch.setenv("AIDUNGEON_JOBS_WORKER", "0")
+
+
 @pytest.fixture()
 def auth_token() -> str:
     """Bearer token válido emitido com as credenciais de teste."""

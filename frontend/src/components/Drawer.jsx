@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import CardsTab from './drawer/CardsTab.jsx'
+import NpcsTab from './drawer/NpcsTab.jsx'
 import MemoryTab from './drawer/MemoryTab.jsx'
 import ConfigTab from './drawer/ConfigTab.jsx'
 import DetailsTab from './drawer/DetailsTab.jsx'
 
 const TABS = [
   { id: 'cards', label: 'Story Cards' },
+  { id: 'npcs', label: 'NPCs' },
   { id: 'memory', label: 'Memory' },
   { id: 'config', label: 'Config' },
   { id: 'details', label: 'Details' },
@@ -39,6 +41,7 @@ export default function Drawer({ open, onClose, adventure, onAdventureChange }) 
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           {tab === 'cards' && <CardsTab adventure={adventure} />}
+          {tab === 'npcs' && <NpcsTab adventure={adventure} />}
           {tab === 'memory' && <MemoryTab adventure={adventure} />}
           {tab === 'config' && <ConfigTab />}
           {tab === 'details' && <DetailsTab adventure={adventure} onAdventureChange={onAdventureChange} />}

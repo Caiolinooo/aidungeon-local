@@ -24,12 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth as auth_core
-from app import db, settings_store
+from app import db, jobs, settings_store
 from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
-                        generation, health, images, import_export, memory,
-                        scenarios, settings)
+                        generation, health, images, import_export, jobs as jobs_routes,
+                        memory, scenarios, settings)
 from app.routes import auth as auth_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -46,10 +46,14 @@ async def lifespan(app: FastAPI):
             "no .env da raiz. Fail closed: rotas /api respondem 401 e "
             "POST /api/auth/login responde 503."
         )
-    yield
+    jobs.start_worker(app)
+    try:
+        yield
+    finally:
+        jobs.stop_worker(app)
 
 
-app = FastAPI(title="AI Dungeon Local — API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="AI Dungeon Local — API", version="0.3.0", lifespan=lifespan)
 
 # CORS: lista vem de config/settings.json (cors_origins) — adicionar lá o
 # domínio da Vercel quando o frontend for publicado.
@@ -105,6 +109,8 @@ app.include_router(assistant.router, prefix="/api", tags=["assistant"],
 app.include_router(actions.router, prefix="/api/actions", tags=["actions"],
                    dependencies=_protected)
 app.include_router(cards.router, prefix="/api/adventures", tags=["cards"],
+                   dependencies=_protected)
+app.include_router(jobs_routes.router, prefix="/api/adventures", tags=["assets"],
                    dependencies=_protected)
 app.include_router(memory.router, prefix="/api/adventures", tags=["memory"],
                    dependencies=_protected)

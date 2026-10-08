@@ -203,9 +203,22 @@ def card_to_dict(row: sqlite3.Row) -> dict:
         "entry": row["entry"] or "",
         "pinned": bool(row["pinned"]),
         "use_for_character_creation": bool(row["use_for_character_creation"]),
+        # v0.3.0: assets do NPC
+        "portrait_image_id": row["portrait_image_id"],
+        "portrait_prompt": row["portrait_prompt"] or "",
+        "voice": row["voice"] or "",
+        "vrm_id": row["vrm_id"] or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def attach_portrait(conn: sqlite3.Connection, card: dict) -> dict:
+    """Embute card['portrait'] = image_ref do retrato atual (None se ausente)."""
+    card["portrait"] = None
+    if card.get("portrait_image_id"):
+        card["portrait"] = image_ref(get_image(conn, card["portrait_image_id"]))
+    return card
 
 
 def memory_to_dict(row: sqlite3.Row) -> dict:
@@ -403,6 +416,8 @@ def image_to_dict(row: sqlite3.Row) -> dict:
         "provider": row["provider"] or "",
         "width": row["width"],
         "height": row["height"],
+        "kind": row["kind"] or "scene",
+        "ref_id": row["ref_id"] or "",
         "created_at": row["created_at"],
         "url": f"/api/images/{row['id']}",
     }
@@ -425,13 +440,15 @@ def insert_image(conn: sqlite3.Connection, *, adventure_id: str, action_seq: int
                  file_path: str, prompt: str = "", negative_prompt: str = "",
                  provider: str = "", width: int | None = None,
                  height: int | None = None, image_id: str | None = None,
+                 kind: str = "scene", ref_id: str = "",
                  created_at: str | None = None) -> dict:
     iid = image_id or new_id()
     conn.execute(
         "INSERT INTO images(id, adventure_id, action_seq, prompt, negative_prompt,"
-        " file_path, provider, width, height, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        " file_path, provider, width, height, kind, ref_id, created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
-         provider, width, height, created_at or utcnow()),
+         provider, width, height, kind, ref_id, created_at or utcnow()),
     )
     return image_to_dict(conn.execute("SELECT * FROM images WHERE id=?", (iid,)).fetchone())
 
@@ -445,14 +462,17 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict | None:
 def insert_card(conn: sqlite3.Connection, adventure_id: str, *, title: str = "",
                 type: str = "other", triggers: list | None = None, entry: str = "",
                 pinned: bool = False, use_for_character_creation: bool = False,
+                portrait_prompt: str = "", voice: str = "", vrm_id: str = "",
                 created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     cid = new_id()
     conn.execute(
         "INSERT INTO story_cards(id, adventure_id, title, type, triggers, entry, pinned,"
-        " use_for_character_creation, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        " use_for_character_creation, portrait_prompt, voice, vrm_id,"
+        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, adventure_id, title, type or "other", _dumps(triggers, []), entry,
-         int(pinned), int(use_for_character_creation), created_at or now, updated_at or now),
+         int(pinned), int(use_for_character_creation), portrait_prompt, voice, vrm_id,
+         created_at or now, updated_at or now),
     )
     return card_to_dict(conn.execute("SELECT * FROM story_cards WHERE id=?", (cid,)).fetchone())
 
@@ -479,12 +499,19 @@ def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
     merged = {**current, **{k: v for k, v in fields.items() if v is not None}}
     conn.execute(
         "UPDATE story_cards SET title=?, type=?, triggers=?, entry=?, pinned=?,"
-        " use_for_character_creation=?, updated_at=? WHERE id=?",
+        " use_for_character_creation=?, portrait_prompt=?, voice=?, vrm_id=?,"
+        " updated_at=? WHERE id=?",
         (merged["title"], merged["type"] or "other", _dumps(merged["triggers"], []),
          merged["entry"], int(merged["pinned"]), int(merged["use_for_character_creation"]),
+         merged["portrait_prompt"], merged["voice"], merged["vrm_id"],
          utcnow(), card_id),
     )
     return get_card(conn, adventure_id, card_id)
+
+
+def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | None) -> None:
+    conn.execute("UPDATE story_cards SET portrait_image_id=?, updated_at=? WHERE id=?",
+                 (image_id, utcnow(), card_id))
 
 
 def delete_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> bool:
@@ -525,3 +552,100 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM settings WHERE key=?", (key,))
+
+
+# -------------------------------------------------------------------- jobs
+JOB_TYPES = ("character_portrait",)
+JOB_ACTIVE = ("pending", "running")
+
+
+def job_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "adventure_id": row["adventure_id"],
+        "type": row["type"],
+        "status": row["status"],
+        "ref_id": row["ref_id"] or "",
+        "payload": _loads(row["payload"], {}),
+        "result": _loads(row["result"], None),
+        "error": row["error"],
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+def insert_job(conn: sqlite3.Connection, *, adventure_id: str, type: str,
+               ref_id: str = "", payload: dict | None = None,
+               job_id: str | None = None) -> dict:
+    if type not in JOB_TYPES:
+        raise ValueError(f"invalid job type: {type}")
+    jid = job_id or new_id()
+    conn.execute(
+        "INSERT INTO jobs(id, adventure_id, type, status, ref_id, payload, created_at)"
+        " VALUES(?,?,?,'pending',?,?,?)",
+        (jid, adventure_id, type, ref_id, _dumps(payload, {}), utcnow()),
+    )
+    return job_to_dict(conn.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone())
+
+
+def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return job_to_dict(row) if row else None
+
+
+def list_jobs(conn: sqlite3.Connection, adventure_id: str,
+              status: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM jobs WHERE adventure_id=?"
+    params: list = [adventure_id]
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    rows = conn.execute(sql + " ORDER BY created_at ASC", params).fetchall()
+    return [job_to_dict(r) for r in rows]
+
+
+def find_active_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | None:
+    """Job pendente/rodando para o mesmo alvo (dedupe de enfileiramento)."""
+    row = conn.execute(
+        "SELECT * FROM jobs WHERE type=? AND ref_id=?"
+        " AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+        (type, ref_id),
+    ).fetchone()
+    return job_to_dict(row) if row else None
+
+
+def claim_next_job(conn: sqlite3.Connection) -> dict | None:
+    """pending → running do job mais antigo (o worker é único por processo)."""
+    row = conn.execute(
+        "SELECT id FROM jobs WHERE status='pending' ORDER BY created_at ASC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    cur = conn.execute(
+        "UPDATE jobs SET status='running', started_at=? WHERE id=? AND status='pending'",
+        (utcnow(), row["id"]),
+    )
+    if cur.rowcount == 0:  # outro processo pegou antes
+        return None
+    return get_job(conn, row["id"])
+
+
+def finish_job(conn: sqlite3.Connection, job_id: str, status: str,
+               result: dict | None = None, error: str | None = None) -> None:
+    conn.execute(
+        "UPDATE jobs SET status=?, result=?, error=?, finished_at=? WHERE id=?",
+        (status, _dumps(result, None) if result is not None else None,
+         error, utcnow(), job_id),
+    )
+
+
+def cancel_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    """Cancela apenas jobs pendentes (running é cooperativo — v1 não interrompe)."""
+    cur = conn.execute(
+        "UPDATE jobs SET status='canceled', finished_at=? WHERE id=? AND status='pending'",
+        (utcnow(), job_id),
+    )
+    if cur.rowcount == 0:
+        return None
+    return get_job(conn, job_id)

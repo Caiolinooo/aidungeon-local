@@ -11,8 +11,16 @@ OpenAI-compatível.
 
 ---
 
-## Funcionalidades (v0.2.0)
+## Funcionalidades (v0.3.0)
 
+- **Pipeline assíncrono de assets**: ao criar uma aventura a partir de um cenário,
+  os retratos dos NPCs já começam a gerar em background (fila de jobs + worker no
+  backend) — você joga enquanto os assets ficam prontos e a UI aplica cada um ao
+  concluir (polling de `GET .../jobs`).
+- **Aba NPCs**: ficha por personagem (story cards `type=character`) com retrato,
+  descrição editável, prompt do retrato (vazio = o LLM escreve um a partir da
+  descrição + contexto da história) e voz TTS (M1–M3, F1–F3). Botão de regenerar
+  por NPC ou "Generate all portraits" para a aventura inteira.
 - **Jogo completo**: ações Do/Say/Story, Continue, Retry, Undo, edição de qualquer ação,
   streaming SSE token a token — paridade com as mecânicas do AI Dungeon.
 - **Generate with AI**: descreva uma ideia ("pirata steampunk caçando um leviatã") e o
@@ -166,29 +174,33 @@ AIDungeon_Local\
 │  ├─ schema.sql             DDL base (aplicada na 1ª execução)
 │  ├─ migrations\            migrations versionadas (PRAGMA user_version):
 │  │                         002 imagens/image_style · 003 story_cards de cenário
+│  │                         · 004 jobs + assets de NPC
 │  ├─ app\                   FastAPI: main, db, game_engine, context_builder,
-│  │  │                      llm_client, image_client, assistant, settings_store, auth
+│  │  │                      llm_client, image_client, assistant, settings_store, auth,
+│  │  │                      jobs (worker do pipeline assíncrono de assets)
 │  │  └─ routes\             routers da API (contratos em docs/openapi.yaml):
 │  │                         generation (SSE), images (See), assistant, choices,
-│  │                         settings (llm + image), cards, memory, import/export…
+│  │                         settings (llm + image), cards, jobs (assets), memory,
+│  │                         import/export…
 │  ├─ memory\                triggers.py, summarizer.py, retrieval.py
 │  ├─ importer.py            backup AI Dungeon → banco
 │  └─ exporter.py            banco → backup AI Dungeon, round-trip
 ├─ frontend\                 React + Vite + Tailwind (build servido pelo FastAPI)
 │  └─ src\                   páginas Home/Play/Login/ScenarioEditor, drawer
-│                            (Cards/Memory/Config/Details), GenerateAdventureModal
+│                            (Cards/NPCs/Memory/Config/Details), GenerateAdventureModal
 ├─ config\
 │  ├─ settings.json          sampler, budgets de contexto, LLM, imagens, assistente,
 │  │                         escolhas, memory bank, story cards, stop sequences
 │  └─ models.json            modelos GGUF de referência + qual está ativo
 ├─ data\
 │  ├─ aidungeon.db           banco SQLite (git-ignored)
-│  ├─ images\                imagens geradas pela ação See (git-ignored)
+│  ├─ images\                imagens geradas (See + retratos de NPC, git-ignored)
 │  ├─ models\*.gguf          pesos dos modelos (git-ignored)
 │  └─ koboldcpp\             runtime local do LLM (git-ignored)
 ├─ tools\                    check_llm.py, bench_llm.py, setup_llm_local.ps1
-├─ tests\                    suíte pytest (93 testes: engine, contexto, memória, auth,
-│                           replay E2E do backup, smoke VM, v2 imagens/assistente)
+├─ tests\                    suíte pytest (104 testes: engine, contexto, memória, auth,
+│                           replay E2E do backup, smoke VM, v2 imagens/assistente,
+│                           v0.3.0 jobs/retratos)
 ├─ docs\
 │  ├─ openapi.yaml           contrato REST completo (PLANO.md §4.4), incl. SSE
 │  └─ DEPLOY_VERCEL.md       deploy do frontend na Vercel
