@@ -9,9 +9,10 @@
 //
 // Auth: mesmo esquema do api.js — header Bearer em toda chamada; 401 →
 // clearToken() + evento 'aidl:unauthorized' (AuthGate volta ao /login).
+// API_BASE: ver api.js (VITE_API_BASE_URL no build; '' = mesma origem).
 
 import { getToken } from './auth.js'
-import { notifyUnauthorized } from './api.js'
+import { notifyUnauthorized, API_BASE } from './api.js'
 
 export async function streamGeneration(path, { body, signal, onToken, onDone, onError } = {}) {
   let res
@@ -19,7 +20,7 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
     const headers = body != null ? { 'Content-Type': 'application/json' } : {}
     const token = getToken()
     if (token) headers.Authorization = `Bearer ${token}`
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${API_BASE}/api${path}`, {
       method: 'POST',
       headers,
       body: body != null ? JSON.stringify(body) : undefined,

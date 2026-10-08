@@ -1,0 +1,2 @@
+# Batch files do cmd.exe exigem CRLF (blocos (...) e goto quebram com LF).
+*.bat text eol=crlf

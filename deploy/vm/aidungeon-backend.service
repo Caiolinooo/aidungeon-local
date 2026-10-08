@@ -1,0 +1,27 @@
+[Unit]
+Description=AI Dungeon Local - backend (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Ajuste o usuario e os caminhos se instalar fora de /opt/aidungeon.
+User=aidungeon
+Group=aidungeon
+WorkingDirectory=/opt/aidungeon/backend
+# Segredos (LLM_API_KEY, AUTH_USER, AUTH_PASSWORD_HASH, AUTH_SECRET) — chmod 600.
+# O app tambem le /opt/aidungeon/.env sozinho; o EnvironmentFile so garante as vars no processo.
+EnvironmentFile=/opt/aidungeon/.env
+ExecStart=/opt/aidungeon/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+
+# Hardening basico (auth do app ja e obrigatoria; dados ficam em data/).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/aidungeon/data /opt/aidungeon/logs
+
+[Install]
+WantedBy=multi-user.target

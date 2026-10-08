@@ -23,6 +23,7 @@ data/koboldcpp/
 
 # --- Logs e temporários ---
 *.log
+logs/
 tmp/
 temp/
 
@@ -31,4 +32,10 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# --- Segredos e pacotes de deploy (nunca versionar) ---
 .env
+.env.bak
+.env.*
+!.env.example
+deploy/vm/*.zip

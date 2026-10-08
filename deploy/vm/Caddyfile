@@ -1,0 +1,14 @@
+# Caddyfile de exemplo — TLS automatico na frente do backend.
+#
+# 1. Troque o placeholder pelo seu dominio e aponte o DNS para a VM.
+# 2. Rode o uvicorn em 127.0.0.1:8000 (ajuste ExecStart no aidungeon-backend.service)
+#    e abra no firewall apenas 80/443.
+# 3. sudo caddy reload --config /opt/aidungeon/Caddyfile  (ou systemctl reload caddy)
+#
+# O Caddy emite e renova o certificado Let's Encrypt sozinho.
+# A auth Bearer do proprio app continua obrigatoria em todas as rotas /api.
+
+api.groupabz.com {
+	reverse_proxy 127.0.0.1:8000
+	encode zstd gzip
+}

@@ -90,6 +90,29 @@ QA sejam desenvolvidos em paralelo contra as mesmas interfaces (ver PLANO.md §5
 - Windows 10/11 x64 para os scripts `tools/*.ps1` / `*.bat` (o restante é portável)
 - 16 GB de RAM recomendados (hardware de referência: i5-1145G7, Iris Xe — sem CUDA)
 
+## Como rodar
+
+1. **Instalação (uma vez):**
+   `powershell -ExecutionPolicy Bypass -File instalar.ps1`
+   — verifica Python 3.12+ e Node 20+, cria `backend\.venv`, instala as deps Python,
+   roda `npm ci` + `npm run build` no frontend, cria `.env` a partir de
+   [`.env.example`](.env.example) (preencha os 4 valores — os comentários no arquivo
+   ensinam a gerar cada um) e testa o LLM da VM.
+2. **Uso diário:** duplo-clique em **`iniciar.bat`** — sobe o backend
+   (`uvicorn` em `127.0.0.1:8000`, log em `logs\backend-AAAAMMDD.log`) e abre o
+   navegador já na página de **login** (usuário/senha do `.env`).
+   Para encerrar: **`parar.bat`**.
+3. O backend serve o build da SPA (`frontend\dist`) na mesma origem — não é preciso
+   `npm run dev` para jogar. Logs de erro do backend ficam em `logs\`.
+
+### Deploy (opcional)
+
+- **Frontend na Vercel** — SPA estática com `VITE_API_BASE_URL` apontando para o
+  backend: passo a passo em [`docs/DEPLOY_VERCEL.md`](docs/DEPLOY_VERCEL.md).
+- **Backend na VM** (`vm.groupabz.com`, FastAPI persistente + systemd + TLS opcional):
+  gerar o pacote com `deploy\vm\package_backend.ps1` e seguir
+  [`deploy/vm/README.md`](deploy/vm/README.md).
+
 ## Onde cada coisa vive
 
 ```

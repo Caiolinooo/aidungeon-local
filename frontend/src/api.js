@@ -1,6 +1,8 @@
 // Wrapper de fetch para a API (contrato: docs/openapi.yaml — fonte da verdade).
-// baseURL '/api': em dev o Vite faz proxy p/ http://127.0.0.1:8000; em produção
-// o próprio FastAPI serve o build na mesma origem.
+// Base: `${API_BASE}/api` — em dev o Vite faz proxy p/ http://127.0.0.1:8000 e
+// em produção local o próprio FastAPI serve o build na mesma origem (API_BASE='').
+// Deploy na Vercel: build com VITE_API_BASE_URL=https://<host-do-backend> faz
+// as chamadas irem para esse host (CORS liberado via cors_origins no backend).
 // Erros seguem o shape {"error": {"code", "message"}} do contrato.
 //
 // Auth: toda chamada leva "Authorization: Bearer <token>" (localStorage, ver
@@ -8,6 +10,10 @@
 // 'aidl:unauthorized', que o AuthGate escuta para voltar ao /login.
 
 import { clearToken, getToken } from './auth.js'
+
+// Prefixo absoluto opcional da API (deploy do frontend fora do backend).
+// '' (default) = mesma origem — comportamento local inalterado.
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 export class ApiError extends Error {
   constructor(status, code, message) {
@@ -57,7 +63,7 @@ async function parseError(res) {
 async function request(path, { method = 'GET', body, signal } = {}) {
   let res
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${API_BASE}/api${path}`, {
       method,
       // FormData (upload multipart) define o próprio Content-Type com boundary
       headers: body instanceof FormData
@@ -98,7 +104,7 @@ export const api = {
   downloadExport: async (id) => {
     let res
     try {
-      res = await fetch(`/api/adventures/${id}/export`, { headers: authHeaders() })
+      res = await fetch(`${API_BASE}/api/adventures/${id}/export`, { headers: authHeaders() })
     } catch {
       throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
     }
