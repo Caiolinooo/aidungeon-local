@@ -425,3 +425,27 @@ D:\Projeto\AIDungeon_Local\
 
 *Plano gerado em 2026-10-07 a partir da análise do backup real (201 ações, 236 cards, 25
 memórias) e do hardware local (i5-1145G7 · 16 GB · Iris Xe).*
+
+---
+
+## 11. ADENDO (2026-10-08) — Infra real, auth e publicação
+
+Decisões tomadas durante a execução:
+
+1. **LLM em VM, não local**: llama.cpp (`llama-server`) em `http://vm.groupabz.com:1234/v1`,
+   modelo **Qwen3.6-35B-A3B** (MoE ~3B ativos, IQ2_M, n_ctx 262144, 4 slots, prompt caching).
+   API key via `LLM_API_KEY` (arquivo `.env` gitignored). `disable_thinking: true` é
+   OBRIGATÓRIO (modelo híbrido Qwen3.x: sem `chat_template_kwargs.enable_thinking=false`
+   o `content` volta vazio).
+2. **Auth obrigatória** (Onda 4): página de login (user `Caio`, senha em `AUTH_PASSWORD_HASH`
+   no `.env` — nunca no git), `POST /api/auth/login` devolve token HMAC assinado
+   (`AUTH_SECRET` no `.env`), middleware Bearer protege TODAS as rotas exceto login.
+   Frontend tem AuthGate (localStorage, 401 → volta ao login).
+3. **Publicação** (Onda 7): repo **privado** no GitHub (`Caiolinooo`) + push.
+   Deploy: **frontend na Vercel** (SPA estática, env `VITE_API_BASE_URL`) +
+   **backend na VM** `vm.groupabz.com` (FastAPI persistente — Vercel serverless tem
+   filesystem efêmero, perderia o SQLite; decisão do usuário em 2026-10-08).
+   Pré-requisito do usuário: `vercel login` (CLI já instalado, sem credenciais).
+4. **Ondas revisadas**: 1 arquiteto ✅ · 2 llm-tools + backend ✅ · 3 memória + frontend 🔄 ·
+   4 auth · 5 QA (replay E2E com auth) · 6 devops (iniciar.bat + script de deploy da VM) ·
+   7 publicação (git push + Vercel).
