@@ -1,18 +1,21 @@
 Avatares GLB dos NPCs (AIDungeon_Local — engine TalkingHead)
 ============================================================
 
-Arquivos: vroid.glb, brunette.glb
+Arquivos: brunette.glb, avaturn.glb
 Origem:   https://github.com/met4citizen/TalkingHead (pasta avatars/)
-
-vroid.glb
----------
-Modelo criado no VRoid Studio e convertido (VRM -> GLB com rig
-Mixamo-compatible + blendshapes ARKit/Oculus) conforme
-https://github.com/met4citizen/TalkingHead/blob/main/blender/VRoid/VROID.md
-Licença do modelo: termos do VRoid Studio — uso não-comercial permissivo.
 
 brunette.glb
 ------------
 Modelo criado no Ready Player Me (https://readyplayer.me/).
 Licença: CC BY-NC 4.0 — livre para desenvolvedores em uso não-comercial.
 https://creativecommons.org/licenses/by-nc/4.0/
+
+avaturn.glb
+-----------
+Modelo criado no Avaturn (https://avaturn.me).
+Licença: uso não-comercial (termos do Avaturn).
+
+Nota: o antigo vroid.glb (VRoid Studio) foi removido — o GLB cru do VRoid
+não tem o rig "Armature" nem os blendshapes Oculus Visemes exigidos pelo
+TalkingHead (exige pipeline de conversão em Blender, ver
+https://github.com/met4citizen/TalkingHead/blob/main/blender/VRoid/VROID.md).

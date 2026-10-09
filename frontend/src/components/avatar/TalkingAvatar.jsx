@@ -50,9 +50,11 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
 ) {
   const containerRef = useRef(null)
   const headRef = useRef(null)
-  // Promise do showAvatar corrente — speak() e setMood() aguardam o avatar
-  // estar carregado para não falarem/animarem no vazio.
-  const headReadyRef = useRef(Promise.resolve())
+  // Promise do showAvatar corrente — resolve true/false conforme o GLB
+  // carregou; speak() e setMood() aguardam o avatar estar carregado e
+  // verificam o flag para não animarem no vazio (GLB incompatível, ex.
+  // sem rig "Armature"/visemes, faz o TalkingHead rejeitar o modelo).
+  const headReadyRef = useRef(Promise.resolve(false))
 
   // Monta o TalkingHead uma única vez (o div é o canvas host dele).
   useEffect(() => {
@@ -90,17 +92,20 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
         lipsyncLang: 'pt_br',
         avatarMood: mood,
       })
-      .catch(() => {
-        // GLB inacessível/inválido: deixa a promise resolvida p/ não travar
-        // o speak(); o container simplesmente fica vazio.
+      .then(() => true)
+      .catch((err) => {
+        // GLB inacessível/incompatível (sem Armature/visemes): loga e
+        // resolve false p/ setMood/speak não operarem em avatar vazio.
+        console.warn('[TalkingAvatar] showAvatar falhou para', url, err)
+        return false
       })
   }, [url, body]) // mood inicial entra no showAvatar; mudanças vão pelo efeito abaixo
 
   // Aplica o mood persistido quando muda (após o avatar estar pronto).
   useEffect(() => {
     let cancelled = false
-    headReadyRef.current.then(() => {
-      if (!cancelled && headRef.current) headRef.current.setMood(mood)
+    headReadyRef.current.then((ok) => {
+      if (!cancelled && ok && headRef.current) headRef.current.setMood(mood)
     })
     return () => {
       cancelled = true
@@ -114,7 +119,8 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
     async speak({ blob, text, onended }) {
       const head = headRef.current
       if (!head) return
-      await headReadyRef.current
+      const ok = await headReadyRef.current
+      if (!ok || headRef.current !== head) return // GLB não carregou / avatar trocado
       head.stopSpeaking()
       try {
         await head.audioCtx.resume()
@@ -139,11 +145,15 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
     },
   }))
 
+  // Tamanho vem do className do chamador (dock passa via pai h-32 w-24,
+  // preview h-80 w-full); sem className, preenche o pai. NÃO fixar
+  // width/height inline aqui — style inline sobrescreve a classe (bug: o
+  // preview da AvatarsTab ficava com altura 0).
   return (
     <div
       ref={containerRef}
-      className={className}
-      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}
+      className={className || 'h-full w-full'}
+      style={{ position: 'relative', overflow: 'hidden' }}
     />
   )
 })

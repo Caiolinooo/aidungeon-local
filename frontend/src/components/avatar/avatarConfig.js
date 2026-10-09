@@ -3,7 +3,7 @@
 //
 // Persistência: card.vrm_id (string livre; nome da coluna mantido por
 // compatibilidade de schema) recebe o JSON de serializeAvatarConfig():
-//   {"model":"vroid","url":"","body":"F","mood":"neutral"}
+//   {"model":"brunette","url":"","body":"F","mood":"neutral"}
 // - model: chave em AVATARS, ou "custom" (url GLB própria — Ready Player Me,
 //   Avaturn T2, VRoid convertido etc.; precisa de rig Mixamo-compatible +
 //   blendshapes ARKit/Oculus, ver README do TalkingHead).
@@ -15,14 +15,17 @@
 // inválido -> defaults (avatar padrão, mood neutral).
 
 // Modelos servidos de frontend/public/avatars (vite copia public/ p/ dist).
-// Licenças: vroid.glb (VRoid Studio, uso não-comercial permissivo),
-// brunette.glb (Ready Player Me, CC BY-NC 4.0) — ver public/avatars/LICENSE.txt.
+// Ambos com rig "Armature" + blendshapes ARKit/Oculus Visemes (exigência do
+// TalkingHead). Licenças: brunette.glb (Ready Player Me, CC BY-NC 4.0),
+// avaturn.glb (Avaturn, uso não-comercial) — ver public/avatars/LICENSE.txt.
+// O antigo preset vroid.glb foi removido: GLB cru de VRoid não é compatível
+// com o TalkingHead sem conversão em Blender (ver LICENSE.txt).
 export const AVATARS = {
-  vroid: { url: '/avatars/vroid.glb', body: 'F', label: 'Anime (VRoid)' },
   brunette: { url: '/avatars/brunette.glb', body: 'F', label: 'Realista (RPM)' },
+  avaturn: { url: '/avatars/avaturn.glb', body: 'F', label: 'Estilizado (Avaturn)' },
 }
 
-export const DEFAULT_AVATAR_MODEL = 'vroid'
+export const DEFAULT_AVATAR_MODEL = 'brunette'
 
 // Moods nativos do TalkingHead (setMood).
 export const MOODS = ['neutral', 'happy', 'angry', 'sad', 'fear', 'disgust', 'love', 'sleep']
