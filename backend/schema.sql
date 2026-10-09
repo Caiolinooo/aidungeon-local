@@ -65,6 +65,10 @@ ALTER TABLE story_cards ADD COLUMN portrait_prompt TEXT DEFAULT '';
 ALTER TABLE story_cards ADD COLUMN voice TEXT DEFAULT '';
 ALTER TABLE story_cards ADD COLUMN vrm_id TEXT DEFAULT '';
 
+-- v0.5.0 (2026-10-09): ficha estruturada do NPC (JSON: appearance, body,
+-- clothing, personality, stats, notes) — alimenta retratos e a aba NPCs
+ALTER TABLE story_cards ADD COLUMN sheet TEXT DEFAULT '';
+
 -- v0.3.0: kind='portrait' + ref_id=card_id para retratos (action_seq=-1: retrato
 -- não pertence ao feed de ações)
 ALTER TABLE images ADD COLUMN kind TEXT DEFAULT 'scene';

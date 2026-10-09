@@ -208,6 +208,8 @@ def card_to_dict(row: sqlite3.Row) -> dict:
         "portrait_prompt": row["portrait_prompt"] or "",
         "voice": row["voice"] or "",
         "vrm_id": row["vrm_id"] or "",
+        # v0.5.0: ficha estruturada do NPC (JSON ou '')
+        "sheet": row["sheet"] or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -463,16 +465,17 @@ def insert_card(conn: sqlite3.Connection, adventure_id: str, *, title: str = "",
                 type: str = "other", triggers: list | None = None, entry: str = "",
                 pinned: bool = False, use_for_character_creation: bool = False,
                 portrait_prompt: str = "", voice: str = "", vrm_id: str = "",
+                sheet: str = "",
                 created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     cid = new_id()
     conn.execute(
         "INSERT INTO story_cards(id, adventure_id, title, type, triggers, entry, pinned,"
-        " use_for_character_creation, portrait_prompt, voice, vrm_id,"
-        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " use_for_character_creation, portrait_prompt, voice, vrm_id, sheet,"
+        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, adventure_id, title, type or "other", _dumps(triggers, []), entry,
          int(pinned), int(use_for_character_creation), portrait_prompt, voice, vrm_id,
-         created_at or now, updated_at or now),
+         sheet, created_at or now, updated_at or now),
     )
     return card_to_dict(conn.execute("SELECT * FROM story_cards WHERE id=?", (cid,)).fetchone())
 
@@ -499,12 +502,12 @@ def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
     merged = {**current, **{k: v for k, v in fields.items() if v is not None}}
     conn.execute(
         "UPDATE story_cards SET title=?, type=?, triggers=?, entry=?, pinned=?,"
-        " use_for_character_creation=?, portrait_prompt=?, voice=?, vrm_id=?,"
+        " use_for_character_creation=?, portrait_prompt=?, voice=?, vrm_id=?, sheet=?,"
         " updated_at=? WHERE id=?",
         (merged["title"], merged["type"] or "other", _dumps(merged["triggers"], []),
          merged["entry"], int(merged["pinned"]), int(merged["use_for_character_creation"]),
          merged["portrait_prompt"], merged["voice"], merged["vrm_id"],
-         utcnow(), card_id),
+         merged["sheet"], utcnow(), card_id),
     )
     return get_card(conn, adventure_id, card_id)
 

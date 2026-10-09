@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Any
 
-from app import db, image_client, llm_client, settings_store
+from app import db, image_client, llm_client, npc_assets, settings_store
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -67,6 +67,10 @@ def _build_portrait_prompt(conn, adv: dict, card: dict, llm_cfg: dict,
         f"Character: {card['title']}\n"
         f"Description: {card['entry'][:1200]}"
     )
+    # v0.5.0: ficha estruturada enriquece o prompt (aparência/corpo/roupa).
+    sheet_ctx = npc_assets.sheet_context(card["sheet"])
+    if sheet_ctx:
+        user += f"\nCharacter sheet:\n{sheet_ctx}"
     messages = [{"role": "system", "content": _PORTRAIT_SYSTEM},
                 {"role": "user", "content": user}]
     prompt = llm_client.chat_completion(llm_cfg, messages, temperature=0.5,

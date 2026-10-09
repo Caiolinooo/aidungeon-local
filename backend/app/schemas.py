@@ -28,6 +28,8 @@ class StoryCardUpsert(BaseModel):
     portrait_prompt: str | None = None
     voice: str | None = None
     vrm_id: str | None = None
+    # v0.5.0: ficha estruturada do NPC (objeto JSON — ver docs/openapi.yaml)
+    sheet: dict | None = None
 
 
 class ScenarioCreate(BaseModel):

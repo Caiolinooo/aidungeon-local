@@ -536,6 +536,57 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/adventures/{adventureId}/cards/{cardId}/enrich:
+    post:
+      tags: [assets]
+      summary: (v0.5.0) Enriquecer a ficha do NPC via LLM
+      operationId: enrichCard
+      description: |
+        O LLM gera a ficha estruturada (appearance, body, clothing, personality,
+        stats {str..cha 1-20}, notes) a partir de entry + contexto da aventura
+        (melhorando uma ficha existente sem contradizê-la) e um portrait_prompt
+        detalhado. Síncrono; persiste sheet (JSON string) e portrait_prompt no card.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Card atualizado (sheet + portrait_prompt).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Resposta do LLM não interpretável (generation_failed) — tente de novo.
+
+  /api/adventures/{adventureId}/cards/{cardId}/vrm-from-portrait:
+    post:
+      tags: [assets]
+      summary: (v0.5.0) Extrair cores VRM do retrato via LLM vision
+      operationId: vrmFromPortrait
+      description: |
+        Envia o PNG do retrato ao LLM (multimodal) e extrai cores hex dominantes
+        (hair, eyes, skin, top, bottom), fundindo-as no vrm_id do card (JSON string)
+        e preservando model/emotion já configurados. Exige retrato gerado.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Card atualizado (vrm_id com as cores extraídas).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Card ainda não tem retrato (no_portrait) — gere um antes.
+        '503':
+          description: Resposta do LLM sem cores hex suficientes (generation_failed).
+
   /api/adventures/{adventureId}/jobs:
     get:
       tags: [assets]
@@ -1501,6 +1552,15 @@ components:
           type: string
           default: ''
           description: v0.3.0 — avatar VRM do NPC (reservado p/ fase 2 — painel 3D).
+        sheet:
+          type: string
+          default: ''
+          description: |
+            v0.5.0 — ficha estruturada do NPC como JSON string ('' = sem ficha).
+            Objeto: {appearance, body, clothing, personality, notes (textos de
+            1-2 frases), stats: {str, dex, con, int, wis, cha (1-20)}}.
+            Preenchida pelo endpoint enrich, editável via PATCH (dict no body) e
+            usada para enriquecer o prompt do retrato.
         portrait:
           type: object
           nullable: true
@@ -1542,6 +1602,9 @@ components:
           type: string
         vrm_id:
           type: string
+        sheet:
+          type: object
+          description: v0.5.0 — ficha estruturada (dict no body; persistida como JSON string).
 
     Job:
       type: object

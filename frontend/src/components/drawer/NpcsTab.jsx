@@ -76,15 +76,79 @@ function PortraitThumb({ card, activeJob }) {
   )
 }
 
+const SHEET_FIELDS = ['appearance', 'body', 'clothing', 'personality', 'notes']
+const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+
+// sheet armazenada (JSON string) → dict editável (''/inválido → {}).
+function parseSheet(raw) {
+  if (!raw) return {}
+  try {
+    const obj = JSON.parse(raw)
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {}
+  } catch {
+    return {}
+  }
+}
+
+// true se a ficha tem algum conteúdo visível (ignora stats default).
+function sheetHasContent(sheet) {
+  return SHEET_FIELDS.some((k) => (sheet[k] || '').trim()) ||
+    Object.keys(sheet.stats || {}).length > 0
+}
+
+// Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
+function SheetPanel({ sheet, onChange }) {
+  const inputCls =
+    'w-full rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs outline-none focus:border-emerald-600'
+  const set = (key, value) => onChange({ ...sheet, [key]: value })
+  const setStat = (key, value) => {
+    const n = Math.max(1, Math.min(20, Number.parseInt(value, 10) || 0))
+    onChange({ ...sheet, stats: { ...(sheet.stats || {}), [key]: n } })
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
+      {SHEET_FIELDS.map((key) => (
+        <label key={key} className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{key}</span>
+          <textarea
+            value={sheet[key] ?? ''}
+            onChange={(e) => set(key, e.target.value)}
+            rows={2}
+            className={`${inputCls} resize-y`}
+          />
+        </label>
+      ))}
+      <div>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stats</span>
+        <div className="mt-1 grid grid-cols-6 gap-1">
+          {STAT_KEYS.map((key) => (
+            <label key={key} className="flex flex-col items-center gap-0.5">
+              <span className="text-[10px] uppercase text-zinc-500">{key}</span>
+              <input
+                type="number" min={1} max={20}
+                value={sheet.stats?.[key] ?? ''}
+                onChange={(e) => setStat(key, e.target.value)}
+                className={`${inputCls} text-center`}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Linha de um NPC: retrato + campos editáveis inline + ações.
-function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
+function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onVrmSync, onDelete, saving, enriching, vrmSyncing }) {
   const toast = useToast()
   const [form, setForm] = useState({
     title: card.title ?? '',
     entry: card.entry ?? '',
     portrait_prompt: card.portrait_prompt ?? '',
     voice: card.voice ?? '',
+    sheet: parseSheet(card.sheet),
   })
+  const [sheetOpen, setSheetOpen] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const previewAudioRef = useRef(null)
 
@@ -127,6 +191,7 @@ function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
       entry: card.entry ?? '',
       portrait_prompt: card.portrait_prompt ?? '',
       voice: card.voice ?? '',
+      sheet: parseSheet(card.sheet),
     })
   }, [card])
 
@@ -134,7 +199,8 @@ function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
     form.title !== (card.title ?? '') ||
     form.entry !== (card.entry ?? '') ||
     form.portrait_prompt !== (card.portrait_prompt ?? '') ||
-    form.voice !== (card.voice ?? '')
+    form.voice !== (card.voice ?? '') ||
+    JSON.stringify(form.sheet) !== JSON.stringify(parseSheet(card.sheet))
 
   const inputCls =
     'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-emerald-600'
@@ -184,15 +250,44 @@ function NpcRow({ card, job, onSave, onRegenerate, onDelete, saving }) {
               {previewing ? '⏳' : '▶'}
             </button>
           </label>
+          <button
+            onClick={() => setSheetOpen((o) => !o)}
+            className="flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-300"
+          >
+            <span>{sheetOpen ? '▾' : '▸'}</span>
+            <span>Character sheet</span>
+            {sheetHasContent(parseSheet(card.sheet)) && (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="Sheet filled" />
+            )}
+          </button>
+          {sheetOpen && (
+            <SheetPanel sheet={form.sheet} onChange={(s) => setForm({ ...form, sheet: s })} />
+          )}
         </div>
       </div>
-      <div className="mt-2 flex justify-end gap-1">
+      <div className="mt-2 flex flex-wrap justify-end gap-1">
         <button
           onClick={() => onSave(card, form)}
           disabled={!dirty || saving}
           className="rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          onClick={() => onEnrich(card)}
+          disabled={enriching}
+          title="AI fills the character sheet and a detailed portrait prompt from the description"
+          className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
+        >
+          {enriching ? 'Enriching…' : '✨ Enrich'}
+        </button>
+        <button
+          onClick={() => onVrmSync(card)}
+          disabled={vrmSyncing || !card.portrait}
+          title={card.portrait ? 'Extract VRM avatar colors from the portrait (AI vision)' : 'Generate a portrait first'}
+          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {vrmSyncing ? 'Syncing…' : '🎨 VRM from portrait'}
         </button>
         <button
           onClick={() => onRegenerate(card)}
@@ -219,6 +314,8 @@ export default function NpcsTab({ adventure }) {
   const [cards, setCards] = useState(null)
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
+  const [enrichingId, setEnrichingId] = useState(null)
+  const [vrmSyncingId, setVrmSyncingId] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
   const prevStatuses = useRef({})
 
@@ -309,6 +406,7 @@ export default function NpcsTab({ adventure }) {
     if (form.entry !== (card.entry ?? '')) patch.entry = form.entry
     if (form.portrait_prompt !== (card.portrait_prompt ?? '')) patch.portrait_prompt = form.portrait_prompt
     if (form.voice !== (card.voice ?? '')) patch.voice = form.voice
+    if (JSON.stringify(form.sheet) !== JSON.stringify(parseSheet(card.sheet))) patch.sheet = form.sheet
     if (Object.keys(patch).length === 0) return
     setSavingId(card.id)
     try {
@@ -319,6 +417,35 @@ export default function NpcsTab({ adventure }) {
       toast(e.message)
     } finally {
       setSavingId(null)
+    }
+  }
+
+  // v0.5.0: LLM preenche a ficha + portrait_prompt (síncrono) — o card
+  // atualizado vem na resposta e substitui o item local, sem reload.
+  const enrich = async (card) => {
+    setEnrichingId(card.id)
+    try {
+      const updated = await api.enrichCard(adventure.id, card.id)
+      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      toast('Sheet enriched.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setEnrichingId(null)
+    }
+  }
+
+  // v0.5.0: cores do retrato → vrm_id (preserva model/emotion já configurados).
+  const vrmSync = async (card) => {
+    setVrmSyncingId(card.id)
+    try {
+      const updated = await api.vrmFromPortrait(adventure.id, card.id)
+      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      toast('VRM colors synced from portrait.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setVrmSyncingId(null)
     }
   }
 
@@ -388,8 +515,12 @@ export default function NpcsTab({ adventure }) {
                 card={c}
                 job={job}
                 saving={savingId === c.id}
+                enriching={enrichingId === c.id}
+                vrmSyncing={vrmSyncingId === c.id}
                 onSave={save}
                 onRegenerate={regenerate}
+                onEnrich={enrich}
+                onVrmSync={vrmSync}
                 onDelete={remove}
               />
               {showError && (

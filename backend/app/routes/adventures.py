@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter
 
 from app import db, game_engine, jobs
@@ -40,6 +42,9 @@ def create_adventure(body: AdventureCreate) -> dict:
                     triggers=card.get("triggers") or [], entry=card.get("entry") or "",
                     pinned=bool(card.get("pinned")),
                     use_for_character_creation=bool(card.get("use_for_character_creation")),
+                    # v0.5.0: ficha estruturada trilha scenario → aventura
+                    sheet=(json.dumps(card["sheet"], ensure_ascii=False)
+                           if isinstance(card.get("sheet"), dict) else ""),
                 )
             # v0.3.0: pipeline assíncrono — retratos dos NPCs começam a gerar
             # em background; a UI aplica cada um quando o job conclui.

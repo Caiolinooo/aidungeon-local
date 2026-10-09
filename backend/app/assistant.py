@@ -39,10 +39,13 @@ Given the player's idea, produce a COMPLETE scenario draft as STRICT JSON (no ma
   "story_cards": [
     {"title": "name", "type": "character|location|faction|item|other",
      "triggers": ["keywords", "that", "surface", "the", "card"],
-     "entry": "facts the AI must know when triggered"}
+     "entry": "facts the AI must know when triggered",
+     "sheet": {"appearance": "face, hair, eyes, marks", "body": "build, height, skin, posture",
+               "clothing": "typical outfit", "personality": "traits, mannerisms",
+               "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20}}}
   ]
 }
-Rules: narrative texts in {language}; story_cards: 3 to 8 entries; opening_text in second person; output ONLY the JSON object."""
+Rules: narrative texts in {language}; story_cards: 3 to 8 entries; sheet only for type character (omit otherwise); opening_text in second person; output ONLY the JSON object."""
 
 _FIELD_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
 Regenerate exactly ONE field of the scenario draft below, keeping coherence with the other fields.
@@ -57,7 +60,7 @@ _FIELD_INSTRUCTIONS = {
     "authors_note": 'Return {"value": "new tone guidance"}.',
     "opening_text": 'Return {"value": "new second-person opening scene"}.',
     "tags": 'Return {"value": "comma, separated, tags"}.',
-    "story_cards": 'Return {"story_cards": [{"title": "...", "type": "character|location|faction|item|other", "triggers": ["..."], "entry": "..."}]} with 3 to 8 cards.',
+    "story_cards": 'Return {"story_cards": [{"title": "...", "type": "character|location|faction|item|other", "triggers": ["..."], "entry": "...", "sheet": {"appearance": "...", "body": "...", "clothing": "...", "personality": "...", "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}}}]} with 3 to 8 cards (sheet only for type character).',
 }
 
 
@@ -100,12 +103,16 @@ def _normalize_cards(value: Any) -> list[dict]:
         title = _as_str(raw.get("title"))
         if not title:
             continue
-        cards.append({
+        card = {
             "title": title,
             "type": _as_str(raw.get("type")) or "other",
             "triggers": _normalize_tags(raw.get("triggers")),
             "entry": _as_str(raw.get("entry")),
-        })
+        }
+        # v0.5.0: ficha estruturada (só faz sentido em character)
+        if isinstance(raw.get("sheet"), dict) and card["type"] == "character":
+            card["sheet"] = raw["sheet"]
+        cards.append(card)
     return cards[:8]
 
 

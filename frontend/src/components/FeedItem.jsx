@@ -24,7 +24,7 @@ async function getNarratorVoice() {
   return narratorVoiceCache
 }
 
-export default function FeedItem({ action, onEdit, disabled }) {
+export default function FeedItem({ action, onEdit, disabled, isLatest = false }) {
   const { type, text, edited_at } = action
   const isPlayer = type === 'do' || type === 'say'
   const isSee = type === 'see'
@@ -32,7 +32,17 @@ export default function FeedItem({ action, onEdit, disabled }) {
   const display = isPlayer ? playerDisplayText(type, text) : text
 
   return (
-    <div className="group relative rounded-lg px-3 py-2 transition-colors hover:bg-zinc-900/70">
+    <div
+      id={`action-${action.id}`}
+      className={`group relative rounded-lg px-3 py-2 transition-colors hover:bg-zinc-900/70 ${
+        isLatest ? 'border-l-2 border-emerald-500/70 bg-emerald-950/20' : ''
+      }`}
+    >
+      {isLatest && (
+        <span className="absolute -left-2 top-1 rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+          New
+        </span>
+      )}
       <button
         onClick={() => onEdit(action)}
         disabled={disabled}

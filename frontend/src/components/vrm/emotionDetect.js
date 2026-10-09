@@ -60,3 +60,11 @@ export function detectEmotion(text, npcTitle) {
   }
   return found
 }
+
+// true se qualquer nome (título + triggers do card) aparece no texto
+// (word boundary, case-insensitive) — usado pelo dock VRM do chat (v0.5.0)
+// para mostrar só os NPCs presentes na cena.
+export function mentionsNpc(text, names) {
+  if (!text) return false
+  return (names || []).some((n) => n && n.trim() && mentionRegex(n).test(text))
+}

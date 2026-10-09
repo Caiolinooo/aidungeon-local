@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api.js'
 import { streamGeneration } from '../sse.js'
@@ -8,6 +8,10 @@ import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
 import Drawer from '../components/Drawer.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
+
+// Dock VRM (v0.5.0): lazy p/ manter o three.js fora do bundle inicial
+// (mesmo padrão do AvatarsTab no Drawer).
+const ChatVrmDock = lazy(() => import('../components/vrm/ChatVrmDock.jsx'))
 
 // Tela 2 — Jogo (a principal, PLANO.md §4.5):
 //  - feed central rolável com scroll automático (prosa da IA; ações do jogador
@@ -33,9 +37,16 @@ export default function Play() {
   const [seePrompt, setSeePrompt] = useState('')
   const [choices, setChoices] = useState([]) // sugestões de próxima ação (v2)
   const [inputDirty, setInputDirty] = useState(false) // usuário digitando → esconde chips
+  const [dockRefresh, setDockRefresh] = useState(0) // v0.5.0 — refetch dos cards do dock VRM
 
   const abortRef = useRef(null)
   const feedRef = useRef(null)
+  // v0.5.0 — scroll inteligente: true enquanto o usuário está perto do fim;
+  // quem sobe p/ reler não é puxado quando chega texto novo.
+  const nearBottomRef = useRef(true)
+  // id do bloco que acabou de chegar (done do stream) — a âncora do scroll.
+  const newBlockIdRef = useRef(null)
+  const initialScrollDone = useRef(false)
   const generating = gen !== null
 
   // ----------------------------------------------------------- carregar estado
@@ -59,11 +70,37 @@ export default function Play() {
   // cancela stream pendente ao sair da tela
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  // ------------------------------------------------------- scroll automático
+  // ------------------------------------------------------- scroll inteligente
+  // Regras (v0.5.0):
+  //  1. carga inicial → vai ao fim;
+  //  2. streaming token a token → acompanha o fim SÓ se o usuário está perto
+  //     dele (< 120px); quem subiu p/ reler fica onde está;
+  //  3. done de nova action → rola para o INÍCIO do bloco novo (retomar a
+  //     leitura do começo), também só se o usuário estava acompanhando o fim.
+  const onFeedScroll = useCallback(() => {
+    const el = feedRef.current
+    if (!el) return
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }, [])
+
   useEffect(() => {
     const el = feedRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [actions?.length, gen?.text, seeing])
+    if (!el || actions === null) return
+    if (!initialScrollDone.current) {
+      initialScrollDone.current = true
+      el.scrollTop = el.scrollHeight
+      return
+    }
+    if (newBlockIdRef.current) {
+      const anchor = document.getElementById(`action-${newBlockIdRef.current}`)
+      newBlockIdRef.current = null
+      if (anchor && nearBottomRef.current) {
+        anchor.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }
+      return
+    }
+    if (nearBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [actions, gen?.text, seeing])
 
   // ------------------------------------------------------------ geração SSE
   // Choices (v2): busca sugestões após cada turno concluído. Chips são
@@ -89,6 +126,9 @@ export default function Play() {
         signal: ctrl.signal,
         onToken: (tok) => setGen((g) => (g ? { ...g, text: g.text + tok } : g)),
         onDone: (data) => {
+          // Âncora do scroll: começo do turno novo (ação do jogador, se houver,
+          // senão a resposta da IA) — ver efeito "scroll inteligente".
+          newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
           setActions((prev) => applyDone(prev ?? [], data).sort(bySeq))
           setGen(null)
           fetchChoices() // input está idle após o envio → novas sugestões
@@ -218,6 +258,12 @@ export default function Play() {
   const canUndo = !generating && actions.some((a) => a.type !== 'start')
   // "See" exige ao menos uma resposta da IA e nenhuma geração em andamento
   const canSee = !generating && !seeing && actions.some((a) => a.type === 'continue')
+  // v0.5.0 — destaque "New": última resposta de texto gerada pela IA.
+  const lastAiTextId = [...actions].reverse().find((a) => a.type === 'continue')?.id
+  // Último texto narrativo (alimenta dock VRM + auto-emoção dos avatares).
+  const latestStoryText = [...actions].reverse().find(
+    (a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see',
+  )?.text
   const showChoices = !generating && !seeing && !inputDirty && choices.length > 0
 
   return (
@@ -328,8 +374,9 @@ export default function Play() {
         </div>
       </header>
 
-      {/* feed central rolável */}
-      <main ref={feedRef} className="flex-1 overflow-y-auto px-3 py-4">
+      {/* feed central rolável + dock VRM sobreposto (v0.5.0) */}
+      <div className="relative flex-1 overflow-hidden">
+      <main ref={feedRef} onScroll={onFeedScroll} className="h-full overflow-y-auto px-3 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-1">
           {actions.length === 0 && !generating && (
             <p className="rounded-lg border border-dashed border-zinc-800 p-6 text-center text-sm text-zinc-500">
@@ -339,7 +386,7 @@ export default function Play() {
           )}
 
           {actions.map((a) => (
-            <FeedItem key={a.id} action={a} onEdit={setEditing} disabled={generating} />
+            <FeedItem key={a.id} action={a} onEdit={setEditing} disabled={generating} isLatest={a.id === lastAiTextId} />
           ))}
 
           {/* bloco "AI is writing…" com cursor animado (streaming token a token) */}
@@ -369,6 +416,14 @@ export default function Play() {
           )}
         </div>
       </main>
+      <Suspense fallback={null}>
+        <ChatVrmDock
+          adventureId={id}
+          storyText={latestStoryText}
+          refreshKey={dockRefresh}
+        />
+      </Suspense>
+      </div>
 
       {/* choices (v2): sugestões clicáveis acima da InputBar — clicar envia já */}
       {showChoices && (
@@ -403,10 +458,14 @@ export default function Play() {
           auto-detect de emoção dos avatares VRM (v0.4.0) */}
       <Drawer
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          // cards podem ter mudado no drawer (NPCs/Avatars) → dock refaz o fetch
+          setDockRefresh((k) => k + 1)
+        }}
         adventure={adventure}
         onAdventureChange={setAdventure}
-        storyText={[...(actions || [])].reverse().find((a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see')?.text}
+        storyText={latestStoryText}
       />
 
       {/* modal de edição de ação */}
