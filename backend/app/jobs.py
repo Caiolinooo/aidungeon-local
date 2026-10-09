@@ -42,6 +42,8 @@ Output ONLY the prompt."""
 PORTRAIT_DENOISE = 0.35
 
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
+# Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
+_CAST_NEGATIVE = "extra person, crowd, duplicate face, wrong hair, different outfit, costume change"
 
 
 def worker_enabled() -> bool:
@@ -152,6 +154,9 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         final = " ".join(p for p in (adv.get("image_style") or "",
                                      prompt,
                                      img_cfg["style_suffix"] or "") if p).strip()
+        look = npc_assets.sheet_context(card.get("sheet") or "")
+        if look:
+            final = f"{final}. Mandatory appearance, do not contradict: {look}"
         init_bytes = None
         init_width = init_height = None
         anchor_id = str(payload.get("init_image_id") or "")
@@ -202,8 +207,9 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
             raise GameError(503, "image_generation_disabled",
                             "Image generation is disabled in settings")
         image_id = db.new_id()
+        ban = _CAST_NEGATIVE if (job.get("payload") or {}).get("include_people") else _BACKDROP_NEGATIVE
         negative = ", ".join(
-            part for part in (img_cfg["negative_prompt"], _BACKDROP_NEGATIVE) if part
+            part for part in (img_cfg["negative_prompt"], ban) if part
         )
         meta = image_client.generate_image(
             img_cfg, prompt, adventure_id=job["adventure_id"],

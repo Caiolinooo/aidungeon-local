@@ -24,7 +24,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Iterator
 
-from app import context_builder, db, llm_client, settings_store
+from app import context_builder, db, llm_client, npc_chronicle, settings_store
 from app.errors import GameError
 
 _locks_guard = threading.Lock()
@@ -120,6 +120,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 data["player_action"] = player_action
             yield {"event": "done", "data": data}
             _maybe_update_memory(adventure_id)
+            npc_chronicle.spawn_after_turn(adventure_id, transport)
         except llm_client.LlmError as exc:
             yield {"event": "error", "data": {"message": exc.message}}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível

@@ -107,6 +107,20 @@ function SheetPanel({ sheet, onChange }) {
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
+      <label className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Status</span>
+        <select
+          value={sheet.status || ''}
+          onChange={(e) => set('status', e.target.value)}
+          className={inputCls}
+        >
+          <option value="">unknown</option>
+          <option value="alive">alive</option>
+          <option value="injured">injured</option>
+          <option value="missing">missing</option>
+          <option value="dead">dead</option>
+        </select>
+      </label>
       {SHEET_FIELDS.map((key) => (
         <label key={key} className="flex flex-col gap-1">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{key}</span>

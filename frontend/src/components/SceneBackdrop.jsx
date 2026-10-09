@@ -57,6 +57,7 @@ export default function SceneBackdrop({
     let dead = false
     let timer = 0
 
+    const started = Date.now()
     const tick = async () => {
       try {
         const next = await api.syncScene(adventureId)
@@ -64,7 +65,9 @@ export default function SceneBackdrop({
         setScene(next)
         const waiting = next.backdrop?.status === 'pending'
           || (next.cast || []).some((npc) => !npc.portrait)
-        if (waiting) timer = window.setTimeout(tick, 4000)
+        // O passe dos NPCs grava o card uns segundos depois da resposta.
+        const settling = Date.now() - started < 20000
+        if (waiting || settling) timer = window.setTimeout(tick, 4000)
       } catch {
         // cena é acessória — o feed continua sem o fundo
       }
@@ -144,7 +147,7 @@ export default function SceneBackdrop({
     : ''
 
   return (
-    <section className="relative h-32 shrink-0 overflow-hidden border-b border-zinc-800 bg-zinc-900">
+    <section className="relative h-28 shrink-0 overflow-hidden border-b border-zinc-800 bg-zinc-900 sm:h-32">
       {backdropUrl && (
         <div
           className={`absolute inset-0 bg-cover bg-center transition-all duration-700 ${filters} ${
@@ -181,18 +184,18 @@ export default function SceneBackdrop({
               return (
                 <figure
                   key={npc.id}
-                  className={`flex w-14 flex-col items-center ${stepped ? 'npc-react' : ''}`}
+                  className={`flex w-12 shrink-0 flex-col items-center sm:w-14 ${stepped ? 'npc-react' : ''}`}
                 >
                   {src ? (
                     <img
                       src={src}
                       alt=""
-                      className={`h-12 w-12 rounded-full border-2 object-cover shadow-lg shadow-black/50 ${
+                      className={`h-10 w-10 rounded-full border-2 object-cover shadow-lg shadow-black/50 sm:h-12 sm:w-12 ${
                         MOOD_RING[npc.mood] || 'border-white/70'
                       }`}
                     />
                   ) : (
-                    <div className="grid h-12 w-12 place-items-center rounded-full border-2 border-white/40 bg-zinc-900/80 text-xs font-semibold text-zinc-200">
+                    <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-white/40 bg-zinc-900/80 text-xs font-semibold text-zinc-200 sm:h-12 sm:w-12">
                       {initials(npc.title)}
                     </div>
                   )}

@@ -73,7 +73,9 @@ BASE_SYSTEM_PROMPT = (
     "- NEVER import stock genre tropes that the story has not established (e.g. knights, castles,\n"
     "  horses or dragons in a sci-fi/superhero story; spaceships in a medieval story).\n"
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
-    "  the narrative back to the established setting without commenting on it."
+    "  the narrative back to the established setting without commenting on it.\n"
+    "- A character card is canon. Use its Appearance, Clothing, Status and Stats exactly.\n"
+    "  Do not change hair, face, build, or whether they are alive unless that card says so."
 )
 
 # Lembrete curto na mensagem final (recência). O histórico já gerado neste
@@ -83,6 +85,14 @@ STYLE_CUE = (
     "[Style: complete grammatical sentences in the story's language, "
     "articles and prepositions kept, two or three sentences per paragraph, "
     "a blank line between paragraphs. Do not copy clipped or run-on prose.]"
+)
+
+# A prosa recente já descreveu o NPC de outro jeito. Sem este lembrete no
+# fim, o modelo copia o vestido e o cabelo errados no turno seguinte.
+CANON_CUE = (
+    "[Canon: a character card overrides earlier prose. Keep their appearance, "
+    "clothing, status and recorded facts. Do not resurrect the dead, invent a "
+    "relative's fate, or redesign a face the card already describes.]"
 )
 
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
@@ -169,9 +179,8 @@ def _select_cards(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
 
 
 def _render_card(card: dict, per_card_budget: int) -> str:
-    title = (card.get("title") or "").strip()
-    entry = _fit_budget((card.get("entry") or "").strip(), per_card_budget)
-    return f"{title}\n{entry}".strip() if title else entry
+    from app import npc_assets
+    return _fit_budget(npc_assets.card_canon_text(card), per_card_budget)
 
 
 def _select_memories(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
@@ -304,6 +313,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if note:
         final_parts.append(f"[Author's note: {note}]")
     final_parts.append(STYLE_CUE)
+    final_parts.append(CANON_CUE)
     final_parts.append(last_txt)
     messages.append({"role": "user", "content": "\n".join(final_parts)})
 

@@ -272,12 +272,13 @@ export default function Play() {
   )
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* header + toolbar */}
-      <header className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-3 py-2">
+      <header className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:flex-row sm:items-center">
+        <div className="flex min-w-0 items-center gap-2">
         <button
           onClick={() => setDrawerOpen(true)}
-          className="rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          className="shrink-0 rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
           aria-label="Open panel"
           title="Story Cards · Memory · Config · Details"
         >
@@ -289,22 +290,24 @@ export default function Play() {
           </Link>
           <h1 className="truncate text-sm font-semibold text-zinc-100">{adventure.title}</h1>
         </div>
-        <div className="flex items-center gap-1">
+        </div>
+        <div className="flex items-center gap-1 sm:shrink-0">
           {generating ? (
             <button
               onClick={stop}
-              className="rounded-md bg-red-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700"
+              className="rounded-md bg-red-800 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700"
               title="Stop generating (cancels the local stream)"
             >
               ■ Stop
             </button>
           ) : (
             <>
+              <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 sm:mx-0 sm:overflow-visible">
               <button
                 onClick={doRetry}
                 disabled={!canRetry}
                 title={canRetry ? 'Regenerate the last AI response' : 'Retry is available when the last action is an AI response'}
-                className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
               >
                 ↻ Retry
               </button>
@@ -312,7 +315,7 @@ export default function Play() {
                 onClick={doUndo}
                 disabled={!canUndo}
                 title="Undo the last turn"
-                className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
               >
                 ↩ Undo
               </button>
@@ -320,11 +323,12 @@ export default function Play() {
                 onClick={doContinue}
                 disabled={generating}
                 title="Let the AI continue on its own"
-                className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
+                className="min-h-11 shrink-0 rounded-md bg-emerald-700 px-2.5 py-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 sm:px-3 sm:text-sm"
               >
                 ▶ Continue
               </button>
-              <div className="relative">
+              </div>
+              <div className="relative shrink-0">
                 <button
                   onClick={() => canSee && setSeeOpen((o) => !o)}
                   disabled={!canSee}
@@ -335,7 +339,7 @@ export default function Play() {
                         ? 'Image generation in progress…'
                         : 'See is available after the AI writes at least one response'
                   }
-                  className="flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -345,7 +349,7 @@ export default function Play() {
                   {seeing ? 'Seeing…' : 'See'}
                 </button>
                 {seeOpen && canSee && (
-                  <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
+                  <div className="absolute right-0 top-full z-30 mt-1 w-[min(18rem,calc(100vw-1.5rem))] rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
                       Extra detail (optional)
                     </label>
@@ -388,8 +392,8 @@ export default function Play() {
         playerAction={lastPlayer}
       />
       <div className="relative min-h-0 flex-1">
-      <main ref={feedRef} onScroll={onFeedScroll} className="h-full overflow-y-auto bg-zinc-950 px-3 py-4">
-        <div className="mx-auto flex max-w-prose flex-col gap-3">
+      <main ref={feedRef} onScroll={onFeedScroll} className="h-full overflow-y-auto overscroll-y-contain bg-zinc-950 px-3 py-4">
+        <div className="mx-auto flex max-w-prose flex-col gap-3 pb-14 sm:pb-0">
           {actions.length === 0 && !generating && (
             <p className="rounded-lg border border-dashed border-zinc-800 p-6 text-center text-sm text-zinc-500">
               A blank page. Send a <b>Story</b> action to set the scene, or press{' '}
@@ -441,8 +445,8 @@ export default function Play() {
       {/* choices (v2): sugestões clicáveis acima da InputBar — clicar envia já */}
       {showChoices && (
         <div className="border-t border-zinc-800/60 bg-zinc-950/95 px-3 pt-2 backdrop-blur">
-          <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+          <div className="mx-auto flex max-w-3xl items-center gap-2 overflow-x-auto pb-1">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
               Suggested
             </span>
             {choices.map((c, i) => (
@@ -450,7 +454,7 @@ export default function Play() {
                 key={i}
                 onClick={() => pickChoice(c)}
                 title={`Send as "${c.type}"`}
-                className="max-w-full truncate rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-300 hover:border-emerald-700 hover:text-emerald-300"
+                className="max-w-[16rem] shrink-0 truncate rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-300 hover:border-emerald-700 hover:text-emerald-300"
               >
                 <span className="mr-1 font-semibold uppercase text-zinc-500">{c.type}</span>
                 {c.text}

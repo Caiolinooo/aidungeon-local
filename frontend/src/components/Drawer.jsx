@@ -26,15 +26,15 @@ export default function Drawer({ open, onClose, adventure, onAdventureChange, st
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-black/60" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="flex h-full w-full max-w-md flex-col border-l border-zinc-800 bg-zinc-900 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-          <div className="flex flex-wrap gap-1">
+    <div className="fixed inset-0 z-30 flex justify-end bg-black/60" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside className="flex h-full w-full max-w-md flex-col border-l border-zinc-800 bg-zinc-900 pb-[env(safe-area-inset-bottom)] shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
             {TABS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                className={`min-h-11 shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium ${
                   tab === t.id ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -42,7 +42,7 @@ export default function Drawer({ open, onClose, adventure, onAdventureChange, st
               </button>
             ))}
           </div>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100" aria-label="Close panel">
+          <button onClick={onClose} className="shrink-0 rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" aria-label="Close panel">
             ✕
           </button>
         </div>

@@ -97,7 +97,7 @@ export default function ScenarioEditor() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8">
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto px-4 py-8">
       <header className="mb-6">
         <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300">
           ← Home

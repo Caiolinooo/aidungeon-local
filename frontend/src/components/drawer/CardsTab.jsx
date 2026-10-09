@@ -6,6 +6,25 @@ import TagInput from '../TagInput.jsx'
 
 const EMPTY_FORM = { title: '', type: 'other', triggers: [], entry: '', pinned: false, use_for_character_creation: false }
 const TYPE_HINTS = ['character', 'location', 'item', 'faction', 'concept', 'other']
+const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+const STATUS_STYLE = {
+  dead: 'bg-red-950 text-red-300',
+  missing: 'bg-amber-950 text-amber-200',
+  injured: 'bg-orange-950 text-orange-200',
+  alive: 'bg-emerald-950 text-emerald-300',
+}
+
+function readSheet(card) {
+  const raw = card?.sheet
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 // Aba Story Cards: lista (pinned primeiro, ordenação do backend) + criar /
 // editar / excluir via CRUD /api/adventures/:id/cards.
@@ -90,13 +109,19 @@ export default function CardsTab({ adventure }) {
 
       {cards.length === 0 && (
         <p className="rounded-lg border border-dashed border-zinc-700 p-4 text-sm text-zinc-500">
-          No story cards yet. Cards are injected into the AI context when one of their
-          triggers appears in the recent story (or always, when pinned).
+          No story cards yet. Characters met in the story are added here on their own.
+          Deaths, wounds and new facts stay on the card, and the storyteller reads them
+          back whenever that name comes up.
         </p>
       )}
 
       <ul className="flex flex-col gap-2">
-        {cards.map((c) => (
+        {cards.map((c) => {
+          const sheet = readSheet(c)
+          const stats = sheet?.stats && typeof sheet.stats === 'object'
+            ? STAT_KEYS.filter((key) => sheet.stats[key] != null).map((key) => `${key} ${sheet.stats[key]}`)
+            : []
+          return (
           <li key={c.id} className="rounded-lg border border-zinc-800 bg-zinc-800/50 p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -106,12 +131,26 @@ export default function CardsTab({ adventure }) {
                 </div>
                 <div className="mt-0.5 text-xs text-zinc-500">
                   <span className="rounded bg-zinc-700 px-1.5 py-0.5">{c.type || 'other'}</span>
+                  {sheet?.status && (
+                    <span className={`ml-2 rounded px-1.5 py-0.5 ${STATUS_STYLE[sheet.status] || 'bg-zinc-700'}`}>
+                      {sheet.status}
+                    </span>
+                  )}
                   {c.triggers?.length > 0 && (
                     <span className="ml-2">triggers: {c.triggers.slice(0, 4).join(', ')}{c.triggers.length > 4 ? '…' : ''}</span>
                   )}
                 </div>
                 {c.entry && (
                   <p className="mt-1 line-clamp-2 text-sm text-zinc-400">{c.entry}</p>
+                )}
+                {sheet?.appearance && (
+                  <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{sheet.appearance}</p>
+                )}
+                {sheet?.notes && (
+                  <p className="mt-1 line-clamp-2 text-xs text-zinc-400">{sheet.notes}</p>
+                )}
+                {stats.length > 0 && (
+                  <p className="mt-1 text-[10px] uppercase tracking-wide text-zinc-500">{stats.join(' · ')}</p>
                 )}
               </div>
               <div className="flex shrink-0 gap-1">
@@ -130,7 +169,8 @@ export default function CardsTab({ adventure }) {
               </div>
             </div>
           </li>
-        ))}
+          )
+        })}
       </ul>
 
       {editing && (

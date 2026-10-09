@@ -42,24 +42,46 @@ function PortraitCover({ imageId }) {
   return <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
 }
 
+function readSheet(card) {
+  const raw = card?.sheet
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 function DockAvatar({ card, avatarRef }) {
   const cfg = parseAvatarConfig(card.vrm_id)
+  const status = readSheet(card)?.status || ''
+  const marked = status === 'dead' || status === 'missing' || status === 'injured'
   return (
-    <div className="flex w-24 flex-col items-center gap-1">
-      <div className="relative h-32 w-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/80">
+    <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-24">
+      <div className="relative h-20 w-16 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/80 sm:h-32 sm:w-24">
         <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" />
         <PortraitCover imageId={card.portrait?.id} />
       </div>
       <span className="max-w-full truncate text-[10px] font-medium text-zinc-300" title={card.title}>
         {card.title || 'Untitled'}
       </span>
+      {marked && (
+        <span className="text-[9px] uppercase tracking-wide text-red-300">{status}</span>
+      )}
     </div>
   )
 }
 
+function dockStartsCollapsed() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+}
+
 export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
   const [cards, setCards] = useState([])
-  const [collapsed, setCollapsed] = useState(false)
+  // No celular o retrato cobre o texto; começa fechado.
+  const [collapsed, setCollapsed] = useState(dockStartsCollapsed)
   // Refs dos TalkingAvatar por card.id — o speaker do bus usa o índice 0.
   const avatarRefs = useRef(new Map())
 
@@ -71,7 +93,14 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
 
   useEffect(() => {
     reload()
-  }, [reload, refreshKey])
+    // O card novo chega depois da resposta, quando o passe dos NPCs termina.
+    const soon = window.setTimeout(reload, 8000)
+    const later = window.setTimeout(reload, 16000)
+    return () => {
+      window.clearTimeout(soon)
+      window.clearTimeout(later)
+    }
+  }, [reload, refreshKey, storyText])
 
   const present = cards.filter(
     (c) => c.type === 'character' && mentionsNpc(storyText, [c.title, ...(c.triggers || [])]),
@@ -91,16 +120,16 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
   if (present.length === 0) return null
 
   return (
-    <div className="absolute right-2 top-2 z-20 flex flex-col items-end gap-1">
+    <div className="absolute bottom-2 left-2 right-2 z-20 flex flex-row items-end gap-1 sm:bottom-auto sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end">
       <button
         onClick={() => setCollapsed((c) => !c)}
         title={collapsed ? 'Show NPC avatars' : 'Hide NPC avatars'}
-        className="rounded-md border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+        className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
       >
-        {collapsed ? `◂ NPCs (${present.length})` : '▸'}
+        {collapsed ? `NPCs (${present.length})` : 'Hide'}
       </button>
       {!collapsed && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-row gap-2 overflow-x-auto sm:flex-col sm:overflow-visible">
           {present.map((c) => (
             <DockAvatar
               key={c.id}

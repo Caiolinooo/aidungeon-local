@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import db, game_engine
+from app import context_builder, db, game_engine
 from app.errors import GameError
 
 from conftest import add_action, make_adventure, make_llm_transport
@@ -76,9 +76,11 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     assert payload["max_tokens"] == 300
     assert payload["temperature"] == 0.85
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    # última mensagem = última ação do jogador formatada
+    # última mensagem = pistas de estilo e cânone + última ação do jogador
     assert payload["messages"][-1]["role"] == "user"
-    assert payload["messages"][-1]["content"] == "\n> You wait\n"
+    assert payload["messages"][-1]["content"] == (
+        f"{context_builder.STYLE_CUE}\n{context_builder.CANON_CUE}\n\n> You wait\n"
+    )
 
 
 def test_generation_concurrent_conflict(adventure):

@@ -80,6 +80,7 @@ def test_sandwich_order_exact(tmp_db):
     final = built.messages[2]["content"]
     assert final == ("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
                      f"{cb.STYLE_CUE}\n"
+                     f"{cb.CANON_CUE}\n"
                      "The market is busy.")
 
 
@@ -94,7 +95,7 @@ def test_empty_blocks_are_skipped(tmp_db):
     roles = [m["role"] for m in built.messages]
     assert roles == ["system", "user"]
     assert built.messages[0]["content"] == cb.BASE_SYSTEM_PROMPT
-    assert built.messages[1]["content"] == f"{cb.STYLE_CUE}\nOnce upon a time."
+    assert built.messages[1]["content"] == f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\nOnce upon a time."
 
 
 # ------------------------------------------------------------- formatação
@@ -114,7 +115,7 @@ def test_player_action_formatting(tmp_db):
     assert "\n> You sheathe the blade\n" in window
     assert "> You \n> You" not in window  # nunca re-embrulha texto do backup
     # bloco 8 = última ação (story → prosa pura)
-    assert built.messages[-1]["content"] == f"{cb.STYLE_CUE}\nPure narration."
+    assert built.messages[-1]["content"] == f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\nPure narration."
 
 
 def test_stop_sequences_from_settings(tmp_db):

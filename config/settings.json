@@ -61,8 +61,8 @@
     "top_k": 5
   },
   "story_cards": {
-    "scan_chars": 1000,
-    "budget_por_card": 150
+    "scan_chars": 2500,
+    "budget_por_card": 320
   },
   "image": {
     "enabled": true,

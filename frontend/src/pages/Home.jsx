@@ -78,18 +78,18 @@ export default function Home() {
   }
 
   return (
-    <div className="mx-auto flex min-h-full max-w-5xl flex-col px-4 py-8">
-      <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto flex h-full max-w-5xl flex-col overflow-y-auto px-4 py-8">
+      <header className="mb-6 flex flex-col gap-3 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
             AI Dungeon <span className="text-emerald-500">Local</span>
           </h1>
           <p className="mt-1 text-sm text-zinc-500">Self-hosted interactive storytelling — 100% local LLM.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
           <button
             onClick={() => setShowImport(true)}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
+            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
           >
             ⬆ Import AI Dungeon backup
           </button>
@@ -97,27 +97,27 @@ export default function Home() {
             onClick={backupAll}
             disabled={backingUp}
             title="Download a .zip backup with ALL adventures"
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
           >
             {backingUp ? 'Backing up…' : '⬇ Backup all (.zip)'}
           </button>
           <button
             onClick={() => setShowGenerate(true)}
             title="Describe an idea and let the AI draft a full scenario for you"
-            className="rounded-lg border border-emerald-800 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50"
+            className="min-h-11 shrink-0 rounded-lg border border-emerald-800 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50"
           >
             Generate with AI
           </button>
           <button
             onClick={() => setShowNew(true)}
-            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+            className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
           >
             + New Adventure
           </button>
           <button
             onClick={logout}
             title="Encerrar a sessão e voltar ao login"
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
           >
             Sair
           </button>

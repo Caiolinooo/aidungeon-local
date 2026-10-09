@@ -6,11 +6,29 @@
 html,
 body,
 #root {
-  height: 100%;
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
 }
 
 body {
+  overscroll-behavior: none;
   @apply bg-zinc-950 text-zinc-200 antialiased;
+}
+
+button,
+a,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* iOS dá zoom se o campo tem menos de 16px. */
+/* text-sm do Tailwind ganha do seletor nu e o iOS dá zoom no foco. */
+@media (max-width: 639px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }
 
 /* Cursor animado do bloco "AI is writing..." (streaming token a token) */

@@ -11,8 +11,16 @@ OpenAI-compatível.
 
 ---
 
-## Funcionalidades (v0.4.0)
+## Funcionalidades (v0.5.0)
 
+- **Prosa legível**: o prompt pede frases completas, com artigos e parágrafos.
+  A tela só quebra bloco telegráfico na leitura; o texto gravado não muda.
+- **Faixa da cena**: a pintura e o elenco ficam numa faixa no topo. O texto
+  fica em fundo sólido.
+- **Crônica dos NPCs**: depois de cada resposta, quem entrou ou mudou atualiza
+  a ficha. A aparência já gravada só muda se o texto marcar essa mudança.
+- **Celular**: a altura acompanha a área visível (o teclado não cobre o campo)
+  e os botões da barra têm área de toque maior.
 - **Voz (TTS/STT)**: narração e falas de NPC em áudio via stack OpenAI-compatível
   da VM — **Supertonic** (TTS, vozes M1–M3/F1–F3) e **Whisper** (STT, fale a ação
   pelo microfone). `POST /api/tts` devolve bytes `audio/mpeg` em passthrough;
@@ -42,10 +50,11 @@ OpenAI-compatível.
   assistente gera o cenário inteiro — título, AI instructions, plot essentials, author's
   note, abertura em 2ª pessoa, tags e 3–8 story cards. Revise cada campo (com botão de
   regenerar individual) antes de criar a aventura.
-- **See (geração de imagens)**: ilustre a cena atual com um clique. O LLM resume a cena
-  em um prompt EN (prefixado pelo estilo visual da aventura) e chama o provedor
-  configurado: **sdwebui** (A1111/Forge/SD.Next local ou LAN) ou **openai_compatible**
-  (qualquer `POST /images/generations`, ex. endpoint na VM). Imagens ficam inline no feed.
+- **See (geração de imagens)**: ilustre o que acabou de acontecer. O prompt
+  começa pela ação recente e pelo visual travado do card (e do jogador, quando
+  o texto diz "you"). Se essa pessoa já tem retrato, a cena parte dessa foto.
+  O estilo visual fica no fim do prompt. Provedores: **sdwebui**
+  (A1111/Forge/SD.Next) ou **openai_compatible**. Imagens ficam inline no feed.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
@@ -215,7 +224,8 @@ AIDungeon_Local\
 ├─ tools\                    check_llm.py, bench_llm.py, setup_llm_local.ps1
 ├─ tests\                    suíte pytest (117 testes: engine, contexto, memória, auth,
 │                           replay E2E do backup, smoke VM, v2 imagens/assistente,
-│                           v0.3.0 jobs/retratos, v0.4.0 voz TTS/STT)
+│                           v0.3.0 jobs/retratos, v0.4.0 voz TTS/STT,
+│                           v0.5.0 crônica, See e prosa)
 ├─ docs\
 │  ├─ openapi.yaml           contrato REST completo (PLANO.md §4.4), incl. SSE
 │  └─ DEPLOY_VERCEL.md       deploy do frontend na Vercel

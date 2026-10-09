@@ -211,7 +211,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                    transport: httpx.BaseTransport | None = None,
                    width: int | None = None, height: int | None = None,
                    init_image: bytes | None = None,
-                   denoising_strength: float | None = None) -> dict:
+                   denoising_strength: float | None = None,
+                   negative_extra: str = "") -> dict:
     """Gera a imagem no provider efetivo, salva o PNG e devolve metadados
     {file_path (relativo), width, height, provider}. Levanta ImageError subclasses.
 
@@ -220,6 +221,12 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
+    if negative_extra:
+        # Cópia rasa: o cfg efetivo é reusado no pedido seguinte.
+        cfg = dict(cfg)
+        cfg["negative_prompt"] = ", ".join(
+            part for part in (cfg.get("negative_prompt") or "", negative_extra) if part
+        )
     with _make_client(transport, timeout) as client:
         if init_image is not None:
             if provider != "sdwebui":

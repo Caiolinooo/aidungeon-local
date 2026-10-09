@@ -38,7 +38,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
   return (
     <div
       id={`action-${action.id}`}
-      className={`group relative rounded-lg px-3 py-2 transition-colors hover:bg-zinc-900/70 ${
+      className={`group relative rounded-lg px-3 pb-2 pt-9 transition-colors hover:bg-zinc-900/70 sm:pt-2 ${
         isLatest ? 'border-l-2 border-emerald-500/70 bg-emerald-950/20' : ''
       }`}
     >
@@ -51,7 +51,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
         onClick={() => onEdit(action)}
         disabled={disabled}
         title="Edit"
-        className="absolute right-2 top-2 hidden rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 group-hover:block"
+        className="absolute right-2 top-2 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
       >
         ✏ Edit
       </button>
@@ -219,7 +219,7 @@ function NarrateButton({ text }) {
     <button
       onClick={state === 'idle' ? play : stop}
       title={state === 'idle' ? 'Narrate (text-to-speech)' : 'Stop narration'}
-      className="absolute right-16 top-2 hidden rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 group-hover:block"
+      className="absolute right-16 top-2 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
     >
       {state === 'loading' ? '⏳' : state === 'playing' ? '⏹' : '🔊'}
     </button>

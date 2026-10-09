@@ -41,7 +41,9 @@ def make_v2_transport(chat_content="a dark tower under a blood-red sky",
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": chat_content}}],
             })
-        if path.endswith("/sdapi/v1/txt2img"):
+        if path.endswith("/sdapi/v1/txt2img") or path.endswith("/sdapi/v1/img2img"):
+            if capture is not None and path.endswith("/img2img"):
+                capture.append(json.loads(request.content.decode("utf-8")))
             return httpx.Response(200, json={"images": [PNG_B64], "parameters": {}})
         return httpx.Response(404, json={"error": f"no mock route: {path}"})
 
@@ -103,9 +105,10 @@ def test_see_flow_creates_image_and_action(client, tmp_path):
     data = resp.json()
     assert data["provider"] == "sdwebui"
     assert data["url"] == f"/api/images/{data['id']}"
-    # prompt final: image_style + resumo do LLM + style_suffix + extra_prompt
-    assert data["prompt"].startswith("ink sketch")
+    # o momento vem antes do estilo: o CLIP corta o fim do bloco
     assert "a dark tower under a blood-red sky" in data["prompt"]
+    assert data["prompt"].index("a dark tower under a blood-red sky") < data["prompt"].index("ink sketch")
+    assert "Thunder cracks overhead" in data["prompt"]
     assert "dramatic angle" in data["prompt"]
     # action type=see persistida com imagem inline
     action = data["action"]

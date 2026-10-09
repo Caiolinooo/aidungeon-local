@@ -82,11 +82,13 @@ def parse_triggers(raw: Any) -> list[str]:
 
 def render_card_text(card: dict, budget_tokens: int,
                      estimator: Estimator | None = None) -> str:
-    """Entrada injetável do card: "{title}: {entry}" truncada ao orçamento."""
+    """Entrada injetável do card, com a ficha quando existe, no orçamento."""
     estimator = estimator or _default_estimator
-    title = (card.get("title") or "").strip()
-    entry = (card.get("entry") or "").strip()
-    piece = f"{title}: {entry}" if title and entry else (title or entry)
+    try:
+        from app import npc_assets
+    except ImportError:  # pragma: no cover
+        from backend.app import npc_assets  # type: ignore
+    piece = npc_assets.card_canon_text(card)
     if budget_tokens <= 0:
         return ""
     if estimator(piece) <= budget_tokens:

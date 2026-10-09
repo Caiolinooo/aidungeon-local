@@ -36,7 +36,7 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center px-4 py-10">
+    <div className="flex h-full items-center justify-center overflow-y-auto px-4 py-10">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-8 shadow-2xl">
         <header className="mb-6 text-center">
           <h1 className="text-2xl font-bold tracking-tight text-zinc-100">

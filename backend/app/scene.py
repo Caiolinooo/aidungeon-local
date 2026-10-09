@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, settings_store
+from app import db, jobs, npc_assets, settings_store
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -126,9 +126,34 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
     return [card for _, card in ranked[-_CAST_LIMIT:]]
 
 
-def _prompt(title: str, entry: str, style: str, atmosphere: str) -> str:
-    """Fundo do lugar, sem a prosa da cena — ela descreve pessoas e o modelo
-    acabava pintando outro rosto a cada clima."""
+def _visual_clause(cast: list[dict]) -> str:
+    """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda."""
+    if not cast:
+        return ""
+    text = " ".join((card.get("title") or "") for card in cast)
+    return npc_assets.image_canon_clause(cast, text)
+
+
+def _prompt(title: str, entry: str, style: str, atmosphere: str,
+            cast: list[dict]) -> tuple[str, bool]:
+    """Lugar, e as pessoas só quando o card já tem o rosto.
+
+    A prosa não entra: ela descreve a princesa de vestido e o modelo pintava
+    outra mulher. Sem visual travado, o fundo continua vazio de gente.
+    """
+    clause = _visual_clause(cast)
+    if clause:
+        parts = [
+            clause,
+            style,
+            f"wide cinematic shot of {title}, only the characters named above, "
+            "each with that exact face, hair, age and clothing",
+            (entry or "")[:400],
+            f"atmosphere: {atmosphere}",
+            "detailed scene painting, no text, no watermark, no logo",
+        ]
+        text = " ".join(part.strip() for part in parts if part and part.strip())
+        return text[:1400], True
     parts = [
         style,
         f"wide cinematic establishing shot of {title}, environment only, no people, no characters, no faces",
@@ -136,11 +161,13 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str) -> str:
         f"atmosphere: {atmosphere}",
         "detailed background painting, empty of people, no text, no watermark, no logo",
     ]
-    return " ".join(part.strip() for part in parts if part and part.strip())[:1400]
+    text = " ".join(part.strip() for part in parts if part and part.strip())
+    return text[:1400], False
 
 
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
-                    enabled: bool, retry: bool, prompt: str) -> dict:
+                    enabled: bool, retry: bool, prompt: str,
+                    include_people: bool = False) -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
     fallback = current or db.latest_image(conn, adventure_id, "backdrop")
@@ -162,7 +189,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         return {"status": "error", "image": image, "error": previous.get("error")}
 
     db.insert_job(conn, adventure_id=adventure_id, type="scene_backdrop",
-                  ref_id=ref, payload={"prompt": prompt})
+                  ref_id=ref, payload={"prompt": prompt, "include_people": include_people})
     return {"status": "pending", "image": image, "error": None}
 
 
@@ -181,17 +208,27 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
 
     title, entry = _location(cards, text)
     atmosphere = atmosphere_of(text)
+    cast_cards = []
+    for card in _cast(cards, text):
+        cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
+    clause = _visual_clause(cast_cards)
     signature = f"{_slug(title)}|{atmosphere}"
+    if clause:
+        # O fundo antigo (pessoa errada) não serve quando o rosto do card entra.
+        signature = f"{signature}|{_slug(clause)[:48]}"
     ref = f"{adventure_id}:{signature}"
     img_cfg = settings_store.effective_image_settings(conn)
-    prompt = _prompt(title, entry, img_cfg.get("style_suffix") or "", atmosphere)
+    prompt, include_people = _prompt(
+        title, entry, img_cfg.get("style_suffix") or "", atmosphere, cast_cards,
+    )
     backdrop = _backdrop_state(
         conn, adventure_id, ref,
         enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
+        include_people=include_people,
     )
 
     cast = []
-    for card in _cast(cards, text):
+    for card in cast_cards:
         if not card.get("portrait") and img_cfg.get("enabled"):
             jobs.enqueue_portrait(conn, adventure_id, card["id"])
         cast.append({

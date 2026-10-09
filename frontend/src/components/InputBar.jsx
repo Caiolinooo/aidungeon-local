@@ -174,7 +174,7 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
   }, [text])
 
   return (
-    <div className="border-t border-zinc-800 bg-zinc-950/95 px-3 pb-3 pt-2 backdrop-blur">
+    <div className="border-t border-zinc-800 bg-zinc-950/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur">
       <div className="mx-auto max-w-3xl">
         <div className="mb-2 flex gap-1">
           {TABS.map((t) => (
@@ -182,7 +182,7 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
               key={t.id}
               onClick={() => setTab(t.id)}
               disabled={disabled}
-              className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+              className={`min-h-11 flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors sm:flex-none sm:px-4 ${
                 tab === t.id
                   ? 'bg-emerald-700 text-white'
                   : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
@@ -209,7 +209,8 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
             disabled={disabled}
             rows={2}
             placeholder={disabled ? 'AI is writing…' : active.placeholder}
-            className="max-h-60 flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 font-prose text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-60"
+            enterKeyHint="send"
+            className="max-h-60 min-w-0 flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 font-prose text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-60 sm:text-sm"
           />
           <button
             onClick={recording ? stopRecording : startRecording}
@@ -221,7 +222,7 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
                   ? 'Stop recording'
                   : 'Dictate (speech-to-text)'
             }
-            className={`rounded-lg px-3 py-2.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`min-h-11 min-w-11 shrink-0 rounded-lg px-3 py-2.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${
               recording
                 ? 'animate-pulse bg-red-700 hover:bg-red-600'
                 : 'bg-zinc-700 hover:bg-zinc-600'
@@ -232,7 +233,7 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
           <button
             onClick={submit}
             disabled={disabled || !text.trim()}
-            className="rounded-lg bg-emerald-700 px-5 py-2.5 font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+            className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2.5 font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
           >
             Send
           </button>

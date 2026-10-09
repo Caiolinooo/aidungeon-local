@@ -2,13 +2,13 @@
 export default function Modal({ title, onClose, children, wide = false }) {
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4"
-      onMouseDown={(e) => {
+      className="fixed inset-0 z-40 flex items-end justify-center bg-black/70 p-3 sm:items-center sm:p-4"
+      onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose?.()
       }}
     >
       <div
-        className={`flex max-h-[85vh] w-full flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${
+        className={`flex max-h-[min(85dvh,var(--app-height,85dvh))] w-full flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${
           wide ? 'max-w-2xl' : 'max-w-lg'
         }`}
       >
