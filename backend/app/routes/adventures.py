@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
+from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
+import exporter
 from app import db, game_engine, jobs
 from app.errors import GameError
-from app.schemas import AdventureCreate
+from app.schemas import AdventureCreate, AdventureUpdate
 
 router = APIRouter()
 
@@ -61,6 +64,25 @@ def list_adventures() -> list[dict]:
         return db.list_adventure_summaries(conn)
 
 
+@router.get("/export")
+def export_all_adventures() -> Response:
+    """Backup completo: um .zip com uma pasta por aventura (formato do backup
+    individual) — restaurável via POST /api/import/aidungeon.
+
+    Registrada ANTES de /{adventure_id} para não ser capturada por ele.
+    """
+    data, count = exporter.export_all_zip()
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    quoted = urllib.parse.quote(f"aidungeon-backup-{stamp}.zip")
+    headers = {
+        "Content-Disposition": (
+            f"attachment; filename=\"aidungeon-backup.zip\"; filename*=UTF-8''{quoted}"
+        ),
+        "X-Adventure-Count": str(count),
+    }
+    return Response(content=data, media_type="application/zip", headers=headers)
+
+
 @router.get("/{adventure_id}")
 def get_adventure(adventure_id: str) -> dict:
     with db.session() as conn:
@@ -68,6 +90,26 @@ def get_adventure(adventure_id: str) -> dict:
     if not state:
         raise GameError.not_found(f"adventure {adventure_id} not found")
     return state
+
+
+@router.patch("/{adventure_id}")
+def patch_adventure(adventure_id: str, body: AdventureUpdate) -> dict:
+    """Edita metadados (título/descrição/tags). Campos ausentes não mudam."""
+    with db.session() as conn:
+        updated = db.update_adventure(conn, adventure_id,
+                                      **body.model_dump(exclude_unset=True))
+        if not updated:
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        return db.adventure_state(conn, adventure_id)
+
+
+@router.delete("/{adventure_id}")
+def delete_adventure(adventure_id: str) -> dict:
+    """Remove a aventura e todos os dependentes (ações, cards, memórias...)."""
+    with db.session() as conn:
+        if not db.delete_adventure(conn, adventure_id):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+    return {"deleted": True, "id": adventure_id}
 
 
 @router.post("/{adventure_id}/undo")

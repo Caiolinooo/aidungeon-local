@@ -51,6 +51,13 @@ class AdventureCreate(BaseModel):
     tags: list[str] | None = None
 
 
+class AdventureUpdate(BaseModel):
+    """PATCH /adventures/{id} — campos ausentes não são alterados."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    tags: list[str] | None = None
+
+
 class ActionRequest(BaseModel):
     type: Literal["do", "say", "story"]
     text: str = Field(min_length=1)

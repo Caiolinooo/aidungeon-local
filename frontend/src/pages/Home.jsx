@@ -9,6 +9,25 @@ import { fmtDate } from '../utils.js'
 
 // Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
 // (escolher scenario existente ou em branco) + "Import AI Dungeon backup".
+
+// Slug seguro p/ nome de arquivo: "My Story!" → "my-story".
+function slugify(title) {
+  return (title || 'adventure').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'adventure'
+}
+
+// Download client-side de um Blob (Âncoras <a href> não levam Bearer — o fetch
+// autenticado já foi feito em api.js; aqui só materializamos o arquivo).
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export default function Home() {
   const toast = useToast()
   const navigate = useNavigate()
@@ -17,6 +36,27 @@ export default function Home() {
   const [showNew, setShowNew] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [menuOpenId, setMenuOpenId] = useState(null) // id da aventura com menu ⋯ aberto
+  const [renaming, setRenaming] = useState(null) // aventura alvo do Rename modal
+  const [deleting, setDeleting] = useState(null) // aventura alvo do Delete modal
+  const [backingUp, setBackingUp] = useState(false)
+
+  // Atualiza/remove uma aventura na lista local após PATCH/DELETE.
+  const patchLocal = (updated) =>
+    setAdventures((list) => list?.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)))
+  const removeLocal = (id) => setAdventures((list) => list?.filter((a) => a.id !== id))
+
+  const backupAll = async () => {
+    setBackingUp(true)
+    try {
+      const blob = await api.downloadBackupAll()
+      downloadBlob(blob, 'aidungeon-backup.zip')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setBackingUp(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setError(null)
@@ -52,6 +92,14 @@ export default function Home() {
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
           >
             ⬆ Import AI Dungeon backup
+          </button>
+          <button
+            onClick={backupAll}
+            disabled={backingUp}
+            title="Download a .zip backup with ALL adventures"
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {backingUp ? 'Backing up…' : '⬇ Backup all (.zip)'}
           </button>
           <button
             onClick={() => setShowGenerate(true)}
@@ -114,11 +162,22 @@ export default function Home() {
               >
                 <div className="mb-1 flex items-start justify-between gap-2">
                   <h3 className="font-semibold text-zinc-100">{a.title}</h3>
-                  {a.source === 'import' && (
-                    <span className="shrink-0 rounded bg-zinc-700 px-1.5 py-0.5 text-[10px] uppercase text-zinc-300">
-                      imported
-                    </span>
-                  )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {a.source === 'import' && (
+                      <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-[10px] uppercase text-zinc-300">
+                        imported
+                      </span>
+                    )}
+                    <AdventureMenu
+                      adventure={a}
+                      open={menuOpenId === a.id}
+                      onToggle={() => setMenuOpenId(menuOpenId === a.id ? null : a.id)}
+                      onClose={() => setMenuOpenId(null)}
+                      onRename={() => setRenaming(a)}
+                      onDelete={() => setDeleting(a)}
+                      toast={toast}
+                    />
+                  </div>
                 </div>
                 <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-zinc-400">
                   {a.last_excerpt || a.description || '…'}
@@ -136,6 +195,20 @@ export default function Home() {
       {showNew && <NewAdventureModal onClose={() => setShowNew(false)} />}
       {showImport && <ImportModal onClose={() => setShowImport(false)} onImported={load} />}
       {showGenerate && <GenerateAdventureModal onClose={() => setShowGenerate(false)} />}
+      {renaming && (
+        <RenameModal
+          adventure={renaming}
+          onClose={() => setRenaming(null)}
+          onRenamed={patchLocal}
+        />
+      )}
+      {deleting && (
+        <DeleteModal
+          adventure={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => removeLocal(deleting.id)}
+        />
+      )}
     </div>
   )
 }
@@ -298,8 +371,54 @@ function ImportModal({ onClose, onImported }) {
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
-            <h3 className="font-semibold text-emerald-300">Import complete — “{report.title}”</h3>
+          {report.multi ? (
+            // Backup multi-aventura: resumo agregado + lista de títulos importados.
+            <>
+              <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
+                <h3 className="font-semibold text-emerald-300">
+                  Import complete — {report.imported} adventure{report.imported === 1 ? '' : 's'} imported
+                </h3>
+                <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                  {(report.results || []).map((r, i) => (
+                    <li key={r.adventure_id ?? i} className="flex items-baseline justify-between gap-2 rounded bg-zinc-800/60 px-2 py-1 text-sm">
+                      <span className="truncate text-zinc-200">{r.title}</span>
+                      <span className="shrink-0 text-xs text-zinc-500">{r.actions_imported ?? 0} actions</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {(() => {
+                const warnings = (report.results || []).flatMap((r) =>
+                  (r.warnings || []).map((w) => `${r.title}: ${w}`)
+                )
+                return warnings.length > 0 ? (
+                  <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-3">
+                    <h4 className="mb-1 text-sm font-semibold text-amber-300">
+                      Warnings ({warnings.length})
+                    </h4>
+                    <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-amber-200/80">
+                      {warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null
+              })()}
+
+              <div className="flex justify-end">
+                <button
+                  onClick={onClose}
+                  className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
+                <h3 className="font-semibold text-emerald-300">Import complete — “{report.title}”</h3>
             <ul className="mt-2 grid grid-cols-3 gap-2 text-center text-sm">
               <li className="rounded bg-zinc-800/60 p-2">
                 <div className="text-xl font-bold text-zinc-100">{report.actions_imported ?? 0}</div>
@@ -340,8 +459,206 @@ function ImportModal({ onClose, onImported }) {
               ▶ Open adventure
             </button>
           </div>
+            </>
+          )}
         </div>
       )}
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Menu ⋯ do card de aventura (Rename / Export .zip / Delete). O card inteiro é
+// um <Link> para /play/:id, então TODO clique aqui dentro precisa de
+// preventDefault + stopPropagation para não navegar. Fecha ao clicar fora
+// (mousedown no document) ou no Esc.
+function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete, toast }) {
+  const rootRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocMouseDown = (e) => {
+      if (!rootRef.current?.contains(e.target)) onClose()
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, onClose])
+
+  // Impede a navegação do <Link> pai em qualquer clique do menu.
+  const guard = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const exportZip = async () => {
+    onClose()
+    try {
+      const blob = await api.downloadExport(adventure.id)
+      downloadBlob(blob, `${slugify(adventure.title)}.zip`)
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const itemCls =
+    'block w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+
+  return (
+    <div ref={rootRef} className="relative" onClick={guard}>
+      <button
+        onClick={onToggle}
+        aria-label={`Manage “${adventure.title}”`}
+        title="Manage adventure"
+        className="rounded-md px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-40 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
+          <button
+            className={itemCls}
+            onClick={() => {
+              onClose()
+              onRename()
+            }}
+          >
+            ✏ Rename
+          </button>
+          <button className={itemCls} onClick={exportZip}>
+            ⬇ Export .zip
+          </button>
+          <button
+            className="block w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-zinc-800 hover:text-red-300"
+            onClick={() => {
+              onClose()
+              onDelete()
+            }}
+          >
+            🗑 Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Modal "Rename adventure": edita título (+ descrição opcional) → PATCH
+// /api/adventures/:id → atualiza a lista local com a resposta.
+function RenameModal({ adventure, onClose, onRenamed }) {
+  const toast = useToast()
+  const [title, setTitle] = useState(adventure.title || '')
+  const [description, setDescription] = useState(adventure.description || '')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!title.trim()) return
+    setSaving(true)
+    try {
+      const updated = await api.updateAdventure(adventure.id, {
+        title: title.trim(),
+        description: description.trim(),
+      })
+      onRenamed(updated)
+      onClose()
+    } catch (e) {
+      toast(e.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Rename adventure" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-medium text-zinc-300">Title</span>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+            }}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-sm font-medium text-zinc-300">
+            Description <span className="text-zinc-500">(optional)</span>
+          </span>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className="resize-y rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+          />
+        </label>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving || !title.trim()}
+            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Modal de confirmação de Delete: mostra o título, avisa que é irreversível →
+// DELETE /api/adventures/:id → remove da lista local.
+function DeleteModal({ adventure, onClose, onDeleted }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+
+  const confirm = async () => {
+    setBusy(true)
+    try {
+      await api.deleteAdventure(adventure.id)
+      onDeleted()
+      onClose()
+    } catch (e) {
+      toast(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Delete adventure" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-zinc-300">
+          Delete <span className="font-semibold text-zinc-100">“{adventure.title}”</span>?
+        </p>
+        <p className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">
+          This permanently removes the story, its actions, story cards and memories. This action
+          cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Cancel
+          </button>
+          <button
+            onClick={confirm}
+            disabled={busy}
+            className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+          >
+            {busy ? 'Deleting…' : 'Delete permanently'}
+          </button>
+        </div>
+      </div>
     </Modal>
   )
 }

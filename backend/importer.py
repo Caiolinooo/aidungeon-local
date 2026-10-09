@@ -47,7 +47,12 @@ def _safe_extract(zf: zipfile.ZipFile, dest: str) -> None:
 
 
 def import_zip(zip_path: str | Path, cards_payload: Any | None = None) -> dict:
-    """Importa um .zip de backup. `cards_payload` = JSON solto de cards (merge/validação)."""
+    """Importa um .zip de backup. `cards_payload` = JSON solto de cards (merge/validação).
+
+    Aceita dois formatos: backup individual (metadata.json na raiz) e backup
+    completo do app (uma pasta NNN-slug/ por aventura, cada uma com seu
+    metadata.json) — este último devolve {"multi": True, "results": [...]}.
+    """
     tmp = tempfile.mkdtemp(prefix="aidungeon_import_")
     try:
         try:
@@ -55,7 +60,27 @@ def import_zip(zip_path: str | Path, cards_payload: Any | None = None) -> dict:
                 _safe_extract(zf, tmp)
         except zipfile.BadZipFile as exc:
             raise BackupFormatError("arquivo não é um zip válido") from exc
-        return import_dir(tmp, cards_payload=cards_payload)
+
+        root = Path(tmp)
+        if (root / "metadata.json").exists():
+            return import_dir(root, cards_payload=cards_payload)
+
+        folders = sorted(p for p in root.iterdir()
+                         if p.is_dir() and (p / "metadata.json").exists())
+        if not folders:
+            raise BackupFormatError("metadata.json ausente no backup")
+        results = []
+        for folder in folders:
+            try:
+                results.append(import_dir(folder))
+            except BackupFormatError as exc:
+                results.append({"title": folder.name, "error": str(exc)})
+        imported = sum(1 for r in results if "error" not in r)
+        if imported == 0:
+            raise BackupFormatError(
+                "nenhuma aventura importável no backup: "
+                + "; ".join(r["error"] for r in results[:3]))
+        return {"multi": True, "imported": imported, "results": results}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

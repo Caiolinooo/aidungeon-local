@@ -107,12 +107,28 @@ export const api = {
   listAdventures: () => request('/adventures'),
   getAdventure: (id) => request(`/adventures/${id}`),
   createAdventure: (payload) => request('/adventures', { method: 'POST', body: payload }),
+  updateAdventure: (id, payload) => request(`/adventures/${id}`, { method: 'PATCH', body: payload }),
+  deleteAdventure: (id) => request(`/adventures/${id}`, { method: 'DELETE' }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
   // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).
   downloadExport: async (id) => {
     let res
     try {
       res = await fetch(`${API_BASE}/api/adventures/${id}/export`, { headers: authHeaders() })
+    } catch {
+      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+    }
+    if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized()
+      throw await parseError(res)
+    }
+    return res.blob()
+  },
+  // Backup completo (todas as aventuras) num único .zip — mesmo padrão do downloadExport.
+  downloadBackupAll: async () => {
+    let res
+    try {
+      res = await fetch(`${API_BASE}/api/adventures/export`, { headers: authHeaders() })
     } catch {
       throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
     }

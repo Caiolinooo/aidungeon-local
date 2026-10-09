@@ -302,6 +302,34 @@ def touch_adventure(conn: sqlite3.Connection, adventure_id: str) -> None:
     conn.execute("UPDATE adventures SET updated_at=? WHERE id=?", (utcnow(), adventure_id))
 
 
+def update_adventure(conn: sqlite3.Connection, adventure_id: str, *,
+                     title: str | None = None, description: str | None = None,
+                     tags: list[str] | None = None) -> dict | None:
+    """Edita metadados da aventura (título/descrição/tags). None = não altera."""
+    current = get_adventure(conn, adventure_id)
+    if not current:
+        return None
+    merged = {
+        "title": current["title"] if title is None else title,
+        "description": current["description"] if description is None else description,
+        "tags": current["tags"] if tags is None else tags,
+    }
+    conn.execute(
+        "UPDATE adventures SET title=?, description=?, tags=?, updated_at=? WHERE id=?",
+        (merged["title"], merged["description"], _dumps(merged["tags"], []),
+         utcnow(), adventure_id),
+    )
+    return get_adventure(conn, adventure_id)
+
+
+def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
+    """Remove a aventura e todos os dependentes (schema não tem ON DELETE CASCADE)."""
+    for table in ("jobs", "images", "memories", "story_cards", "actions"):
+        conn.execute(f"DELETE FROM {table} WHERE adventure_id=?", (adventure_id,))
+    cur = conn.execute("DELETE FROM adventures WHERE id=?", (adventure_id,))
+    return cur.rowcount > 0
+
+
 def update_adventure_memory(conn: sqlite3.Connection, adventure_id: str, *,
                             plot_essentials: str | None = None,
                             authors_note: str | None = None) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from typing import Any
 
@@ -117,3 +118,33 @@ def export_zip(adventure_id: str) -> tuple[bytes, str]:
         zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
         zf.writestr("actions-001.json", json.dumps(actions_part, ensure_ascii=False, indent=2))
     return buf.getvalue(), adv["title"]
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-")[:40] or "adventure"
+
+
+def export_all_zip() -> tuple[bytes, int]:
+    """Backup completo: um .zip com uma pasta por aventura (NNN-slug/), cada
+    pasta no formato do backup individual (metadata.json + actions-001.json).
+    Devolve (bytes, nº de aventuras)."""
+    with db.session() as conn:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM adventures ORDER BY updated_at DESC").fetchall()]
+        bundles = [
+            (db.get_adventure(conn, aid), db.list_actions(conn, aid),
+             db.list_cards(conn, aid), db.list_memories(conn, aid))
+            for aid in ids
+        ]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, (adv, actions, cards, memories) in enumerate(bundles, 1):
+            folder = f"{i:03d}-{_slug(adv['title'])}"
+            metadata = build_metadata(adv, actions, cards, memories)
+            actions_part = build_actions_part(actions)
+            zf.writestr(f"{folder}/metadata.json",
+                        json.dumps(metadata, ensure_ascii=False, indent=2))
+            zf.writestr(f"{folder}/actions-001.json",
+                        json.dumps(actions_part, ensure_ascii=False, indent=2))
+    return buf.getvalue(), len(bundles)
