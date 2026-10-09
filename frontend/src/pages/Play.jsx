@@ -9,9 +9,9 @@ import InputBar from '../components/InputBar.jsx'
 import Drawer from '../components/Drawer.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
 
-// Dock VRM (v0.5.0): lazy p/ manter o three.js fora do bundle inicial
-// (mesmo padrão do AvatarsTab no Drawer).
-const ChatVrmDock = lazy(() => import('../components/vrm/ChatVrmDock.jsx'))
+// Dock de avatares (v0.6.0): lazy p/ manter o three.js fora do bundle
+// inicial (mesmo padrão do AvatarsTab no Drawer).
+const ChatAvatarDock = lazy(() => import('../components/avatar/ChatAvatarDock.jsx'))
 
 // Tela 2 — Jogo (a principal, PLANO.md §4.5):
 //  - feed central rolável com scroll automático (prosa da IA; ações do jogador
@@ -417,7 +417,7 @@ export default function Play() {
         </div>
       </main>
       <Suspense fallback={null}>
-        <ChatVrmDock
+        <ChatAvatarDock
           adventureId={id}
           storyText={latestStoryText}
           refreshKey={dockRefresh}

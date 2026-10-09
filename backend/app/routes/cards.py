@@ -95,17 +95,6 @@ def enrich_card(adventure_id: str, card_id: str,
         return db.attach_portrait(conn, card)
 
 
-@router.post("/{adventure_id}/cards/{card_id}/vrm-from-portrait")
-def vrm_from_portrait(adventure_id: str, card_id: str,
-                      transport=Depends(get_http_transport)) -> dict:
-    """v0.5.0: LLM vision extrai as cores do retrato → card.vrm_id."""
-    with db.session() as conn:
-        adv, card = _card_or_404(conn, adventure_id, card_id)
-        llm_cfg = settings_store.effective_llm_settings(conn)
-        card = npc_assets.vrm_from_portrait(conn, adv, card, llm_cfg, transport=transport)
-        return db.attach_portrait(conn, card)
-
-
 @router.delete("/{adventure_id}/cards/{card_id}", status_code=204)
 def delete_card(adventure_id: str, card_id: str) -> Response:
     with db.session() as conn:

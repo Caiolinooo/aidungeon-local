@@ -162,8 +162,6 @@ export const api = {
   // v0.5.0 — ficha estruturada do NPC (síncronos, ver docs/openapi.yaml).
   enrichCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}/enrich`, { method: 'POST', body: {} }),
-  vrmFromPortrait: (advId, cardId) =>
-    request(`/adventures/${advId}/cards/${cardId}/vrm-from-portrait`, { method: 'POST', body: {} }),
 
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),

@@ -1,52 +1,47 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
-import VrmAvatar from '../vrm/VrmAvatar.jsx'
+import TalkingAvatar from '../avatar/TalkingAvatar.jsx'
 import {
-  DEFAULT_VRM_CONFIG,
-  EMOTIONS,
-  parseVrmConfig,
-  sameVrmConfig,
-  serializeVrmConfig,
-  VRM_MODELS,
-} from '../vrm/vrmConfig.js'
-import { detectEmotion } from '../vrm/emotionDetect.js'
+  AVATARS,
+  DEFAULT_AVATAR_CONFIG,
+  MOODS,
+  parseAvatarConfig,
+  sameAvatarConfig,
+  serializeAvatarConfig,
+} from '../avatar/avatarConfig.js'
+import { detectEmotion } from '../avatar/emotionDetect.js'
 
-// Quanto tempo uma emoção escolhida manualmente vence o auto-detect.
+// Quanto tempo um mood escolhido manualmente vence o auto-detect.
 const MANUAL_OVERRIDE_MS = 60_000
 
-const COLOR_FIELDS = [
-  { key: 'hair', label: 'Hair' },
-  { key: 'eyes', label: 'Eyes' },
-  { key: 'skin', label: 'Skin' },
-  { key: 'top', label: 'Top' },
-  { key: 'bottom', label: 'Bottom' },
-]
-
-const EMOTION_LABELS = {
+const MOOD_LABELS = {
   neutral: 'Neutral',
   happy: 'Happy',
   angry: 'Angry',
   sad: 'Sad',
-  surprised: 'Surprised',
-  relaxed: 'Relaxed',
+  fear: 'Fear',
+  disgust: 'Disgust',
+  love: 'Love',
+  sleep: 'Sleep',
 }
 
-// Aba Avatars (v0.4.0): viewer 3D VRM por NPC, com customização de cores e
-// emoções persistida em card.vrm_id (JSON — ver vrmConfig.js).
+// Aba Avatars: viewer 3D (TalkingHead/GLB) por NPC, com seleção de modelo,
+// corpo e mood persistidos em card.vrm_id (JSON — ver avatarConfig.js; nome
+// da coluna mantido por compatibilidade de schema).
 //
 // Prop opcional `storyText`: texto narrativo mais recente da aventura
 // (quem renderiza o Drawer pode passar o último texto do feed). Quando
 // presente e "Follow the story" está ligado, emotionDetect procura menções
-// do NPC perto de palavras de emoção e aplica a expressão automaticamente.
+// do NPC perto de palavras de emoção e aplica o mood automaticamente.
 // Override manual vence por 60s, depois volta ao auto. Sem a prop, o
-// auto-detect simplesmente não dispara e as emoções ficam 100% manuais.
+// auto-detect simplesmente não dispara e os moods ficam 100% manuais.
 export default function AvatarsTab({ adventure, storyText }) {
   const toast = useToast()
   const [cards, setCards] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
-  const [cfg, setCfg] = useState({ ...DEFAULT_VRM_CONFIG })
-  const [autoEmotion, setAutoEmotion] = useState(null)
+  const [cfg, setCfg] = useState({ ...DEFAULT_AVATAR_CONFIG })
+  const [autoMood, setAutoMood] = useState(null)
   const [followStory, setFollowStory] = useState(true)
   const [manualUntil, setManualUntil] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -67,11 +62,12 @@ export default function AvatarsTab({ adventure, storyText }) {
   const npcs = (cards || []).filter((c) => c.type === 'character')
   const selected = npcs.find((c) => c.id === selectedId) || npcs[0] || null
 
-  // Carrega a config persistida do NPC selecionado (parse tolerante).
+  // Carrega a config persistida do NPC selecionado (parse tolerante —
+  // legado VRM de cores cai nos defaults automaticamente).
   useEffect(() => {
     if (!selected) return
-    setCfg(parseVrmConfig(selected.vrm_id))
-    setAutoEmotion(null)
+    setCfg(parseAvatarConfig(selected.vrm_id))
+    setAutoMood(null)
     setManualUntil(0)
     clearTimeout(overrideTimer.current)
   }, [selected?.id, selected?.vrm_id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,7 +77,7 @@ export default function AvatarsTab({ adventure, storyText }) {
     if (!followStory || !storyText || !selected) return
     if (Date.now() < manualUntil) return // override manual ainda valendo
     const hit = detectEmotion(storyText, selected.title)
-    setAutoEmotion(hit ? hit.emotion : null)
+    setAutoMood(hit ? hit.emotion : null)
   }, [storyText, followStory, selected, manualUntil])
 
   if (cards === null) return <p className="text-sm text-zinc-500">Loading…</p>
@@ -96,33 +92,31 @@ export default function AvatarsTab({ adventure, storyText }) {
 
   const pickNpc = (id) => setSelectedId(id)
 
-  const setColor = (key, value) => setCfg((c) => ({ ...c, [key]: value }))
+  // Troca de modelo: preset zera a URL custom e herda o body do preset;
+  // "custom" mantém a URL já digitada e o body selecionado.
+  const pickModel = (model) =>
+    setCfg((c) => ({
+      ...c,
+      model,
+      url: model === 'custom' ? c.url : '',
+      body: model === 'custom' ? c.body : AVATARS[model].body,
+    }))
 
-  // Clique manual numa emoção: persiste na config e segura o auto por 60s.
-  const pickEmotion = (emotion) => {
-    setCfg((c) => ({ ...c, emotion }))
-    setAutoEmotion(null)
+  // Clique manual num mood: persiste na config e segura o auto por 60s.
+  const pickMood = (mood) => {
+    setCfg((c) => ({ ...c, mood }))
+    setAutoMood(null)
     setManualUntil(Date.now() + MANUAL_OVERRIDE_MS)
     clearTimeout(overrideTimer.current)
     overrideTimer.current = setTimeout(() => setManualUntil(0), MANUAL_OVERRIDE_MS)
   }
-
-  const resetColors = () =>
-    setCfg((c) => ({
-      ...c,
-      hair: DEFAULT_VRM_CONFIG.hair,
-      eyes: DEFAULT_VRM_CONFIG.eyes,
-      skin: DEFAULT_VRM_CONFIG.skin,
-      top: DEFAULT_VRM_CONFIG.top,
-      bottom: DEFAULT_VRM_CONFIG.bottom,
-    }))
 
   // PATCH do card com o JSON da config (mesmo fluxo de salvamento do NpcsTab).
   const save = async () => {
     if (!selected) return
     setSaving(true)
     try {
-      await api.updateCard(adventure.id, selected.id, { vrm_id: serializeVrmConfig(cfg) })
+      await api.updateCard(adventure.id, selected.id, { vrm_id: serializeAvatarConfig(cfg) })
       toast('Avatar saved.', 'ok')
       reload()
     } catch (e) {
@@ -132,10 +126,9 @@ export default function AvatarsTab({ adventure, storyText }) {
     }
   }
 
-  const dirty = selected ? !sameVrmConfig(cfg, parseVrmConfig(selected.vrm_id)) : false
+  const dirty = selected ? !sameAvatarConfig(cfg, parseAvatarConfig(selected.vrm_id)) : false
   const manualActive = Date.now() < manualUntil
-  const effectiveEmotion =
-    !manualActive && followStory && autoEmotion ? autoEmotion : cfg.emotion
+  const effectiveMood = !manualActive && followStory && autoMood ? autoMood : cfg.mood
 
   const inputCls =
     'rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm outline-none focus:border-emerald-600'
@@ -165,47 +158,82 @@ export default function AvatarsTab({ adventure, storyText }) {
 
       {selected && (
         <>
-          <VrmAvatar
-            url={VRM_MODELS[cfg.model] || VRM_MODELS.base}
-            colors={{ hair: cfg.hair, eyes: cfg.eyes, skin: cfg.skin, top: cfg.top, bottom: cfg.bottom }}
-            emotion={effectiveEmotion}
-          />
-          <p className="mt-1 text-xs text-zinc-500">Drag to rotate.</p>
+          {/* preview reflete o mood efetivo (auto ou manual) sem sujar a config */}
+          <TalkingAvatar cfg={{ ...cfg, mood: effectiveMood }} className="h-80 w-full" view="mid" />
 
-          {/* cores (tints multiplicativos; branco = cor original) */}
-          <div className="mt-3 grid grid-cols-5 gap-2">
-            {COLOR_FIELDS.map(({ key, label }) => (
-              <label key={key} className="flex flex-col items-center gap-1 text-xs text-zinc-400">
-                <input
-                  type="color"
-                  value={cfg[key]}
-                  onChange={(e) => setColor(key, e.target.value)}
-                  className="h-8 w-full cursor-pointer rounded border border-zinc-700 bg-zinc-800"
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <button
-            onClick={resetColors}
-            className="mt-2 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
-          >
-            Reset colors
-          </button>
-
-          {/* emoções */}
-          <div className="mt-4 flex flex-wrap gap-1">
-            {EMOTIONS.map((e) => (
+          {/* modelo: presets locais (public/avatars) ou GLB custom por URL */}
+          <div className="mt-3 flex flex-wrap gap-1">
+            {Object.entries(AVATARS).map(([key, a]) => (
               <button
-                key={e}
-                onClick={() => pickEmotion(e)}
+                key={key}
+                onClick={() => pickModel(key)}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
-                  effectiveEmotion === e
+                  cfg.model === key
                     ? 'bg-emerald-700 text-white'
                     : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
                 }`}
               >
-                {EMOTION_LABELS[e]}
+                {a.label}
+              </button>
+            ))}
+            <button
+              onClick={() => pickModel('custom')}
+              className={`rounded-md px-2 py-1 text-xs font-medium ${
+                cfg.model === 'custom'
+                  ? 'bg-emerald-700 text-white'
+                  : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+              }`}
+            >
+              Custom URL
+            </button>
+          </div>
+
+          {cfg.model === 'custom' && (
+            <div className="mt-2">
+              <input
+                type="text"
+                value={cfg.url}
+                onChange={(e) => setCfg((c) => ({ ...c, url: e.target.value.trim() }))}
+                placeholder="https://…/avatar.glb"
+                className={`${inputCls} w-full`}
+              />
+              <p className="mt-1 text-xs text-zinc-500">
+                Ready Player Me GLB com morphTargets=ARKit,Oculus Visemes
+              </p>
+            </div>
+          )}
+
+          {/* corpo (forma usada pelo TalkingHead p/ poses) */}
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs text-zinc-400">Body:</span>
+            {['F', 'M'].map((b) => (
+              <button
+                key={b}
+                onClick={() => setCfg((c) => ({ ...c, body: b }))}
+                className={`rounded-md px-2 py-1 text-xs font-medium ${
+                  cfg.body === b
+                    ? 'bg-emerald-700 text-white'
+                    : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                }`}
+              >
+                {b}
+              </button>
+            ))}
+          </div>
+
+          {/* moods */}
+          <div className="mt-4 flex flex-wrap gap-1">
+            {MOODS.map((m) => (
+              <button
+                key={m}
+                onClick={() => pickMood(m)}
+                className={`rounded-md px-2 py-1 text-xs font-medium ${
+                  effectiveMood === m
+                    ? 'bg-emerald-700 text-white'
+                    : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                }`}
+              >
+                {MOOD_LABELS[m]}
               </button>
             ))}
           </div>
@@ -222,9 +250,9 @@ export default function AvatarsTab({ adventure, storyText }) {
               <span className="text-xs text-zinc-500">(waiting for story feed)</span>
             )}
           </label>
-          {followStory && autoEmotion && !manualActive && (
+          {followStory && autoMood && !manualActive && (
             <p className="mt-1 text-xs text-emerald-400">
-              Auto-detected: {EMOTION_LABELS[autoEmotion]}
+              Auto-detected: {MOOD_LABELS[autoMood]}
             </p>
           )}
 

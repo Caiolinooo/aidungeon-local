@@ -139,7 +139,7 @@ function SheetPanel({ sheet, onChange }) {
 }
 
 // Linha de um NPC: retrato + campos editáveis inline + ações.
-function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onVrmSync, onDelete, saving, enriching, vrmSyncing }) {
+function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onDelete, saving, enriching }) {
   const toast = useToast()
   const [form, setForm] = useState({
     title: card.title ?? '',
@@ -282,14 +282,6 @@ function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onVrmSync, onDelete
           {enriching ? 'Enriching…' : '✨ Enrich'}
         </button>
         <button
-          onClick={() => onVrmSync(card)}
-          disabled={vrmSyncing || !card.portrait}
-          title={card.portrait ? 'Extract VRM avatar colors from the portrait (AI vision)' : 'Generate a portrait first'}
-          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {vrmSyncing ? 'Syncing…' : '🎨 VRM from portrait'}
-        </button>
-        <button
           onClick={() => onRegenerate(card)}
           disabled={!!job && (job.status === 'pending' || job.status === 'running')}
           className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
@@ -315,7 +307,6 @@ export default function NpcsTab({ adventure }) {
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
   const [enrichingId, setEnrichingId] = useState(null)
-  const [vrmSyncingId, setVrmSyncingId] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
   const prevStatuses = useRef({})
 
@@ -435,20 +426,6 @@ export default function NpcsTab({ adventure }) {
     }
   }
 
-  // v0.5.0: cores do retrato → vrm_id (preserva model/emotion já configurados).
-  const vrmSync = async (card) => {
-    setVrmSyncingId(card.id)
-    try {
-      const updated = await api.vrmFromPortrait(adventure.id, card.id)
-      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
-      toast('VRM colors synced from portrait.', 'ok')
-    } catch (e) {
-      toast(e.message)
-    } finally {
-      setVrmSyncingId(null)
-    }
-  }
-
   const regenerate = async (card) => {
     try {
       await api.regeneratePortrait(adventure.id, card.id)
@@ -516,11 +493,9 @@ export default function NpcsTab({ adventure }) {
                 job={job}
                 saving={savingId === c.id}
                 enriching={enrichingId === c.id}
-                vrmSyncing={vrmSyncingId === c.id}
                 onSave={save}
                 onRegenerate={regenerate}
                 onEnrich={enrich}
-                onVrmSync={vrmSync}
                 onDelete={remove}
               />
               {showError && (

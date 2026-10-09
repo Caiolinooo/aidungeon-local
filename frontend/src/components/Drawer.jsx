@@ -5,8 +5,8 @@ import MemoryTab from './drawer/MemoryTab.jsx'
 import ConfigTab from './drawer/ConfigTab.jsx'
 import DetailsTab from './drawer/DetailsTab.jsx'
 
-// three.js/@pixiv/three-vrm somem ~700KB ao bundle — carrega sob demanda só
-// quando a aba Avatars abre (v0.4.0).
+// TalkingHead (three.js) soma peso considerável ao bundle — carrega sob
+// demanda só quando a aba Avatars abre.
 const AvatarsTab = lazy(() => import('./drawer/AvatarsTab.jsx'))
 
 const TABS = [

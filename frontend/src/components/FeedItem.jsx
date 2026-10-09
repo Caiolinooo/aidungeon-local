@@ -11,6 +11,7 @@ import { api } from '../api.js'
 import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
 import { playerDisplayText } from '../utils.js'
+import { speakNarration, stopNarration } from './avatar/avatarBus.js'
 
 // Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
 // durante a sessão — evita um GET /api/voices a cada clique no 🔊.
@@ -83,15 +84,23 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
 }
 
 // Botão 🔊 (v0.4.0) das entradas narrativas da IA: sintetiza o texto com a
-// voz do narrador (TTS) e toca o mp3 retornado. Clique durante o play = stop.
-// objectURL e Audio são limpos no stop/ended/unmount.
+// voz do narrador (TTS). Se houver avatar no dock (avatarBus), o áudio toca
+// através do TalkingHead COM lip-sync; senão, toca o mp3 via Audio().
+// Clique durante o play = stop. objectURL e Audio são limpos no
+// stop/ended/unmount.
 function NarrateButton({ text }) {
   const toast = useToast()
   const [state, setState] = useState('idle') // idle | loading | playing
   const audioRef = useRef(null)
   const urlRef = useRef(null)
+  // true enquanto a fala está a cargo do avatar (stop delegado ao bus).
+  const viaAvatarRef = useRef(false)
 
   const stop = () => {
+    if (viaAvatarRef.current) {
+      viaAvatarRef.current = false
+      stopNarration()
+    }
     if (audioRef.current) {
       audioRef.current.onended = null
       audioRef.current.pause()
@@ -104,9 +113,11 @@ function NarrateButton({ text }) {
     setState('idle')
   }
 
-  // Sem áudio pendurado após o unmount (ex.: undo remove a entrada tocando).
+  // Sem áudio/fala pendurados após o unmount (ex.: undo remove a entrada
+  // tocando).
   useEffect(() => {
     return () => {
+      if (viaAvatarRef.current) stopNarration()
       if (audioRef.current) {
         audioRef.current.onended = null
         audioRef.current.pause()
@@ -120,6 +131,12 @@ function NarrateButton({ text }) {
     try {
       const voice = await getNarratorVoice()
       const blob = await api.voice.tts(text, voice)
+      // Avatar do dock assume (lip-sync) quando disponível.
+      if (await speakNarration({ blob, text, onended: stop })) {
+        viaAvatarRef.current = true
+        setState('playing')
+        return
+      }
       const url = URL.createObjectURL(blob)
       urlRef.current = url
       const audio = new Audio(url)

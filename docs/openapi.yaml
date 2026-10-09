@@ -561,32 +561,6 @@ paths:
         '503':
           description: Resposta do LLM não interpretável (generation_failed) — tente de novo.
 
-  /api/adventures/{adventureId}/cards/{cardId}/vrm-from-portrait:
-    post:
-      tags: [assets]
-      summary: (v0.5.0) Extrair cores VRM do retrato via LLM vision
-      operationId: vrmFromPortrait
-      description: |
-        Envia o PNG do retrato ao LLM (multimodal) e extrai cores hex dominantes
-        (hair, eyes, skin, top, bottom), fundindo-as no vrm_id do card (JSON string)
-        e preservando model/emotion já configurados. Exige retrato gerado.
-      parameters:
-        - $ref: '#/components/parameters/AdventureId'
-        - $ref: '#/components/parameters/CardId'
-      responses:
-        '200':
-          description: Card atualizado (vrm_id com as cores extraídas).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StoryCard'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          description: Card ainda não tem retrato (no_portrait) — gere um antes.
-        '503':
-          description: Resposta do LLM sem cores hex suficientes (generation_failed).
-
   /api/adventures/{adventureId}/jobs:
     get:
       tags: [assets]
@@ -1551,7 +1525,9 @@ components:
         vrm_id:
           type: string
           default: ''
-          description: v0.3.0 — avatar VRM do NPC (reservado p/ fase 2 — painel 3D).
+          description: Config do avatar 3D do NPC (JSON de serializeAvatarConfig —
+            modelo GLB/corpo/mood do TalkingHead; nome da coluna mantido por
+            compatibilidade de schema).
         sheet:
           type: string
           default: ''

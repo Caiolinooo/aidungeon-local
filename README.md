@@ -19,14 +19,15 @@ OpenAI-compatível.
   `POST /api/stt` recebe multipart e devolve `{"text": ...}`. Voz por NPC na ficha
   (aba NPCs), voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
   (chave via `VOICE_API_KEY` no `.env`, sempre mascarada na API).
-- **Avatares VRM 3D**: aba "Avatars" no painel lateral — avatar VRM 1.0
-  (three.js + `@pixiv/three-vrm`, modelo base redistribuível em
-  `frontend/public/vrm/` com licença) por NPC, com customização persistida na
-  ficha (`vrm_id` em JSON): cor de cabelo, olhos, pele e roupa (tints MToon por
-  heurística de nome de material/mesh) e emoções (presets de expressão VRM com
-  transição suave, blink e respiração idle). O modo "seguir a história" detecta
-  a emoção do NPC a partir da narrativa mais recente (menção do nome + palavras
-  de emoção PT/EN); override manual vence por 60s.
+- **Avatares 3D (TalkingHead)**: aba "Avatars" no painel lateral — avatar GLB
+  (Ready Player Me / VRoid convertido, via `@met4citizen/talkinghead` sobre
+  three.js; presets em `frontend/public/avatars/` com licença) por NPC, com
+  customização persistida na ficha (`vrm_id` em JSON — nome da coluna mantido
+  por compatibilidade): modelo (preset ou URL GLB custom), corpo (M/F) e mood
+  (8 moods nativos do TalkingHead, com lipsync pt-BR/en para narração TTS).
+  O modo "seguir a história" detecta o mood do NPC a partir da narrativa mais
+  recente (menção do nome + palavras de emoção PT/EN); override manual vence
+  por 60s.
 - **Pipeline assíncrono de assets**: ao criar uma aventura a partir de um cenário,
   os retratos dos NPCs já começam a gerar em background (fila de jobs + worker no
   backend) — você joga enquanto os assets ficam prontos e a UI aplica cada um ao
