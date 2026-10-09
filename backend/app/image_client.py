@@ -126,6 +126,12 @@ def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byt
         "steps": cfg["sdwebui_steps"],
         "width": width,
         "height": height,
+        # Fixos (não-config): DPM++ 2M Karras + CFG 5 cobrem bem SD1.5 e SDXL
+        # (Juggernaut/realistas pedem CFG 3-6); o default do servidor (Euler a,
+        # CFG 7, salvo em ui-config) deixa de depender de estado da UI.
+        "sampler_name": "DPM++ 2M",
+        "scheduler": "Karras",
+        "cfg_scale": 5,
     }
     data = _post_json(client, f"{base}{cfg['txt2img_path']}", payload,
                       {"Accept": "application/json"}, "txt2img")
