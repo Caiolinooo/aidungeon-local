@@ -156,7 +156,8 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
         "stream": True,
         "temperature": sampler.get("temperature", 0.85),
         "top_p": sampler.get("top_p", 0.95),
-        "repetition_penalty": sampler.get("repetition_penalty", 1.08),
+        # llama.cpp ignora "repetition_penalty" (nome HF); a chave efetiva é "repeat_penalty"
+        "repeat_penalty": sampler.get("repetition_penalty", 1.08),
         "max_tokens": int(sampler.get("max_tokens", 300)),
         "stop": list(stop),
     }
