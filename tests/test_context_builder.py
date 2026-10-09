@@ -136,7 +136,7 @@ def test_block_budget_truncation(tmp_db):
         built = _build(adv, actions, _cfg(conn))
     sys_msg = built.messages[0]["content"]
     assert "z" * 2800 in sys_msg and "z" * 2801 not in sys_msg  # instr ≤ 700 tk
-    assert "x" * 1600 in sys_msg and "x" * 1601 not in sys_msg  # plot ≤ 400 tk
+    assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
     # author's note truncada a 300 tk dentro da user final
     final = built.messages[-1]["content"]
     assert final.startswith("[Author's note: " + "y" * 1200 + "]\n")
@@ -151,8 +151,8 @@ def test_recent_window_dynamic_rule(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
     budgets = settings_store.load_file_settings()["context"]["budgets"]
-    expected = 8192 - (700 + 400 + 1200 + 600 + 400 + 300 + 200) - 512
-    assert built.meta["budgets"]["recent_window"] == expected == 3880
+    expected = 32768 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200) - 1024
+    assert built.meta["budgets"]["recent_window"] == expected == 25744
 
 
 def test_window_truncates_by_whole_action(tmp_db):
@@ -184,7 +184,7 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0
-        cfg = _cfg(conn, context_size=3800 + 512 + 250)
+        cfg = _cfg(conn, context_size=6000 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert built.meta["window_action_count"] == 1

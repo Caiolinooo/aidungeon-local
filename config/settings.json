@@ -7,18 +7,18 @@
     "max_tokens_slider": { "min": 100, "max": 600 }
   },
   "context": {
-    "context_size": 8192,
+    "context_size": 32768,
     "recent_window_rule": "recent_window = context_size - soma(demais budgets) - response_reserve; budgets fixos sao pisos, a janela recente absorve a diferenca",
     "budgets": {
       "ai_instructions": 700,
-      "plot_essentials": 400,
-      "story_cards": 1200,
-      "memory_bank": 600,
-      "story_summary": 400,
-      "recent_window": 3800,
+      "plot_essentials": 1600,
+      "story_cards": 1600,
+      "memory_bank": 800,
+      "story_summary": 800,
+      "recent_window": 25600,
       "authors_note": 300,
       "last_action": 200,
-      "response_reserve": 512
+      "response_reserve": 1024
     }
   },
   "llm": {
@@ -33,7 +33,7 @@
       "pick": "first",
       "note": "auto = GET {base_url}/models em runtime usa o modelo que o servidor tem carregado; model_alias explicito sobrescreve"
     },
-    "context_size": 8192,
+    "context_size": 32768,
     "context_size_limits": { "min": 4096, "max": 131072 },
     "disable_thinking": true,
     "disable_thinking_note": "OBRIGATORIO p/ Qwen3.x hibrido: llm_client DEVE enviar chat_template_kwargs={\"enable_thinking\": false} em toda chamada; sem isso content volta vazio (tokens viram reasoning_content). Validado contra a VM em 2026-10-07.",

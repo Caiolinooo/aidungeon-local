@@ -57,7 +57,14 @@ BASE_SYSTEM_PROMPT = (
     "You are an AI storyteller running an interactive text adventure. Continue the story in\n"
     "second person (\"You ...\"), matching the established tone. Write vivid prose with dialogue,\n"
     "sensory detail and consequences for the player's actions. Never decide what the player\n"
-    "character says or does beyond their stated action. Never break the fourth wall."
+    "character says or does beyond their stated action. Never break the fourth wall.\n\n"
+    "Setting fidelity rules (highest priority):\n"
+    "- The Plot, World info, Memories and Summary blocks below define the world, genre\n"
+    "  and premise. Everything you write MUST be consistent with them.\n"
+    "- NEVER import stock genre tropes that the story has not established (e.g. knights, castles,\n"
+    "  horses or dragons in a sci-fi/superhero story; spaceships in a medieval story).\n"
+    "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
+    "  the narrative back to the established setting without commenting on it."
 )
 
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
@@ -74,12 +81,17 @@ def estimate_tokens(text: str) -> int:
 
 
 def _fit_budget(text: str, budget_tokens: int) -> str:
-    """Trunca texto ao budget estimado (corte duro por caracteres)."""
+    """Trunca texto ao budget estimado. Corta no último parágrafo/frase que
+    couber (nunca no meio de uma palavra) para não vazar fragmento truncado."""
     if budget_tokens <= 0:
         return ""
     if estimate_tokens(text) <= budget_tokens:
         return text
-    return text[: budget_tokens * 4]
+    cut = text[: budget_tokens * 4]
+    boundary = max(cut.rfind("\n\n"), cut.rfind(". "), cut.rfind(".\n"))
+    if boundary > len(cut) // 2:
+        cut = cut[: boundary + 1]
+    return cut.rstrip()
 
 
 # ------------------------------------------------------- formatação ações
@@ -212,7 +224,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # 2 — plot_essentials
     plot = (adventure.get("plot_essentials") or "").strip()
     if plot:
-        system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 400))))
+        system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
 
     # 3 — story cards (pinned + disparados)
     cards_cfg = cfg.get("story_cards", {})
@@ -237,7 +249,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # 5 — story_summary
     summary = (adventure.get("story_summary") or "").strip()
     if summary:
-        system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 400))))
+        system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 800))))
 
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 

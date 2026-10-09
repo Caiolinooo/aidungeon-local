@@ -22,7 +22,7 @@ def test_get_settings_defaults(client):
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"
     assert data["api_key"] is None                       # settings.json tem ""
     assert data["model_alias"] == "auto"
-    assert data["context_size"] == 8192
+    assert data["context_size"] == 32768
     assert data["max_tokens"] == 300
     assert data["streaming"] is True
     assert data["disable_thinking"] is True              # default do contrato

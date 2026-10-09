@@ -340,13 +340,13 @@ def test_imported_summary_marks_position_without_llm(tmp_db):
 def test_summary_respects_budget_hard_cap(tmp_db):
     adv = make_adventure()
     _actions(adv["id"], 3, chars=580)
-    fake = FakeLLM(reply="y" * 4000)  # 1000 tk >> budget 400
+    fake = FakeLLM(reply="y" * 4000)  # 1000 tk >> budget 800
     with db.session() as conn:
         cfg = _cfg(conn, context_size=3800 + 512 + 100)
         summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
                                 settings=cfg)
         adv2 = db.get_adventure(conn, adv["id"])
-    assert len(adv2["story_summary"]) <= 400 * 4
+    assert len(adv2["story_summary"]) <= 800 * 4
 
 
 def test_llm_failure_is_silent(tmp_db):
