@@ -159,6 +159,10 @@ export const api = {
     request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'POST' }),
   generateAllPortraits: (advId) =>
     request(`/adventures/${advId}/portraits`, { method: 'POST' }),
+  // Fundo do lugar atual + elenco com retrato. Enfileira a pintura se o
+  // lugar ou o clima mudou; polling no mesmo endpoint enquanto pending.
+  syncScene: (advId, { retry = false } = {}) =>
+    request(`/adventures/${advId}/scene`, { method: 'POST', body: retry ? { retry: true } : {} }),
   // v0.5.0 — ficha estruturada do NPC (síncronos, ver docs/openapi.yaml).
   enrichCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}/enrich`, { method: 'POST', body: {} }),
@@ -242,10 +246,24 @@ export const api = {
       }
       return res.blob()
     },
-    // POST /stt: multipart (campo 'file', nome 'audio.webm') → {"text": "..."}.
+    // POST /stt: multipart (campo 'file') → {"text": "..."}.
+    // O nome acompanha o mime real (webm/mp4/ogg) — mandar tudo como
+    // audio.webm faz o Whisper recusar um mp4 do Safari.
+    // language: subtag do browser (pt, en…). Sem isso o servidor de voz
+    // força português e uma fala em inglês volta vazia.
     stt: (blob) => {
       const fd = new FormData()
-      fd.append('file', blob, 'audio.webm')
+      const mime = blob.type || 'audio/webm'
+      const ext = mime.includes('mp4') || mime.includes('m4a')
+        ? 'm4a'
+        : mime.includes('ogg')
+          ? 'ogg'
+          : mime.includes('wav')
+            ? 'wav'
+            : 'webm'
+      fd.append('file', blob, `audio.${ext}`)
+      const lang = (navigator.language || 'pt').slice(0, 2).toLowerCase()
+      if (/^[a-z]{2}$/.test(lang)) fd.append('language', lang)
       return request('/stt', { method: 'POST', body: fd })
     },
     getSettings: () => request('/settings/voice'),

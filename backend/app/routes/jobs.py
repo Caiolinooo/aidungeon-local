@@ -39,7 +39,7 @@ def enqueue_portrait(adventure_id: str, card_id: str) -> dict:
         card = db.get_card(conn, adventure_id, card_id)
         if not card:
             raise GameError.not_found(f"card {card_id} not found")
-        return jobs.enqueue_portrait(conn, adventure_id, card_id)
+        return jobs.enqueue_portrait(conn, adventure_id, card_id, replace=True)
 
 
 @router.get("/{adventure_id}/jobs")

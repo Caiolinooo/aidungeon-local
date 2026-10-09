@@ -110,7 +110,7 @@ def test_tts_empty_and_too_long_text_400(client):
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "invalid_payload"
 
-        resp = client.post("/api/tts", json={"text": "x" * 2001})
+        resp = client.post("/api/tts", json={"text": "x" * 5501})
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "text_too_long"
     finally:
@@ -155,6 +155,23 @@ def test_stt_ok_multipart(client):
     assert b'filename="clip.webm"' in body
     assert b"audio/webm" in body
     assert b"whisper-1" in body
+
+
+def test_stt_forwards_language(client):
+    capture: list = []
+    override_transport(client, make_voice_transport(capture=capture))
+    try:
+        resp = client.post(
+            "/api/stt",
+            files={"file": ("clip.webm", b"fake-webm-audio", "audio/webm")},
+            data={"language": "en-US"},
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    body = capture[0]
+    assert b'name="language"' in body
+    assert b"\r\n\r\nen\r\n" in body or b"\nen\n" in body
 
 
 def test_stt_missing_file_400(client):

@@ -284,6 +284,7 @@ function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onDelete, saving, e
         <button
           onClick={() => onRegenerate(card)}
           disabled={!!job && (job.status === 'pending' || job.status === 'running')}
+          title="New picture of this NPC, starting from the saved face"
           className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
         >
           Regenerate portrait
@@ -383,7 +384,9 @@ export default function NpcsTab({ adventure }) {
   const generateAll = async () => {
     try {
       const { jobs: queued } = await api.generateAllPortraits(adventure.id)
-      toast(`${queued.length} portrait job(s) queued.`, 'ok')
+      toast(queued.length
+        ? `${queued.length} portrait job(s) queued.`
+        : 'Every NPC already has a saved portrait.', 'ok')
       fetchJobs()
     } catch (e) {
       toast(e.message)
@@ -468,9 +471,10 @@ export default function NpcsTab({ adventure }) {
           </button>
           <button
             onClick={generateAll}
+            title="Only NPCs that don't have a portrait yet. Saved faces stay."
             className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
           >
-            Generate all portraits
+            Generate missing portraits
           </button>
         </div>
       </div>

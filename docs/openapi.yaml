@@ -487,6 +487,31 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/adventures/{adventureId}/scene:
+    post:
+      tags: [assets]
+      summary: Fundo e elenco da cena atual (enfileira a pintura se o lugar ou o clima mudou)
+      operationId: syncScene
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                retry:
+                  type: boolean
+                  description: true força outra pintura mesmo com fundo já pronto.
+      responses:
+        '200':
+          description: |
+            Lugar, clima, elenco (retratos) e estado do fundo
+            (none/pending/ready/error/disabled). Não bloqueia na geração.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   # ------------------------------------------------------------------- assets
   # Pipeline assíncrono (v0.3.0): enfileira gerações; o worker (backend) executa
   # em background e a UI faz polling em GET .../jobs, aplicando cada asset ao
@@ -494,7 +519,7 @@ paths:
   /api/adventures/{adventureId}/portraits:
     post:
       tags: [assets]
-      summary: Enfileirar geração de retrato para todos os NPCs (cards type=character)
+      summary: Enfileirar retrato só dos NPCs que ainda não têm foto (cards type=character)
       operationId: enqueueAllPortraits
       parameters:
         - $ref: '#/components/parameters/AdventureId'
@@ -519,10 +544,13 @@ paths:
       summary: (Re)gerar retrato de um NPC
       operationId: enqueuePortrait
       description: |
-        Enfileira um job character_portrait. Se o card não tiver portrait_prompt,
+        Enfileira um job character_portrait. A primeira foto vira a âncora
+        (portrait_anchor_id) e passa a ser a cara do NPC na cena, no dock e na ficha.
+        Se o card já tem retrato, o job é img2img a partir desse PNG (o rosto não
+        é sorteado de novo). Geração automática (cena, "gerar todos", nova aventura)
+        não substitui um retrato existente. Se o card não tiver portrait_prompt,
         o LLM escreve um a partir de entry + contexto da aventura (e o persiste no
-        card). Prompt final = image_style da aventura + portrait_prompt + style_suffix
-        (mesma config efetiva da ação "See").
+        card). Prompt final = image_style da aventura + portrait_prompt + style_suffix.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
         - $ref: '#/components/parameters/CardId'
@@ -1513,7 +1541,11 @@ components:
         portrait_image_id:
           type: string
           nullable: true
-          description: v0.3.0 — id da imagem de retrato atual (definido pelo job character_portrait; não editável via PATCH).
+          description: v0.3.0 — id da imagem de retrato que a UI mostra (definido pelo job character_portrait; não editável via PATCH).
+        portrait_anchor_id:
+          type: string
+          nullable: true
+          description: Primeira foto do NPC. Regenerar retrato faz img2img a partir deste arquivo, para manter o mesmo rosto. Não editável via PATCH.
         portrait_prompt:
           type: string
           default: ''

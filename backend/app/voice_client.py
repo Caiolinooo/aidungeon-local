@@ -92,15 +92,23 @@ def synthesize(cfg: dict, text: str, voice: str, *,
 
 
 def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,
+               language: str | None = None,
                transport: httpx.BaseTransport | None = None) -> str:
     """Transcreve o áudio `data` no provider efetivo (multipart, model=stt_model);
-    devolve o texto. Levanta VoiceError subclasses."""
+    devolve o texto. Levanta VoiceError subclasses.
+
+    `language` (ISO 639-1, opcional) é repassado no form. Sem ele o servidor
+    de voz assume português e uma fala em inglês volta vazia ou lixo.
+    """
     timeout = float(cfg.get("timeout_seconds", 60))
     files = {"file": (filename, data, content_type)}
+    form = {"model": cfg["stt_model"]}
+    if language:
+        form["language"] = language
     with _make_client(transport, timeout) as client:
         try:
             resp = client.post(f"{_base(cfg)}/audio/transcriptions", files=files,
-                               data={"model": cfg["stt_model"]},
+                               data=form,
                                headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc

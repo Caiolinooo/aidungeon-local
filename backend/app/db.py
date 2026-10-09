@@ -205,6 +205,7 @@ def card_to_dict(row: sqlite3.Row) -> dict:
         "use_for_character_creation": bool(row["use_for_character_creation"]),
         # v0.3.0: assets do NPC
         "portrait_image_id": row["portrait_image_id"],
+        "portrait_anchor_id": row["portrait_anchor_id"],
         "portrait_prompt": row["portrait_prompt"] or "",
         "voice": row["voice"] or "",
         "vrm_id": row["vrm_id"] or "",
@@ -540,9 +541,21 @@ def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
     return get_card(conn, adventure_id, card_id)
 
 
-def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | None) -> None:
-    conn.execute("UPDATE story_cards SET portrait_image_id=?, updated_at=? WHERE id=?",
-                 (image_id, utcnow(), card_id))
+def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | None,
+                      *, anchor_id: str | None = None) -> None:
+    """Grava a foto exibida. anchor_id só preenche a âncora se ela ainda está vazia."""
+    if anchor_id:
+        conn.execute(
+            "UPDATE story_cards SET portrait_image_id=?,"
+            " portrait_anchor_id=COALESCE(NULLIF(portrait_anchor_id, ''), ?),"
+            " updated_at=? WHERE id=?",
+            (image_id, anchor_id, utcnow(), card_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE story_cards SET portrait_image_id=?, updated_at=? WHERE id=?",
+            (image_id, utcnow(), card_id),
+        )
 
 
 def delete_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> bool:
@@ -586,7 +599,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 # -------------------------------------------------------------------- jobs
-JOB_TYPES = ("character_portrait",)
+JOB_TYPES = ("character_portrait", "scene_backdrop")
 JOB_ACTIVE = ("pending", "running")
 
 
@@ -634,6 +647,33 @@ def list_jobs(conn: sqlite3.Connection, adventure_id: str,
         params.append(status)
     rows = conn.execute(sql + " ORDER BY created_at ASC", params).fetchall()
     return [job_to_dict(r) for r in rows]
+
+
+def latest_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | None:
+    """Job mais recente (qualquer status) para o mesmo alvo."""
+    row = conn.execute(
+        "SELECT * FROM jobs WHERE type=? AND ref_id=? ORDER BY created_at DESC LIMIT 1",
+        (type, ref_id),
+    ).fetchone()
+    return job_to_dict(row) if row else None
+
+
+def latest_image(conn: sqlite3.Connection, adventure_id: str, kind: str,
+                 ref_id: str | None = None) -> dict | None:
+    """Imagem mais recente de um kind. ref_id=None devolve qualquer uma do kind."""
+    if ref_id is None:
+        row = conn.execute(
+            "SELECT * FROM images WHERE adventure_id=? AND kind=?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (adventure_id, kind),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM images WHERE adventure_id=? AND kind=? AND ref_id=?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (adventure_id, kind, ref_id),
+        ).fetchone()
+    return image_to_dict(row) if row else None
 
 
 def find_active_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | None:

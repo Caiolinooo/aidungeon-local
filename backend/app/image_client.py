@@ -115,30 +115,61 @@ def _save_png(cfg: dict, adventure_id: str, image_id: str, content: bytes) -> st
 
 
 # ---------------------------------------------------------------- providers
-def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str) -> tuple[bytes, int, int]:
-    base = cfg["sdwebui_base_url"].rstrip("/")
-    if not base:
-        raise ImageError("config_error: image.providers.sdwebui.base_url vazio")
-    width, height = cfg["sdwebui_width"], cfg["sdwebui_height"]
-    payload = {
+def _sd_payload(cfg: dict, prompt: str, width: int, height: int) -> dict:
+    # Fixos (não-config): DPM++ 2M Karras + CFG 5 cobrem bem SD1.5 e SDXL
+    # (Juggernaut/realistas pedem CFG 3-6); o default do servidor (Euler a,
+    # CFG 7, salvo em ui-config) deixa de depender de estado da UI.
+    return {
         "prompt": prompt,
         "negative_prompt": cfg["negative_prompt"],
         "steps": cfg["sdwebui_steps"],
         "width": width,
         "height": height,
-        # Fixos (não-config): DPM++ 2M Karras + CFG 5 cobrem bem SD1.5 e SDXL
-        # (Juggernaut/realistas pedem CFG 3-6); o default do servidor (Euler a,
-        # CFG 7, salvo em ui-config) deixa de depender de estado da UI.
         "sampler_name": "DPM++ 2M",
         "scheduler": "Karras",
         "cfg_scale": 5,
     }
-    data = _post_json(client, f"{base}{cfg['txt2img_path']}", payload,
-                      {"Accept": "application/json"}, "txt2img")
+
+
+def _sd_base(cfg: dict) -> str:
+    base = cfg["sdwebui_base_url"].rstrip("/")
+    if not base:
+        raise ImageError("config_error: image.providers.sdwebui.base_url vazio")
+    return base
+
+
+def _first_image(data: dict, what: str) -> bytes:
     images = data.get("images")
     if not isinstance(images, list) or not images:
-        raise ImageError("resposta de txt2img sem lista 'images'")
-    return _decode_b64(str(images[0]), "txt2img"), width, height
+        raise ImageError(f"resposta de {what} sem lista 'images'")
+    return _decode_b64(str(images[0]), what)
+
+
+def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str,
+                      width: int | None = None, height: int | None = None,
+                      ) -> tuple[bytes, int, int]:
+    width = int(width or cfg["sdwebui_width"])
+    height = int(height or cfg["sdwebui_height"])
+    data = _post_json(client, f"{_sd_base(cfg)}{cfg['txt2img_path']}",
+                      _sd_payload(cfg, prompt, width, height),
+                      {"Accept": "application/json"}, "txt2img")
+    return _first_image(data, "txt2img"), width, height
+
+
+def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
+                              init_image: bytes, width: int | None,
+                              height: int | None,
+                              denoising_strength: float) -> tuple[bytes, int, int]:
+    """Pinta a partir de um PNG já salvo. denoising baixo mantém o mesmo rosto."""
+    width = int(width or cfg["sdwebui_width"])
+    height = int(height or cfg["sdwebui_height"])
+    payload = _sd_payload(cfg, prompt, width, height)
+    payload["init_images"] = [base64.b64encode(init_image).decode("ascii")]
+    payload["denoising_strength"] = denoising_strength
+    path = cfg.get("img2img_path") or "/sdapi/v1/img2img"
+    data = _post_json(client, f"{_sd_base(cfg)}{path}", payload,
+                      {"Accept": "application/json"}, "img2img")
+    return _first_image(data, "img2img"), width, height
 
 
 def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[bytes, int | None, int | None]:
@@ -177,14 +208,29 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
 
 # ------------------------------------------------------------------ público
 def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
-                   transport: httpx.BaseTransport | None = None) -> dict:
+                   transport: httpx.BaseTransport | None = None,
+                   width: int | None = None, height: int | None = None,
+                   init_image: bytes | None = None,
+                   denoising_strength: float | None = None) -> dict:
     """Gera a imagem no provider efetivo, salva o PNG e devolve metadados
-    {file_path (relativo), width, height, provider}. Levanta ImageError subclasses."""
+    {file_path (relativo), width, height, provider}. Levanta ImageError subclasses.
+
+    init_image pede img2img (mesmo rosto). Sem endpoint img2img o pedido falha
+    em vez de inventar outro personagem em txt2img.
+    """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
     with _make_client(transport, timeout) as client:
-        if provider == "sdwebui":
-            content, width, height = _generate_sdwebui(cfg, client, prompt)
+        if init_image is not None:
+            if provider != "sdwebui":
+                raise ImageError(
+                    "cannot keep the same face: this image provider has no img2img")
+            content, width, height = _generate_sdwebui_img2img(
+                cfg, client, prompt, init_image, width, height,
+                float(denoising_strength if denoising_strength is not None else 0.35),
+            )
+        elif provider == "sdwebui":
+            content, width, height = _generate_sdwebui(cfg, client, prompt, width, height)
         elif provider == "openai_compatible":
             content, width, height = _generate_openai(cfg, client, prompt)
         else:

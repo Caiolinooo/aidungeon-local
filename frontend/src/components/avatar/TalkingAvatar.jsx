@@ -113,15 +113,17 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
   }, [mood])
 
   useImperativeHandle(ref, () => ({
-    // Fala o blob de TTS com lipsync pt-BR. Interrompe a fala anterior.
+    // Fala o blob de TTS com lipsync pt-BR.
+    // interrupt (default true) corta a fala anterior; false enfileira no
+    // TalkingHead (narração partida em vários mp3).
     // onended (opcional): enfileirado via speakMarker p/ o chamador saber
     // quando a fala terminou (NarrateButton volta ao estado idle).
-    async speak({ blob, text, onended }) {
+    async speak({ blob, text, onended, interrupt = true }) {
       const head = headRef.current
       if (!head) return
       const ok = await headReadyRef.current
       if (!ok || headRef.current !== head) return // GLB não carregou / avatar trocado
-      head.stopSpeaking()
+      if (interrupt) head.stopSpeaking()
       try {
         await head.audioCtx.resume()
       } catch {

@@ -6,12 +6,13 @@
 // Audio() simples.
 //
 // Contrato do speaker (objeto):
-//   speak: async ({ blob, text, onended }) => undefined
+//   speak: async ({ blob, text, onended, interrupt }) => undefined
 //     - blob: audio/mpeg retornado pelo POST /api/tts
 //     - text: texto narrado (usado p/ gerar visemes via lipsync module)
 //     - onended: callback opcional chamado quando a fala termina
 //       (TalkingHead: enfileirar speakMarker(onended) após o speakAudio)
-//     - deve parar a fala anterior antes de começar a nova
+//     - interrupt: true (default) para a fala anterior; false enfileira
+//       (narração em vários pedaços)
 //   stop: () => undefined  (interrompe a fala em andamento)
 
 let speaker = null
@@ -31,9 +32,9 @@ export function registerSpeaker(spk) {
 
 // Tenta falar pelo avatar. Retorna true se um speaker tratou (o chamador
 // NÃO deve tocar o áudio de novo), false se não há avatar disponível.
-export async function speakNarration({ blob, text, onended }) {
+export async function speakNarration({ blob, text, onended, interrupt = true }) {
   if (!speaker) return false
-  await speaker.speak({ blob, text, onended })
+  await speaker.speak({ blob, text, onended, interrupt })
   return true
 }
 

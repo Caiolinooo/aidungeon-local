@@ -29,7 +29,7 @@ from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
                         generation, health, images, import_export, jobs as jobs_routes,
-                        memory, scenarios, settings, voice)
+                        memory, scenarios, scene as scene_routes, settings, voice)
 from app.routes import auth as auth_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -97,6 +97,8 @@ _protected = [Depends(require_auth)]
 app.include_router(scenarios.router, prefix="/api/scenarios", tags=["scenarios"],
                    dependencies=_protected)
 app.include_router(adventures.router, prefix="/api/adventures", tags=["adventures"],
+                   dependencies=_protected)
+app.include_router(scene_routes.router, prefix="/api/adventures", tags=["scene"],
                    dependencies=_protected)
 app.include_router(generation.router, prefix="/api/adventures", tags=["generation"],
                    dependencies=_protected)

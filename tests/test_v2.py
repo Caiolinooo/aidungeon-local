@@ -302,7 +302,7 @@ def test_init_db_sets_latest_user_version(tmp_db):
     assert "images" in tables
     assert "jobs" in tables
     assert "image_style" in adv_cols
-    assert {"portrait_image_id", "portrait_prompt", "voice", "vrm_id", "sheet"} <= card_cols
+    assert {"portrait_image_id", "portrait_anchor_id", "portrait_prompt", "voice", "vrm_id", "sheet"} <= card_cols
     assert {"kind", "ref_id"} <= img_cols
     assert "story_cards" in scn_cols
     db.init_db()  # idempotente: segunda chamada não falha

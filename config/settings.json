@@ -73,6 +73,7 @@
       "sdwebui": {
         "base_url": "http://127.0.0.1:7860",
         "txt2img_path": "/sdapi/v1/txt2img",
+        "img2img_path": "/sdapi/v1/img2img",
         "width": 512,
         "height": 512,
         "steps": 20,
@@ -102,8 +103,8 @@
     "stt_model": "whisper-1",
     "narrator_voice": "M1",
     "voices": ["M1", "M2", "M3", "F1", "F2", "F3"],
-    "timeout_seconds": 60,
-    "max_text_chars": 2000,
+    "timeout_seconds": 300,
+    "max_text_chars": 5500,
     "stt_max_bytes": 10485760
   },
   "assistant": {

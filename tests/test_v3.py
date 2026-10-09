@@ -239,3 +239,57 @@ def test_cancel_finished_job_409(client, tmp_path):
     resp = client.delete(f"/api/adventures/{adv['id']}/jobs/{job['id']}")
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "job_not_cancelable"
+
+
+def test_bulk_does_not_replace_an_existing_portrait(client, tmp_path):
+    adv = make_adventure()
+    keep = make_npc(adv["id"], title="Ada", entry="Captain.",
+                    portrait_prompt="silver hair, bust portrait")
+    make_npc(adv["id"], title="Rex", entry="Engineer.")
+    use_tmp_storage(tmp_path)
+    client.post(f"/api/adventures/{adv['id']}/cards/{keep['id']}/portrait")
+    assert jobs.process_pending(make_assets_transport()) == 1
+    saved = client.get(f"/api/adventures/{adv['id']}/cards/{keep['id']}").json()
+    assert saved["portrait_anchor_id"] == saved["portrait"]["id"]
+
+    resp = client.post(f"/api/adventures/{adv['id']}/portraits")
+    assert resp.status_code == 202, resp.text
+    assert len(resp.json()["jobs"]) == 1
+    assert resp.json()["jobs"][0]["ref_id"] != keep["id"]
+    again = client.get(f"/api/adventures/{adv['id']}/cards/{keep['id']}").json()
+    assert again["portrait"]["id"] == saved["portrait"]["id"]
+    assert again["portrait_anchor_id"] == saved["portrait_anchor_id"]
+
+
+def test_regenerate_portrait_img2img_from_anchor(client, tmp_path):
+    adv = make_adventure(image_style="ink sketch")
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.",
+                   portrait_prompt="scarred veteran captain, oil painting")
+    use_tmp_storage(tmp_path)
+    first = client.post(f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert jobs.process_pending(make_assets_transport()) == 1
+    card = client.get(f"/api/adventures/{adv['id']}/cards/{npc['id']}").json()
+    anchor = card["portrait_anchor_id"]
+    assert anchor == card["portrait"]["id"]
+    assert first["id"]
+
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/sdapi/v1/img2img"):
+            seen.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={"images": [PNG_B64], "parameters": {}})
+        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
+
+    second = client.post(f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert second["payload"]["replace"] is True
+    assert second["payload"]["init_image_id"] == anchor
+    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
+    assert seen and seen[0]["denoising_strength"] == jobs.PORTRAIT_DENOISE
+    assert jobs.PORTRAIT_DENOISE <= 0.45
+    assert seen[0]["init_images"] and seen[0]["init_images"][0]
+    assert "same face" in seen[0]["prompt"]
+
+    updated = client.get(f"/api/adventures/{adv['id']}/cards/{npc['id']}").json()
+    assert updated["portrait"]["id"] != anchor
+    assert updated["portrait_anchor_id"] == anchor

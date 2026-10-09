@@ -7,7 +7,9 @@ import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
 import Drawer from '../components/Drawer.jsx'
+import SceneBackdrop from '../components/SceneBackdrop.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
+import { loosenProse } from '../prose.js'
 
 // Dock de avatares (v0.6.0): lazy p/ manter o three.js fora do bundle
 // inicial (mesmo padrão do AvatarsTab no Drawer).
@@ -265,6 +267,9 @@ export default function Play() {
     (a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see',
   )?.text
   const showChoices = !generating && !seeing && !inputDirty && choices.length > 0
+  const lastPlayer = [...actions].reverse().find(
+    (a) => a.type === 'do' || a.type === 'say' || a.type === 'story',
+  )
 
   return (
     <div className="flex h-full flex-col">
@@ -374,10 +379,17 @@ export default function Play() {
         </div>
       </header>
 
-      {/* feed central rolável + dock VRM sobreposto (v0.5.0) */}
-      <div className="relative flex-1 overflow-hidden">
-      <main ref={feedRef} onScroll={onFeedScroll} className="h-full overflow-y-auto px-3 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-1">
+      {/* faixa da cena em cima; o texto fica no fundo sólido, sem a pintura atrás */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <SceneBackdrop
+        adventureId={id}
+        storyText={latestStoryText}
+        generating={generating}
+        playerAction={lastPlayer}
+      />
+      <div className="relative min-h-0 flex-1">
+      <main ref={feedRef} onScroll={onFeedScroll} className="h-full overflow-y-auto bg-zinc-950 px-3 py-4">
+        <div className="mx-auto flex max-w-prose flex-col gap-3">
           {actions.length === 0 && !generating && (
             <p className="rounded-lg border border-dashed border-zinc-800 p-6 text-center text-sm text-zinc-500">
               A blank page. Send a <b>Story</b> action to set the scene, or press{' '}
@@ -396,8 +408,8 @@ export default function Play() {
                 <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
                 AI is writing…
               </div>
-              <p className="streaming-cursor whitespace-pre-wrap font-prose leading-relaxed text-zinc-200">
-                {gen.text}
+              <p className="streaming-cursor whitespace-pre-wrap font-prose text-[1.05rem] leading-8 text-zinc-100">
+                {loosenProse(gen.text)}
               </p>
             </div>
           )}
@@ -423,6 +435,7 @@ export default function Play() {
           refreshKey={dockRefresh}
         />
       </Suspense>
+      </div>
       </div>
 
       {/* choices (v2): sugestões clicáveis acima da InputBar — clicar envia já */}

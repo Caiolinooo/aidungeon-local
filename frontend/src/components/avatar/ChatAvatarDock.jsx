@@ -22,12 +22,33 @@ import { parseAvatarConfig } from './avatarConfig.js'
 import { registerSpeaker } from './avatarBus.js'
 import { mentionsNpc } from './emotionDetect.js'
 
+function PortraitCover({ imageId }) {
+  const [src, setSrc] = useState(null)
+  useEffect(() => {
+    if (!imageId) return undefined
+    let url = null
+    let dead = false
+    api.fetchImageBlob(imageId).then((blob) => {
+      if (dead) return
+      url = URL.createObjectURL(blob)
+      setSrc(url)
+    }).catch(() => {})
+    return () => {
+      dead = true
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [imageId])
+  if (!src) return null
+  return <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
+}
+
 function DockAvatar({ card, avatarRef }) {
   const cfg = parseAvatarConfig(card.vrm_id)
   return (
     <div className="flex w-24 flex-col items-center gap-1">
-      <div className="h-32 w-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/80">
+      <div className="relative h-32 w-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/80">
         <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" />
+        <PortraitCover imageId={card.portrait?.id} />
       </div>
       <span className="max-w-full truncate text-[10px] font-medium text-zinc-300" title={card.title}>
         {card.title || 'Untitled'}

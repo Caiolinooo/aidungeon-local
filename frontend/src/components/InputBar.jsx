@@ -8,11 +8,16 @@ const TABS = [
   { id: 'story', label: 'Story', placeholder: 'What happens next?' },
 ]
 
-// Mime preferido da gravação (contrato STT aceita webm); cai no default do
-// browser quando não suportado (Safari grava mp4/aac, também aceito).
-const MIC_MIME = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm')
-  ? 'audio/webm'
-  : ''
+// Mime da gravação. 'audio/webm' pelado faz o Chrome lançar NotSupportedError
+// em alguns builds mesmo com isTypeSupported true — por isso a ordem tenta
+// opus explícito e, se o construtor falhar, o default do browser.
+function preferredMicMime() {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return ''
+  for (const mime of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+    if (MediaRecorder.isTypeSupported(mime)) return mime
+  }
+  return ''
+}
 
 // Barra de entrada fixa no rodapé: tabs [Do | Say | Story], textarea
 // (Enter envia, Shift+Enter quebra linha) e botão Send.
@@ -27,6 +32,7 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
   const [text, setText] = useState('')
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  const [micHint, setMicHint] = useState('')
   const areaRef = useRef(null)
   const recorderRef = useRef(null)
   const chunksRef = useRef([])
@@ -60,18 +66,48 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
   }
 
   const startRecording = async () => {
+    setMicHint('')
+    // getUserMedia só existe em contexto seguro (https ou localhost).
+    // http://host:2122 não pede permissão — a gravação morre aqui e o
+    // /api/stt nunca é chamado.
+    if (!window.isSecureContext) {
+      const msg = 'Microphone needs HTTPS. Open the game with https://, not http://…:2122.'
+      setMicHint(msg)
+      toast(msg)
+      return
+    }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      toast('Voice recording is not supported in this browser.')
+      const msg = 'Voice recording is not supported in this browser.'
+      setMicHint(msg)
+      toast(msg)
       return
     }
     let stream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch {
-      toast('Microphone access denied — allow the mic to dictate your action.')
+    } catch (err) {
+      const msg = err?.name === 'NotFoundError'
+        ? 'No microphone found on this device.'
+        : 'Microphone access denied — allow the mic for this site and try again.'
+      setMicHint(msg)
+      toast(msg)
       return
     }
-    const rec = new MediaRecorder(stream, MIC_MIME ? { mimeType: MIC_MIME } : undefined)
+    const mime = preferredMicMime()
+    let rec
+    try {
+      rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+    } catch {
+      try {
+        rec = new MediaRecorder(stream)
+      } catch (err) {
+        stream.getTracks().forEach((t) => t.stop())
+        const msg = err?.message || 'Could not start the recorder.'
+        setMicHint(msg)
+        toast(msg)
+        return
+      }
+    }
     recorderRef.current = rec
     chunksRef.current = []
     rec.ondataavailable = (e) => {
@@ -81,30 +117,52 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
       stream.getTracks().forEach((t) => t.stop()) // solta o mic (some o indicador do SO)
       recorderRef.current = null
       setRecording(false)
-      const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' })
+      const blob = new Blob(chunksRef.current, { type: rec.mimeType || mime || 'audio/webm' })
       chunksRef.current = []
-      if (blob.size === 0) return
+      if (blob.size < 200) {
+        const msg = 'Recording was empty. Speak, then tap the mic again to stop.'
+        setMicHint(msg)
+        toast(msg)
+        return
+      }
+      setMicHint('Transcribing…')
       setTranscribing(true)
       try {
         const { text: spoken } = await api.voice.stt(blob)
         const t = (spoken || '').trim()
         if (t) {
+          setMicHint('')
           setText((prev) => {
             const next = prev.trim() ? `${prev.trimEnd()} ${t}` : t
             onTextChange?.(next)
             return next
           })
         } else {
-          toast('Nothing recognized — try speaking closer to the mic.')
+          const msg = 'Nothing recognized — try speaking closer to the mic.'
+          setMicHint(msg)
+          toast(msg)
         }
       } catch (e) {
+        setMicHint(e.message)
         toast(e.message)
       } finally {
         setTranscribing(false)
       }
     }
-    rec.start()
+    try {
+      // timeslice: sem ele alguns browsers só entregam o áudio no stop e
+      // o blob sai vazio se o clique de parar chega cedo demais.
+      rec.start(250)
+    } catch (err) {
+      stream.getTracks().forEach((t) => t.stop())
+      recorderRef.current = null
+      const msg = err?.message || 'Could not start the recorder.'
+      setMicHint(msg)
+      toast(msg)
+      return
+    }
     setRecording(true)
+    setMicHint('Recording… tap the mic again to transcribe.')
   }
 
   // auto-resize da textarea (2..10 linhas)
@@ -179,6 +237,9 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
             Send
           </button>
         </div>
+        {micHint && (
+          <p className="mt-1 text-xs text-amber-300/90">{micHint}</p>
+        )}
       </div>
     </div>
   )

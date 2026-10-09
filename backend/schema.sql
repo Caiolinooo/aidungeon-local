@@ -69,6 +69,10 @@ ALTER TABLE story_cards ADD COLUMN vrm_id TEXT DEFAULT '';
 -- clothing, personality, stats, notes) — alimenta retratos e a aba NPCs
 ALTER TABLE story_cards ADD COLUMN sheet TEXT DEFAULT '';
 
+-- Retrato de identidade: a primeira foto do NPC. Gerações seguintes (img2img)
+-- partem deste arquivo; geração automática não substitui portrait_image_id.
+ALTER TABLE story_cards ADD COLUMN portrait_anchor_id TEXT;
+
 -- v0.3.0: kind='portrait' + ref_id=card_id para retratos (action_seq=-1: retrato
 -- não pertence ao feed de ações)
 ALTER TABLE images ADD COLUMN kind TEXT DEFAULT 'scene';

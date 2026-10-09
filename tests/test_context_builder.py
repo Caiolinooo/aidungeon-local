@@ -79,6 +79,7 @@ def test_sandwich_order_exact(tmp_db):
     # 7+8 — user final: author's note em linha própria ANTES da última ação
     final = built.messages[2]["content"]
     assert final == ("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                     f"{cb.STYLE_CUE}\n"
                      "The market is busy.")
 
 
@@ -93,7 +94,7 @@ def test_empty_blocks_are_skipped(tmp_db):
     roles = [m["role"] for m in built.messages]
     assert roles == ["system", "user"]
     assert built.messages[0]["content"] == cb.BASE_SYSTEM_PROMPT
-    assert built.messages[1]["content"] == "Once upon a time."
+    assert built.messages[1]["content"] == f"{cb.STYLE_CUE}\nOnce upon a time."
 
 
 # ------------------------------------------------------------- formatação
@@ -113,7 +114,7 @@ def test_player_action_formatting(tmp_db):
     assert "\n> You sheathe the blade\n" in window
     assert "> You \n> You" not in window  # nunca re-embrulha texto do backup
     # bloco 8 = última ação (story → prosa pura)
-    assert built.messages[-1]["content"] == "Pure narration."
+    assert built.messages[-1]["content"] == f"{cb.STYLE_CUE}\nPure narration."
 
 
 def test_stop_sequences_from_settings(tmp_db):
@@ -173,7 +174,8 @@ def test_window_truncates_by_whole_action(tmp_db):
     full = "".join(m["content"] for m in built.messages)
     assert "OLDACTION" not in full
     assert "NEWESTACTION" not in full  # ação 1 ficou fora (janela 0); última vai ao bloco 8
-    assert built.messages[-1]["content"].startswith("CURRENT last action.")
+    assert built.messages[-1]["content"].endswith("CURRENT last action.")
+    assert cb.STYLE_CUE in built.messages[-1]["content"]
 
 
 def test_window_keeps_newest_whole_actions_first(tmp_db):

@@ -12,6 +12,8 @@ import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
 import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
+import { splitNarration } from '../ttsText.js'
+import { loosenProse } from '../prose.js'
 
 // Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
 // durante a sessão — evita um GET /api/voices a cada clique no 🔊.
@@ -31,6 +33,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
   const isSee = type === 'see'
   // do/say vêm formatados do backend ("\n> You ...\n") — exibe sem o wrapper
   const display = isPlayer ? playerDisplayText(type, text) : text
+  const shown = isPlayer || isSee ? display : loosenProse(text)
 
   return (
     <div
@@ -68,11 +71,11 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
         </blockquote>
       ) : (
         <p
-          className={`whitespace-pre-wrap font-prose leading-relaxed ${
-            type === 'story' ? 'italic text-zinc-300' : 'text-zinc-200'
+          className={`whitespace-pre-wrap font-prose text-[1.05rem] leading-8 ${
+            type === 'story' ? 'italic text-zinc-200' : 'text-zinc-100'
           }`}
         >
-          {text}
+          {shown}
         </p>
       )}
 
@@ -83,26 +86,29 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
   )
 }
 
-// Botão 🔊 (v0.4.0) das entradas narrativas da IA: sintetiza o texto com a
-// voz do narrador (TTS). Se houver avatar no dock (avatarBus), o áudio toca
-// através do TalkingHead COM lip-sync; senão, toca o mp3 via Audio().
-// Clique durante o play = stop. objectURL e Audio são limpos no
-// stop/ended/unmount.
+// Botão 🔊 das entradas narrativas da IA. O texto vai em pedaços curtos
+// (splitNarration): o primeiro mp3 começa a tocar enquanto o próximo ainda
+// está sendo sintetizado, e textos acima de 2000 caracteres não batem no
+// teto da rota. Avatar no dock (avatarBus) fala com lip-sync, enfileirando
+// os pedaços; senão, cada mp3 toca via Audio() em sequência.
+// Clique durante loading/play = stop.
 function NarrateButton({ text }) {
   const toast = useToast()
   const [state, setState] = useState('idle') // idle | loading | playing
   const audioRef = useRef(null)
   const urlRef = useRef(null)
+  const audioDoneRef = useRef(null)
   // true enquanto a fala está a cargo do avatar (stop delegado ao bus).
   const viaAvatarRef = useRef(false)
+  // Incrementar invalida o loop de pedaços em andamento (stop / unmount).
+  const tokenRef = useRef(0)
 
-  const stop = () => {
-    if (viaAvatarRef.current) {
-      viaAvatarRef.current = false
-      stopNarration()
-    }
+  const releaseAudio = () => {
+    audioDoneRef.current?.()
+    audioDoneRef.current = null
     if (audioRef.current) {
       audioRef.current.onended = null
+      audioRef.current.onerror = null
       audioRef.current.pause()
       audioRef.current = null
     }
@@ -110,6 +116,15 @@ function NarrateButton({ text }) {
       URL.revokeObjectURL(urlRef.current)
       urlRef.current = null
     }
+  }
+
+  const stop = () => {
+    tokenRef.current += 1
+    if (viaAvatarRef.current) {
+      viaAvatarRef.current = false
+      stopNarration()
+    }
+    releaseAudio()
     setState('idle')
   }
 
@@ -117,34 +132,84 @@ function NarrateButton({ text }) {
   // tocando).
   useEffect(() => {
     return () => {
+      tokenRef.current += 1
       if (viaAvatarRef.current) stopNarration()
-      if (audioRef.current) {
-        audioRef.current.onended = null
-        audioRef.current.pause()
-      }
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+      releaseAudio()
     }
   }, [])
 
-  const play = async () => {
-    setState('loading')
-    try {
-      const voice = await getNarratorVoice()
-      const blob = await api.voice.tts(text, voice)
-      // Avatar do dock assume (lip-sync) quando disponível.
-      if (await speakNarration({ blob, text, onended: stop })) {
-        viaAvatarRef.current = true
-        setState('playing')
-        return
-      }
+  const playBlob = (blob) =>
+    new Promise((resolve, reject) => {
+      releaseAudio()
       const url = URL.createObjectURL(blob)
       urlRef.current = url
       const audio = new Audio(url)
       audioRef.current = audio
-      audio.onended = stop
-      await audio.play()
-      setState('playing')
+      audioDoneRef.current = () => {
+        audioDoneRef.current = null
+        resolve()
+      }
+      audio.onended = () => audioDoneRef.current?.()
+      audio.onerror = () => {
+        audioDoneRef.current = null
+        reject(new Error('Could not play narration audio.'))
+      }
+      audio.play().catch((err) => {
+        audioDoneRef.current = null
+        reject(err)
+      })
+    })
+
+  const play = async () => {
+    const token = ++tokenRef.current
+    const alive = () => tokenRef.current === token
+    setState('loading')
+    try {
+      const voice = await getNarratorVoice()
+      if (!alive()) return
+      const parts = splitNarration(text)
+      if (parts.length === 0) {
+        setState('idle')
+        return
+      }
+      let upcoming = api.voice.tts(parts[0], voice)
+      let useAvatar = null
+      for (let i = 0; i < parts.length; i++) {
+        const blob = await upcoming
+        if (!alive()) return
+        if (i + 1 < parts.length) upcoming = api.voice.tts(parts[i + 1], voice)
+        const last = i === parts.length - 1
+        const finish = last
+          ? () => {
+              if (alive()) stop()
+            }
+          : undefined
+        if (useAvatar !== false) {
+          const took = await speakNarration({
+            blob,
+            text: parts[i],
+            interrupt: i === 0,
+            onended: finish,
+          })
+          if (!alive()) return
+          if (took) {
+            useAvatar = true
+            viaAvatarRef.current = true
+            setState('playing')
+            continue
+          }
+          useAvatar = false
+        }
+        setState('playing')
+        await playBlob(blob)
+        if (!alive()) return
+      }
+      if (useAvatar === false && alive()) {
+        releaseAudio()
+        setState('idle')
+      }
     } catch (e) {
+      if (!alive()) return
       stop()
       toast(e.message)
     }
@@ -152,10 +217,9 @@ function NarrateButton({ text }) {
 
   return (
     <button
-      onClick={state === 'playing' ? stop : play}
-      disabled={state === 'loading'}
-      title={state === 'playing' ? 'Stop narration' : 'Narrate (text-to-speech)'}
-      className="absolute right-16 top-2 hidden rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 group-hover:block"
+      onClick={state === 'idle' ? play : stop}
+      title={state === 'idle' ? 'Narrate (text-to-speech)' : 'Stop narration'}
+      className="absolute right-16 top-2 hidden rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 group-hover:block"
     >
       {state === 'loading' ? '⏳' : state === 'playing' ? '⏹' : '🔊'}
     </button>

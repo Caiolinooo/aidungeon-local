@@ -58,12 +58,15 @@ BASE_SYSTEM_PROMPT = (
     "second person (\"You ...\"), matching the established tone. Write vivid prose with dialogue,\n"
     "sensory detail and consequences for the player's actions. Never decide what the player\n"
     "character says or does beyond their stated action. Never break the fourth wall.\n\n"
-    "Prose quality rules:\n"
-    "- Vary sentence and paragraph length; avoid repeating the same words, imagery\n"
-    "  or sentence patterns from earlier responses.\n"
-    "- Show events through action, dialogue and the senses instead of summarizing them.\n"
-    "- End each response at a moment of momentum that invites the player's next move —\n"
-    "  never wrap up the scene or narrate an epilogue.\n\n"
+    "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
+    "- Write complete sentences in the story's language. Keep articles and\n"
+    "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
+    "- Every sentence has a subject and a verb and ends with . ? or !\n"
+    "- Two or three sentences per paragraph. Separate paragraphs with a blank line.\n"
+    "- Do not chain clauses with semicolons. Do not end a paragraph with an ellipsis.\n"
+    "- Vary wording; do not repeat the same image or sentence pattern.\n"
+    "- Show events through action, dialogue and the senses. Stop while the scene is\n"
+    "  still open — never wrap up the scene or narrate an epilogue.\n\n"
     "Setting fidelity rules (highest priority):\n"
     "- The Plot, World info, Memories and Summary blocks below define the world, genre\n"
     "  and premise. Everything you write MUST be consistent with them.\n"
@@ -71,6 +74,15 @@ BASE_SYSTEM_PROMPT = (
     "  horses or dragons in a sci-fi/superhero story; spaceships in a medieval story).\n"
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
     "  the narrative back to the established setting without commenting on it."
+)
+
+# Lembrete curto na mensagem final (recência). O histórico já gerado neste
+# estilo telegráfico puxa o modelo de volta; a instrução no system, lá no
+# início, perde para esse exemplo.
+STYLE_CUE = (
+    "[Style: complete grammatical sentences in the story's language, "
+    "articles and prepositions kept, two or three sentences per paragraph, "
+    "a blank line between paragraphs. Do not copy clipped or run-on prose.]"
 )
 
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
@@ -278,7 +290,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
 
-    # 7+8 — user(final): author's note como linha própria + última ação
+    # 7+8 — user(final): author's note, lembrete de prosa, última ação
     note = (adventure.get("authors_note") or "").strip()
     if note:
         note = _fit_budget(note, int(budgets.get("authors_note", 300)))
@@ -288,10 +300,12 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                                int(budgets.get("last_action", 200)))
     else:
         last_txt = "Begin the story."
+    final_parts = []
     if note:
-        messages.append({"role": "user", "content": f"[Author's note: {note}]\n{last_txt}"})
-    else:
-        messages.append({"role": "user", "content": last_txt})
+        final_parts.append(f"[Author's note: {note}]")
+    final_parts.append(STYLE_CUE)
+    final_parts.append(last_txt)
+    messages.append({"role": "user", "content": "\n".join(final_parts)})
 
     return BuiltContext(messages=messages,
                         stop_sequences=list(cfg.get("stop_sequences",

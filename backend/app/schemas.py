@@ -112,6 +112,11 @@ class ImageSettingsUpdate(BaseModel):
 
 
 # ------------------------------------------------------------------ v4: voice
+class SceneSyncRequest(BaseModel):
+    """POST /api/adventures/{id}/scene — retry força outra pintura do fundo."""
+    retry: bool = False
+
+
 class TtsRequest(BaseModel):
     """POST /api/tts — voice omitida (null) usa narrator_voice da config."""
     text: str

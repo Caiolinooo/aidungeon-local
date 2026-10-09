@@ -26,6 +26,25 @@ body {
   }
 }
 
+@keyframes scene-flash {
+  0% { filter: brightness(1.6); }
+  100% { filter: brightness(1); }
+}
+
+.scene-react {
+  animation: scene-flash 0.8s ease-out;
+}
+
+@keyframes npc-step {
+  0% { transform: translateY(6px) scale(0.92); }
+  45% { transform: translateY(-8px) scale(1.12); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.npc-react {
+  animation: npc-step 0.8s ease-out;
+}
+
 /* Scrollbar discreta no tema escuro */
 ::-webkit-scrollbar {
   width: 10px;

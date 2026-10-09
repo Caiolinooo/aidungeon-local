@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
 from app import db, settings_store, voice_client
@@ -108,6 +108,7 @@ def post_tts(body: TtsRequest,
 # ----------------------------------------------------------------------- /stt
 @router.post("/stt")
 async def post_stt(request: Request, file: UploadFile | None = File(None),
+                   language: str | None = Form(None),
                    transport: Any = Depends(get_http_transport)) -> dict:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
@@ -130,11 +131,14 @@ async def post_stt(request: Request, file: UploadFile | None = File(None),
     if len(data) > max_bytes:
         raise GameError(413, "audio_too_large",
                         f"audio exceeds stt_max_bytes ({max_bytes})")
+    lang = (language or "").strip().lower().split("-")[0]
+    if len(lang) != 2 or not lang.isalpha():
+        lang = None
     try:
         text = voice_client.transcribe(
             cfg, file.filename or "audio",
             file.content_type or "application/octet-stream",
-            data, transport=transport)
+            data, language=lang, transport=transport)
     except voice_client.VoiceError as exc:
         raise GameError(502, exc.code, exc.message) from exc
     return {"text": text}
