@@ -245,6 +245,116 @@ def test_assistant_scenario_without_cards_is_503(client):
     assert resp.json()["error"]["code"] == "generation_failed"
 
 
+def _scenario_then(card_payloads: list[str]):
+    """Primeira resposta é o cenário sem cards; as seguintes são a etapa de cards."""
+    core = {k: v for k, v in DRAFT.items() if k != "story_cards"}
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if path.endswith("/chat/completions"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                content = json.dumps(core)
+            else:
+                content = card_payloads[min(calls["n"] - 2, len(card_payloads) - 1)]
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(404, json={"error": path})
+
+    return calls, httpx.MockTransport(handler)
+
+
+def test_assistant_accepts_a_bare_card_array(client):
+    cards = json.dumps([
+        {"title": "Ada Vane", "type": "character", "triggers": ["Ada"],
+         "entry": "Captain of the Kestrel."},
+    ])
+    calls, transport = _scenario_then([cards])
+    override_transport(client, transport)
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["story_cards"][0]["title"] == "Ada Vane"
+    assert calls["n"] == 2
+
+
+def test_assistant_keeps_cards_when_the_list_is_cut_off(client):
+    truncated = (
+        '{"story_cards": [\n'
+        '  {"title": "Port Sorrow", "type": "location", "triggers": ["Port"],'
+        ' "entry": "Last free port."},\n'
+        '  {"title": "Broken", "type": "location", "entry": "cut\n'
+        ']}'
+    )
+    calls, transport = _scenario_then([truncated])
+    override_transport(client, transport)
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert [c["title"] for c in resp.json()["story_cards"]] == ["Port Sorrow"]
+    assert calls["n"] == 2
+
+
+def test_assistant_reads_card_aliases(client):
+    aliased = json.dumps({"cards": [{
+        "name": "Ada Vane", "kind": "character", "keywords": ["Ada"],
+        "description": "Captain of the Kestrel.",
+    }]})
+    _calls, transport = _scenario_then([aliased])
+    override_transport(client, transport)
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    card = resp.json()["story_cards"][0]
+    assert card["title"] == "Ada Vane"
+    assert card["type"] == "character"
+    assert card["entry"] == "Captain of the Kestrel."
+    assert card["triggers"] == ["Ada"]
+
+
+def test_assistant_retries_when_the_model_call_fails(client):
+    core = {k: v for k, v in DRAFT.items() if k != "story_cards"}
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if path.endswith("/chat/completions"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(500, json={"error": "overloaded"})
+            if calls["n"] == 2:
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": json.dumps(core)}}],
+                })
+            return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
+                "story_cards": DRAFT["story_cards"],
+            })}}]})
+        return httpx.Response(404, json={"error": path})
+
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["story_cards"]) == 3
+    assert calls["n"] == 3
+
+
 def test_assistant_field_regenerates_one_field(client):
     override_transport(client, make_v2_transport('{"value": "The Sky Whale Saga"}'))
     try:

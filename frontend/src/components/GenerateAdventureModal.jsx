@@ -152,7 +152,7 @@ export default function GenerateAdventureModal({ onClose }) {
           />
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600">
-              {generating ? 'Generating… the LLM can take up to ~30s.' : 'Nothing is saved until you click "Create Adventure".'}
+              {generating ? 'Generating… this often takes about a minute.' : 'Nothing is saved until you click "Create Adventure".'}
             </span>
             <div className="flex gap-2">
               <button
