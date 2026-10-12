@@ -51,6 +51,13 @@ Given the player's idea and the scenario draft, produce 3 to 8 story cards as ST
 ]}
 Rules: narrative texts in {language}; include characters, a place, and at least one faction or item when the idea supports them; sheet only for type character (omit otherwise); every card needs a non-empty title, triggers, and entry; output ONLY the JSON object."""
 
+_CARDS_RETRY_SYSTEM = """You are a scenario designer. The previous card list could not be read.
+Return ONE JSON object and nothing else (no markdown, no array at the top level):
+{"story_cards": [
+  {"title": "name", "type": "character|location|faction|item", "triggers": ["word"], "entry": "one sentence of facts"}
+]}
+3 to 6 cards. Narrative texts in {language}. Omit sheet. Every card needs title, type, triggers and entry."""
+
 _FIELD_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
 Regenerate exactly ONE field of the scenario draft below, keeping coherence with the other fields.
 {field_instruction}
@@ -72,15 +79,31 @@ _FIELD_INSTRUCTIONS = {
 def _extract_json(text: str) -> Any:
     """Extração robusta: remove code fences e recorta do primeiro '{'/'[' ao
     último '}'/']'. Levanta ValueError se não houver JSON parseável."""
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    blob = _json_blob(text)
+    if blob is None:
+        raise ValueError("resposta sem objeto/array JSON")
+    try:
+        return json.loads(blob)
+    except json.JSONDecodeError:
+        repaired = re.sub(r",\s*([}\]])", r"\1", blob)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as exc:
+            raise ValueError("resposta com JSON incompleto") from exc
+
+
+def _json_blob(text: str) -> str | None:
+    """Trecho entre o primeiro '{'/'[' e o último '}'/']', sem fences nem <think>."""
+    cleaned = re.sub(r"```(?:json)?", "", text or "")
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
     start_candidates = [i for i in (cleaned.find("{"), cleaned.find("[")) if i >= 0]
     if not start_candidates:
-        raise ValueError("resposta sem objeto/array JSON")
+        return None
     start = min(start_candidates)
     end = max(cleaned.rfind("}"), cleaned.rfind("]"))
     if end <= start:
-        raise ValueError("resposta com JSON incompleto")
-    return json.loads(cleaned[start:end + 1])
+        return None
+    return cleaned[start:end + 1]
 
 
 def _as_str(value: Any) -> str:
@@ -97,24 +120,37 @@ def _normalize_tags(value: Any) -> list[str]:
 
 
 def _normalize_cards(value: Any) -> list[dict]:
-    """3–8 cards com defaults (type 'other', triggers list[str])."""
+    """3–8 cards com defaults (type 'other', triggers list[str]).
+
+    Aceita os aliases que o modelo troca no JSON: name/title, description/entry,
+    keywords/triggers. Card sem título é descartado.
+    """
+    if isinstance(value, dict):
+        value = [value]
     if not isinstance(value, list):
         return []
     cards: list[dict] = []
     for raw in value:
         if not isinstance(raw, dict):
             continue
-        title = _as_str(raw.get("title"))
+        title = _as_str(raw.get("title")) or _as_str(raw.get("name"))
         if not title:
             continue
+        triggers = raw.get("triggers")
+        if triggers is None:
+            triggers = raw.get("trigger")
+        if triggers is None:
+            triggers = raw.get("keywords")
+        card_type = _as_str(raw.get("type")) or _as_str(raw.get("kind")) or "other"
         card = {
             "title": title,
-            "type": _as_str(raw.get("type")) or "other",
-            "triggers": _normalize_tags(raw.get("triggers")),
-            "entry": _as_str(raw.get("entry")),
+            "type": card_type,
+            "triggers": _normalize_tags(triggers),
+            "entry": (_as_str(raw.get("entry")) or _as_str(raw.get("description"))
+                      or _as_str(raw.get("text")) or _as_str(raw.get("content"))),
         }
         # v0.5.0: ficha estruturada (só faz sentido em character)
-        if isinstance(raw.get("sheet"), dict) and card["type"] == "character":
+        if isinstance(raw.get("sheet"), dict) and card_type.lower() == "character":
             card["sheet"] = raw["sheet"]
         cards.append(card)
     return cards[:8]
@@ -161,22 +197,128 @@ def _chat_object(llm_cfg: dict, system: str, user: str, *, max_tokens: int,
     return _parse_object(content)
 
 
+def _looks_like_card(raw: dict) -> bool:
+    """Objeto de card, não o rascunho do cenário (que também tem title)."""
+    if not (_as_str(raw.get("title")) or _as_str(raw.get("name"))):
+        return False
+    return any(raw.get(key) not in (None, "", [])
+               for key in ("entry", "triggers", "trigger", "type", "kind", "keywords"))
+
+
+def _card_items(raw: Any) -> list:
+    """Lista de cards a partir de objeto, array solto ou um card único."""
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, dict):
+        return []
+    for key in ("story_cards", "cards", "storyCards"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+    if _looks_like_card(raw):
+        return [raw]
+    return []
+
+
+def _iter_json_objects(text: str) -> list[dict]:
+    """Objetos {...} completos, mesmo se o array em volta estiver cortado."""
+    found: list[dict] = []
+    start = 0
+    while True:
+        brace = text.find("{", start)
+        if brace < 0:
+            return found
+        parsed, end = _read_json_object(text, brace)
+        if parsed is None:
+            start = brace + 1
+            continue
+        found.append(parsed)
+        start = end
+
+
+def _read_json_object(text: str, start: int) -> tuple[dict | None, int]:
+    depth = 0
+    in_str = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_str:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_str = False
+            continue
+        if char == '"':
+            in_str = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                blob = text[start:index + 1]
+                try:
+                    parsed = json.loads(blob)
+                except json.JSONDecodeError:
+                    repaired = re.sub(r",\s*([}\]])", r"\1", blob)
+                    try:
+                        parsed = json.loads(repaired)
+                    except json.JSONDecodeError:
+                        return None, index + 1
+                if isinstance(parsed, dict):
+                    return parsed, index + 1
+                return None, index + 1
+    return None, start + 1
+
+
+def _cards_from_content(content: str) -> list[dict]:
+    """Cards de um JSON inteiro ou, se ele quebrou, dos objetos que fecharam."""
+    try:
+        raw = _extract_json(content)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raw = None
+    cards = _normalize_cards(_card_items(raw))
+    if cards:
+        return cards
+    salvaged = [obj for obj in _iter_json_objects(content or "") if _looks_like_card(obj)]
+    return _normalize_cards(salvaged)
+
+
 def _draft_cards(llm_cfg: dict, assistant_cfg: dict | None, *, brief: str,
                  draft: dict, language: str, transport: Any) -> list[dict]:
-    """Segunda etapa. Um retry se a lista vier vazia ou o JSON quebrar."""
+    """Segunda etapa. Um retry, com prompt mais curto, se a lista vier vazia."""
     cfg = _assistant_cfg(assistant_cfg)
-    system = _CARDS_SYSTEM.replace("{language}", language or "en")
+    language = language or "en"
+    systems = (
+        _CARDS_SYSTEM.replace("{language}", language),
+        _CARDS_RETRY_SYSTEM.replace("{language}", language),
+    )
     snapshot = {k: v for k, v in draft.items() if k in TEXT_FIELDS and v}
     snapshot["tags"] = draft.get("tags") or []
     user = (f"Player's idea: {brief.strip()}\n\nScenario so far:\n"
             + json.dumps(snapshot, ensure_ascii=False))
-    for _attempt in range(2):
-        raw = _chat_object(llm_cfg, system, user, max_tokens=cfg["cards_max_tokens"],
-                           temperature=cfg["temperature"], transport=transport)
-        cards = _normalize_cards((raw or {}).get("story_cards"))
+    last_exc: llm_client.LlmError | None = None
+    saw_content = False
+    for attempt, system in enumerate(systems, start=1):
+        try:
+            content = _chat(llm_cfg, system, user, max_tokens=cfg["cards_max_tokens"],
+                            temperature=cfg["temperature"], transport=transport)
+        except llm_client.LlmError as exc:
+            last_exc = exc
+            log.info("assistant: chamada de cards falhou (%s); tentando de novo", exc.message)
+            continue
+        saw_content = True
+        cards = _cards_from_content(content)
         if cards:
             return cards
-        log.info("assistant: story_cards vazio; tentando de novo")
+        snippet = " ".join(content.split())[:180]
+        log.info("assistant: story_cards vazio (tentativa %s, %s chars): %s",
+                 attempt, len(content), snippet)
+    if last_exc is not None and not saw_content:
+        raise last_exc
     raise _generation_failed("resposta sem 'story_cards'")
 
 
@@ -194,14 +336,25 @@ def generate_scenario_draft(llm_cfg: dict, assistant_cfg: dict | None,
     system = _SCENARIO_SYSTEM.replace("{language}", language)
     idea = f"Player's idea: {brief.strip()}"
     raw: dict | None = None
+    last_exc: llm_client.LlmError | None = None
+    saw_content = False
     for _attempt in range(2):
-        raw = _chat_object(llm_cfg, system, idea, max_tokens=cfg["max_tokens"],
-                           temperature=cfg["temperature"], transport=transport)
+        try:
+            raw = _chat_object(llm_cfg, system, idea, max_tokens=cfg["max_tokens"],
+                               temperature=cfg["temperature"], transport=transport)
+        except llm_client.LlmError as exc:
+            last_exc = exc
+            raw = None
+            log.info("assistant: chamada do rascunho falhou (%s); tentando de novo", exc.message)
+            continue
+        saw_content = True
         if raw and _as_str(raw.get("title")):
             break
         log.info("assistant: rascunho sem título ou JSON inválido; tentando de novo")
         raw = None
     if not raw or not _as_str(raw.get("title")):
+        if last_exc is not None and not saw_content:
+            raise last_exc
         raise _generation_failed("resposta sem 'title'")
 
     draft = {field: _as_str(raw.get(field)) for field in TEXT_FIELDS}
