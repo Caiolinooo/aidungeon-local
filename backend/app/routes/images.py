@@ -2,12 +2,11 @@
 
 Fluxo do /see (contrato docs/openapi.yaml):
 1) o momento é os dois últimos trechos (não a história inteira); o LLM
-   descreve só lugar e ação, em inglês;
-2) o primeiro bloco do CLIP é o rosto travado (card, e o jogador quando
-   o texto diz "you") mais a ação. Estilo fica depois do BREAK;
-3) se essa pessoa tem retrato, img2img parte da foto (não do tamanho dela);
-4) grava a linha em `images` + action type=see (mesmo seq vinculando);
-5) devolve ImageResult.
+   descreve o gesto em inglês, com quem faz o quê;
+2) o primeiro bloco do CLIP é a ação, o lugar e só então o rosto travado.
+   Estilo fica depois do BREAK. O retrato não vira img2img;
+3) grava a linha em `images` + action type=see (mesmo seq vinculando);
+4) devolve ImageResult.
 
 Mesmo lock por aventura do game_engine → 409 generation_in_progress.
 """
@@ -16,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -32,14 +30,19 @@ log = logging.getLogger("aidungeon.images")
 router = APIRouter()
 
 _PROMPT_BUILDER_SYSTEM = """You describe one moment of an interactive story for a text-to-image model.
-Write a single English sentence: the place, who is there (use the names given), and what they are doing right now.
+Write a single English sentence whose subject is the action happening right now: who does what to whom, in the place.
+Name every person in the moment, including the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not add people who are not in the moment. Do not change the place.
+Do not turn the moment into a portrait or a close-up of one face.
 No dialogue, no quotes, no meta text. Output ONLY that sentence."""
 
-# Retrato como img2img. 0.35 reimprime o busto e a cena some; acima de ~0.75
-# o rosto some. No meio, a cara ainda puxa o sample e o lugar pode mudar.
-SEE_DENOISE = 0.62
+# Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
+_PORTRAIT_NEGATIVE = "solo portrait, bust, headshot, close-up"
+_INTERACTION_WORDS = (
+    "kiss", "beijo", "beij", "embrace", "abrac", "abraç", "hug",
+    "slap", "punch", "dance", "marry", "wedding", "stab", "fight",
+)
 
 # Palavras de rosto e roupa. Se não estão no card, saem do prompt do See:
 # a prosa descreve a princesa de vestido e o modelo pintava outra mulher.
@@ -201,34 +204,22 @@ def _look_clause(frame: list[dict]) -> str:
     return "exact likeness, " + ", ".join(lines)
 
 
-def _focus_portrait_id(frame: list[dict]) -> str:
-    """O citado por último que já tem foto. É essa cara que o img2img segura."""
-    for card in reversed(frame):
-        image_id = str(card.get("portrait_image_id") or "")
-        if image_id:
-            return image_id
-    return ""
-
-
-def _portrait_png(image: dict | None) -> bytes | None:
-    raw = str((image or {}).get("file_path") or "")
-    if not raw:
-        return None
-    path = Path(raw)
-    if not path.is_absolute():
-        path = db.REPO_ROOT / path
-    if not path.is_file():
-        return None
-    return path.read_bytes()
+def _is_interaction(text: str, names: list[str]) -> bool:
+    """Gesto entre pessoas, ou mais de um nome no quadro."""
+    folded = (text or "").casefold()
+    if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _INTERACTION_WORDS):
+        return True
+    return len([name for name in names if name.strip()]) >= 2
 
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
-                        transport: Any) -> tuple[str, str, str]:
-    """O momento atual + o rosto do card. Devolve (prompt, negative, portrait id).
+                        transport: Any) -> tuple[str, str]:
+    """O momento atual + o rosto do card. Devolve (prompt, negative).
 
-    O CLIP pinta o começo de cada bloco e corta o fim. O primeiro bloco é
-    a cara e o que está acontecendo agora. O estilo fica depois do BREAK.
+    O CLIP pinta o começo de cada bloco. O primeiro bloco é o gesto e quem
+    faz o quê; o rosto vem depois; o estilo fica depois do BREAK. O retrato
+    não entra como img2img — um busto reimprime a foto e apaga a ação.
     """
     pb = img_cfg["prompt_builder"]
     moment = current_moment(actions, body.action_seq)
@@ -237,6 +228,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     names = [card.get("title") for card in frame if card.get("title")]
     if not names:
         names = [card.get("title") for card in scene._cast(cards, moment) if card.get("title")]
+    player_name = _protagonist_name(adv.get("plot_essentials") or "") or "the player character"
+    you = re.search(r"(?<!\w)you(?!\w)", moment or "", re.IGNORECASE)
+    if you and not any(name.casefold() == player_name.casefold() for name in names):
+        names.insert(0, player_name)
     canon = ""
     if clause:
         canon = (
@@ -273,16 +268,17 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(location)
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
-    portrait_id = _focus_portrait_id(frame)
     lead_bits = []
-    if clause:
-        lead_bits.append(clause[:260].rstrip(" ,.;"))
     if beat:
         lead_bits.append(beat)
     if where:
         lead_bits.append(", ".join(where))
-    if portrait_id:
-        lead_bits.append("wide shot of that moment, same face, not a close-up portrait")
+    if names:
+        lead_bits.append("people present: " + ", ".join(names))
+    if clause:
+        lead_bits.append(clause[:260].rstrip(" ,.;"))
+    if _is_interaction(moment, names):
+        lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
     lead = ", ".join(lead_bits)
     # A frase do modelo fica, mas depois da ação e antes do estilo.
     tail = ", ".join(part for part in (
@@ -296,7 +292,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         prompt = f"{lead} BREAK {tail}"
     else:
         prompt = lead or tail
-    return prompt, _dedupe_negative(neg_summary, neg_moment), portrait_id
+    negative = _dedupe_negative(neg_summary, neg_moment)
+    if _is_interaction(moment, names):
+        negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
+    return prompt, negative
 
 
 @router.post("/adventures/{adventure_id}/see")
@@ -321,25 +320,16 @@ def post_see(adventure_id: str, body: SeeRequest,
                             "image generation is disabled (settings.image.enabled)")
 
         try:
-            prompt, negative_extra, portrait_id = _build_final_prompt(
+            prompt, negative_extra = _build_final_prompt(
                 adv, actions, body, img_cfg, llm_cfg, cards, transport)
         except llm_client.LlmError as exc:
             raise GameError(503, exc.code, exc.message) from exc
 
-        init_bytes = None
-        if portrait_id and (img_cfg.get("provider") or "sdwebui") == "sdwebui":
-            with db.session() as conn:
-                init_bytes = _portrait_png(db.get_image(conn, portrait_id))
-
         image_id = db.new_id()
         try:
-            # Sem width do retrato: o busto é quadrado e a cena tem o tamanho
-            # configurado. O denoise deixa o lugar mudar sem trocar a pessoa.
             result = image_client.generate_image(
                 img_cfg, prompt, adventure_id=adventure_id, image_id=image_id,
-                transport=transport, negative_extra=negative_extra,
-                init_image=init_bytes,
-                denoising_strength=SEE_DENOISE if init_bytes else None)
+                transport=transport, negative_extra=negative_extra)
         except image_client.ImageError as exc:
             raise GameError(503, exc.code, exc.message) from exc
 

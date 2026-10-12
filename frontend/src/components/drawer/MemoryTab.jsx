@@ -3,8 +3,8 @@ import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
 
 // Aba Memory: Plot Essentials + Author's Note editáveis (GET/PUT
-// /api/adventures/:id/memory); Story Summary é read-only (mantido pelo
-// summarizer do backend). Memory Bank (resumos automáticos) exibido read-only.
+// /api/adventures/:id/memory); Story Summary e o Memory Bank vêm dessa
+// resposta (não do snapshot da aventura, que fica velho depois do dump).
 export default function MemoryTab({ adventure }) {
   const toast = useToast()
   const [mem, setMem] = useState(null)
@@ -44,7 +44,7 @@ export default function MemoryTab({ adventure }) {
 
   if (mem === null) return <p className="text-sm text-zinc-500">Loading…</p>
 
-  const memories = adventure.memories ?? []
+  const memories = mem.memories ?? []
 
   return (
     <div className="flex flex-col gap-4">

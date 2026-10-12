@@ -191,8 +191,11 @@ export const api = {
       body: language ? { brief, language } : { brief },
     }),
   // Regenera um campo do rascunho (resposta: {field, value} ou {field, story_cards}).
-  assistantField: ({ field, brief, current, draft } = {}) =>
-    request('/assistant/field', { method: 'POST', body: { field, brief, current, draft } }),
+  assistantField: ({ field, brief, current, draft, language } = {}) =>
+    request('/assistant/field', {
+      method: 'POST',
+      body: language ? { field, brief, current, draft, language } : { field, brief, current, draft },
+    }),
 
   // ------------------------------------------------------------ images (v2)
   // Ação "See": gera imagem da cena (JSON, não-SSE — pode levar minutos).

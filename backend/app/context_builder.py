@@ -75,7 +75,10 @@ BASE_SYSTEM_PROMPT = (
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
     "  the narrative back to the established setting without commenting on it.\n"
     "- A character card is canon. Use its Appearance, Clothing, Status and Stats exactly.\n"
-    "  Do not change hair, face, build, or whether they are alive unless that card says so."
+    "  Do not change hair, face, build, or whether they are alive unless that card says so.\n"
+    "- Memories, Plot and World info are canon and override earlier prose.\n"
+    "- Do not invent a death, a relative, an item, or a place that those blocks\n"
+    "  do not establish."
 )
 
 # Lembrete curto na mensagem final (recência). O histórico já gerado neste
@@ -253,11 +256,29 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if plot:
         system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
 
-    # 3 — story cards (pinned + disparados)
+    # 4 antes do 3: a memória selecionada também dispara story card. Um nome
+    # que já saiu da janela continua puxando a ficha.
     cards_cfg = cfg.get("story_cards", {})
     scan_chars = int(cards_cfg.get("scan_chars", 1000))
     recent_text = "".join(format_action_text(a["type"], a["text"]) for a in actions)
-    cards = _select_cards(conn, adventure["id"], recent_text[-scan_chars:],
+    recent_tail = recent_text[-scan_chars:]
+    mems = _select_memories(conn, adventure["id"], recent_tail,
+                            int(budgets.get("memory_bank", 600)),
+                            cfg.get("memory_bank", {}))
+    summary = (adventure.get("story_summary") or "").strip()
+    canon_scan = "\n".join(
+        part for part in (summary, "\n".join(m["text"] for m in mems)) if part
+    )
+    if len(canon_scan) >= scan_chars:
+        card_scan = canon_scan[-scan_chars:]
+    elif canon_scan:
+        room = scan_chars - len(canon_scan) - 1
+        card_scan = (recent_tail[-room:] + "\n" + canon_scan) if room > 0 else canon_scan
+    else:
+        card_scan = recent_tail
+
+    # 3 — story cards (pinned + disparados pela janela, pelo resumo e pelas memórias)
+    cards = _select_cards(conn, adventure["id"], card_scan,
                           int(budgets.get("story_cards", 1200)), cards_cfg)
     if cards:
         per_card = int(cards_cfg.get("budget_por_card", 150))
@@ -265,16 +286,12 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                             + "\n\n".join(_render_card(c, per_card) for c in cards))
         meta["cards_included"] = [c.get("id") for c in cards]
 
-    # 4 — memory bank (top-k)
-    mems = _select_memories(conn, adventure["id"], recent_text[-scan_chars:],
-                            int(budgets.get("memory_bank", 600)),
-                            cfg.get("memory_bank", {}))
+    # 4 — memory bank (top-k, ordem cronológica)
     if mems:
         system_parts.append("[Memories]\n" + "\n\n".join(m["text"] for m in mems))
         meta["memories_included"] = [m.get("id") for m in mems]
 
     # 5 — story_summary
-    summary = (adventure.get("story_summary") or "").strip()
     if summary:
         system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 800))))
 

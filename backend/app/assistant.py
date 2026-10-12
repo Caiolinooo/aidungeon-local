@@ -27,7 +27,7 @@ TEXT_FIELDS = ("title", "description", "ai_instructions", "plot_essentials",
 DRAFT_FIELDS = TEXT_FIELDS + ("tags", "story_cards")
 
 _SCENARIO_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
-Given the player's idea, produce a COMPLETE scenario draft as STRICT JSON (no markdown, no commentary) with exactly these keys:
+Given the player's idea, produce the scenario text as STRICT JSON (no markdown, no commentary) with exactly these keys:
 {
   "title": "short evocative title",
   "description": "1-2 sentence hook shown in the scenario library",
@@ -35,17 +35,21 @@ Given the player's idea, produce a COMPLETE scenario draft as STRICT JSON (no ma
   "plot_essentials": "protagonist sheet + premise, AI Dungeon format, e.g. [Name: ...; Age: ...; Class: ...] plus world rules",
   "authors_note": "tone guidance injected near the end of context",
   "opening_text": "second-person opening scene that starts the adventure",
-  "tags": ["genre", "tone", "setting"],
-  "story_cards": [
-    {"title": "name", "type": "character|location|faction|item|other",
-     "triggers": ["keywords", "that", "surface", "the", "card"],
-     "entry": "facts the AI must know when triggered",
-     "sheet": {"appearance": "face, hair, eyes, marks", "body": "build, height, skin, posture",
-               "clothing": "typical outfit", "personality": "traits, mannerisms",
-               "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20}}}
-  ]
+  "tags": ["genre", "tone", "setting"]
 }
-Rules: narrative texts in {language}; story_cards: 3 to 8 entries; sheet only for type character (omit otherwise); opening_text in second person; output ONLY the JSON object."""
+Rules: narrative texts in {language}; opening_text in second person; output ONLY the JSON object. Do not include story cards in this response."""
+
+_CARDS_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
+Given the player's idea and the scenario draft, produce 3 to 8 story cards as STRICT JSON (no markdown, no commentary):
+{"story_cards": [
+  {"title": "name", "type": "character|location|faction|item|other",
+   "triggers": ["keywords", "that", "surface", "the", "card"],
+   "entry": "facts the AI must know when triggered",
+   "sheet": {"appearance": "face, hair, eyes, marks", "body": "build, height, skin, posture",
+             "clothing": "typical outfit", "personality": "traits, mannerisms",
+             "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20}}}
+]}
+Rules: narrative texts in {language}; include characters, a place, and at least one faction or item when the idea supports them; sheet only for type character (omit otherwise); every card needs a non-empty title, triggers, and entry; output ONLY the JSON object."""
 
 _FIELD_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
 Regenerate exactly ONE field of the scenario draft below, keeping coherence with the other fields.
@@ -133,34 +137,75 @@ def _chat(llm_cfg: dict, system: str, user: str, *, max_tokens: int,
 def _assistant_cfg(cfg: dict | None) -> dict:
     cfg = cfg or {}
     return {
-        "max_tokens": int(cfg.get("max_tokens", 1400)),
+        "max_tokens": int(cfg.get("max_tokens", 2500)),
         "field_max_tokens": int(cfg.get("field_max_tokens", 400)),
+        "cards_max_tokens": int(cfg.get("cards_max_tokens", 2000)),
         "temperature": float(cfg.get("temperature", 0.7)),
     }
 
 
 # ------------------------------------------------------------------ público
+def _parse_object(content: str) -> dict | None:
+    """JSON objeto ou None. JSON cortado no meio não derruba a etapa."""
+    try:
+        raw = _extract_json(content)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _chat_object(llm_cfg: dict, system: str, user: str, *, max_tokens: int,
+                 temperature: float, transport: Any) -> dict | None:
+    content = _chat(llm_cfg, system, user, max_tokens=max_tokens,
+                    temperature=temperature, transport=transport)
+    return _parse_object(content)
+
+
+def _draft_cards(llm_cfg: dict, assistant_cfg: dict | None, *, brief: str,
+                 draft: dict, language: str, transport: Any) -> list[dict]:
+    """Segunda etapa. Um retry se a lista vier vazia ou o JSON quebrar."""
+    cfg = _assistant_cfg(assistant_cfg)
+    system = _CARDS_SYSTEM.replace("{language}", language or "en")
+    snapshot = {k: v for k, v in draft.items() if k in TEXT_FIELDS and v}
+    snapshot["tags"] = draft.get("tags") or []
+    user = (f"Player's idea: {brief.strip()}\n\nScenario so far:\n"
+            + json.dumps(snapshot, ensure_ascii=False))
+    for _attempt in range(2):
+        raw = _chat_object(llm_cfg, system, user, max_tokens=cfg["cards_max_tokens"],
+                           temperature=cfg["temperature"], transport=transport)
+        cards = _normalize_cards((raw or {}).get("story_cards"))
+        if cards:
+            return cards
+        log.info("assistant: story_cards vazio; tentando de novo")
+    raise _generation_failed("resposta sem 'story_cards'")
+
+
 def generate_scenario_draft(llm_cfg: dict, assistant_cfg: dict | None,
                             brief: str, language: str = "en",
                             transport: Any = None) -> dict:
-    """brief → ScenarioDraft (dict). Levanta LlmError / GameError(503)."""
+    """brief → ScenarioDraft (dict). Levanta LlmError / GameError(503).
+
+    Duas chamadas: texto do cenário, depois os cards. Cada etapa que falha
+    (JSON cortado, sem título, sem cards) ganha um retry. Sem card o rascunho
+    não é sucesso.
+    """
     cfg = _assistant_cfg(assistant_cfg)
-    system = _SCENARIO_SYSTEM.replace("{language}", language or "en")
-    content = _chat(llm_cfg, system, f"Player's idea: {brief.strip()}",
-                    max_tokens=cfg["max_tokens"], temperature=cfg["temperature"],
-                    transport=transport)
-    try:
-        raw = _extract_json(content)
-    except (ValueError, TypeError) as exc:
-        raise _generation_failed(str(exc)) from exc
-    if not isinstance(raw, dict):
-        raise _generation_failed("resposta não é um objeto JSON")
+    language = language or "en"
+    system = _SCENARIO_SYSTEM.replace("{language}", language)
+    idea = f"Player's idea: {brief.strip()}"
+    raw: dict | None = None
+    for _attempt in range(2):
+        raw = _chat_object(llm_cfg, system, idea, max_tokens=cfg["max_tokens"],
+                           temperature=cfg["temperature"], transport=transport)
+        if raw and _as_str(raw.get("title")):
+            break
+        log.info("assistant: rascunho sem título ou JSON inválido; tentando de novo")
+        raw = None
+    if not raw or not _as_str(raw.get("title")):
+        raise _generation_failed("resposta sem 'title'")
 
     draft = {field: _as_str(raw.get(field)) for field in TEXT_FIELDS}
-    if not draft["title"]:
-        raise _generation_failed("resposta sem 'title'")
     draft["tags"] = _normalize_tags(raw.get("tags"))
-    draft["story_cards"] = _normalize_cards(raw.get("story_cards"))
     # O LLM às vezes omite/trunca campos longos (observado com opening_text).
     # Regenera individualmente, usando o próprio rascunho como contexto.
     for field in ("opening_text", "description"):
@@ -168,20 +213,25 @@ def generate_scenario_draft(llm_cfg: dict, assistant_cfg: dict | None,
             log.info("assistant: campo '%s' vazio no rascunho; regenerando", field)
             draft[field] = regenerate_field(llm_cfg, assistant_cfg, field,
                                             brief=brief, draft=draft,
+                                            language=language,
                                             transport=transport)["value"]
+    draft["story_cards"] = _draft_cards(
+        llm_cfg, assistant_cfg, brief=brief, draft=draft, language=language,
+        transport=transport)
     return draft
 
 
 def regenerate_field(llm_cfg: dict, assistant_cfg: dict | None, field: str, *,
                      brief: str | None = None, current: str | None = None,
-                     draft: dict | None = None, transport: Any = None) -> dict:
+                     draft: dict | None = None, language: str = "en",
+                     transport: Any = None) -> dict:
     """Regenera UM campo. Campos de texto → {"field": f, "value": "..."}
     (tags como string separada por vírgula); story_cards →
     {"field": "story_cards", "story_cards": [...]}."""
     cfg = _assistant_cfg(assistant_cfg)
     instruction = _FIELD_INSTRUCTIONS[field]
     system = _FIELD_SYSTEM.replace("{field_instruction}", instruction) \
-                          .replace("{language}", "en")
+                          .replace("{language}", language or "en")
 
     context_parts = []
     if brief:
@@ -196,7 +246,8 @@ def regenerate_field(llm_cfg: dict, assistant_cfg: dict | None, field: str, *,
                              f"improve it): {current.strip()}")
     user = "\n\n".join(context_parts) or "No additional context."
 
-    content = _chat(llm_cfg, system, user, max_tokens=cfg["field_max_tokens"],
+    token_budget = cfg["cards_max_tokens"] if field == "story_cards" else cfg["field_max_tokens"]
+    content = _chat(llm_cfg, system, user, max_tokens=token_budget,
                     temperature=cfg["temperature"], transport=transport)
     try:
         raw = _extract_json(content)

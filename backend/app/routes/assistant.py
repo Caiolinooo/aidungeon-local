@@ -43,6 +43,6 @@ def post_assistant_field(body: AssistantFieldRequest,
         return assistant.regenerate_field(
             _llm_cfg(), _assistant_file_cfg(), body.field,
             brief=body.brief, current=body.current, draft=body.draft,
-            transport=transport)
+            language=body.language, transport=transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc

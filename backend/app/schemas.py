@@ -146,3 +146,4 @@ class AssistantFieldRequest(BaseModel):
     brief: str | None = None
     current: str | None = None
     draft: dict | None = None
+    language: str = "en"

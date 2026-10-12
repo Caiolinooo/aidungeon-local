@@ -1687,6 +1687,12 @@ components:
           type: string
           readOnly: true
           description: Mantido automaticamente pelo summarizer (não editável aqui).
+        memories:
+          type: array
+          readOnly: true
+          description: Memory bank arquivado (trechos que saíram da janela).
+          items:
+            $ref: '#/components/schemas/Memory'
 
     MemoryUpdate:
       type: object

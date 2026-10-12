@@ -221,11 +221,9 @@ def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path)
     assert "open the gate" in head
     assert "ink sketch" in tail
     assert "ancient dragon" not in prompt.lower()
+    assert head.lower().index("steps into the rain") < head.lower().index("plate armor")
     img2img = [item for item in capture if isinstance(item, dict) and item.get("init_images")]
-    assert len(img2img) == 1
-    assert img2img[0]["width"] == 512
-    assert img2img[0]["height"] == 512
-    assert abs(img2img[0]["denoising_strength"] - 0.62) < 0.001
+    assert img2img == []
 
 
 def test_look_words_from_the_prose_do_not_override_the_card():
@@ -308,4 +306,91 @@ def test_portrait_blocks_a_new_outfit_and_the_dead_stay_dead(tmp_db):
         assert sheet["status"] == "alive"
         assert "scar" in sheet["appearance"]
         assert "scar" in card["portrait_prompt"]
+
+
+def test_blank_adventure_grows_place_character_and_plot(tmp_db):
+    adv = make_adventure()
+    with db.session() as conn:
+        result = npc_chronicle.apply_chronicle(conn, adv["id"], {
+            "plot_essentials": "[Name: Caio; Place: the royal hall; Tone: tense]",
+            "characters": [{
+                "name": "Princess Alusair",
+                "summary": "Princess of the realm.",
+                "facts": ["She receives the visitor in the hall."],
+            }],
+            "places": [{
+                "name": "Royal Hall",
+                "aliases": ["the hall"],
+                "summary": "The throne room of the palace.",
+                "facts": ["The meeting happens here."],
+            }],
+            "items": [{
+                "name": "Sealed Scroll",
+                "summary": "A letter for the regent.",
+                "facts": ["Caio still carries it."],
+            }],
+        }, "")
+        cards = {card["title"]: card for card in db.list_cards(conn, adv["id"])}
+        plot = db.get_adventure(conn, adv["id"])["plot_essentials"]
+        kept = npc_chronicle.apply_chronicle(conn, adv["id"], {
+            "plot_essentials": "[Name: Someone Else]",
+            "places": [{
+                "name": "Royal Hall",
+                "existing_title": "Royal Hall",
+                "facts": ["Banners hang from the beams."],
+            }],
+        }, plot)
+        hall = next(c for c in db.list_cards(conn, adv["id"]) if c["title"] == "Royal Hall")
+        plot_after = db.get_adventure(conn, adv["id"])["plot_essentials"]
+
+    assert result["created"] == 3
+    assert cards["Princess Alusair"]["type"] == "character"
+    assert cards["Royal Hall"]["type"] == "location"
+    assert "the hall" in cards["Royal Hall"]["triggers"]
+    assert cards["Sealed Scroll"]["type"] == "item"
+    assert cards["Sealed Scroll"]["sheet"] == ""
+    assert "Caio" in plot
+    assert kept == {"created": 0, "updated": 1}
+    assert "Banners" in hall["entry"]
+    assert plot_after == plot
+
+
+def test_see_paints_the_kiss_not_a_portrait(client, tmp_path):
+    from test_v2 import PNG_BYTES
+
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    portrait = tmp_path / "alusair.png"
+    portrait.write_bytes(PNG_BYTES)
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        image = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path=str(portrait), prompt="bust",
+            kind="portrait", width=64, height=64,
+        )
+        alusair = db.insert_card(
+            conn, adv["id"], type="character", title="Princess Alusair",
+            triggers=["Alusair", "princesa"], entry="Steel Regent.",
+            portrait_prompt="long red hair, green eyes, plate armor",
+        )
+        db.set_card_portrait(conn, alusair["id"], image["id"], anchor_id=image["id"])
+    add_action(adv["id"], 0, "do", "\n> You kiss Princess Alusair\n")
+    capture: list = []
+    override_transport(client, make_v2_transport(capture=capture))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"]
+    head = prompt.split("BREAK", 1)[0]
+    assert "kiss" in head.lower()
+    assert "alusair" in head.lower()
+    assert "caio" in head.lower()
+    assert head.lower().index("kiss") < head.lower().index("long red hair")
+    assert not any(isinstance(item, dict) and item.get("init_images") for item in capture)
+    with db.session() as conn:
+        saved = db.get_image(conn, resp.json()["id"])
+    assert "bust" in saved["negative_prompt"].lower()
+    assert "close-up" in saved["negative_prompt"].lower()
 

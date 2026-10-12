@@ -167,7 +167,7 @@ def test_recency_order_and_top_k(tmp_db):
                              seq_start=i, seq_end=i)
         mems = retrieval.select_memories(conn, adv["id"], "", budget_tokens=600,
                                          top_k=2)
-    assert [m["seq_end"] for m in mems] == [3, 2]  # mais recentes primeiro
+    assert [m["seq_end"] for m in mems] == [2, 3]  # cronológico, os dois mais recentes
 
 
 def test_keyword_overlap_can_beat_close_recency(tmp_db):
@@ -186,16 +186,19 @@ def test_keyword_overlap_can_beat_close_recency(tmp_db):
     assert mems[0]["seq_end"] == 9
 
 
-def test_recency_dominates_when_far_apart(tmp_db):
+def test_overlap_beats_distant_recency(tmp_db):
     adv = make_adventure()
     with db.session() as conn:
         db.insert_memory(conn, adv["id"], "the sealed scroll matter",
                          seq_start=0, seq_end=1)
         db.insert_memory(conn, adv["id"], "nothing relevant here",
                          seq_start=9, seq_end=10)
-        mems = retrieval.select_memories(conn, adv["id"], "sealed scroll",
+        only = retrieval.select_memories(conn, adv["id"], "sealed scroll",
                                          budget_tokens=600, top_k=1)
-    assert mems[0]["seq_end"] == 10  # recency pesa mais em seqs distantes
+        both = retrieval.select_memories(conn, adv["id"], "sealed scroll",
+                                         budget_tokens=600, top_k=2)
+    assert only[0]["seq_end"] == 1  # o fato antigo vence a recência
+    assert [m["seq_end"] for m in both] == [1, 10]  # o recente entra, em ordem
 
 
 def test_budget_skips_oversized_and_keeps_smaller(tmp_db):
@@ -223,6 +226,7 @@ def test_stopwords_and_short_words_do_not_count():
     assert retrieval.significant_words("the and of to in a an it is") == set()
     assert retrieval.significant_words("Thuldan and the scroll") == \
         {"thuldan", "scroll"}
+    assert retrieval.significant_words("que não com para uma princesa") == {"princesa"}
 
 
 def test_memory_without_seq_falls_back_to_id(tmp_db):
@@ -241,11 +245,11 @@ def test_memory_bank_creates_memory_over_trigger(tmp_db):
     _actions(adv["id"], 4, chars=200)  # ~53 tk cada; trigger 100 → chunk = 2
     fake = FakeLLM(reply="You did things.")
     with db.session() as conn:
-        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100})
+        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100}, context_size=7000)
         assert summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
                                        settings=cfg) is None
         mems = db.list_memories(conn, adv["id"])
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 2  # arquivo do que saiu da janela + story summary
     assert len(mems) == 1
     assert mems[0]["text"] == "You did things."
     assert mems[0]["seq_start"] == 0
@@ -276,7 +280,7 @@ def test_memory_bank_resumes_from_last_memory(tmp_db):
     with db.session() as conn:
         db.insert_memory(conn, adv["id"], "coberto até 3", seq_start=0, seq_end=3)
         fake = FakeLLM(reply="Later events.")
-        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100})
+        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100}, context_size=7000)
         summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
                                 settings=cfg)
         mems = db.list_memories(conn, adv["id"])
@@ -296,11 +300,12 @@ def test_story_summary_updated_when_window_slides(tmp_db):
                                 settings=cfg)
         adv2 = db.get_adventure(conn, adv["id"])
         covered = db.get_setting(conn, f"memory.summary_covered_seq.{adv['id']}")
-    # memory bank não disparou (3×148 < 1500) — só 1 chamada (summary)
-    assert len(fake.calls) == 1
+    # o que saiu da janela vira memória e o summary reescreve o "agora"
+    assert len(fake.calls) == 2
     assert adv2["story_summary"] == "You reached Calimport and met Thuldan."
     assert covered == "1"  # última ação (seq 2) nunca é "antiga"
-    prompt = fake.calls[0]["messages"][0]["content"]
+    prompt = next(call["messages"][0]["content"] for call in fake.calls
+                  if "running summary" in call["messages"][0]["content"])
     assert "running summary" in prompt
     assert "New events:" in prompt
     assert "Action 0." in prompt and "Action 1." in prompt
@@ -318,7 +323,7 @@ def test_story_summary_not_rewritten_without_new_old_actions(tmp_db):
         summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
                                 settings=_cfg(conn, context_size=3800 + 512 + 100))
         adv2 = db.get_adventure(conn, adv["id"])
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 2  # 1ª passada: arquivo + summary; 2ª não chama
     assert adv2["story_summary"] == "Summary v1."
 
 
@@ -332,9 +337,10 @@ def test_imported_summary_marks_position_without_llm(tmp_db):
                                 settings=cfg)
         covered = db.get_setting(conn, f"memory.summary_covered_seq.{adv['id']}")
         adv2 = db.get_adventure(conn, adv["id"])
-    assert fake.calls == []                # resumo do backup já cobre o passado
     assert covered == "1"
     assert adv2["story_summary"] == "Resumo que veio do backup."
+    assert all("running summary" not in call["messages"][0]["content"]
+               for call in fake.calls)
 
 
 def test_summary_respects_budget_hard_cap(tmp_db):
@@ -362,8 +368,9 @@ def test_llm_failure_is_silent(tmp_db):
         covered = db.get_setting(conn, f"memory.summary_covered_seq.{adv['id']}")
         adv2 = db.get_adventure(conn, adv["id"])
     assert result is None            # nunca levanta exceção
-    assert mems == []                # nada gravado
-    assert covered is None           # posição não avança (tenta de novo depois)
+    assert len(mems) == 1            # o arquivo cru fica, mesmo com o LLM fora
+    assert "Action 0." in mems[0]["text"]
+    assert covered is None           # summary não avança (tenta de novo depois)
     assert adv2["story_summary"] == ""
 
 
@@ -397,9 +404,37 @@ def test_maybe_update_with_real_llm_client_and_transport(tmp_db):
     _actions(adv["id"], 4, chars=200)
     transport = _json_llm_transport(reply="You did things.")
     with db.session() as conn:
-        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100})
+        cfg = _cfg(conn, memory_bank={"trigger_tokens": 100}, context_size=7000)
         summarizer.maybe_update(adv["id"], conn=conn, settings=cfg,
                                 transport=transport)  # llm_client real
         mems = db.list_memories(conn, adv["id"])
     assert len(mems) == 1
     assert mems[0]["text"] == "You did things."
+
+
+def test_short_evicted_passage_is_still_archived(tmp_db):
+    """Sair da janela basta. Não espera mais 1500 tokens novos."""
+    adv = make_adventure()
+    _actions(adv["id"], 3, chars=40)
+    fake = FakeLLM(reply="You left the hall and kept the scroll.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=7000, memory_bank={"trigger_tokens": 800})
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 1
+    assert mems[0]["seq_start"] == 0
+    assert mems[0]["seq_end"] == 1
+    assert "Action 0." in fake.calls[0]["messages"][0]["content"]
+
+
+def test_memory_endpoint_lists_the_bank(client):
+    adv = make_adventure(plot_essentials="plot alpha")
+    with db.session() as conn:
+        db.insert_memory(conn, adv["id"], "You met Alusair.", seq_start=0, seq_end=2)
+    resp = client.get(f"/api/adventures/{adv['id']}/memory")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["plot_essentials"] == "plot alpha"
+    assert data["memories"][0]["text"] == "You met Alusair."
+    assert data["memories"][0]["seq_start"] == 0
+    assert data["memories"][0]["seq_end"] == 2
