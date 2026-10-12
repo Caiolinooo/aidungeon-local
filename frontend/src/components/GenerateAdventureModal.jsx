@@ -13,6 +13,13 @@ import TagInput from './TagInput.jsx'
 //  "Create Adventure" persiste: POST /api/scenarios (com story_cards) e depois
 //  POST /api/adventures {scenario_id} → navega p/ /play/:id.
 // A geração via LLM pode levar ~30s — todos os estados de loading são visíveis.
+// language segue o browser (pt → textos em português).
+
+function draftLanguage() {
+  const lang = (typeof navigator !== 'undefined' && navigator.language) || 'pt'
+  const sub = String(lang).slice(0, 2).toLowerCase()
+  return /^[a-z]{2}$/.test(sub) ? sub : 'pt'
+}
 
 export default function GenerateAdventureModal({ onClose }) {
   const toast = useToast()
@@ -34,7 +41,7 @@ export default function GenerateAdventureModal({ onClose }) {
     }
     setGenerating(true)
     try {
-      setDraft(await api.assistantScenario({ brief: b }))
+      setDraft(await api.assistantScenario({ brief: b, language: draftLanguage() }))
     } catch (e) {
       toast(e.message)
     } finally {
@@ -51,7 +58,9 @@ export default function GenerateAdventureModal({ onClose }) {
         field === 'tags' ? (draft.tags ?? []).join(', ')
         : field === 'story_cards' ? undefined
         : draft[field]
-      const r = await api.assistantField({ field, brief: brief.trim(), current, draft })
+      const r = await api.assistantField({
+        field, brief: brief.trim(), current, draft, language: draftLanguage(),
+      })
       if (field === 'story_cards') {
         // regenerar cards SUBSTITUI a lista inteira (decisão do frontend)
         if (Array.isArray(r.story_cards)) setDraft((d) => ({ ...d, story_cards: r.story_cards }))
@@ -130,7 +139,7 @@ export default function GenerateAdventureModal({ onClose }) {
         <div className="flex flex-col gap-4">
           <p className="text-sm text-zinc-400">
             Describe the adventure you want — in any language. The AI drafts a full scenario
-            (title, plot, opening, story cards) in English for you to review before creating.
+            (title, plot, opening, story cards) in that language for you to review before creating.
           </p>
           <textarea
             value={brief}

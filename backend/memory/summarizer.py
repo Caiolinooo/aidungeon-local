@@ -5,12 +5,13 @@ Hook best-effort chamado pelo game_engine após cada geração:
     maybe_update(adventure_id, *, conn=..., llm_client=..., settings=...,
                  estimator=..., transport=...)   # injeção p/ testes
 
-(a) MEMORY BANK — quando há >= settings.memory_bank.trigger_tokens (default
-    1500, estimador chars/4) de texto novo em actions desde o seq_end da última
-    memória, resume UM trecho (do mais antigo não coberto até estourar o
-    trigger; o restante fica p/ as próximas chamadas) via llm_client sem
-    stream (temperature = summary_temperature, max_tokens ~200) e grava em
-    `memories` com seq_start/seq_end do trecho.
+(a) MEMORY BANK — ações que saíram da janela recente (a mesma regra do
+    context_builder) e ainda não estão cobertas por memories.seq_end são
+    arquivadas em pedaços de settings.memory_bank.trigger_tokens (default
+    800). Cada pedaço vira um resumo de fatos (nomes, decisões, promessas,
+    mortes, itens, lugares, relações), na língua do trecho. Se o LLM falhar
+    ou voltar vazio, grava o extrato verbatim: nada sai da janela sem
+    registro. Um pedaço por chamada; o resto fica para a geração seguinte.
 
 (b) STORY SUMMARY rolante — quando cresce o conjunto de ações antigas FORA da
     janela recente (mesma regra do context_builder, bloco 6), reescreve
@@ -21,8 +22,9 @@ Hook best-effort chamado pelo game_engine após cada geração:
     marca a posição — o resumo existente já cobre o passado.
 
 (c) NUNCA lança exceção para o caller (try/except + log por passo e global) e
-    NUNCA bloqueia a resposta ao jogador em falha do LLM: em erro, nada é
-    gravado e a posição não avança (tenta de novo na próxima geração).
+    NUNCA bloqueia a resposta ao jogador. Falha do LLM no memory bank grava o
+    extrato verbatim e avança o seq coberto. Falha no story summary não
+    reescreve o resumo nem avança a posição (tenta de novo na próxima geração).
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ except ImportError:  # pragma: no cover
 
 log = logging.getLogger("aidungeon.memory")
 
-DEFAULT_TRIGGER_TOKENS = 1500
+DEFAULT_TRIGGER_TOKENS = 800
 DEFAULT_SUMMARY_MAX_WORDS = 120
 DEFAULT_SUMMARY_TEMPERATURE = 0.3
 DEFAULT_SUMMARY_BUDGET = 400
@@ -52,9 +54,11 @@ MAX_EXCERPT_CHARS = 6000
 Estimator = Callable[[str], int]
 
 MEMORY_BANK_PROMPT = (
-    "Summarize the key events of this RPG story excerpt in at most {max_words} words. "
-    "Keep: decisions, promises, NPC names and roles, places visited, items "
-    "gained/lost, unresolved threads. Write in second person, past tense. Text:\n{text}"
+    "Extract the facts that must not be forgotten from this RPG story excerpt. "
+    "Write in the same language as the excerpt, in at most {max_words} words. "
+    "Keep names, decisions, promises, deaths, items gained or lost, places, "
+    "and relationship changes. Do not invent anything that is not in the excerpt. "
+    "Text:\n{text}"
 )
 
 ROLLING_SUMMARY_PROMPT = (
@@ -110,12 +114,38 @@ def _recent_window_budget(cfg: dict) -> int:
         return max(0, size - fixed - reserve)
 
 
+def _evicted_actions(actions: list[dict], window_budget: int,
+                     estimator: Estimator) -> list[dict]:
+    """Ações fora da janela recente. A última ação nunca é antiga."""
+    if len(actions) < 2:
+        return []
+    kept = 0
+    used = 0
+    for action in reversed(actions[:-1]):
+        cost = estimator(_fmt(action))
+        if used + cost > window_budget:
+            break
+        used += cost
+        kept += 1
+    return actions[: len(actions) - 1 - kept]
+
+
+def _verbatim_excerpt(excerpt: str) -> str:
+    """Registro cru quando o resumo falha. O fato não pode sumir da janela."""
+    text = (excerpt or "").strip()
+    if len(text) > MAX_EXCERPT_CHARS:
+        text = text[-MAX_EXCERPT_CHARS:]
+    return text
+
+
 # ------------------------------------------------------------- memory bank
 def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
                         llm: Any, cfg: dict, estimator: Estimator,
                         transport: Any) -> None:
     mem = _mem_cfg(cfg)
-    trigger = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
+    chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
+    if chunk_tokens <= 0:
+        chunk_tokens = DEFAULT_TRIGGER_TOKENS
     max_words = int(mem.get("summary_max_words", DEFAULT_SUMMARY_MAX_WORDS))
     temperature = float(mem.get("summary_temperature", DEFAULT_SUMMARY_TEMPERATURE))
 
@@ -126,20 +156,20 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
     covered = row["m"] if row else None
 
     actions = db.list_actions(conn, adventure_id)
-    new_actions = [a for a in actions if covered is None or a["seq"] > covered]
-    if not new_actions:
+    outside = _evicted_actions(actions, _recent_window_budget(cfg), estimator)
+    pending = [a for a in outside if covered is None or a["seq"] > covered]
+    if not pending:
         return
-    if estimator("".join(_fmt(a) for a in new_actions)) < trigger:
-        return  # ainda não acumulou texto novo suficiente
 
-    # Um trecho por chamada: do mais antigo não coberto até estourar o trigger
-    # (o restante é resumido nas gerações seguintes — seq_start/end honestos).
+    # Um pedaço por chamada: do mais antigo não coberto até estourar o tamanho
+    # (o restante é arquivado nas gerações seguintes — seq_start/end honestos).
+    # Texto que já saiu da janela entra mesmo abaixo do tamanho do pedaço.
     chunk: list[dict] = []
     used = 0
-    for action in new_actions:
+    for action in pending:
         chunk.append(action)
         used += estimator(_fmt(action))
-        if used >= trigger:
+        if used >= chunk_tokens:
             break
 
     excerpt = "".join(_fmt(a) for a in chunk)
@@ -147,12 +177,19 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
         excerpt = excerpt[-MAX_EXCERPT_CHARS:]
 
     prompt = MEMORY_BANK_PROMPT.format(max_words=max_words, text=excerpt)
-    text = llm.chat_completion(
-        _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-        temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
-        transport=transport,
-    )
-    text = (text or "").strip()
+    try:
+        text = llm.chat_completion(
+            _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
+            temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
+            transport=transport,
+        )
+        text = (text or "").strip()
+    except Exception:
+        log.warning("memory bank: LLM falhou; gravando extrato (adventure=%s)",
+                    adventure_id, exc_info=True)
+        text = ""
+    if not text:
+        text = _verbatim_excerpt(excerpt)
     if not text:
         return
     db.insert_memory(conn, adventure_id, text,
@@ -170,20 +207,7 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     window_budget = _recent_window_budget(cfg)
 
     actions = db.list_actions(conn, adventure_id)
-    if len(actions) < 2:
-        return
-
-    # Janela recente = mesma regra do context_builder (bloco 6): anda de trás
-    # p/ frente por AÇÃO INTEIRA; a última ação nunca é "antiga" (bloco 8).
-    kept = 0
-    used = 0
-    for action in reversed(actions[:-1]):
-        cost = estimator(_fmt(action))
-        if used + cost > window_budget:
-            break
-        used += cost
-        kept += 1
-    old_actions = actions[: len(actions) - 1 - kept]
+    old_actions = _evicted_actions(actions, window_budget, estimator)
     if not old_actions:
         return
 

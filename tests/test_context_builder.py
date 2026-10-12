@@ -193,3 +193,21 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     assert built.meta["window_action_count"] == 1
     window = built.messages[1]["content"]
     assert window.startswith("M") and len(window) == 401   # inteira, sem corte
+
+
+def test_card_triggers_from_memory_outside_the_window(tmp_db):
+    adv = make_adventure(story_summary="")
+    add_action(adv["id"], 0, "start", "You walk the road.")
+    add_action(adv["id"], 1, "continue", "The rain keeps falling.")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Princess Alusair",
+                       triggers=["Alusair"], entry="Steel Regent of Cormyr.")
+        db.insert_memory(conn, adv["id"],
+                         "Princess Alusair swore an oath in the hall.",
+                         seq_start=0, seq_end=0)
+        actions = db.list_actions(conn, adv["id"])
+        built = cb.build_context(adv, actions, _cfg(conn), conn)
+    system = built.messages[0]["content"]
+    assert "Alusair" not in "You walk the road. The rain keeps falling."
+    assert "Steel Regent of Cormyr." in system
+    assert "swore an oath" in system

@@ -1,11 +1,13 @@
 """Registro vivo dos NPCs.
 
 Depois de cada resposta da IA, um passe lê o trecho e os cards que já existem.
-Quem entrou na história ganha um card. Morte, parentesco, decisão ou ferimento
-vão para a ficha, e um delta pequeno mexe no atributo quando o texto justifica.
+Quem entrou na história ganha um card. Lugar, facção e item também, só com o
+que o texto já estabeleceu. Morte, parentesco, decisão ou ferimento vão para
+a ficha, e um delta pequeno mexe no atributo quando o texto justifica.
 
 A aparência já gravada não muda, a menos que o passe marque look_changed
 (cicatriz, transformação). Roupa pode mudar. O protagonista do Plot não vira card.
+Aventura sem plot ganha plot_essentials neste passe, a partir da abertura.
 """
 
 from __future__ import annotations
@@ -23,26 +25,33 @@ log = logging.getLogger("aidungeon.npc_chronicle")
 
 _STATUSES = ("alive", "dead", "missing", "injured")
 
-_SYSTEM = """You keep the NPC registry of an interactive fiction game.
-Read the recent passage and the existing character cards. Return STRICT JSON only:
-{"characters": [
-  {
-    "name": "canonical name",
-    "aliases": ["short name"],
-    "existing_title": "exact title of a card already listed, or empty if this person is new",
-    "summary": "who they are, 1-2 sentences, only facts the story has established",
-    "facts": ["one new fact from THIS passage"],
-    "status": "alive, dead, missing, injured, or unknown",
-    "appearance": "face, hair, eyes, marks — empty if neither the passage nor the card describes them",
-    "clothing": "what they wear now, empty if unknown",
-    "personality": "traits actually shown, empty if unknown",
-    "look_changed": false,
-    "stat_delta": {"str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0}
-  }
-]}
+_SYSTEM = """You keep the registry of an interactive fiction game.
+Read the recent passage and the existing cards. Return STRICT JSON only:
+{
+  "plot_essentials": "only when the protagonist block is empty: who the player is, where they are, and the tone, using only the passage. Otherwise an empty string",
+  "characters": [
+    {
+      "name": "canonical name",
+      "aliases": ["short name"],
+      "existing_title": "exact title of a card already listed, or empty if this person is new",
+      "summary": "who they are, 1-2 sentences, only facts the story has established",
+      "facts": ["one new fact from THIS passage"],
+      "status": "alive, dead, missing, injured, or unknown",
+      "appearance": "face, hair, eyes, marks — empty if neither the passage nor the card describes them",
+      "clothing": "what they wear now, empty if unknown",
+      "personality": "traits actually shown, empty if unknown",
+      "look_changed": false,
+      "stat_delta": {"str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0}
+    }
+  ],
+  "places": [{"name": "place", "aliases": ["short name"], "existing_title": "", "summary": "what the passage established", "facts": ["one new fact"]}],
+  "factions": [{"name": "group", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}],
+  "items": [{"name": "item", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}]
+}
 Rules:
 - Include someone only if they act, speak, or are discussed in the passage.
-- Never include the protagonist.
+- Include a place, faction, or item only when the passage establishes it. Do not invent a sheet for them.
+- Never include the protagonist as a character.
 - Never invent appearance, relatives, death, or numbers.
 - look_changed is true only when the body or face itself changes (scar, curse, aging), not when clothes change.
 - If the card already has an appearance or a portrait, leave appearance and clothing empty unless look_changed is true.
@@ -51,8 +60,14 @@ Rules:
 - A death, a relative's death, a wound, a new title, allegiance, or a decision that changes their life is a fact and must be recorded.
 - stat_delta is an integer from -2 to 2 and only for a clear consequence in the passage (a wound, training, a hard choice). Otherwise every value is 0.
 - facts are short and new. Do not repeat a fact already on the card.
-- If nobody qualifies, return {"characters": []}.
+- If nobody qualifies, return empty arrays.
 Output ONLY the JSON object."""
+
+_WORLD_KEYS = (
+    ("location", "places"),
+    ("faction", "factions"),
+    ("item", "items"),
+)
 
 
 def protagonist_names(plot: str) -> set[str]:
@@ -267,21 +282,91 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     return "updated"
 
 
+def _world_triggers(item: dict, protagonists: set[str]) -> list[str]:
+    triggers = []
+    for raw in (item.get("name"), *(item.get("aliases") or [])):
+        trigger = " ".join(str(raw or "").split()).strip()
+        if len(trigger) >= 3 and trigger not in triggers and not _is_player(trigger, protagonists):
+            triggers.append(trigger)
+    return triggers[:8]
+
+
+def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
+                type_: str, protagonists: set[str]) -> str | None:
+    """Card de lugar, facção ou item. Só título, gatilhos e entry — sem ficha inventada."""
+    if not isinstance(item, dict) or type_ not in ("location", "faction", "item"):
+        return None
+    name = " ".join(str(item.get("name") or "").split()).strip()
+    if len(name) < 2 or _is_player(name, protagonists):
+        return None
+    facts = _facts(item)
+    summary = " ".join(str(item.get("summary") or "").split()).strip()
+    card = _match_card(cards, item)
+    if card is None:
+        if not (summary or facts):
+            return None
+        created = db.insert_card(
+            conn, adventure_id, title=name[:80], type=type_,
+            triggers=_world_triggers(item, protagonists),
+            entry=_append_unique(summary, facts)[:1600],
+        )
+        cards.append(created)
+        return "created"
+    entry = _append_unique(card.get("entry") or summary, facts)
+    triggers = list(card.get("triggers") or [])
+    for trigger in _world_triggers(item, protagonists):
+        if trigger not in triggers:
+            triggers.append(trigger)
+    updated = db.update_card(conn, adventure_id, card["id"], {
+        "entry": entry[:1600],
+        "triggers": triggers[:8],
+    })
+    if updated:
+        card.update(updated)
+    return "updated"
+
+
+def _incoming_plot(payload: dict, plot: str) -> str:
+    """Frase de plot só quando a aventura ainda não tem um."""
+    if (plot or "").strip() or not isinstance(payload, dict):
+        return ""
+    line = " ".join(str(payload.get("plot_essentials") or "").split())
+    return line[:800] if len(line) >= 12 else ""
+
+
 def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str) -> dict:
     """Aplica o JSON do passe. Não chama o LLM."""
-    items = payload.get("characters") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
+    if not isinstance(payload, dict):
         return {"created": 0, "updated": 0}
-    protagonists = protagonist_names(plot)
-    cards = [card for card in db.list_cards(conn, adventure_id)
-             if card.get("type") == "character"]
+    incoming = _incoming_plot(payload, plot)
+    protagonists = protagonist_names(plot) | protagonist_names(incoming)
+    all_cards = db.list_cards(conn, adventure_id)
     created = updated = 0
-    for item in items[:8]:
-        kind = apply_character(conn, adventure_id, cards, item, protagonists)
-        if kind == "created":
-            created += 1
-        elif kind == "updated":
-            updated += 1
+
+    characters = [card for card in all_cards if card.get("type") == "character"]
+    items = payload.get("characters")
+    if isinstance(items, list):
+        for item in items[:8]:
+            kind = apply_character(conn, adventure_id, characters, item, protagonists)
+            if kind == "created":
+                created += 1
+            elif kind == "updated":
+                updated += 1
+
+    for type_, key in _WORLD_KEYS:
+        pool = [card for card in all_cards if card.get("type") == type_]
+        world_items = payload.get(key)
+        if not isinstance(world_items, list):
+            continue
+        for item in world_items[:8]:
+            kind = apply_world(conn, adventure_id, pool, item, type_, protagonists)
+            if kind == "created":
+                created += 1
+            elif kind == "updated":
+                updated += 1
+
+    if incoming:
+        db.update_adventure_memory(conn, adventure_id, plot_essentials=incoming)
     return {"created": created, "updated": updated}
 
 

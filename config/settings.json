@@ -55,10 +55,10 @@
   "cors_origins": ["http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:5173"],
   "stop_sequences": ["\n> You", "\n> you"],
   "memory_bank": {
-    "trigger_tokens": 1500,
+    "trigger_tokens": 800,
     "summary_max_words": 120,
     "summary_temperature": 0.3,
-    "top_k": 5
+    "top_k": 12
   },
   "story_cards": {
     "scan_chars": 2500,
@@ -108,8 +108,9 @@
     "stt_max_bytes": 10485760
   },
   "assistant": {
-    "max_tokens": 1400,
+    "max_tokens": 2500,
     "field_max_tokens": 400,
+    "cards_max_tokens": 2000,
     "temperature": 0.7,
     "note": "Assistente de criacao de cenarios: POST /api/assistant/scenario (draft completo estruturado) e POST /api/assistant/field (regenera um campo). Sempre via LLM da VM."
   },

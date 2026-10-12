@@ -20,6 +20,7 @@ def _memory_state(adventure_id: str) -> dict:
             "plot_essentials": adv["plot_essentials"],
             "authors_note": adv["authors_note"],
             "story_summary": adv["story_summary"],
+            "memories": db.list_memories(conn, adventure_id),
         }
 
 

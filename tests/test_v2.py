@@ -203,6 +203,48 @@ def test_assistant_scenario_malformed_json_503(client):
     assert resp.json()["error"]["code"] == "generation_failed"
 
 
+def test_assistant_retries_the_card_step_when_the_first_list_is_empty(client):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if path.endswith("/chat/completions"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                body = {k: v for k, v in DRAFT.items() if k != "story_cards"}
+                content = json.dumps(body)
+            elif calls["n"] == 2:
+                content = '{"story_cards": []}'
+            else:
+                content = json.dumps({"story_cards": DRAFT["story_cards"]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(404, json={"error": path})
+
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["story_cards"]) == 3
+    assert calls["n"] == 3  # texto, cards vazio, retry dos cards
+
+
+def test_assistant_scenario_without_cards_is_503(client):
+    core = {k: v for k, v in DRAFT.items() if k != "story_cards"}
+    override_transport(client, make_v2_transport(json.dumps(core)))
+    try:
+        resp = client.post("/api/assistant/scenario",
+                           json={"brief": "steampunk pirate hunting a leviathan"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "generation_failed"
+
+
 def test_assistant_field_regenerates_one_field(client):
     override_transport(client, make_v2_transport('{"value": "The Sky Whale Saga"}'))
     try:
