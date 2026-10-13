@@ -101,6 +101,36 @@ def test_scene_paints_the_card_face_not_the_prose(client, tmp_path):
     assert "person, people" not in image["negative_prompt"]
 
 
+def test_explicit_scene_does_not_restore_the_outfit(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        db.insert_card(
+            conn, adv["id"], type="character", title="Princess Alusair",
+            triggers=["Alusair"], entry="Steel Regent of Cormyr.",
+            sheet=json.dumps({
+                "appearance": "long red hair, green eyes",
+                "clothing": "plate armor",
+            }),
+        )
+    add_action(adv["id"], 0, "continue", "Princess Alusair is naked on the bed.")
+    resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert resp.status_code == 200, resp.text
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+    prompt = job["payload"]["prompt"].lower()
+    assert job["payload"]["explicit"] is True
+    assert "naked" in prompt
+    assert "plate armor" not in prompt
+    assert "long red hair" in prompt
+    assert jobs.process_pending(make_assets_transport()) >= 1
+    with db.session() as conn:
+        image = db.latest_image(conn, adv["id"], "backdrop")
+    assert "costume change" not in image["negative_prompt"].lower()
+    assert "nude" not in image["negative_prompt"].lower()
+
+
 def test_scene_new_atmosphere_paints_again(client, tmp_path):
     use_tmp_storage(tmp_path)
     adv = _seed()

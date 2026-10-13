@@ -37,6 +37,25 @@ _MOODS = (
 
 _CAST_LIMIT = 4
 
+# Cena adulta. Não é um bloqueio: é o que faz a roupa do card ceder ao momento.
+_EXPLICIT_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"naked|nude|nudes|topless|bottomless|undress(?:ed|ing)?|"
+    r"nua|nuas|nus|pelad[oa]s?|sem roupa|"
+    r"sex|sexo|sexual|fuck(?:ing)?|foder|transar|transando|"
+    r"orgasm(?:o|s)?|gozar|gozando|ejacul\w*|"
+    r"penis|p[eê]nis|vagina|buceta|pau|cock|pussy|clit(?:oris)?|"
+    r"nipples?|breasts?|seios|bunda|boquete|"
+    r"anal|intercourse|thrust(?:ing)?"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def is_explicit(text: str) -> bool:
+    """O momento descreve nudez ou sexo entre adultos."""
+    return _EXPLICIT_RE.search(text or "") is not None
+
 
 def _slug(text: str) -> str:
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
@@ -126,22 +145,53 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
     return [card for _, card in ranked[-_CAST_LIMIT:]]
 
 
-def _visual_clause(cast: list[dict]) -> str:
-    """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda."""
+def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
+    """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda.
+
+    Cena nua não carrega a roupa do card.
+    """
     if not cast:
         return ""
+    if explicit:
+        lines = []
+        for card in cast:
+            bits = npc_assets.identity_bits(card)
+            title = (card.get("title") or "").strip()
+            if bits:
+                lines.append(f"{title}: " + "; ".join(bits) if title else "; ".join(bits))
+            elif title:
+                lines.append(title)
+        if not lines:
+            return ""
+        return "exact likeness, " + ", ".join(lines)
     text = " ".join((card.get("title") or "") for card in cast)
     return npc_assets.image_canon_clause(cast, text)
 
 
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
-            cast: list[dict]) -> tuple[str, bool]:
+            cast: list[dict], moment: str = "") -> tuple[str, bool]:
     """Lugar, e as pessoas só quando o card já tem o rosto.
 
-    A prosa não entra: ela descreve a princesa de vestido e o modelo pintava
-    outra mulher. Sem visual travado, o fundo continua vazio de gente.
+    A prosa não entra numa cena vestida: ela descreve a princesa de vestido
+    e o modelo pintava outra mulher. Nudez e sexo entram no prompt, e a roupa
+    do card não volta. Sem visual travado, o fundo continua vazio de gente.
     """
-    clause = _visual_clause(cast)
+    explicit = is_explicit(moment)
+    clause = _visual_clause(cast, explicit=explicit)
+    if clause and explicit:
+        parts = [
+            clause,
+            "clothes off, nude, do not restore outfits, uncensored",
+            (moment or "")[-400:],
+            style,
+            f"wide cinematic shot of {title}, only the characters named above, "
+            "each with that exact face and hair",
+            (entry or "")[:400],
+            f"atmosphere: {atmosphere}",
+            "detailed scene painting, no text, no watermark, no logo",
+        ]
+        text = " ".join(part.strip() for part in parts if part and part.strip())
+        return text[:1400], True
     if clause:
         parts = [
             clause,
@@ -167,7 +217,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
 
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
-                    include_people: bool = False) -> dict:
+                    include_people: bool = False, explicit: bool = False) -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
     fallback = current or db.latest_image(conn, adventure_id, "backdrop")
@@ -189,7 +239,11 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         return {"status": "error", "image": image, "error": previous.get("error")}
 
     db.insert_job(conn, adventure_id=adventure_id, type="scene_backdrop",
-                  ref_id=ref, payload={"prompt": prompt, "include_people": include_people})
+                  ref_id=ref, payload={
+                      "prompt": prompt,
+                      "include_people": include_people,
+                      "explicit": explicit,
+                  })
     return {"status": "pending", "image": image, "error": None}
 
 
@@ -211,20 +265,25 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     cast_cards = []
     for card in _cast(cards, text):
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
-    clause = _visual_clause(cast_cards)
+    explicit = is_explicit(text)
+    clause = _visual_clause(cast_cards, explicit=explicit)
     signature = f"{_slug(title)}|{atmosphere}"
     if clause:
         # O fundo antigo (pessoa errada) não serve quando o rosto do card entra.
         signature = f"{signature}|{_slug(clause)[:48]}"
+    if explicit:
+        signature = f"{signature}|explicit"
     ref = f"{adventure_id}:{signature}"
     img_cfg = settings_store.effective_image_settings(conn)
     prompt, include_people = _prompt(
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, cast_cards,
+        text,
     )
     backdrop = _backdrop_state(
         conn, adventure_id, ref,
         enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
         include_people=include_people,
+        explicit=explicit,
     )
 
     cast = []

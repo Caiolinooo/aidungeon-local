@@ -213,6 +213,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
                                   image.get("timeout_seconds", 300))),
         "txt2img_path": sdwebui.get("txt2img_path", "/sdapi/v1/txt2img"),
         "img2img_path": sdwebui.get("img2img_path", "/sdapi/v1/img2img"),
+        "sd_model_checkpoint": sdwebui.get("sd_model_checkpoint", ""),
         "prompt_builder": dict(prompt_builder),
     }
 

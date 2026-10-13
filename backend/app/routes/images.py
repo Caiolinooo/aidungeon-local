@@ -37,6 +37,13 @@ Do not add people who are not in the moment. Do not change the place.
 Do not turn the moment into a portrait or a close-up of one face.
 No dialogue, no quotes, no meta text. Output ONLY that sentence."""
 
+_EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
+Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
+Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
+Do not describe hair, face, eyes or age.
+Do not add people who are not in the moment. Do not change the place.
+Do not sexualize a child. Output ONLY that sentence."""
+
 # Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
 _PORTRAIT_NEGATIVE = "solo portrait, bust, headshot, close-up"
 _INTERACTION_WORDS = (
@@ -49,7 +56,7 @@ _INTERACTION_WORDS = (
 _LOOK_WORDS = (
     "eyes", "eye", "hair", "gown", "dress", "robe", "armor", "armour",
     "skin", "beard", "scar", "blonde", "brunette", "redhead", "helm",
-    "naked", "nude", "cloak", "cape", "silk", "shirt",
+    "cloak", "cape", "silk", "shirt",
     "cabelo", "olhos", "olho", "vestido", "armadura", "elmo", "barba",
     "cicatriz", "pele", "tunica", "túnica", "manto", "capa",
 )
@@ -188,11 +195,14 @@ def _cards_in_frame(cards: list[dict], text: str, plot: str) -> list[dict]:
     return frame
 
 
-def _look_clause(frame: list[dict]) -> str:
-    """Rosto travado no começo do prompt. Sem isso o CLIP pinta um estranho."""
+def _look_clause(frame: list[dict], *, explicit: bool = False) -> str:
+    """Rosto travado no começo do prompt. Sem isso o CLIP pinta um estranho.
+
+    Cena nua ou sexual guarda o rosto e solta a roupa do card.
+    """
     lines = []
     for card in frame:
-        bits = npc_assets.visual_bits(card)
+        bits = npc_assets.identity_bits(card) if explicit else npc_assets.visual_bits(card)
         title = (card.get("title") or "").strip()
         if not bits:
             if title:
@@ -223,8 +233,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     """
     pb = img_cfg["prompt_builder"]
     moment = current_moment(actions, body.action_seq)
+    explicit = scene.is_explicit(moment)
     frame = _cards_in_frame(cards, moment, adv.get("plot_essentials") or "")
-    clause = _look_clause(frame) or npc_assets.image_canon_clause(cards, moment)
+    clause = _look_clause(frame, explicit=explicit) or (
+        "" if explicit else npc_assets.image_canon_clause(cards, moment)
+    )
     names = [card.get("title") for card in frame if card.get("title")]
     if not names:
         names = [card.get("title") for card in scene._cast(cards, moment) if card.get("title")]
@@ -233,7 +246,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if you and not any(name.casefold() == player_name.casefold() for name in names):
         names.insert(0, player_name)
     canon = ""
-    if clause:
+    if clause and explicit:
+        canon = (
+            "Identity only, face and hair, not their usual clothes: "
+            + clause
+            + ". Do not restore outfits. Depict the adult nudity and the act."
+        )
+    elif clause:
         canon = (
             "Character canon, mandatory whenever they are visible, overrides the prose: "
             + clause
@@ -253,7 +272,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         + (moment or "(an empty scene)")
     )
     messages = [
-        {"role": "system", "content": _PROMPT_BUILDER_SYSTEM},
+        {"role": "system", "content": _EXPLICIT_BUILDER_SYSTEM if explicit else _PROMPT_BUILDER_SYSTEM},
         {"role": "user", "content": user},
     ]
     summarized = llm_client.chat_completion(
@@ -271,6 +290,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     lead_bits = []
     if beat:
         lead_bits.append(beat)
+    if explicit:
+        lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
         lead_bits.append(", ".join(where))
     if names:
