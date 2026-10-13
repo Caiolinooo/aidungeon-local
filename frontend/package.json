@@ -1,7 +1,7 @@
 {
   "name": "aidungeon-local-frontend",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.7.0",
   "type": "module",
   "description": "SPA React — réplica funcional da UI do AI Dungeon (PLANO.md §4.5)",
   "scripts": {

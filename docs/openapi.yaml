@@ -41,6 +41,8 @@ tags:
     description: Pipeline assíncrono de assets (v0.3.0) — fila de jobs que gera retratos de NPCs em background; a UI faz polling e aplica cada asset ao concluir.
   - name: voice
     description: Voz (v0.4.0) — TTS Supertonic e STT Whisper via stack OpenAI-compatível da VM; /tts devolve bytes audio/mpeg (não JSON).
+  - name: ui-profile
+    description: Controles dinâmicos (v0.7.0) — manifesto do painel gerado pela IA (tabs + widgets) e estado dos widgets editável pelo jogador.
   - name: health
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
@@ -940,6 +942,99 @@ paths:
                 $ref: '#/components/schemas/Error'
         '503':
           description: LLM indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/ui-profile:
+    get:
+      tags: [ui-profile]
+      summary: Ler manifesto de controles + estado dos widgets
+      operationId: getUiProfile
+      description: |
+        Devolve o manifesto gerado pela IA (`profile`: tabs do InputBar +
+        widgets dice/stats/inventory/character) e o estado atual dos widgets
+        (`state`, editado pelo jogador). `profile: null` = aventura sem painel
+        (não gerado ou `settings.ui_profile.enabled=false`).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Manifesto + estado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiProfileResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [ui-profile]
+      summary: Gerar (ou redesenhar) o manifesto de controles via LLM
+      operationId: postUiProfile
+      description: |
+        O LLM lê título, descrição, AI instructions, plot essentials, author's
+        note e abertura da aventura e devolve o manifesto JSON do painel.
+        A resposta é normalizada por whitelist (ids de tab fixos do/say/story;
+        tipos de widget dice/stats/inventory/character; limites de tamanho) e
+        persistida em `adventures.ui_profile`. Na primeira geração o estado
+        inicial dos widgets (valores do LLM) é gravado em `ui_state` —
+        gerações seguintes preservam o estado editado pelo jogador.
+        `enabled=false` → 200 com `profile: null`. Usa o mesmo lock por
+        aventura da geração (action/continue/retry/see/choices).
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Manifesto gerado + estado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiProfileResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Geração em andamento para a aventura.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: LLM indisponível ou resposta não parseável.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/ui-state:
+    put:
+      tags: [ui-profile]
+      summary: Gravar estado dos widgets (edição do jogador)
+      operationId: putUiState
+      description: |
+        Substitui `adventures.ui_state` (HP, inventário, ficha). O frontend
+        envia com debounce de ~600 ms a cada edição. Limite de 16 KB
+        serializados. O estado entra no contexto do LLM como bloco
+        `[Player state]` na próxima geração.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UiStateUpdate'
+      responses:
+        '200':
+          description: Estado gravado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiStateResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: Estado excede 16 KB.
           content:
             application/json:
               schema:
@@ -1870,6 +1965,112 @@ components:
                 type: string
                 maxLength: 120
                 description: Sugestão curta em inglês.
+
+    # ------------------------------------------------------- v0.7.0: ui-profile
+    UiTab:
+      type: object
+      required: [id, label, placeholder]
+      properties:
+        id:
+          type: string
+          enum: [do, say, story]
+          description: Fixo (constraint do banco); só label/placeholder mudam.
+        label:
+          type: string
+          maxLength: 12
+        placeholder:
+          type: string
+          maxLength: 60
+
+    UiWidget:
+      type: object
+      required: [id, type, label]
+      description: |
+        Widget do painel (whitelist, máx. 6). Campos por tipo:
+        - `dice`: `dice` (lados permitidos: 4, 6, 8, 10, 12, 20, 100);
+        - `stats`: `stats` [{name, value, max?, min?}], máx. 8;
+        - `inventory`: `items` [{name, qty}], máx. 24 (inicial vazio é válido);
+        - `character`: `fields` [{name, value}], máx. 12.
+      properties:
+        id:
+          type: string
+          maxLength: 24
+        type:
+          type: string
+          enum: [dice, stats, inventory, character]
+        label:
+          type: string
+          maxLength: 24
+        dice:
+          type: array
+          items: {type: integer, enum: [4, 6, 8, 10, 12, 20, 100]}
+        stats:
+          type: array
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name: {type: string, maxLength: 24}
+              value: {type: integer}
+              max: {type: integer, nullable: true}
+              min: {type: integer, nullable: true}
+        items:
+          type: array
+          items:
+            type: object
+            required: [name, qty]
+            properties:
+              name: {type: string, maxLength: 24}
+              qty: {type: integer, minimum: 1}
+        fields:
+          type: array
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name: {type: string, maxLength: 24}
+              value: {type: string, maxLength: 120}
+
+    UiProfile:
+      type: object
+      required: [tabs, widgets]
+      properties:
+        tabs:
+          type: array
+          description: Sempre as 3 tabs (do/say/story), na ordem fixa.
+          items:
+            $ref: '#/components/schemas/UiTab'
+        widgets:
+          type: array
+          description: Vazio = só o InputBar, sem painel.
+          items:
+            $ref: '#/components/schemas/UiWidget'
+
+    UiProfileResponse:
+      type: object
+      required: [profile, state]
+      properties:
+        profile:
+          nullable: true
+          $ref: '#/components/schemas/UiProfile'
+        state:
+          type: object
+          description: Estado dos widgets por widget id (chaves `stats`/`items`/`fields`/`dice`).
+
+    UiStateUpdate:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: object
+          description: Objeto livre, máx. 16 KB serializado.
+
+    UiStateResponse:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: object
 
     AssistantScenarioRequest:
       type: object

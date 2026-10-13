@@ -101,7 +101,7 @@ CANON_CUE = (
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
 FIXED_BUDGET_KEYS = (
     "ai_instructions", "plot_essentials", "story_cards", "memory_bank",
-    "story_summary", "authors_note", "last_action",
+    "story_summary", "authors_note", "last_action", "player_state",
 )
 
 
@@ -218,6 +218,23 @@ def _select_memories(conn: sqlite3.Connection, adventure_id: str, recent_text: s
 
 
 # ------------------------------------------------------------- resultado
+def render_player_state(ui_state: dict) -> str:
+    """v0.7.0 — bloco compacto "[Player state]" a partir do ui_state do painel
+    (stats do tipo {"HP": 14}, inventário [{"name","qty"}], ficha {campo: valor}).
+    '' quando vazio — histórias sem widgets não gastam tokens."""
+    lines: list[str] = []
+    for key, value in (ui_state or {}).items():
+        if isinstance(value, dict) and value:
+            pairs = ", ".join(f"{k} {v}" for k, v in value.items())
+            lines.append(f"{key}: {pairs}")
+        elif isinstance(value, list) and value:
+            items = ", ".join(
+                f"{i.get('name')}×{i.get('qty', 1)}" if isinstance(i, dict) else str(i)
+                for i in value)
+            lines.append(f"{key}: {items}")
+    return "\n".join(lines)
+
+
 @dataclass
 class BuiltContext:
     messages: list[dict]
@@ -294,6 +311,13 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # 5 — story_summary
     if summary:
         system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 800))))
+
+    # 5b — estado do painel dinâmico (v0.7.0): HP/inventário/ficha que o
+    # jogador edita nos widgets. Sem ele a IA narra dano/tesouro no escuro.
+    player_state = render_player_state(adventure.get("ui_state") or {})
+    if player_state:
+        system_parts.append("[Player state]\n" + _fit_budget(
+            player_state, int(budgets.get("player_state", 200))))
 
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 

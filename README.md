@@ -11,8 +11,18 @@ OpenAI-compatível.
 
 ---
 
-## Funcionalidades (v0.5.1)
+## Funcionalidades (v0.7.0)
 
+- **Controles dinâmicos definidos pela IA**: cada aventura ganha um painel de
+  controles desenhado pelo LLM a partir do cenário — tabs do InputBar com
+  rótulos do gênero (ex.: Action/Dialogue/Narrate) e widgets de **dados**
+  (rolagem local, enviar como ação), **stats** (HP/Mana com barras),
+  **inventário** (chips, toque insere no input) e **ficha do personagem**
+  (edição inline). O manifesto fica em `adventures.ui_profile` e o estado dos
+  widgets em `adventures.ui_state` (edição do jogador, PUT com debounce); o
+  estado entra no contexto como bloco `[Player state]` — a IA não narra dano
+  ou tesouro no escuro. `enabled=false` em `config/settings.json` (`ui_profile`)
+  volta ao InputBar padrão.
 - **Prosa legível**: o prompt pede frases completas, com artigos e parágrafos.
   A tela só quebra bloco telegráfico na leitura; o texto gravado não muda.
 - **Faixa da cena**: a pintura e o elenco ficam numa faixa no topo. O texto
@@ -224,11 +234,12 @@ AIDungeon_Local\
 │  ├─ models\*.gguf          pesos dos modelos (git-ignored)
 │  └─ koboldcpp\             runtime local do LLM (git-ignored)
 ├─ tools\                    check_llm.py, bench_llm.py, setup_llm_local.ps1
-├─ tests\                    suíte pytest (117 testes: engine, contexto, memória, auth,
+├─ tests\                    suíte pytest (181 testes: engine, contexto, memória, auth,
 │                           replay E2E do backup, smoke VM, v2 imagens/assistente,
 │                           v0.3.0 jobs/retratos, v0.4.0 voz TTS/STT,
 │                           v0.5.0 crônica, See e prosa,
-│                           v0.5.1 epiCRealism XL)
+│                           v0.5.1 epiCRealism XL,
+│                           v0.7.0 ui-profile/controles dinâmicos)
 ├─ docs\
 │  ├─ openapi.yaml           contrato REST completo (PLANO.md §4.4), incl. SSE
 │  └─ DEPLOY_VERCEL.md       deploy do frontend na Vercel

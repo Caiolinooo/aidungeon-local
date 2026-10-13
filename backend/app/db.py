@@ -171,6 +171,10 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "authors_note": row["authors_note"] or "",
         "story_summary": row["story_summary"] or "",
         "image_style": row["image_style"] or "",
+        # v0.7.0 — controles dinâmicos: manifesto gerado pela IA + estado dos
+        # widgets ('' no banco → None/{} na API).
+        "ui_profile": _loads(row["ui_profile"], None) if row["ui_profile"] else None,
+        "ui_state": _loads(row["ui_state"], {}) if row["ui_state"] else {},
         "tags": _loads(row["tags"], []),
         "third_person": bool(row["third_person"]),
         "source": row["source"] or "new",
@@ -346,6 +350,20 @@ def update_adventure_memory(conn: sqlite3.Connection, adventure_id: str, *,
 def update_adventure_summary(conn: sqlite3.Connection, adventure_id: str, story_summary: str) -> None:
     conn.execute("UPDATE adventures SET story_summary=?, updated_at=? WHERE id=?",
                  (story_summary, utcnow(), adventure_id))
+
+
+def update_adventure_ui_profile(conn: sqlite3.Connection, adventure_id: str,
+                                profile: dict | None) -> None:
+    """v0.7.0 — grava o manifesto de controles gerado pela IA ('' = ausente)."""
+    conn.execute("UPDATE adventures SET ui_profile=?, updated_at=? WHERE id=?",
+                 ("" if profile is None else _dumps(profile, {}), utcnow(), adventure_id))
+
+
+def update_adventure_ui_state(conn: sqlite3.Connection, adventure_id: str,
+                              state: dict) -> None:
+    """v0.7.0 — grava o estado dos widgets do painel (HP, inventário, ficha)."""
+    conn.execute("UPDATE adventures SET ui_state=?, updated_at=? WHERE id=?",
+                 (_dumps(state, {}), utcnow(), adventure_id))
 
 
 def list_adventure_summaries(conn: sqlite3.Connection) -> list[dict]:

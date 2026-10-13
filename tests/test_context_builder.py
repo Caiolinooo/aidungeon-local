@@ -153,8 +153,8 @@ def test_recent_window_dynamic_rule(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
     budgets = settings_store.load_file_settings()["context"]["budgets"]
-    expected = 32768 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200) - 1024
-    assert built.meta["budgets"]["recent_window"] == expected == 25744
+    expected = 32768 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200 + 200) - 1024
+    assert built.meta["budgets"]["recent_window"] == expected == 25544
 
 
 def test_window_truncates_by_whole_action(tmp_db):
@@ -187,7 +187,8 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0
-        cfg = _cfg(conn, context_size=6000 + 1024 + 250)
+        # (6200 = budgets fixos, incl. player_state=200 do v0.7.0)
+        cfg = _cfg(conn, context_size=6200 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert built.meta["window_action_count"] == 1

@@ -16,6 +16,8 @@ CREATE TABLE adventures(
   authors_note TEXT DEFAULT '', story_summary TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', third_person INTEGER DEFAULT 0,
   source TEXT DEFAULT 'new',            -- 'new' | 'import'
+  ui_profile TEXT DEFAULT '',           -- v0.7.0: manifesto JSON de controles (IA)
+  ui_state TEXT DEFAULT '',             -- v0.7.0: estado JSON dos widgets
   created_at TEXT, updated_at TEXT);
 
 CREATE TABLE actions(

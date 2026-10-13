@@ -26,9 +26,18 @@ function preferredMicMime() {
 // usado pelo Play p/ esconder as "choices" enquanto há texto no input.
 // v0.4.0: botão 🎙 dita o texto (MediaRecorder → POST /api/stt) e ANEXA a
 // transcrição ao conteúdo atual do input.
-export default function InputBar({ disabled, onSend, onTextChange }) {
+// v0.7.0: `tabs` dinâmicas do ui_profile da IA (labels/placeholders por
+// gênero; ids continuam do/say/story), botão 🎲 abre o GamePanel quando há
+// widgets, e `inject` ({text, nonce}) anexa texto vindo dos widgets.
+const DEFAULT_TABS = TABS
+
+export default function InputBar({
+  disabled, onSend, onTextChange,
+  tabs = DEFAULT_TABS, inject = null,
+  panelAvailable = false, panelOpen = false, onTogglePanel,
+}) {
   const toast = useToast()
-  const [tab, setTab] = useState('do')
+  const [tab, setTab] = useState(tabs[0]?.id ?? 'do')
   const [text, setText] = useState('')
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
@@ -37,7 +46,28 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
   const recorderRef = useRef(null)
   const chunksRef = useRef([])
 
-  const active = TABS.find((t) => t.id === tab)
+  const active = tabs.find((t) => t.id === tab) ?? tabs[0] ?? DEFAULT_TABS[0]
+
+  // Tabs dinâmicas: se a tab atual sumiu do manifesto, volta p/ a primeira.
+  useEffect(() => {
+    if (!tabs.some((t) => t.id === tab)) setTab(tabs[0]?.id ?? 'do')
+  }, [tabs, tab])
+
+  // Texto injetado pelos widgets do GamePanel (dado, "use item"…): ANEXA,
+  // nunca sobrescreve o que o jogador já digitou. nonce = nova injeção.
+  const lastInjectNonce = useRef(null)
+  useEffect(() => {
+    if (!inject || inject.nonce === lastInjectNonce.current) return
+    lastInjectNonce.current = inject.nonce
+    const t = (inject.text || '').trim()
+    if (!t) return
+    setText((prev) => {
+      const next = prev.trim() ? `${prev.trimEnd()} ${t}` : t
+      onTextChange?.(next)
+      return next
+    })
+    areaRef.current?.focus()
+  }, [inject, onTextChange])
 
   const submit = () => {
     const t = text.trim()
@@ -176,13 +206,14 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
   return (
     <div className="border-t border-zinc-800 bg-zinc-950/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur">
       <div className="mx-auto max-w-3xl">
-        <div className="mb-2 flex gap-1">
-          {TABS.map((t) => (
+        <div className="mb-2 flex gap-1 overflow-x-auto">
+          {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               disabled={disabled}
-              className={`min-h-11 flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors sm:flex-none sm:px-4 ${
+              title={t.placeholder || t.label}
+              className={`min-h-11 shrink-0 flex-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors sm:flex-none sm:px-4 ${
                 tab === t.id
                   ? 'bg-emerald-700 text-white'
                   : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
@@ -212,6 +243,21 @@ export default function InputBar({ disabled, onSend, onTextChange }) {
             enterKeyHint="send"
             className="max-h-60 min-w-0 flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 font-prose text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-60 sm:text-sm"
           />
+          {panelAvailable && (
+            <button
+              onClick={onTogglePanel}
+              disabled={disabled}
+              title={panelOpen ? 'Hide game controls' : 'Show game controls (dice, stats, inventory…)'}
+              aria-pressed={panelOpen}
+              className={`min-h-11 min-w-11 shrink-0 rounded-lg px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                panelOpen
+                  ? 'bg-emerald-700 text-white hover:bg-emerald-600'
+                  : 'bg-zinc-700 text-zinc-200 hover:bg-zinc-600'
+              }`}
+            >
+              🎲
+            </button>
+          )}
           <button
             onClick={recording ? stopRecording : startRecording}
             disabled={disabled || transcribing}

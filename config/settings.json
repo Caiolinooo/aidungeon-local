@@ -18,6 +18,7 @@
       "recent_window": 25600,
       "authors_note": 300,
       "last_action": 200,
+      "player_state": 200,
       "response_reserve": 1024
     }
   },
@@ -121,5 +122,11 @@
     "max_tokens": 220,
     "temperature": 0.8,
     "note": "POST /api/adventures/{id}/choices: LLM sugere 'count' opcoes curtas de proxima acao (type do/say/story, texto <= 120 chars, EN) como array JSON. enabled=false -> 200 {\"choices\": []}."
+  },
+  "ui_profile": {
+    "enabled": true,
+    "max_tokens": 700,
+    "temperature": 0.3,
+    "note": "POST /api/adventures/{id}/ui-profile: LLM desenha o painel de controles do jogo (tabs do InputBar + widgets dice/stats/inventory/character) como JSON, persistido em adventures.ui_profile. Estado dos widgets em adventures.ui_state via PUT ui-state. enabled=false -> profile null (so InputBar padrao)."
   }
 }

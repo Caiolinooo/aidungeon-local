@@ -206,6 +206,14 @@ export const api = {
     }),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
   getChoices: (advId) => request(`/adventures/${advId}/choices`, { method: 'POST' }),
+
+  // ------------------------------------------- controles dinâmicos (v0.7.0)
+  // Manifesto gerado pela IA: {tabs, widgets} + estado dos widgets (ui_state).
+  getUiProfile: (advId) => request(`/adventures/${advId}/ui-profile`),
+  generateUiProfile: (advId) =>
+    request(`/adventures/${advId}/ui-profile`, { method: 'POST' }),
+  putUiState: (advId, state) =>
+    request(`/adventures/${advId}/ui-state`, { method: 'PUT', body: { state } }),
   getImageSettings: () => request('/settings/image'),
   putImageSettings: (payload) => request('/settings/image', { method: 'PUT', body: payload }),
   // Fetch autenticado da imagem (<img> não envia o header Bearer — ver downloadExport).

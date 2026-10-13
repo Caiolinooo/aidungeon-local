@@ -6,6 +6,7 @@ import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
+import GamePanel from '../components/GamePanel.jsx'
 import Drawer from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
@@ -40,6 +41,12 @@ export default function Play() {
   const [choices, setChoices] = useState([]) // sugestões de próxima ação (v2)
   const [inputDirty, setInputDirty] = useState(false) // usuário digitando → esconde chips
   const [dockRefresh, setDockRefresh] = useState(0) // v0.5.0 — refetch dos cards do dock VRM
+  // v0.7.0 — controles dinâmicos definidos pela IA (ui_profile + ui_state)
+  const [uiProfile, setUiProfile] = useState(undefined) // undefined=carregando, null=sem painel
+  const [uiState, setUiState] = useState({})
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [regeneratingProfile, setRegeneratingProfile] = useState(false)
+  const [inject, setInject] = useState(null) // {text, nonce} → InputBar anexa
 
   const abortRef = useRef(null)
   const feedRef = useRef(null)
@@ -58,6 +65,9 @@ export default function Play() {
       const st = await api.getAdventure(id)
       setAdventure(st)
       setActions([...(st.actions ?? [])].sort(bySeq))
+      // v0.7.0 — perfil de controles já vem embutido no state da aventura
+      setUiProfile(st.ui_profile ?? null)
+      setUiState(st.ui_state ?? {})
     } catch (e) {
       setError(e)
       setAdventure(null)
@@ -68,6 +78,60 @@ export default function Play() {
   useEffect(() => {
     load()
   }, [load])
+
+  // v0.7.0 — primeira vez na aventura (sem manifesto): a IA desenha os
+  // controles em background. Falhas (409 lock ocupado, 503 LLM) são silenciosas
+  // — o botão "↻ Redesign" do painel/input retry sob demanda.
+  const profileRequestedRef = useRef(false)
+  useEffect(() => {
+    if (uiProfile !== null || profileRequestedRef.current) return
+    profileRequestedRef.current = true
+    api.generateUiProfile(id)
+      .then((r) => {
+        setUiProfile(r.profile ?? null)
+        setUiState(r.state ?? {})
+        if ((r.profile?.widgets ?? []).length > 0) setPanelOpen(true)
+      })
+      .catch(() => setUiProfile(null))
+  }, [uiProfile, id])
+
+  const regenerateProfile = useCallback(async () => {
+    if (regeneratingProfile) return
+    setRegeneratingProfile(true)
+    try {
+      const r = await api.generateUiProfile(id)
+      setUiProfile(r.profile ?? null)
+      setUiState(r.state ?? {})
+      if ((r.profile?.widgets ?? []).length > 0) {
+        setPanelOpen(true)
+        toast('Game controls redesigned.', 'ok')
+      } else {
+        setPanelOpen(false)
+        toast('AI kept it text-only — no extra controls needed.', 'ok')
+      }
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setRegeneratingProfile(false)
+    }
+  }, [id, regeneratingProfile, toast])
+
+  // Persistência do estado dos widgets (debounce 600ms — steppers de HP
+  // disparam várias mudanças seguidas).
+  const uiStateTimerRef = useRef(null)
+  const handleUiStateChange = useCallback((next) => {
+    setUiState(next)
+    clearTimeout(uiStateTimerRef.current)
+    uiStateTimerRef.current = setTimeout(() => {
+      api.putUiState(id, next).catch(() => { /* estado local permanece */ })
+    }, 600)
+  }, [id])
+  useEffect(() => () => clearTimeout(uiStateTimerRef.current), [])
+
+  // Widgets → input do jogador (anexa texto; nonce marca injeção nova)
+  const insertToInput = useCallback((text) => {
+    setInject({ text, nonce: Date.now() })
+  }, [])
 
   // cancela stream pendente ao sair da tela
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -274,8 +338,8 @@ export default function Play() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* header + toolbar */}
-      <header className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:flex-row sm:items-center">
-        <div className="flex min-w-0 items-center gap-2">
+      <header className="flex flex-col gap-1.5 border-b border-zinc-800 bg-zinc-950/95 px-2 py-1.5 pt-[max(0.375rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:gap-2 sm:px-3 sm:py-2">
+        <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
         <button
           onClick={() => setDrawerOpen(true)}
           className="shrink-0 rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
@@ -306,32 +370,36 @@ export default function Play() {
               <button
                 onClick={doRetry}
                 disabled={!canRetry}
+                aria-label="Retry"
                 title={canRetry ? 'Regenerate the last AI response' : 'Retry is available when the last action is an AI response'}
-                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
+                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:text-sm"
               >
-                ↻ Retry
+                ↻<span className="hidden sm:inline">&nbsp;Retry</span>
               </button>
               <button
                 onClick={doUndo}
                 disabled={!canUndo}
+                aria-label="Undo"
                 title="Undo the last turn"
-                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
+                className="min-h-11 shrink-0 rounded-md border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:text-sm"
               >
-                ↩ Undo
+                ↩<span className="hidden sm:inline">&nbsp;Undo</span>
               </button>
               <button
                 onClick={doContinue}
                 disabled={generating}
+                aria-label="Continue"
                 title="Let the AI continue on its own"
-                className="min-h-11 shrink-0 rounded-md bg-emerald-700 px-2.5 py-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 sm:px-3 sm:text-sm"
+                className="min-h-11 shrink-0 rounded-md bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 sm:text-sm"
               >
-                ▶ Continue
+                ▶<span className="hidden sm:inline">&nbsp;Continue</span>
               </button>
               </div>
               <div className="relative shrink-0">
                 <button
                   onClick={() => canSee && setSeeOpen((o) => !o)}
                   disabled={!canSee}
+                  aria-label={seeing ? 'Generating image' : 'See'}
                   title={
                     canSee
                       ? 'Generate an image of the current scene'
@@ -339,14 +407,14 @@ export default function Play() {
                         ? 'Image generation in progress…'
                         : 'See is available after the AI writes at least one response'
                   }
-                  className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:text-sm"
+                  className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 sm:text-sm"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
                     <circle cx="8.5" cy="8.5" r="1.5" />
                     <path d="m21 15-5-5L5 21" />
                   </svg>
-                  {seeing ? 'Seeing…' : 'See'}
+                  <span className="hidden sm:inline">{seeing ? 'Seeing…' : 'See'}</span>
                 </button>
                 {seeOpen && canSee && (
                   <div className="absolute right-0 top-full z-30 mt-1 w-[min(18rem,calc(100vw-1.5rem))] rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
@@ -464,11 +532,31 @@ export default function Play() {
         </div>
       )}
 
+      {/* painel de controles dinâmico (v0.7.0) — widgets definidos pela IA */}
+      {panelOpen && (
+        <GamePanel
+          profile={uiProfile}
+          state={uiState}
+          disabled={generating || seeing}
+          regenerating={regeneratingProfile}
+          onStateChange={handleUiStateChange}
+          onSend={sendAction}
+          onInsert={insertToInput}
+          onRegenerate={regenerateProfile}
+          onClose={() => setPanelOpen(false)}
+        />
+      )}
+
       {/* barra de entrada fixa embaixo */}
       <InputBar
         disabled={generating}
         onSend={sendAction}
         onTextChange={(t) => setInputDirty(t.trim().length > 0)}
+        tabs={uiProfile?.tabs}
+        inject={inject}
+        panelAvailable={(uiProfile?.widgets ?? []).length > 0}
+        panelOpen={panelOpen}
+        onTogglePanel={() => setPanelOpen((o) => !o)}
       />
 
       {/* drawer lateral — storyText (última narrativa da IA) alimenta o
