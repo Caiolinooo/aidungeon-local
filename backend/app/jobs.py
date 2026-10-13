@@ -10,7 +10,7 @@ tipos:
   não substitui um retrato que já existe. Pedido explícito de regenerar
   usa img2img a partir dessa âncora, para o rosto continuar o mesmo.
 - `scene_backdrop` — pinta o fundo do lugar atual (payload.prompt já pronto,
-  sem LLM) em images kind='backdrop'. Wide 896×512.
+  sem LLM) em images kind='backdrop'. Wide 1344×768 (bucket SDXL).
 
 O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para testes
 determinísticos — a suíte chama `process_pending()` diretamente.
@@ -193,9 +193,9 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                 "prompt": prompt}
 
 
-# Fundo de cena: widescreen, lugar sem pessoas (os retratos entram por cima).
-_BACKDROP_WIDTH = 896
-_BACKDROP_HEIGHT = 512
+# Fundo de cena: bucket SDXL 7:4. A faixa corta o centro; 896×512 ficava mole.
+_BACKDROP_WIDTH = 1344
+_BACKDROP_HEIGHT = 768
 
 
 def _execute_backdrop(job: dict, transport: Any) -> dict:
@@ -223,6 +223,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
             img_cfg, prompt, adventure_id=job["adventure_id"],
             image_id=image_id, transport=transport,
             width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
+            negative_extra=ban,
         )
         image = db.insert_image(
             conn, adventure_id=job["adventure_id"], action_seq=-1,

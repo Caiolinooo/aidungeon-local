@@ -116,9 +116,8 @@ def _save_png(cfg: dict, adventure_id: str, image_id: str, content: bytes) -> st
 
 # ---------------------------------------------------------------- providers
 def _sd_payload(cfg: dict, prompt: str, width: int, height: int) -> dict:
-    # Fixos (não-config): DPM++ 2M Karras + CFG 5 cobrem bem SD1.5 e SDXL
-    # (Juggernaut/realistas pedem CFG 3-6); o default do servidor (Euler a,
-    # CFG 7, salvo em ui-config) deixa de depender de estado da UI.
+    # DPM++ 2M Karras e CFG 5 servem o epiCRealism XL (pede CFG 3-6).
+    # O checkpoint é travado por _apply_checkpoint em volta deste payload.
     return {
         "prompt": prompt,
         "negative_prompt": cfg["negative_prompt"],

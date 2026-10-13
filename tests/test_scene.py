@@ -60,8 +60,8 @@ def test_scene_paints_backdrop_and_portrait(client, tmp_path):
     with db.session() as conn:
         image = db.get_image(conn, data["backdrop"]["image"]["id"])
         assert image["kind"] == "backdrop"
-        assert image["width"] == 896
-        assert image["height"] == 512
+        assert image["width"] == 1344
+        assert image["height"] == 768
         assert "wrong hair" in image["negative_prompt"]
         assert "silver-haired" in image["prompt"].lower()
         # mesma cara: não enfileira de novo

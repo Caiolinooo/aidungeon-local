@@ -11,7 +11,7 @@ OpenAI-compatível.
 
 ---
 
-## Funcionalidades (v0.5.0)
+## Funcionalidades (v0.5.1)
 
 - **Prosa legível**: o prompt pede frases completas, com artigos e parágrafos.
   A tela só quebra bloco telegráfico na leitura; o texto gravado não muda.
@@ -53,8 +53,10 @@ OpenAI-compatível.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer. O prompt
   começa pela ação recente e pelo visual travado do card (e do jogador, quando
   o texto diz "you"). Se essa pessoa já tem retrato, a cena parte dessa foto.
-  O estilo visual fica no fim do prompt. Provedores: **sdwebui**
-  (A1111/Forge/SD.Next) ou **openai_compatible**. Imagens ficam inline no feed.
+  Nudez descrita no momento não vai para o negativo. O estilo visual fica no
+  fim do prompt. Na VM o checkpoint é o **epiCRealism XL CrystalClear**
+  (SDXL fotorealista, sem filtro): retrato e See em 1024×1024, faixa da cena
+  em 1344×768. Provedores: **sdwebui** ou **openai_compatible**.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
@@ -225,7 +227,8 @@ AIDungeon_Local\
 ├─ tests\                    suíte pytest (117 testes: engine, contexto, memória, auth,
 │                           replay E2E do backup, smoke VM, v2 imagens/assistente,
 │                           v0.3.0 jobs/retratos, v0.4.0 voz TTS/STT,
-│                           v0.5.0 crônica, See e prosa)
+│                           v0.5.0 crônica, See e prosa,
+│                           v0.5.1 epiCRealism XL)
 ├─ docs\
 │  ├─ openapi.yaml           contrato REST completo (PLANO.md §4.4), incl. SSE
 │  └─ DEPLOY_VERCEL.md       deploy do frontend na Vercel

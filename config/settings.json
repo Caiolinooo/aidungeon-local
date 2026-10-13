@@ -74,12 +74,12 @@
         "base_url": "http://127.0.0.1:7860",
         "txt2img_path": "/sdapi/v1/txt2img",
         "img2img_path": "/sdapi/v1/img2img",
-        "width": 512,
-        "height": 512,
-        "steps": 20,
-        "negative_prompt": "text, watermark, signature, low quality, deformed, blurry",
-        "sd_model_checkpoint": "juggernautXL_ragnarok.safetensors",
-        "note": "A1111/SD.Next/Forge local ou LAN; API precisa estar com --api. Checkpoint sem safety checker."
+        "width": 1024,
+        "height": 1024,
+        "steps": 30,
+        "negative_prompt": "text, watermark, signature, low quality, deformed, blurry, cartoon, anime, illustration, cgi",
+        "sd_model_checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
+        "note": "A1111 na VM, --medvram --no-half-vae, VAE sdxl-vae-fp16-fix. Checkpoint epiCRealism XL CrystalClear (SDXL fotorealista, sem filtro de conteúdo; Juggernaut XL fica de backup no disco). 1024 é o tamanho nativo; a faixa da cena usa 1344x768. Flux não cabe: o llama-server ocupa ~14 GB dos 23 GB da L4."
       },
       "openai_compatible": {
         "base_url": "",
@@ -91,7 +91,7 @@
     },
     "prompt_builder": {
       "max_scene_chars": 1200,
-      "style_suffix": "fantasy art, detailed, atmospheric lighting",
+      "style_suffix": "photorealistic photograph, natural skin texture, real lighting, sharp detail",
       "max_tokens": 120,
       "note": "LLM (cliente existente, disable_thinking) resume a cena recente em prompt de imagem EN; adventures.image_style entra como prefixo de estilo"
     }
