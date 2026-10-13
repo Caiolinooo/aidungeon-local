@@ -427,6 +427,23 @@ def test_short_evicted_passage_is_still_archived(tmp_db):
     assert "Action 0." in fake.calls[0]["messages"][0]["content"]
 
 
+def test_summarizer_does_not_archive_see_prompts(tmp_db):
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue", "Action 0. " + "x" * 580)
+    add_action(adv["id"], 1, "see",
+               "exact likeness, Bust portrait of Alex BREAK people present")
+    add_action(adv["id"], 2, "continue", "Action 2. " + "x" * 580)
+    add_action(adv["id"], 3, "continue", "Action 3. " + "x" * 580)
+    fake = FakeLLM(reply="Kept the facts.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=3800 + 512 + 100)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+    blob = " ".join(call["messages"][0]["content"] for call in fake.calls)
+    assert "Bust portrait" not in blob
+    assert "people present" not in blob
+    assert "Action 0." in blob
+
+
 def test_memory_endpoint_lists_the_bank(client):
     adv = make_adventure(plot_essentials="plot alpha")
     with db.session() as conn:
