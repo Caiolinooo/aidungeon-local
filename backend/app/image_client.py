@@ -131,6 +131,16 @@ def _sd_payload(cfg: dict, prompt: str, width: int, height: int) -> dict:
     }
 
 
+def _apply_checkpoint(cfg: dict, payload: dict) -> dict:
+    """Trava o checkpoint sem safety checker. Sem nome, usa o que o WebUI já carregou."""
+    checkpoint = " ".join(str(cfg.get("sd_model_checkpoint") or "").split())
+    if not checkpoint:
+        return payload
+    payload["override_settings"] = {"sd_model_checkpoint": checkpoint}
+    payload["override_settings_restore_afterwards"] = False
+    return payload
+
+
 def _sd_base(cfg: dict) -> str:
     base = cfg["sdwebui_base_url"].rstrip("/")
     if not base:
@@ -151,7 +161,7 @@ def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str,
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
     data = _post_json(client, f"{_sd_base(cfg)}{cfg['txt2img_path']}",
-                      _sd_payload(cfg, prompt, width, height),
+                      _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height)),
                       {"Accept": "application/json"}, "txt2img")
     return _first_image(data, "txt2img"), width, height
 
@@ -163,7 +173,7 @@ def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
     """Pinta a partir de um PNG já salvo. denoising baixo mantém o mesmo rosto."""
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
-    payload = _sd_payload(cfg, prompt, width, height)
+    payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
     payload["init_images"] = [base64.b64encode(init_image).decode("ascii")]
     payload["denoising_strength"] = denoising_strength
     path = cfg.get("img2img_path") or "/sdapi/v1/img2img"

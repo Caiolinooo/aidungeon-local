@@ -78,7 +78,8 @@
         "height": 512,
         "steps": 20,
         "negative_prompt": "text, watermark, signature, low quality, deformed, blurry",
-        "note": "A1111/SD.Next/Forge local ou LAN; API precisa estar com --api"
+        "sd_model_checkpoint": "juggernautXL_ragnarok.safetensors",
+        "note": "A1111/SD.Next/Forge local ou LAN; API precisa estar com --api. Checkpoint sem safety checker."
       },
       "openai_compatible": {
         "base_url": "",

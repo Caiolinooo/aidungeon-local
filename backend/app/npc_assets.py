@@ -149,6 +149,44 @@ def sheet_context(raw_sheet: str) -> str:
     return "\n".join(parts)
 
 
+_OUTFIT_WORDS = (
+    "dress", "gown", "shirt", "armor", "armour", "outfit", "wearing",
+    "clothed", "robe", "robes", "lace", "vestido", "roupa", "camis",
+    "tunic", "túnica", "tunica", "coat", "jacket", "suit", "lingerie",
+    "bra", "panties", "jeans", "skirt", "uniform", "cloak", "cape",
+    "silk", "plate", "helmet", "helm", "boots", "glove", "casaco",
+)
+
+
+def without_outfit(text: str) -> str:
+    """Tira o trecho de roupa. O rosto fica, para a cena nua não herdar o vestido."""
+    kept: list[str] = []
+    for part in re.split(r"[,;]", text or ""):
+        folded = part.casefold()
+        if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _OUTFIT_WORDS):
+            continue
+        bit = " ".join(part.split())
+        if bit:
+            kept.append(bit)
+    return ", ".join(kept)
+
+
+def identity_bits(card: dict) -> list[str]:
+    """Rosto e corpo, sem a roupa de sempre. Usado quando a cena está nua."""
+    sheet = parse_sheet(card.get("sheet") or "")
+    bits: list[str] = []
+    for key in ("appearance", "body"):
+        value = sheet.get(key)
+        if isinstance(value, str) and value.strip():
+            bits.append(value.strip())
+    if bits:
+        return bits
+    prompt = without_outfit(" ".join(str(card.get("portrait_prompt") or "").split()))
+    if prompt:
+        return [prompt[:240]]
+    return []
+
+
 def visual_bits(card: dict) -> list[str]:
     """O visual que a pintura tem de obedecer.
 

@@ -394,3 +394,34 @@ def test_see_paints_the_kiss_not_a_portrait(client, tmp_path):
     assert "bust" in saved["negative_prompt"].lower()
     assert "close-up" in saved["negative_prompt"].lower()
 
+
+def test_see_keeps_nudity_and_drops_the_outfit(client, tmp_path):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        db.insert_card(
+            conn, adv["id"], type="character", title="Princess Alusair",
+            triggers=["Alusair", "princesa"], entry="Steel Regent.",
+            portrait_prompt="long red hair, green eyes, plate armor",
+        )
+    add_action(adv["id"], 0, "do", "\n> You undress Princess Alusair until she is naked\n")
+    capture: list = []
+    override_transport(client, make_v2_transport(capture=capture))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"].lower()
+    assert "naked" in prompt
+    assert "clothes off" in prompt
+    assert "plate armor" not in prompt
+    assert "long red hair" in prompt
+    with db.session() as conn:
+        saved = db.get_image(conn, resp.json()["id"])
+    negative = saved["negative_prompt"].lower()
+    assert "naked" not in negative
+    assert "nude" not in negative
+    sent = json.dumps(capture)
+    assert "Do not censor adult nudity" in sent
+

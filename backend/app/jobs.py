@@ -44,6 +44,8 @@ PORTRAIT_DENOISE = 0.35
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
 # Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
 _CAST_NEGATIVE = "extra person, crowd, duplicate face, wrong hair, different outfit, costume change"
+# Cena nua: a roupa do card não é negativa. "costume change" vestia de novo.
+_CAST_NEGATIVE_EXPLICIT = "extra person, crowd, duplicate face, wrong hair"
 
 
 def worker_enabled() -> bool:
@@ -207,7 +209,13 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
             raise GameError(503, "image_generation_disabled",
                             "Image generation is disabled in settings")
         image_id = db.new_id()
-        ban = _CAST_NEGATIVE if (job.get("payload") or {}).get("include_people") else _BACKDROP_NEGATIVE
+        payload = job.get("payload") or {}
+        if payload.get("explicit"):
+            ban = _CAST_NEGATIVE_EXPLICIT
+        elif payload.get("include_people"):
+            ban = _CAST_NEGATIVE
+        else:
+            ban = _BACKDROP_NEGATIVE
         negative = ", ".join(
             part for part in (img_cfg["negative_prompt"], ban) if part
         )
