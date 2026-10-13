@@ -97,6 +97,17 @@ def _format_player_text(type_: str, text: str) -> str:
     return inner  # story: prosa pura
 
 
+def cut_incomplete_sentence(text: str) -> str:
+    """O teto de tokens cortou no meio. A prosa gravada para no último . ! ?"""
+    stripped = text.rstrip()
+    if not stripped or stripped[-1] in ".!?":
+        return stripped
+    end = max(stripped.rfind("."), stripped.rfind("!"), stripped.rfind("?"))
+    if end < 0:
+        return stripped
+    return stripped[: end + 1].rstrip()
+
+
 def _maybe_update_memory(adventure_id: str) -> None:
     """Hook do memory bank/summarizer — best-effort, nunca quebra a geração."""
     mod = context_builder._memory_module("summarizer")
@@ -197,13 +208,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             if ctx_script:
                 built.messages = scripting.run_context_modifier(ctx_script, built.messages)
 
+            stream_state = llm_client.StreamState()
             for token in llm_client.stream_chat_completion(
                     llm_cfg, built.messages, sampler=sampler,
-                    stop=built.stop_sequences, transport=transport):
+                    stop=built.stop_sequences, transport=transport,
+                    state=stream_state):
                 full.append(token)
                 yield {"event": "token", "data": {"token": token}}
 
             text = "".join(full).rstrip()
+            if stream_state.truncated:
+                text = cut_incomplete_sentence(text)
             # Scripting hook: output modifier (after generation completion)
             out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
             if out_script:

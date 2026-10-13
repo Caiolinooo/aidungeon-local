@@ -243,24 +243,22 @@ def card_canon_text(card: dict) -> str:
     else:
         identity = title or entry
     sheet = parse_sheet(card.get("sheet") or "")
-    prompt = " ".join(str(card.get("portrait_prompt") or "").split())
-    if not sheet and not prompt:
+    # O portrait_prompt é legenda de retrato ("Bust portrait of...").
+    # O narrador lê a ficha. A pintura continua usando o prompt do retrato.
+    if not sheet:
         return identity
     first: list[str] = []
     status = sheet.get("status")
     if isinstance(status, str) and status.strip():
         first.append(f"Status: {status.strip()}")
-    if prompt:
-        first.append(f"Appearance: {prompt[:240]}")
-    else:
-        for key, label in (
-            ("appearance", "Appearance"),
-            ("body", "Body"),
-            ("clothing", "Clothing"),
-        ):
-            value = sheet.get(key)
-            if isinstance(value, str) and value.strip():
-                first.append(f"{label}: {value.strip()}")
+    for key, label in (
+        ("appearance", "Appearance"),
+        ("body", "Body"),
+        ("clothing", "Clothing"),
+    ):
+        value = sheet.get(key)
+        if isinstance(value, str) and value.strip():
+            first.append(f"{label}: {value.strip()}")
     personality = sheet.get("personality")
     if isinstance(personality, str) and personality.strip():
         first.append(f"Personality: {personality.strip()}")

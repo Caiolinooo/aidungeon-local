@@ -266,3 +266,20 @@ def test_card_triggers_from_memory_outside_the_window(tmp_db):
     assert "Alusair" not in "You walk the road. The rain keeps falling."
     assert "Steel Regent of Cormyr." in system
     assert "swore an oath" in system
+
+
+def test_see_prompt_stays_out_of_the_narrator(tmp_db):
+    adv = make_adventure(title="See")
+    add_action(adv["id"], 0, "start", "The aisle is dark.")
+    add_action(adv["id"], 1, "continue", "A runner leaps.")
+    add_action(adv["id"], 2, "see",
+               "people present: Alex, exact likeness, Bust portrait BREAK night")
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        built = _build(adv, actions, _cfg(conn))
+    full = "".join(message["content"] for message in built.messages)
+    assert "Bust portrait" not in full
+    assert "people present" not in full
+    assert "BREAK" not in full
+    assert built.messages[-1]["content"].endswith("A runner leaps.")
+    assert "The aisle is dark." in built.messages[1]["content"]

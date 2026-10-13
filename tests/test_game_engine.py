@@ -259,3 +259,26 @@ def test_retry_temperature_stepping(adventure):
     _collect(game_engine.handle_retry(adventure["id"], transport=t10, retry_count=10))
     assert len(cap10) == 1
     assert round(cap10[0]["temperature"], 2) == 1.15
+
+
+def test_token_limit_keeps_the_last_complete_sentence(adventure):
+    transport = make_llm_transport(
+        tokens=("The door opens. He stumbles and",),
+        finish_reason="length",
+    )
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "push", transport=transport))
+    assert "stumbles" in _tokens(events)
+    assert _done(events)["action"]["text"] == "The door opens."
+
+
+def test_a_finished_reply_keeps_a_trailing_fragment(adventure):
+    transport = make_llm_transport(tokens=("The door opens. He stumbles and",))
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "push", transport=transport))
+    assert _done(events)["action"]["text"] == "The door opens. He stumbles and"
+
+
+def test_cut_without_punctuation_keeps_the_fragment():
+    assert game_engine.cut_incomplete_sentence("apesar") == "apesar"
+    assert game_engine.cut_incomplete_sentence("Done.") == "Done."

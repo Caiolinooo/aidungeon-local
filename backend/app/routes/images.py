@@ -3,9 +3,9 @@
 Fluxo do /see (contrato docs/openapi.yaml):
 1) o momento é os dois últimos trechos (não a história inteira); o LLM
    descreve o gesto em inglês, com quem faz o quê;
-2) o primeiro bloco do CLIP abre com a frase em inglês do modelo (o beat
-   cru só entra se ela vier vazia), depois o lugar e o rosto travado.
-   Estilo fica depois do BREAK. O retrato não vira img2img;
+2) o primeiro bloco do CLIP é essa frase (uma só), o lugar e o rosto.
+   A prosa crua não entra. Estilo fica depois do BREAK. O retrato não
+   vira img2img;
 3) grava a linha em `images` + action type=see (mesmo seq vinculando);
 4) devolve ImageResult.
 
@@ -113,6 +113,40 @@ def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
     cleaned = re.sub(r"(?:\s*[,.;]\s*){2,}", ", ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;")
     return cleaned, ", ".join(dict.fromkeys(banned))
+
+
+def clip_words(text: str, limit: int) -> str:
+    """Corta no fim da frase ou na palavra. Nunca no meio de uma palavra."""
+    text = " ".join((text or "").split())
+    if limit <= 0 or len(text) <= limit:
+        return text
+    cut = text[:limit]
+    sentence = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if sentence == -1 and cut.endswith((".", "!", "?")):
+        sentence = len(cut) - 1
+    if sentence >= limit // 2:
+        return cut[: sentence + 1].rstrip()
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        return cut[:space].rstrip(" ,.;")
+    return cut.rstrip(" ,.;")
+
+
+_PT_MARK = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
+
+
+def one_image_sentence(text: str) -> str:
+    """A primeira frase em inglês do resumo. O resto (entry, segunda frase) sai."""
+    flat = " ".join((text or "").replace("\n", " ").split()).strip().strip('"')
+    flat = re.sub(r"^>\s*You\s+(?:say\s+)?", "", flat, flags=re.IGNORECASE)
+    if not flat:
+        return ""
+    parts = [part.strip() for part in re.findall(r"[^.!?]+[.!?]?", flat) if part.strip()]
+    if not parts:
+        return ""
+    english = [part for part in parts if not _PT_MARK.search(part)]
+    chosen = english[0] if english else parts[0]
+    return clip_words(chosen, 280)
 
 
 def _dedupe_negative(*parts: str) -> str:
@@ -264,7 +298,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     atmosphere = scene.atmosphere_of(moment)
     place = ""
     if location and location != "the current scene":
-        place = f"Place: {location}. {(entry or '')[:200]}\n"
+        place = f"Place: {location}. {clip_words(entry or '', 200)}\n"
     who = ", ".join(names) if names else "only the people named in the moment"
     user = (
         (canon + "\n\n" if canon else "")
@@ -281,24 +315,18 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         llm_cfg, messages, temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
     summarized, neg_summary = contradicting_looks(summarized, clause)
-    moment_clean = re.sub(
-        r"(?m)^\s*>\s*(?:You(?:\s+say)?\s+)?", "", moment or "", flags=re.IGNORECASE
-    )
-    beat, neg_moment = contradicting_looks(
-        re.sub(r"\.\s*\.", ".", moment_clean.replace("\n", ". ")), clause
-    )
-    # O beat cru só lidera quando o modelo não devolveu a frase.
-    beat = beat[:320].strip(" ,.;")
+    _, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
+    # Uma frase em inglês na frente. A prosa crua não entra: ela vinha
+    # cortada no meio da palavra e o narrador copiava o prompt.
+    sentence = one_image_sentence(summarized)
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
     lead_bits = []
-    if summarized:
-        lead_bits.append(summarized)
-    elif beat:
-        lead_bits.append(beat)
+    if sentence:
+        lead_bits.append(sentence)
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
@@ -306,7 +334,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if names:
         lead_bits.append("people present: " + ", ".join(names))
     if clause:
-        lead_bits.append(clause[:260].rstrip(" ,.;"))
+        lead_bits.append(clip_words(clause, 260))
     if _is_interaction(moment, names):
         lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
     lead = ", ".join(lead_bits)
@@ -323,7 +351,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     negative = _dedupe_negative(neg_summary, neg_moment)
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
-    caption = summarized or beat
+    caption = sentence or summarized
     return prompt, negative, caption
 
 

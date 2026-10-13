@@ -82,19 +82,27 @@ def client(tmp_db, auth_token):
 
 
 # ------------------------------------------------------------------ mock LLM
-def sse_body(tokens, reasoning_only: bool = False) -> str:
+def sse_body(tokens, reasoning_only: bool = False,
+             finish_reason: str | None = None) -> str:
     """Corpo SSE fake de /chat/completions."""
     lines = []
     for t in tokens:
         delta = {"reasoning_content": t} if reasoning_only else {"content": t}
         lines.append(f"data: {json.dumps({'choices': [{'delta': delta}]})}\n\n")
+    if finish_reason:
+        lines.append(
+            "data: "
+            + json.dumps({"choices": [{"delta": {}, "finish_reason": finish_reason}]})
+            + "\n\n"
+        )
     lines.append("data: [DONE]\n\n")
     return "".join(lines)
 
 
 def make_llm_transport(tokens=("You", " open"), model_id="mock-model",
                        capture: list | None = None, fail: str | None = None,
-                       reasoning_only: bool = False) -> httpx.MockTransport:
+                       reasoning_only: bool = False,
+                       finish_reason: str | None = None) -> httpx.MockTransport:
     """MockTransport do servidor llama.cpp: /models + /chat/completions (SSE).
 
     fail: 'connect' (queima conexão), 'auth' (401), 'http500'.
@@ -120,7 +128,8 @@ def make_llm_transport(tokens=("You", " open"), model_id="mock-model",
                 capture.append(json.loads(request.content.decode("utf-8")))
             return httpx.Response(
                 200, headers={"content-type": "text/event-stream"},
-                text=sse_body(tokens, reasoning_only=reasoning_only),
+                text=sse_body(tokens, reasoning_only=reasoning_only,
+                              finish_reason=finish_reason),
             )
         return httpx.Response(404, json={"error": f"no mock route: {path}"})
 
