@@ -64,8 +64,8 @@ MEMORY_BANK_PROMPT = (
 ROLLING_SUMMARY_PROMPT = (
     "You maintain a running summary of an ongoing RPG adventure. Current summary:\n"
     "{summary}\n\nNew events:\n{text}\n\nRewrite the summary incorporating the new "
-    "events, in at most 150 words, second person, focusing on facts that must not "
-    "be forgotten."
+    "events, in at most 150 words, in the same language as the story, focusing on "
+    "facts that must not be forgotten. Do not copy image prompts."
 )
 
 
@@ -155,7 +155,7 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
     ).fetchone()
     covered = row["m"] if row else None
 
-    actions = db.list_actions(conn, adventure_id)
+    actions = context_builder.story_actions(db.list_actions(conn, adventure_id))
     outside = _evicted_actions(actions, _recent_window_budget(cfg), estimator)
     pending = [a for a in outside if covered is None or a["seq"] > covered]
     if not pending:
@@ -206,7 +206,7 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     summary_budget = int(budgets.get("story_summary", DEFAULT_SUMMARY_BUDGET))
     window_budget = _recent_window_budget(cfg)
 
-    actions = db.list_actions(conn, adventure_id)
+    actions = context_builder.story_actions(db.list_actions(conn, adventure_id))
     old_actions = _evicted_actions(actions, window_budget, estimator)
     if not old_actions:
         return

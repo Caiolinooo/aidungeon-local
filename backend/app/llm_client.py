@@ -47,6 +47,13 @@ class LlmAuthError(LlmError):
     code = "auth_error"
 
 
+class StreamState:
+    """O teto de tokens (`finish_reason` length) corta a frase no meio."""
+
+    def __init__(self) -> None:
+        self.truncated = False
+
+
 def invalidate_discovery_cache() -> None:
     _discovery_cache.clear()
 
@@ -168,7 +175,8 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
 
 def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
                            stop: list[str],
-                           transport: httpx.BaseTransport | None = None) -> Iterator[str]:
+                           transport: httpx.BaseTransport | None = None,
+                           state: StreamState | None = None) -> Iterator[str]:
     """Stream de tokens via SSE. Levanta LlmError/LlmUnreachable/LlmAuthError."""
     model = resolve_model(cfg, transport)
     if not model:
@@ -208,6 +216,10 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
                             yield token
                         elif delta.get("reasoning_content"):
                             saw_reasoning = True
+                        if state is not None and choice.get("finish_reason") in (
+                            "length", "max_tokens",
+                        ):
+                            state.truncated = True
     except httpx.TransportError as exc:
         raise LlmUnreachable(f"llm unreachable: {type(exc).__name__}") from exc
 

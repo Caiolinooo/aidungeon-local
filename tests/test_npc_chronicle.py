@@ -111,8 +111,8 @@ def test_see_prompt_includes_the_character_canon(client, tmp_path):
     assert "plate armor" in prompt
     assert "white gown" not in prompt.lower()
     assert "dark hair" not in prompt.lower()
-    assert "reclines" in prompt.lower()
-    assert prompt.lower().index("long red hair") < prompt.lower().index("dark tower")
+    assert "reclines" not in prompt.lower()
+    assert prompt.lower().index("dark tower") < prompt.lower().index("long red hair")
     assert " BREAK " in prompt
     sent = json.dumps(capture)
     assert "long red hair" in sent
@@ -170,8 +170,9 @@ def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
-    assert "steps into the rain" in prompt
-    assert "open the gate" in prompt
+    assert "a dark tower under a blood-red sky" in prompt
+    assert "steps into the rain" not in prompt
+    assert "open the gate" not in prompt
     assert "ancient dragon" not in prompt.lower()
     sent = json.dumps(capture)
     assert "steps into the rain" in sent
@@ -217,11 +218,12 @@ def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path)
     head, tail = prompt.split("BREAK", 1)
     assert "plate armor" in head
     assert "short black hair" in head
-    assert "steps into the rain" in head
-    assert "open the gate" in head
+    assert "steps into the rain" not in head
+    assert "open the gate" not in head
+    assert "a dark tower under a blood-red sky" in head
     assert "ink sketch" in tail
     assert "ancient dragon" not in prompt.lower()
-    assert head.lower().index("steps into the rain") < head.lower().index("plate armor")
+    assert head.lower().index("dark tower") < head.lower().index("plate armor")
     img2img = [item for item in capture if isinstance(item, dict) and item.get("init_images")]
     assert img2img == []
 
@@ -264,8 +266,10 @@ def test_portrait_beats_a_conflicting_sheet_and_the_prose():
     assert "white gown" not in clause
     assert "dark hair" not in clause
     narrated = npc_assets.card_canon_text(card)
-    assert "plate armor" in narrated
-    assert "white gown" not in narrated
+    assert "plate armor" not in narrated
+    assert "Bust portrait" not in narrated
+    assert "dark hair" in narrated
+    assert "white gown" in narrated
 
 
 def test_portrait_blocks_a_new_outfit_and_the_dead_stay_dead(tmp_db):
@@ -380,7 +384,8 @@ def test_see_paints_the_kiss_not_a_portrait(client, tmp_path):
         db.set_card_portrait(conn, alusair["id"], image["id"], anchor_id=image["id"])
     add_action(adv["id"], 0, "do", "\n> You kiss Princess Alusair\n")
     capture: list = []
-    override_transport(client, make_v2_transport(capture=capture))
+    override_transport(client, make_v2_transport(
+        capture=capture, chat_content="Caio kisses Princess Alusair in the hall."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     finally:
@@ -417,8 +422,9 @@ def test_see_keeps_nudity_and_drops_the_outfit(client, tmp_path):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"].lower()
-    assert "naked" in prompt
+    assert "nude" in prompt
     assert "clothes off" in prompt
+    assert "> you" not in prompt
     assert "plate armor" not in prompt
     assert "long red hair" in prompt
     with db.session() as conn:
@@ -428,4 +434,27 @@ def test_see_keeps_nudity_and_drops_the_outfit(client, tmp_path):
     assert "nude" not in negative
     sent = json.dumps(capture)
     assert "Do not censor adult nudity" in sent
+
+
+def test_image_sentence_drops_the_rest_of_the_dump():
+    from app.routes.images import clip_words, one_image_sentence
+
+    dumped = (
+        "Alex thrusts a combat knife. Um grande centro comercial à meia-noite. "
+        "As prateleiras estão vazias."
+    )
+    assert one_image_sentence(dumped) == "Alex thrusts a combat knife."
+    echoed = "> You ataque o zumbi O corredor cheirava à podridão."
+    assert not one_image_sentence(echoed).startswith(">")
+    assert clip_words("alpha beta gamma", 15) == "alpha beta"
+
+
+def test_portrait_prompt_is_not_narrator_appearance():
+    rendered = npc_assets.card_canon_text({
+        "title": "Alex",
+        "entry": "Ex-firefighter.",
+        "portrait_prompt": "Bust portrait of a rugged 28-year-old ex-firefighter",
+    })
+    assert "Bust portrait" not in rendered
+    assert rendered == "Alex: Ex-firefighter."
 

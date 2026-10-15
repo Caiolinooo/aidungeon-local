@@ -216,3 +216,26 @@ def test_reasoning_only_response_becomes_config_error(adventure):
     with db.session() as conn:
         actions = db.list_actions(conn, adventure["id"])
     assert [a["type"] for a in actions] == ["start", "do"]
+
+
+def test_token_limit_keeps_the_last_complete_sentence(adventure):
+    transport = make_llm_transport(
+        tokens=("The door opens. He stumbles and",),
+        finish_reason="length",
+    )
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "push", transport=transport))
+    assert "stumbles" in _tokens(events)
+    assert _done(events)["action"]["text"] == "The door opens."
+
+
+def test_a_finished_reply_keeps_a_trailing_fragment(adventure):
+    transport = make_llm_transport(tokens=("The door opens. He stumbles and",))
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "push", transport=transport))
+    assert _done(events)["action"]["text"] == "The door opens. He stumbles and"
+
+
+def test_cut_without_punctuation_keeps_the_fragment():
+    assert game_engine.cut_incomplete_sentence("apesar") == "apesar"
+    assert game_engine.cut_incomplete_sentence("Done.") == "Done."

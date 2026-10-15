@@ -33,6 +33,7 @@ Formatação das ações do jogador (byte a byte como no backup):
     do   → "\\n> You {text}\\n"
     say  → '\\n> You say "{text}"\\n'
     story/start/continue → prosa pura (verbatim)
+    see → fora do narrador (o prompt de imagem não é prosa)
 
 A formatação é idempotente: textos que já começam com ">" (como os do backup,
 que já vêm formatados) NÃO são re-embrulhados.
@@ -55,9 +56,12 @@ from typing import Any
 
 BASE_SYSTEM_PROMPT = (
     "You are an AI storyteller running an interactive text adventure. Continue the story in\n"
-    "second person (\"You ...\"), matching the established tone. Write vivid prose with dialogue,\n"
-    "sensory detail and consequences for the player's actions. Never decide what the player\n"
-    "character says or does beyond their stated action. Never break the fourth wall.\n\n"
+    "its own language, tense, and grammatical person. If the story addresses the player as\n"
+    "\"you\", stay in second person. If it narrates a named protagonist, keep that name and\n"
+    "person. Do not switch to English. Do not write image captions, portrait prompts, or\n"
+    "camera directions. Write vivid prose with dialogue, sensory detail and consequences\n"
+    "for the player's actions. Never decide what the player character says or does beyond\n"
+    "their stated action. Never break the fourth wall.\n\n"
     "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
     "- Write complete sentences in the story's language. Keep articles and\n"
     "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
@@ -75,6 +79,7 @@ BASE_SYSTEM_PROMPT = (
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
     "  the narrative back to the established setting without commenting on it.\n"
     "- A character card is canon. Use its Appearance, Clothing, Status and Stats exactly.\n"
+    "  Those fields come from the character sheet, not from a portrait prompt.\n"
     "  Do not change hair, face, build, or whether they are alive unless that card says so.\n"
     "- Memories, Plot and World info are canon and override earlier prose.\n"
     "- Do not invent a death, a relative, an item, or a place that those blocks\n"
@@ -85,9 +90,10 @@ BASE_SYSTEM_PROMPT = (
 # estilo telegráfico puxa o modelo de volta; a instrução no system, lá no
 # início, perde para esse exemplo.
 STYLE_CUE = (
-    "[Style: complete grammatical sentences in the story's language, "
+    "[Style: complete grammatical sentences in the story's language and person, "
     "articles and prepositions kept, two or three sentences per paragraph, "
-    "a blank line between paragraphs. Do not copy clipped or run-on prose.]"
+    "a blank line between paragraphs. Do not copy clipped or run-on prose, "
+    "and do not write image prompts.]"
 )
 
 # A prosa recente já descreveu o NPC de outro jeito. Sem este lembrete no
@@ -135,7 +141,12 @@ def format_action_text(type_: str, text: str) -> str:
         if type_ == "do":
             return f"\n> You {inner}\n"
         return f'\n> You say "{inner}"\n'
-    return text  # start/continue/story/see: prosa pura, verbatim
+    return text  # start/continue/story: prosa pura, verbatim
+
+
+def story_actions(actions: list[dict]) -> list[dict]:
+    """Prosa da história. O prompt do See fica no feed e fora do narrador."""
+    return [action for action in actions if action.get("type") != "see"]
 
 
 # ---------------------------------------------------- módulos de memória
@@ -257,11 +268,12 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     do template Qwen3: UMA system na posição 0 (blocos 1–5) + users."""
     budgets = cfg["budgets"]
     meta: dict[str, Any] = {"budgets": {}}
+    actions = story_actions(actions)
 
     # ---- system único (posição 0): blocos 1–5 concatenados ----------------
     system_parts: list[str] = []
 
-    # 1 — narrador em 2ª pessoa + ai_instructions (sem cabeçalho)
+    # 1 — narrador + ai_instructions (sem cabeçalho)
     block1 = BASE_SYSTEM_PROMPT
     ai = (adventure.get("ai_instructions") or "").strip()
     if ai:
