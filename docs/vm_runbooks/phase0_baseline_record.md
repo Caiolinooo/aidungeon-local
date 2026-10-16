@@ -1,90 +1,61 @@
-# Phase 0 Baseline Measurement Record
+# Phase 0 Baseline Record (Measured Live on `vm.groupabz.com`)
 
-**Status**: SPECIFICATION & ROLLBACK ANCHOR  
-**Host**: `vm.groupabz.com`  
-**Recorded At**: 2026-10-16T13:45:00Z  
-**Hardware**: NVIDIA L4 (24,117 MiB total capacity)  
-**Driver / CUDA**: 535.183.01 / CUDA 12.2  
+**Date**: 2026-10-16  
+**Host**: `vm.groupabz.com` (`pop-os`, NVIDIA L4 23,034 MiB)  
+**Status**: Recorded prior to any service modification or restart.
 
 ---
 
-## 1. Process Command Lines & Service Units
+## 1. GPU & Process VRAM (`nvidia-smi`)
 
-### llama-server
-- **Unit**: `/etc/systemd/system/llama-server.service`
-- **Command Line**:
-  ```bash
-  /usr/local/bin/llama-server \
-    -m /opt/models/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
-    --port 1234 \
-    --host 0.0.0.0 \
-    -c 262144 \
-    --parallel 4 \
-    -b 8192 \
-    -ub 4096 \
-    --mmproj /opt/models/mmproj-model-f16.gguf \
-    --api-key-file /opt/aidungeon/.llama_api_key
-  ```
+| State | Total VRAM | Used VRAM | Free VRAM | Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| **Idle** | `23,034 MiB` | `16,787 MiB` | `5,779 MiB` | `llama-server` (`14,546 MiB`), `abz-voice` (`1,426 MiB`), `sd-webui` (`316 MiB`), desktop/X (`~300 MiB`) |
+| **Mid-Turn (LLM Generation)** | `23,034 MiB` | `16,787 MiB` | `5,779 MiB` | 220 tokens generated at `temperature=0.85` |
+| **Mid-Portrait (SDXL 1024×1024)** | `23,034 MiB` | **`22,487 MiB`** | **`79 MiB`** | 30 steps `epiCRealism XL` at `1024×1024` (dangerously close to 23 GB ceiling!) |
 
-### SDWebUI (Stable Diffusion WebUI)
-- **Command Line**:
-  ```bash
-  python launch.py --listen --port 7860 --medvram --no-half-vae --xformers
-  ```
-- **Active Checkpoint**: `epicrealismXL_vxviiCrystalclear.safetensors`
-- **VAE**: `sdxl-vae-fp16-fix`
-
-### Voice Stack (Supertonic + Whisper)
-- **Command Line**:
-  ```bash
-  python -m supertonic.server --port 8000 --tts-model supertonic-3 --stt-model whisper-1
-  ```
+### Per-Process VRAM at Baseline Idle
+```text
+pid, process_name, used_gpu_memory [MiB]
+343960, /home/caio/llama.cpp-turboq-mtp/build/bin/llama-server, 14546 MiB
+369675, venv/bin/python3 (abz-voice-audio), 1426 MiB
+915356, venv/bin/python (sd-webui), 316 MiB
+```
 
 ---
 
-## 2. VRAM Allocations Across States
+## 2. Exact `llama-server` Command Line (Phase 0 Rollback Point)
 
-| Operational State | Total VRAM (MiB) | Used VRAM (MiB) | Free VRAM (MiB) | llama-server VRAM | SDWebUI VRAM | Voice VRAM |
-|---|---|---|---|---|---|---|
-| **Idle** | 24,117 | 16,120 | 7,997 (~7.8 GiB) | 14,500 MiB | 210 MiB | 1,410 MiB |
-| **Mid-Turn (LLM)** | 24,117 | 16,820 | 7,297 (~7.1 GiB) | 15,200 MiB | 210 MiB | 1,410 MiB |
-| **Mid-Portrait (SDXL)** | 24,117 | 20,360 | 3,757 (~3.7 GiB) | 14,500 MiB | 4,450 MiB | 1,410 MiB |
-
----
-
-## 3. Fixed Passage LLM Benchmark (tok/s)
-
-- **Prompt**:
-  `You are Caio, an Aasimar sorcerer allied with the Zhentarim, standing at the gates of Calimport at dusk. The agent Thuldan waves at you from the crowded bazaar.\n\n> You greet Thuldan and ask about the sealed scroll.`
-- **Temperature**: `0.85`
-- **Top P**: `0.95`
-- **Repetition Penalty**: `1.08`
-- **Stop Sequences**: `["\n> You", "\n> you"]`
-- **Disable Thinking**: `enable_thinking=false`
-- **Time to First Token (TTFT)**: `0.38 s`
-- **Tokens Generated**: `185 tokens`
-- **Generation Time**: `8.72 s`
-- **Speed**: **21.2 tok/s**
-
----
-
-## 4. SDXL epiCRealism 1024 Portrait Benchmark
-
-- **Checkpoint**: `epicrealismXL_vxviiCrystalclear.safetensors`
-- **Resolution**: `1024 x 1024`
-- **Steps**: `30 steps`
-- **Sampler**: `DPM++ 2M Karras`
-- **CFG Scale**: `7.0`
-- **Total Generation Time**: **14.8 seconds**
-- **Peak VRAM Surge**: `+4,240 MiB` (Peak Total: `20,360 MiB`)
-- **Peak Free Headroom**: `3,757 MiB` (~3.7 GiB)
+```bash
+/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server \
+  --host 0.0.0.0 \
+  --port 1234 \
+  -t 8 \
+  --threads-batch 16 \
+  -b 8192 \
+  -ub 4096 \
+  --api-key [REDACTED_FROM_ENV] \
+  -rea auto \
+  -fa on \
+  --tools all \
+  --jinja \
+  -m Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
+  --mmproj mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf \
+  --n-gpu-layers 99 \
+  -ncmoe 24 \
+  --no-mmap \
+  --image-min-tokens 1024
+```
+* **`/props` inspection**: `total_slots: 4`, `n_ctx: 262144`, unquantized `f16` KV cache.
 
 ---
 
-## 5. Rollback Contract
+## 3. Fixed Benchmark Sample Results (Phase 0)
 
-If any subsequent phase (Phase 1, 2, or 3) fails its validation gate or experiences instability:
-1. Restore `/etc/systemd/system/llama-server.service` to the Phase 0 command line above.
-2. Restart `llama-server`.
-3. Verify `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf` is loaded.
-4. Verify `tok/s` returns to ~21.2 tok/s and idle VRAM returns to ~16,120 MiB.
+* **LLM Turn (`temperature=0.85`, `max_tokens=220`)**:
+  * **Throughput**: **`18.37 tok/s`** (`220 tokens` in `11.98s`)
+  * **Sample Output**:
+    > *"The air in the lantern-lit bazaar is thick enough to chew, smelling of roasted meat, exotic spices, and the metallic tang of dried blood. Torches sputter in iron sconces, casting long, flickering shadows that seem to dance with a life of their own..."*
+* **SDXL Portrait (`1024×1024`, 30 steps, `epiCRealism XL`, seed `424242`)**:
+  * **Latency**: **`27.03s`**
+  * **Peak VRAM**: **`22,487 MiB`** (`79 MiB` free)

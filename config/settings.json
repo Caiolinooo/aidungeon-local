@@ -80,7 +80,7 @@
   },
   "embeddings": {
     "enabled": true,
-    "base_url": "http://127.0.0.1:8081/v1",
+    "base_url": "http://127.0.0.1:8091/v1",
     "model": "Qwen3-Embedding-0.6B",
     "timeout_seconds": 30
   },
