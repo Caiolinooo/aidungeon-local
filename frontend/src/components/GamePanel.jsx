@@ -280,19 +280,81 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
   )
 }
 
-// ------------------------------------------------------------------- painel
 export default function GamePanel({
   profile, state, disabled, regenerating,
   onStateChange, onSend, onInsert, onRegenerate, onClose,
+  inline = false,
 }) {
   const widgets = profile?.widgets ?? []
   if (widgets.length === 0) return null
 
+  if (inline) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2 pb-2 border-b border-subtle">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted">
+            Game Controls
+          </span>
+          {onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              disabled={disabled || regenerating}
+              title="Ask AI to redesign these controls"
+              className="text-xs text-accent-pri hover:underline disabled:opacity-50"
+            >
+              {regenerating ? 'Redesigning…' : '↻ Redesign'}
+            </button>
+          )}
+        </div>
+        <div className="flex flex-col gap-3">
+          {widgets.map((widget) => (
+            <section
+              key={widget.id}
+              className="rounded-xl border border-subtle bg-surface p-3"
+            >
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
+                {widget.label}
+              </h3>
+              {widget.type === 'dice' && (
+                <DiceWidget widget={widget} disabled={disabled} onSend={onSend} onInsert={onInsert} />
+              )}
+              {widget.type === 'stats' && (
+                <StatsWidget
+                  widget={widget}
+                  values={state?.[widget.id]}
+                  disabled={disabled}
+                  onChange={(next) => onStateChange({ ...state, [widget.id]: next })}
+                />
+              )}
+              {widget.type === 'inventory' && (
+                <InventoryWidget
+                  widget={widget}
+                  items={state?.[widget.id]}
+                  disabled={disabled}
+                  onChange={(next) => onStateChange({ ...state, [widget.id]: next })}
+                  onInsert={onInsert}
+                />
+              )}
+              {widget.type === 'character' && (
+                <CharacterWidget
+                  widget={widget}
+                  values={state?.[widget.id]}
+                  disabled={disabled}
+                  onChange={(next) => onStateChange({ ...state, [widget.id]: next })}
+                />
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="border-t border-zinc-800/60 bg-zinc-950/95 backdrop-blur">
+    <div className="border-t border-subtle bg-surface/95 backdrop-blur">
       <div className="mx-auto max-w-3xl px-3 py-2">
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
             Game controls
           </span>
           <span className="flex-1" />
@@ -300,20 +362,23 @@ export default function GamePanel({
             onClick={onRegenerate}
             disabled={disabled || regenerating}
             title="Ask the AI to redesign these controls"
-            className="min-h-11 rounded-md px-2 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+            className="min-h-11 rounded-md px-2 text-xs text-secondary hover:bg-elevated hover:text-primary disabled:opacity-40"
           >
             {regenerating ? '…' : '↻ Redesign'}
           </button>
-          <button
-            onClick={onClose}
-            aria-label="Close panel"
-            className="min-h-11 rounded-md px-2 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-          >
-            ✕
-          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              aria-label="Close panel"
+              className="min-h-11 rounded-md px-2 text-secondary hover:bg-elevated hover:text-primary"
+            >
+              ✕
+            </button>
+          )}
         </div>
         {/* mobile: cards em fila rolável; desktop: grade de 2 colunas */}
         <div className="flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible">
+
           {widgets.map((widget) => (
             <section
               key={widget.id}

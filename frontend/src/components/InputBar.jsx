@@ -37,7 +37,11 @@ export default function InputBar({
   panelAvailable = false, panelOpen = false, onTogglePanel,
 }) {
   const toast = useToast()
-  const [tab, setTab] = useState(tabs[0]?.id ?? 'do')
+  const normTabs = (tabs && tabs.length ? tabs : DEFAULT_TABS).map((t) => ({
+    ...t,
+    id: t.id || t.type || 'do',
+  }))
+  const [tab, setTab] = useState(normTabs[0]?.id ?? 'do')
   const [text, setText] = useState('')
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
@@ -46,12 +50,12 @@ export default function InputBar({
   const recorderRef = useRef(null)
   const chunksRef = useRef([])
 
-  const active = tabs.find((t) => t.id === tab) ?? tabs[0] ?? DEFAULT_TABS[0]
+  const active = normTabs.find((t) => t.id === tab) ?? normTabs[0] ?? DEFAULT_TABS[0]
 
   // Tabs dinâmicas: se a tab atual sumiu do manifesto, volta p/ a primeira.
   useEffect(() => {
-    if (!tabs.some((t) => t.id === tab)) setTab(tabs[0]?.id ?? 'do')
-  }, [tabs, tab])
+    if (!normTabs.some((t) => t.id === tab)) setTab(normTabs[0]?.id ?? 'do')
+  }, [normTabs, tab])
 
   // Texto injetado pelos widgets do GamePanel (dado, "use item"…): ANEXA,
   // nunca sobrescreve o que o jogador já digitou. nonce = nova injeção.
@@ -204,26 +208,26 @@ export default function InputBar({
   }, [text])
 
   return (
-    <div className="border-t border-zinc-800 bg-zinc-950/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur">
-      <div className="mx-auto max-w-3xl">
-        <div className="mb-2 flex gap-1 overflow-x-auto">
-          {tabs.map((t) => (
+    <div className="w-full border-t border-subtle bg-surface/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur">
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="mb-2 flex items-center gap-1.5 overflow-x-auto">
+          {normTabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               disabled={disabled}
               title={t.placeholder || t.label}
-              className={`min-h-11 shrink-0 flex-1 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors sm:flex-none sm:px-4 ${
+              className={`min-h-11 shrink-0 flex-1 whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-semibold uppercase tracking-wider transition-colors sm:flex-none sm:px-4 ${
                 tab === t.id
-                  ? 'bg-emerald-700 text-white'
-                  : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
+                  ? 'bg-accent-pri text-white shadow-sm'
+                  : 'border border-subtle bg-elevated text-secondary hover:text-primary'
               } disabled:opacity-50`}
             >
               {t.label}
             </button>
           ))}
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex w-full items-end gap-2">
           <textarea
             ref={areaRef}
             value={text}
@@ -240,19 +244,21 @@ export default function InputBar({
             disabled={disabled}
             rows={2}
             placeholder={disabled ? 'AI is writing…' : active.placeholder}
+            aria-label={active.label || 'Story action input'}
             enterKeyHint="send"
-            className="max-h-60 min-w-0 flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 font-prose text-base text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-60 sm:text-sm"
+            className="max-h-60 min-w-0 w-full flex-1 resize-none rounded-xl border border-subtle bg-elevated px-3.5 py-2.5 font-prose text-base text-primary outline-none placeholder:text-muted focus:border-accent-pri disabled:opacity-60 sm:text-sm"
           />
           {panelAvailable && (
             <button
               onClick={onTogglePanel}
               disabled={disabled}
               title={panelOpen ? 'Hide game controls' : 'Show game controls (dice, stats, inventory…)'}
+              aria-label="Toggle dynamic game controls"
               aria-pressed={panelOpen}
-              className={`min-h-11 min-w-11 shrink-0 rounded-lg px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 panelOpen
-                  ? 'bg-emerald-700 text-white hover:bg-emerald-600'
-                  : 'bg-zinc-700 text-zinc-200 hover:bg-zinc-600'
+                  ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
+                  : 'border-subtle bg-elevated text-secondary hover:text-primary'
               }`}
             >
               🎲
@@ -268,10 +274,11 @@ export default function InputBar({
                   ? 'Stop recording'
                   : 'Dictate (speech-to-text)'
             }
-            className={`min-h-11 min-w-11 shrink-0 rounded-lg px-3 py-2.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${
+            aria-label={recording ? 'Stop voice recording' : 'Dictate action with microphone'}
+            className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
               recording
-                ? 'animate-pulse bg-red-700 hover:bg-red-600'
-                : 'bg-zinc-700 hover:bg-zinc-600'
+                ? 'animate-pulse border-red-500 bg-red-600 text-white hover:bg-red-500'
+                : 'border-subtle bg-elevated hover:bg-surface'
             }`}
           >
             {transcribing ? '⏳' : recording ? '⏹' : '🎙'}
@@ -279,13 +286,13 @@ export default function InputBar({
           <button
             onClick={submit}
             disabled={disabled || !text.trim()}
-            className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2.5 font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
+            className="min-h-11 shrink-0 rounded-xl bg-accent-pri px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
           >
             Send
           </button>
         </div>
         {micHint && (
-          <p className="mt-1 text-xs text-amber-300/90">{micHint}</p>
+          <p className="mt-1.5 text-xs text-amber-300/90">{micHint}</p>
         )}
       </div>
     </div>

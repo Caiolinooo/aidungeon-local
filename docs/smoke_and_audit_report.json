@@ -1,0 +1,213 @@
+{
+  "status": "PASS",
+  "desktop": {
+    "viewport": "1440x900",
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "homeA11y": {
+      "pageName": "Home (1440x900)",
+      "score": 100,
+      "checks": [
+        {
+          "id": "html-has-lang",
+          "passed": true,
+          "detail": "en"
+        },
+        {
+          "id": "document-title",
+          "passed": true,
+          "detail": "AI Dungeon Local"
+        },
+        {
+          "id": "image-alt",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "button-name",
+          "passed": true,
+          "detail": "7/7"
+        },
+        {
+          "id": "form-field-labels",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "landmark-regions",
+          "passed": true,
+          "detail": "count=2"
+        },
+        {
+          "id": "heading-hierarchy",
+          "passed": true,
+          "detail": "count=3"
+        },
+        {
+          "id": "meta-viewport-scalable",
+          "passed": true,
+          "detail": "width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+        }
+      ]
+    },
+    "playA11y": {
+      "pageName": "Play (1440x900)",
+      "score": 100,
+      "checks": [
+        {
+          "id": "html-has-lang",
+          "passed": true,
+          "detail": "en"
+        },
+        {
+          "id": "document-title",
+          "passed": true,
+          "detail": "AI Dungeon Local"
+        },
+        {
+          "id": "image-alt",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "button-name",
+          "passed": true,
+          "detail": "42/42"
+        },
+        {
+          "id": "form-field-labels",
+          "passed": true,
+          "detail": "2/2"
+        },
+        {
+          "id": "landmark-regions",
+          "passed": true,
+          "detail": "count=4"
+        },
+        {
+          "id": "heading-hierarchy",
+          "passed": true,
+          "detail": "count=2"
+        },
+        {
+          "id": "meta-viewport-scalable",
+          "passed": true,
+          "detail": "width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+        }
+      ]
+    },
+    "pwaCheck": {
+      "hasManifestLink": true,
+      "manifestName": "AI Dungeon Local",
+      "manifestDisplay": "standalone",
+      "manifestIconsCount": 3,
+      "swActive": true
+    },
+    "offlineBannerVisible": true
+  },
+  "mobile": {
+    "viewport": "390x844",
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "homeA11y": {
+      "pageName": "Home (390x844)",
+      "score": 100,
+      "checks": [
+        {
+          "id": "html-has-lang",
+          "passed": true,
+          "detail": "en"
+        },
+        {
+          "id": "document-title",
+          "passed": true,
+          "detail": "AI Dungeon Local"
+        },
+        {
+          "id": "image-alt",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "button-name",
+          "passed": true,
+          "detail": "7/7"
+        },
+        {
+          "id": "form-field-labels",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "landmark-regions",
+          "passed": true,
+          "detail": "count=2"
+        },
+        {
+          "id": "heading-hierarchy",
+          "passed": true,
+          "detail": "count=3"
+        },
+        {
+          "id": "meta-viewport-scalable",
+          "passed": true,
+          "detail": "width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+        }
+      ]
+    },
+    "playA11y": {
+      "pageName": "Play (390x844)",
+      "score": 100,
+      "checks": [
+        {
+          "id": "html-has-lang",
+          "passed": true,
+          "detail": "en"
+        },
+        {
+          "id": "document-title",
+          "passed": true,
+          "detail": "AI Dungeon Local"
+        },
+        {
+          "id": "image-alt",
+          "passed": true,
+          "detail": "0/0"
+        },
+        {
+          "id": "button-name",
+          "passed": true,
+          "detail": "19/19"
+        },
+        {
+          "id": "form-field-labels",
+          "passed": true,
+          "detail": "1/1"
+        },
+        {
+          "id": "landmark-regions",
+          "passed": true,
+          "detail": "count=3"
+        },
+        {
+          "id": "heading-hierarchy",
+          "passed": true,
+          "detail": "count=1"
+        },
+        {
+          "id": "meta-viewport-scalable",
+          "passed": true,
+          "detail": "width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+        }
+      ]
+    },
+    "pwaCheck": {
+      "hasManifestLink": true,
+      "manifestName": "AI Dungeon Local",
+      "manifestDisplay": "standalone",
+      "manifestIconsCount": 3,
+      "swActive": true
+    },
+    "offlineBannerVisible": true
+  }
+}

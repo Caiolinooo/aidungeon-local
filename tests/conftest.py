@@ -74,9 +74,11 @@ def client(tmp_db, auth_token):
     from fastapi.testclient import TestClient
 
     from app.main import app
+    app.dependency_overrides.clear()
     with TestClient(app) as c:
         c.headers["Authorization"] = f"Bearer {auth_token}"
         yield c
+    app.dependency_overrides.clear()
 
 
 # ------------------------------------------------------------------ mock LLM

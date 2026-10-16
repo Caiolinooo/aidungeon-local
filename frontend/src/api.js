@@ -143,12 +143,14 @@ export const api = {
   patchAction: (id, text) => request(`/actions/${id}`, { method: 'PATCH', body: { text } }),
 
   // ----------------------------------------------------------------- cards
-  listCards: (advId) => request(`/adventures/${advId}/cards`),
+  listCards: (advId, params = {}) => request(`/adventures/${advId}/cards${qs(params)}`),
   createCard: (advId, payload) => request(`/adventures/${advId}/cards`, { method: 'POST', body: payload }),
   updateCard: (advId, cardId, payload) =>
     request(`/adventures/${advId}/cards/${cardId}`, { method: 'PATCH', body: payload }),
   deleteCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}`, { method: 'DELETE' }),
+  bulkCards: (advId, payload) =>
+    request(`/adventures/${advId}/cards/bulk`, { method: 'POST', body: payload }),
 
   // ----------------------------------------------------- assets / jobs (v0.3.0)
   // Fila assíncrona de assets (retratos de NPC etc.) — ver docs do pipeline.
@@ -170,6 +172,15 @@ export const api = {
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),
   putMemory: (advId, payload) => request(`/adventures/${advId}/memory`, { method: 'PUT', body: payload }),
+  listMemories: (advId) => request(`/adventures/${advId}/memories`),
+  createMemory: (advId, payload) => request(`/adventures/${advId}/memories`, { method: 'POST', body: payload }),
+  patchMemory: (advId, memoryId, payload) =>
+    request(`/adventures/${advId}/memories/${memoryId}`, { method: 'PATCH', body: payload }),
+  deleteMemory: (advId, memoryId) =>
+    request(`/adventures/${advId}/memories/${memoryId}`, { method: 'DELETE' }),
+  regenerateMemories: (advId) =>
+    request(`/adventures/${advId}/memories/regenerate`, { method: 'POST' }),
+
 
   // ---------------------------------------------------------------- import
   importBackup: (file) => {
@@ -182,6 +193,13 @@ export const api = {
   getLlmSettings: () => request('/settings/llm'),
   putLlmSettings: (payload) => request('/settings/llm', { method: 'PUT', body: payload }),
   healthLlm: () => request('/health/llm'),
+  getVoiceSettings: () => request('/settings/voice'),
+  putVoiceSettings: (payload) => request('/settings/voice', { method: 'PUT', body: payload }),
+  getEmbeddingsSettings: () => request('/settings/embeddings'),
+  putEmbeddingsSettings: (payload) => request('/settings/embeddings', { method: 'PUT', body: payload }),
+  getScriptingSettings: () => request('/settings/scripting'),
+  putScriptingSettings: (payload) => request('/settings/scripting', { method: 'PUT', body: payload }),
+
 
   // --------------------------------------------------------- assistant (v2)
   // Gera rascunho estruturado de cenário a partir de uma ideia (não persiste).

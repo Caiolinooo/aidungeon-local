@@ -371,7 +371,13 @@ export default function NpcsTab({ adventure }) {
     return () => clearInterval(t)
   }, [hasActive, fetchJobs])
 
-  const npcs = (cards || []).filter((c) => c.type === 'character')
+  const [searchQuery, setSearchQuery] = useState('')
+  const npcs = (cards || []).filter((c) => {
+    if (c.type !== 'character') return false
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.toLowerCase()
+    return (c.title || '').toLowerCase().includes(q) || (c.entry || '').toLowerCase().includes(q)
+  })
 
   // Último job (qualquer status) de cada NPC, para overlay/erro/disable.
   const latestJobFor = (cardId) => {
@@ -492,6 +498,17 @@ export default function NpcsTab({ adventure }) {
           </button>
         </div>
       </div>
+
+      <div className="mb-3">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search NPCs by name or description…"
+          className="w-full rounded-xl border border-subtle bg-surface px-3 py-1.5 text-xs text-primary placeholder-muted outline-none focus:border-accent-pri transition"
+        />
+      </div>
+
 
       {npcs.length === 0 && (
         <p className="rounded-lg border border-dashed border-zinc-700 p-4 text-sm text-zinc-500">

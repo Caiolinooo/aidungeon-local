@@ -423,6 +423,24 @@ paths:
       operationId: listCards
       parameters:
         - $ref: '#/components/parameters/AdventureId'
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Busca textual case-insensitive em título, triggers e entry
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtro por tipo de card (character, location, item, lore, etc.)
+        - name: pinned
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Filtro por status fixado (pinned)
       responses:
         '200':
           description: Lista de cards (pinned primeiro).
@@ -434,6 +452,33 @@ paths:
                   $ref: '#/components/schemas/StoryCard'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/cards/bulk:
+    post:
+      tags: [cards]
+      summary: Executar operações em lote sobre story cards
+      operationId: bulkCardsAction
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardBulkAction'
+      responses:
+        '200':
+          description: Operação em lote concluída com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardBulkResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /api/adventures/{adventureId}/cards/{cardId}:
     get:
@@ -697,6 +742,103 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/memories:
+    get:
+      tags: [memory]
+      summary: Listar entradas individuais do Memory Bank
+      operationId: listAdventureMemories
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Lista de memórias da aventura.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Memory'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [memory]
+      summary: Criar entrada no Memory Bank e gerar embedding
+      operationId: createAdventureMemory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryCreate'
+      responses:
+        '201':
+          description: Memória criada e vetorizada com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Memory'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/memories/{memoryId}:
+    patch:
+      tags: [memory]
+      summary: Atualizar texto de memória e recalcular embedding
+      operationId: patchAdventureMemory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/MemoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryPatch'
+      responses:
+        '200':
+          description: Memória atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Memory'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [memory]
+      summary: Excluir memória do Memory Bank
+      operationId: deleteAdventureMemory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/MemoryId'
+      responses:
+        '204':
+          description: Memória excluída.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/memories/regenerate:
+    post:
+      tags: [memory]
+      summary: Regenerar resumos e re-vetorizar todo o Memory Bank
+      operationId: regenerateAdventureMemories
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Memory Bank reprocessado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryRegenerateResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   # ------------------------------------------------------------ import/export
   /api/import/aidungeon:
@@ -1292,6 +1434,13 @@ components:
       required: true
       schema:
         type: string
+    MemoryId:
+      name: memoryId
+      in: path
+      required: true
+      description: ID numérico da memória individual.
+      schema:
+        type: integer
 
   responses:
     NotFound:
@@ -1709,6 +1858,39 @@ components:
           type: object
           description: v0.5.0 — ficha estruturada (dict no body; persistida como JSON string).
 
+    CardBulkAction:
+      type: object
+      required:
+        - action
+        - card_ids
+      properties:
+        action:
+          type: string
+          enum: [delete, pin, unpin, retype]
+          description: Operação a ser executada em lote
+        card_ids:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Lista de IDs dos story cards a modificar
+        new_type:
+          type: string
+          description: Novo tipo do card (obrigatório se action=retype)
+
+    CardBulkResponse:
+      type: object
+      required:
+        - updated
+        - action
+      properties:
+        updated:
+          type: integer
+          description: Quantidade de cards afetados pela operação
+        action:
+          type: string
+          description: Ação executada
+
     Job:
       type: object
       description: Job do pipeline assíncrono de assets (v0.3.0).
@@ -1796,6 +1978,48 @@ components:
           type: string
         authors_note:
           type: string
+
+    MemoryCreate:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: Texto do fato a ser lembrado.
+        seq_start:
+          type: integer
+          nullable: true
+          description: Primeiro seq coberto.
+        seq_end:
+          type: integer
+          nullable: true
+          description: Último seq coberto.
+
+    MemoryPatch:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: Novo texto do fato (recalcula embedding se fornecido).
+        seq_start:
+          type: integer
+          nullable: true
+        seq_end:
+          type: integer
+          nullable: true
+
+    MemoryRegenerateResponse:
+      type: object
+      required: [status, count]
+      properties:
+        status:
+          type: string
+          example: regenerated
+        count:
+          type: integer
+          example: 5
 
     ImportReport:
       type: object

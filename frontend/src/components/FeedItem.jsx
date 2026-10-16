@@ -14,6 +14,7 @@ import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
 import { splitNarration } from '../ttsText.js'
 import { loosenProse } from '../prose.js'
+import { Edit2, Volume2, Square, Loader2 } from 'lucide-react'
 
 // Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
 // durante a sessão — evita um GET /api/voices a cada clique no 🔊.
@@ -38,25 +39,29 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
   return (
     <div
       id={`action-${action.id}`}
-      className={`group relative rounded-lg px-3 pb-2 pt-9 transition-colors hover:bg-zinc-900/70 sm:pt-2 ${
-        isLatest ? 'border-l-2 border-emerald-500/70 bg-emerald-950/20' : ''
+      className={`group relative rounded-xl px-4 pb-3 pt-9 transition-colors hover:bg-elevated/40 sm:pt-4 ${
+        isLatest ? 'border-l-2 border-accent-pri bg-accent-pri/10' : ''
       }`}
     >
       {isLatest && (
-        <span className="absolute -left-2 top-1 rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
-          New
-        </span>
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="inline-flex items-center rounded bg-accent-pri px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-sm">
+            New
+          </span>
+        </div>
       )}
       <button
         onClick={() => onEdit(action)}
         disabled={disabled}
-        title="Edit"
-        className="absolute right-2 top-2 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
+        title="Edit action"
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
       >
-        ✏ Edit
+        <Edit2 className="w-3 h-3" />
+        <span>Edit</span>
       </button>
 
       {!isPlayer && !isSee && <NarrateButton text={display} />}
+
 
       {isSee ? (
         <SeeImageCard action={action} />
@@ -65,14 +70,14 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
           <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-emerald-400">
             You {type}
           </div>
-          <p className="whitespace-pre-wrap font-prose text-zinc-100">
+          <p className="whitespace-pre-wrap font-prose text-primary">
             {type === 'say' ? `“${display}”` : display}
           </p>
         </blockquote>
       ) : (
         <p
           className={`whitespace-pre-wrap font-prose text-[1.05rem] leading-8 ${
-            type === 'story' ? 'italic text-zinc-200' : 'text-zinc-100'
+            type === 'story' ? 'italic text-secondary' : 'text-primary'
           }`}
         >
           {shown}
@@ -80,7 +85,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
       )}
 
       {edited_at && (
-        <div className="mt-1 text-[10px] uppercase tracking-wide text-zinc-600">edited</div>
+        <div className="mt-1 text-[10px] uppercase tracking-wide text-muted">edited</div>
       )}
     </div>
   )
@@ -219,9 +224,28 @@ function NarrateButton({ text }) {
     <button
       onClick={state === 'idle' ? play : stop}
       title={state === 'idle' ? 'Narrate (text-to-speech)' : 'Stop narration'}
-      className="absolute right-16 top-2 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
+      aria-label={state === 'idle' ? 'Narrate text-to-speech' : 'Stop narration'}
+      className={`absolute right-16 top-2 flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition ${
+        state === 'playing'
+          ? 'inline-flex border-amber-500/50 bg-amber-500/15 text-amber-300'
+          : state === 'loading'
+            ? 'inline-flex border-accent-pri/50 bg-accent-pri/15 text-accent-pri'
+            : 'border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated max-sm:inline-flex sm:hidden sm:group-hover:inline-flex'
+      }`}
     >
-      {state === 'loading' ? '⏳' : state === 'playing' ? '⏹' : '🔊'}
+      {state === 'loading' ? (
+        <>
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-pri" />
+          <span className="text-[10px] font-medium">TTS…</span>
+        </>
+      ) : state === 'playing' ? (
+        <>
+          <Square className="w-3 h-3 fill-current text-amber-400" />
+          <span className="text-[10px] font-medium">Speaking</span>
+        </>
+      ) : (
+        <Volume2 className="w-3.5 h-3.5" />
+      )}
     </button>
   )
 }
@@ -230,10 +254,12 @@ function NarrateButton({ text }) {
 // autenticado → blob → objectURL, pois <img> não envia o header Bearer).
 // objectURL é revogado no unmount. Clique abre a imagem em tamanho full (Modal).
 function SeeImageCard({ action }) {
+  const toast = useToast()
   const image = action.image
   const [objUrl, setObjUrl] = useState(null)
   const [failed, setFailed] = useState(false)
   const [fullOpen, setFullOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
   const holderRef = useRef(null)
 
   useEffect(() => {
@@ -281,30 +307,75 @@ function SeeImageCard({ action }) {
 
   const caption = image?.prompt || action.text
 
+  const copyPrompt = async () => {
+    if (!caption) return
+    try {
+      await navigator.clipboard.writeText(caption)
+      setCopied(true)
+      toast('Image prompt copied to clipboard.', 'ok')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast('Could not copy prompt.')
+    }
+  }
+
   return (
-    <figure ref={holderRef} className="my-1">
+    <figure ref={holderRef} className="my-2 overflow-hidden rounded-xl border border-subtle bg-surface/80 p-2">
       <button
         type="button"
         onClick={() => objUrl && setFullOpen(true)}
         title={objUrl ? 'Open full size' : undefined}
-        className="block w-full cursor-pointer overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60"
+        className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
       >
         {objUrl ? (
-          <img src={objUrl} alt={caption} className="max-h-96 w-full object-contain" />
+          <img src={objUrl} alt={caption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
         ) : (
-          <div className="flex h-48 items-center justify-center text-sm text-zinc-600">
-            {failed || !image?.id ? 'Could not load the image.' : 'Loading image…'}
+          <div className="flex h-48 items-center justify-center text-sm text-muted">
+            {failed || !image?.id ? 'Could not load the image.' : 'Loading scene illustration…'}
           </div>
         )}
       </button>
-      {caption && (
-        <figcaption className="mt-1 line-clamp-2 text-xs italic text-zinc-500">{caption}</figcaption>
-      )}
+      <div className="mt-2 flex items-center justify-between gap-2 px-1">
+        {caption ? (
+          <figcaption className="line-clamp-2 flex-1 text-xs italic text-secondary">{caption}</figcaption>
+        ) : <span />}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {caption && (
+            <button
+              type="button"
+              onClick={copyPrompt}
+              className="rounded-md border border-subtle bg-elevated px-2 py-1 text-[10px] font-medium text-secondary hover:text-primary transition"
+            >
+              {copied ? 'Copied' : 'Copy prompt'}
+            </button>
+          )}
+          {objUrl && (
+            <a
+              href={objUrl}
+              download={`scene-${image?.id || action.id}.png`}
+              className="rounded-md border border-subtle bg-elevated px-2 py-1 text-[10px] font-medium text-secondary hover:text-primary transition"
+            >
+              Save PNG
+            </a>
+          )}
+        </div>
+      </div>
 
       {fullOpen && objUrl && (
-        <Modal title="See — scene image" onClose={() => setFullOpen(false)} wide>
-          <img src={objUrl} alt={caption} className="w-full rounded-lg object-contain" />
-          {caption && <p className="mt-2 text-xs italic text-zinc-500">{caption}</p>}
+        <Modal title="See — Scene Illustration" onClose={() => setFullOpen(false)} wide>
+          <img src={objUrl} alt={caption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+          {caption && (
+            <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-subtle bg-elevated/50 p-3">
+              <p className="text-xs italic text-secondary">{caption}</p>
+              <button
+                type="button"
+                onClick={copyPrompt}
+                className="shrink-0 rounded-lg border border-subtle bg-surface px-2.5 py-1 text-xs font-medium text-primary hover:bg-elevated"
+              >
+                {copied ? 'Copied' : 'Copy prompt'}
+              </button>
+            </div>
+          )}
         </Modal>
       )}
     </figure>

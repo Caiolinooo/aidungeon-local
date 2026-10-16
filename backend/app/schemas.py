@@ -32,6 +32,12 @@ class StoryCardUpsert(BaseModel):
     sheet: dict | None = None
 
 
+class CardBulkAction(BaseModel):
+    action: Literal["delete", "pin", "unpin", "retype"]
+    card_ids: list[str] = Field(min_length=1)
+    new_type: str | None = None  # required if action == "retype"
+
+
 class ScenarioCreate(BaseModel):
     title: str
     description: str = ""
@@ -72,20 +78,49 @@ class MemoryUpdate(BaseModel):
     authors_note: str | None = None
 
 
+class MemoryCreate(BaseModel):
+    """POST /api/adventures/{id}/memories — cria memória avulsa no memory bank."""
+    text: str = Field(min_length=1, max_length=4000, description="Texto do fato a ser lembrado")
+    seq_start: int | None = Field(default=None, description="Primeira ação coberta")
+    seq_end: int | None = Field(default=None, description="Última ação coberta")
+
+
+class MemoryPatch(BaseModel):
+    """PATCH /api/adventures/{id}/memories/{memory_id} — campos ausentes não são alterados."""
+    text: str | None = Field(default=None, min_length=1, max_length=4000, description="Novo texto do fato")
+    seq_start: int | None = Field(default=None, description="Primeira ação coberta")
+    seq_end: int | None = Field(default=None, description="Última ação coberta")
+
+
+class MemoryRegenerateResponse(BaseModel):
+    """Resposta de POST /api/adventures/{id}/memories/regenerate."""
+    status: Literal["regenerated"] = "regenerated"
+    count: int
+
+
 class LlmSettingsUpdate(BaseModel):
     """Todos os campos opcionais; omitidos permanecem (api_key="" remove a chave)."""
     base_url: str | None = None
     api_key: str | None = None
     model_alias: str | None = None
-    context_size: int | None = Field(default=None, ge=4096, le=131072)
-    max_tokens: int | None = Field(default=None, ge=100, le=600)
+    context_size: int | None = Field(default=None, ge=4096, le=262144)
+    max_tokens: int | None = Field(default=None, ge=100, le=2048)
     streaming: bool | None = None
     disable_thinking: bool | None = None
     timeout_seconds: int | None = None
     # sampler (persistidos como overrides sampler.*)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
     repetition_penalty: float | None = Field(default=None, ge=1.0, le=2.0)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    dry_multiplier: float | None = Field(default=None, ge=0.0, le=5.0)
+    dry_base: float | None = Field(default=None, ge=1.0, le=3.0)
+    dry_allowed_length: int | None = Field(default=None, ge=1, le=10)
+    dry_penalty_last_n: int | None = Field(default=None)
+    retry_temperature_step: float | None = Field(default=None, ge=0.0, le=0.5)
+    max_retry_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 
 # ------------------------------------------------------------------ v2: see
@@ -147,3 +182,17 @@ class AssistantFieldRequest(BaseModel):
     current: str | None = None
     draft: dict | None = None
     language: str = "en"
+
+
+class EmbeddingsSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    base_url: str | None = None
+    model: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+
+
+class ScriptingSettingsUpdate(BaseModel):
+    input_modifier: str | None = None
+    context_modifier: str | None = None
+    output_modifier: str | None = None
+

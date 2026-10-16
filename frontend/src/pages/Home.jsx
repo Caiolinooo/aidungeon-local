@@ -5,7 +5,21 @@ import { clearToken } from '../auth.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
 import GenerateAdventureModal from '../components/GenerateAdventureModal.jsx'
+import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { fmtDate } from '../utils.js'
+import {
+  Upload,
+  Download,
+  Sparkles,
+  Plus,
+  LogOut,
+  Settings as SettingsIcon,
+  MoreVertical,
+  Edit2,
+  Trash2,
+  BookOpen,
+  RefreshCw,
+} from 'lucide-react'
 
 // Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
 // (escolher scenario existente ou em branco) + "Import AI Dungeon backup".
@@ -36,6 +50,7 @@ export default function Home() {
   const [showNew, setShowNew] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [showReaderModal, setShowReaderModal] = useState(false)
   const [menuOpenId, setMenuOpenId] = useState(null) // id da aventura com menu ⋯ aberto
   const [renaming, setRenaming] = useState(null) // aventura alvo do Rename modal
   const [deleting, setDeleting] = useState(null) // aventura alvo do Delete modal
@@ -78,51 +93,78 @@ export default function Home() {
   }
 
   return (
-    <div className="mx-auto flex h-full max-w-5xl flex-col overflow-y-auto px-4 py-8">
-      <header className="mb-6 flex flex-col gap-3 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto flex h-full max-w-6xl flex-col overflow-y-auto px-4 py-8 bg-canvas text-primary">
+      <header className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
-            AI Dungeon <span className="text-emerald-500">Local</span>
+          <h1 className="text-3xl font-extrabold tracking-tight text-primary flex items-center gap-2">
+            AI Dungeon <span className="text-accent-pri">Local</span>
           </h1>
-          <p className="mt-1 text-sm text-zinc-500">Self-hosted interactive storytelling — 100% local LLM.</p>
+          <p className="mt-1 text-xs text-muted">Self-hosted interactive storytelling — 100% private, local LLM.</p>
         </div>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 items-center">
+          <button
+            onClick={() => setShowReaderModal(true)}
+            title="Theme & Reader options"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+          >
+            <BookOpen className="w-4 h-4 text-accent-pri" />
+            <span className="hidden md:inline">Theme</span>
+          </button>
+          <Link
+            to="/settings"
+            title="Global Settings (LLM, Image, Voice, Memory)"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+          >
+            <SettingsIcon className="w-4 h-4 text-secondary" />
+            <span>Settings</span>
+          </Link>
           <button
             onClick={() => setShowImport(true)}
-            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
           >
-            ⬆ Import AI Dungeon backup
+            <Upload className="w-4 h-4 text-muted" />
+            <span>Import</span>
           </button>
           <button
             onClick={backupAll}
             disabled={backingUp}
             title="Download a .zip backup with ALL adventures"
-            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
           >
-            {backingUp ? 'Backing up…' : '⬇ Backup all (.zip)'}
+            <Download className="w-4 h-4 text-muted" />
+            <span>{backingUp ? 'Exporting…' : 'Backup all'}</span>
           </button>
           <button
             onClick={() => setShowGenerate(true)}
             title="Describe an idea and let the AI draft a full scenario for you"
-            className="min-h-11 shrink-0 rounded-lg border border-emerald-800 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-accent-pri/50 bg-elevated px-3.5 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/20 transition"
           >
-            Generate with AI
+            <Sparkles className="w-4 h-4" />
+            <span>Generate with AI</span>
           </button>
           <button
             onClick={() => setShowNew(true)}
-            className="min-h-11 shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
           >
-            + New Adventure
+            <Plus className="w-4 h-4" />
+            <span>New Adventure</span>
           </button>
           <button
             onClick={logout}
-            title="Encerrar a sessão e voltar ao login"
-            className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            title="Sign out and return to login"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-muted hover:text-red-400 hover:bg-elevated transition"
           >
-            Sair
+            <LogOut className="w-4 h-4" />
+            <span>Log out</span>
           </button>
         </div>
       </header>
+
+      <ReaderPreferencesModal
+        isOpen={showReaderModal}
+        onClose={() => setShowReaderModal(false)}
+      />
+
 
       {error && (
         <div className="mb-6 flex items-center justify-between rounded-lg border border-red-900 bg-red-950/60 px-4 py-3 text-sm text-red-200">
@@ -179,8 +221,8 @@ export default function Home() {
                     />
                   </div>
                 </div>
-                <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-zinc-400">
-                  {a.last_excerpt || a.description || '…'}
+                <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-secondary">
+                  {a.last_excerpt || a.excerpt || a.description || '…'}
                 </p>
                 <div className="flex items-center justify-between text-xs text-zinc-600">
                   <span>{a.action_count ?? 0} actions</span>
@@ -516,35 +558,42 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
         onClick={onToggle}
         aria-label={`Manage “${adventure.title}”`}
         title="Manage adventure"
-        className="rounded-md px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+        className="rounded-lg p-1.5 text-muted hover:bg-elevated hover:text-primary transition"
       >
-        ⋯
+        <MoreVertical className="w-4 h-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-40 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
+        <div className="absolute right-0 top-full z-30 mt-1 w-44 overflow-hidden rounded-xl border border-subtle bg-surface py-1 shadow-xl">
           <button
-            className={itemCls}
+            className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-secondary hover:bg-elevated hover:text-primary transition"
             onClick={() => {
               onClose()
               onRename()
             }}
           >
-            ✏ Rename
-          </button>
-          <button className={itemCls} onClick={exportZip}>
-            ⬇ Export .zip
+            <Edit2 className="w-3.5 h-3.5" />
+            <span>Rename</span>
           </button>
           <button
-            className="block w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-zinc-800 hover:text-red-300"
+            className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-secondary hover:bg-elevated hover:text-primary transition"
+            onClick={exportZip}
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export .zip</span>
+          </button>
+          <button
+            className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-red-400 hover:bg-red-950/40 hover:text-red-300 transition"
             onClick={() => {
               onClose()
               onDelete()
             }}
           >
-            🗑 Delete
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete</span>
           </button>
         </div>
       )}
+
     </div>
   )
 }

@@ -54,10 +54,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 BASE_SYSTEM_PROMPT = (
-    "You are an AI storyteller running an interactive text adventure. Continue the story in\n"
-    "second person (\"You ...\"), matching the established tone. Write vivid prose with dialogue,\n"
-    "sensory detail and consequences for the player's actions. Never decide what the player\n"
-    "character says or does beyond their stated action. Never break the fourth wall.\n\n"
+    "You are the narrator and environment in an interactive text adventure. You control NPCs,\n"
+    "sensory consequences, and the immediate world. The player has absolute agency over You.\n"
+    "Continue the story in second person (\"You ...\"), matching the established tone. Write vivid\n"
+    "prose with dialogue, sensory detail and consequences for the player's actions.\n\n"
+    "Player agency invariants (highest priority):\n"
+    "- Never write internal thoughts, feelings, decisions, spoken dialogue, or future actions for You.\n"
+    "- Describe only the immediate sensory consequences of the player's action and NPC reactions.\n"
+    "- Conclude each response with the scene active and unresolved, inviting the player's next move.\n"
+    "- If an NPC asks a question or initiates a conflict, stop immediately to let the player answer.\n"
+    "- Never break the fourth wall.\n\n"
     "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
     "- Write complete sentences in the story's language. Keep articles and\n"
     "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
@@ -67,7 +73,7 @@ BASE_SYSTEM_PROMPT = (
     "- Vary wording; do not repeat the same image or sentence pattern.\n"
     "- Show events through action, dialogue and the senses. Stop while the scene is\n"
     "  still open — never wrap up the scene or narrate an epilogue.\n\n"
-    "Setting fidelity rules (highest priority):\n"
+    "Setting fidelity rules:\n"
     "- The Plot, World info, Memories and Summary blocks below define the world, genre\n"
     "  and premise. Everything you write MUST be consistent with them.\n"
     "- NEVER import stock genre tropes that the story has not established (e.g. knights, castles,\n"
@@ -242,12 +248,70 @@ class BuiltContext:
     meta: dict = field(default_factory=dict)
 
 
+def context_scale_factor(cfg: dict) -> float:
+    """Fator de escala dinâmico para contextos longos (> 32k tokens).
+
+    Mantém 1.0 em <= 32768 tokens (preservando os pisos originais) e escala
+    suavemente até 3.0x em contextos de 64k–256k tokens para permitir mais
+    Story Cards, Memórias Vetoriais e Story Summary sem sufocar o cânone.
+    """
+    dyn = cfg.get("dynamic_scaling") or {}
+    if not dyn.get("enabled", True):
+        return 1.0
+    base = float(dyn.get("base_context_size", 32768) or 32768)
+    max_scale = float(dyn.get("max_scale_factor", 3.0) or 3.0)
+    ctx = float(cfg.get("context_size", 32768) or 32768)
+    if ctx <= base:
+        return 1.0
+    return min(max_scale, max(1.0, ctx / base))
+
+
 def recent_window_budget(cfg: dict) -> int:
     """Regra dinâmica: context_size − soma(demais budgets) − response_reserve."""
     budgets = cfg["budgets"]
     fixed = sum(int(budgets.get(k, 0)) for k in FIXED_BUDGET_KEYS)
     reserve = int(budgets.get("response_reserve", 512))
-    return max(0, int(cfg["context_size"]) - fixed - reserve)
+    max_new = int((cfg.get("sampler") or {}).get("max_tokens", 0) or 0)
+    effective_reserve = max(reserve, max_new)
+    return max(0, int(cfg["context_size"]) - fixed - effective_reserve)
+
+
+def _card_matches_immediate_turn(card: dict, immediate_norm: str) -> bool:
+    """Verifica se o card foi citado/disparado na ação do turno imediato."""
+    if not immediate_norm:
+        return False
+    title = " ".join(str(card.get("title") or "").split()).casefold()
+    if title and len(title) >= 3 and title in immediate_norm:
+        return True
+    mod = _memory_module("triggers")
+    if mod is not None and hasattr(mod, "parse_triggers"):
+        triggers = mod.parse_triggers(card.get("triggers"))
+    else:
+        triggers = card.get("triggers") or []
+        if isinstance(triggers, str):
+            triggers = triggers.split(",")
+    for t in triggers:
+        t_norm = " ".join(str(t).split()).casefold()
+        if t_norm and len(t_norm) >= 3 and t_norm in immediate_norm:
+            return True
+    return False
+
+
+def _card_snippet(card: dict) -> str:
+    """Extrai um resumo canônico conciso de 1 linha para recency anchor."""
+    raw = (card.get("entry") or card.get("content") or card.get("value") or "").strip()
+    if not raw:
+        try:
+            from app import npc_assets
+            raw = npc_assets.card_canon_text(card)
+        except Exception:
+            raw = ""
+    if not raw:
+        return ""
+    first_line = raw.split("\n")[0].strip()
+    if ". " in first_line:
+        first_line = first_line.split(". ")[0].strip() + "."
+    return first_line[:100].rstrip(".")
 
 
 # ---------------------------------------------------------------- builder
@@ -256,7 +320,8 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     """Monta as mensagens na ordem do sanduíche (PLANO.md §4.2), no formato
     do template Qwen3: UMA system na posição 0 (blocos 1–5) + users."""
     budgets = cfg["budgets"]
-    meta: dict[str, Any] = {"budgets": {}}
+    scale = context_scale_factor(cfg)
+    meta: dict[str, Any] = {"budgets": {}, "context_scale_factor": scale}
 
     # ---- system único (posição 0): blocos 1–5 concatenados ----------------
     system_parts: list[str] = []
@@ -273,15 +338,30 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if plot:
         system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
 
+    # Em contextos longos (>32k), os tetos de story_cards, memory_bank e
+    # story_summary escalam proporcionalmente (até 3x) para injetar mais
+    # fatos canônicos sem desperdiçar a janela expandida.
+    base_cards_budget = int(budgets.get("story_cards", 1200))
+    base_mem_budget = int(budgets.get("memory_bank", 600))
+    base_sum_budget = int(budgets.get("story_summary", 800))
+
+    cards_budget = int(base_cards_budget * scale)
+    mem_budget = int(base_mem_budget * scale)
+    sum_budget = int(base_sum_budget * scale)
+
     # 4 antes do 3: a memória selecionada também dispara story card. Um nome
     # que já saiu da janela continua puxando a ficha.
-    cards_cfg = cfg.get("story_cards", {})
-    scan_chars = int(cards_cfg.get("scan_chars", 1000))
+    cards_cfg = dict(cfg.get("story_cards", {}))
+    scan_chars = int(int(cards_cfg.get("scan_chars", 1000)) * scale)
     recent_text = "".join(format_action_text(a["type"], a["text"]) for a in actions)
     recent_tail = recent_text[-scan_chars:]
+
+    mem_cfg = dict(cfg.get("memory_bank", {}))
+    if scale > 1.0:
+        mem_cfg["top_k"] = int(int(mem_cfg.get("top_k", 12)) * scale)
+
     mems = _select_memories(conn, adventure["id"], recent_tail,
-                            int(budgets.get("memory_bank", 600)),
-                            cfg.get("memory_bank", {}))
+                            mem_budget, mem_cfg)
     summary = (adventure.get("story_summary") or "").strip()
     canon_scan = "\n".join(
         part for part in (summary, "\n".join(m["text"] for m in mems)) if part
@@ -296,21 +376,27 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
 
     # 3 — story cards (pinned + disparados pela janela, pelo resumo e pelas memórias)
     cards = _select_cards(conn, adventure["id"], card_scan,
-                          int(budgets.get("story_cards", 1200)), cards_cfg)
+                          cards_budget, cards_cfg)
+    extra_canon_tokens = 0
     if cards:
         per_card = int(cards_cfg.get("budget_por_card", 150))
-        system_parts.append("[World info]\n"
-                            + "\n\n".join(_render_card(c, per_card) for c in cards))
+        cards_block = "\n\n".join(_render_card(c, per_card) for c in cards)
+        system_parts.append("[World info]\n" + cards_block)
         meta["cards_included"] = [c.get("id") for c in cards]
+        extra_canon_tokens += max(0, estimate_tokens(cards_block) - base_cards_budget)
 
     # 4 — memory bank (top-k, ordem cronológica)
     if mems:
-        system_parts.append("[Memories]\n" + "\n\n".join(m["text"] for m in mems))
+        mems_block = "\n\n".join(m["text"] for m in mems)
+        system_parts.append("[Memories]\n" + mems_block)
         meta["memories_included"] = [m.get("id") for m in mems]
+        extra_canon_tokens += max(0, estimate_tokens(mems_block) - base_mem_budget)
 
     # 5 — story_summary
     if summary:
-        system_parts.append("[Summary]\n" + _fit_budget(summary, int(budgets.get("story_summary", 800))))
+        sum_block = _fit_budget(summary, sum_budget)
+        system_parts.append("[Summary]\n" + sum_block)
+        extra_canon_tokens += max(0, estimate_tokens(sum_block) - base_sum_budget)
 
     # 5b — estado do painel dinâmico (v0.7.0): HP/inventário/ficha que o
     # jogador edita nos widgets. Sem ele a IA narra dano/tesouro no escuro.
@@ -322,8 +408,9 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 
     # 6 — user: janela recente verbatim (trunca POR AÇÃO INTEIRA)
-    window_budget = recent_window_budget(cfg)
-    meta["budgets"]["recent_window"] = window_budget
+    base_window_budget = recent_window_budget(cfg)
+    window_budget = max(0, base_window_budget - extra_canon_tokens)
+    meta["budgets"]["recent_window"] = base_window_budget
     window_actions = actions[:-1] if actions else []
     chosen: list[str] = []
     used = 0
@@ -340,7 +427,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
 
-    # 7+8 — user(final): author's note, lembrete de prosa, última ação
+    # 7+8 — user(final): author's note, active lore anchors, lembrete de prosa, última ação
     note = (adventure.get("authors_note") or "").strip()
     if note:
         note = _fit_budget(note, int(budgets.get("authors_note", 300)))
@@ -353,12 +440,83 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     final_parts = []
     if note:
         final_parts.append(f"[Author's note: {note}]")
+
+    # Active entity recency anchor: cards disparados pelo turno imediato
+    anchored_titles: set[str] = set()
+    if actions and cards:
+        immediate_norm = " ".join(last_txt.split()).casefold()
+        for c in cards:
+            if _card_matches_immediate_turn(c, immediate_norm):
+                snippet = _card_snippet(c)
+                title = c.get("title") or ""
+                if title and snippet:
+                    final_parts.append(f"[Active Lore: {title} — {snippet}]")
+                    anchored_titles.add(title)
+
+    # Long-Horizon Anti-Hallucination & Continuity Anchor:
+    # Quando a janela recente acumula muitos turnos/tokens ("Lost in the Middle"),
+    # re-ancora os fatos canônicos e entidades das últimas ações imediatamente
+    # antes da geração para impedir alucinações e deriva de estado.
+    dyn_cfg = cfg.get("dynamic_scaling") or {}
+    min_anchor_tokens = int(dyn_cfg.get("continuity_anchor_min_window_tokens", 1200))
+    min_anchor_turns = int(dyn_cfg.get("continuity_anchor_min_turns", 8))
+    if used >= min_anchor_tokens or len(chosen) >= min_anchor_turns:
+        recent_scene_norm = " ".join("".join(chosen[-3:]).split()).casefold()
+        if cards and recent_scene_norm:
+            for c in cards:
+                title = c.get("title") or ""
+                if title in anchored_titles:
+                    continue
+                if _card_matches_immediate_turn(c, recent_scene_norm):
+                    snippet = _card_snippet(c)
+                    if title and snippet:
+                        final_parts.append(f"[Active Lore: {title} — {snippet}]")
+                        anchored_titles.add(title)
+                        if len(anchored_titles) >= 4:
+                            break
+        continuity_bits: list[str] = []
+        if plot:
+            plot_head = " ".join(plot.splitlines()[:2]).strip()[:180]
+            if plot_head:
+                continuity_bits.append(f"Protagonist/Premise: {plot_head}")
+        if summary:
+            sum_tail = " ".join(summary.split())[-220:]
+            continuity_bits.append(f"Story so far: {sum_tail}")
+        elif mems:
+            mem_tail = " ".join((mems[-1].get("text") or "").split())[:200]
+            if mem_tail:
+                continuity_bits.append(f"Recent memory: {mem_tail}")
+        if continuity_bits:
+            final_parts.append(
+                "[Continuity Anchor: " + " | ".join(continuity_bits) + "]"
+            )
+            meta["continuity_anchor_active"] = True
+
     final_parts.append(STYLE_CUE)
     final_parts.append(CANON_CUE)
     final_parts.append(last_txt)
     messages.append({"role": "user", "content": "\n".join(final_parts)})
 
+    # Dynamic stop sequence hardening (protagonista + player/user boundaries)
+    stops = list(cfg.get("stop_sequences", ["\n> You", "\n> you"]))
+    plot = adventure.get("plot_essentials") or ""
+    if plot:
+        try:
+            from app.npc_chronicle import protagonist_names
+            for p_name in protagonist_names(plot):
+                p_clean = p_name.strip()
+                if p_clean:
+                    for variant in {p_clean, p_clean.title(), p_clean.capitalize()}:
+                        for s in (f"\n> {variant}", f"\n{variant}:", f"\n>{variant}"):
+                            if s not in stops:
+                                stops.append(s)
+        except Exception:
+            pass
+
+    for extra in ("\nPlayer:", "\nUser:"):
+        if extra not in stops:
+            stops.append(extra)
+
     return BuiltContext(messages=messages,
-                        stop_sequences=list(cfg.get("stop_sequences",
-                                                    ["\n> You", "\n> you"])),
+                        stop_sequences=stops,
                         meta=meta)

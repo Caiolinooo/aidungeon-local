@@ -22,7 +22,7 @@ def test_get_settings_defaults(client):
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"
     assert data["api_key"] is None                       # settings.json tem ""
     assert data["model_alias"] == "auto"
-    assert data["context_size"] == 32768
+    assert data["context_size"] == 65536
     assert data["max_tokens"] == 300
     assert data["streaming"] is True
     assert data["disable_thinking"] is True              # default do contrato
@@ -52,9 +52,10 @@ def test_api_key_empty_string_removes_it(client):
 
 
 def test_put_partial_update_keeps_other_fields(client):
-    client.put("/api/settings/llm", json={"max_tokens": 450, "streaming": False})
+    client.put("/api/settings/llm", json={"max_tokens": 1200, "context_size": 262144, "streaming": False})
     data = client.get("/api/settings/llm").json()
-    assert data["max_tokens"] == 450
+    assert data["max_tokens"] == 1200
+    assert data["context_size"] == 262144
     assert data["streaming"] is False
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"  # intacto
     assert data["disable_thinking"] is True                      # intacto
@@ -133,3 +134,78 @@ def test_health_auth_error(client):
     resp = client.get("/api/health/llm")
     assert resp.json()["status"] == "auth_error"
     client.app.dependency_overrides.clear()
+
+
+def test_put_and_get_advanced_sampler_settings(client):
+    # Verify defaults
+    initial = client.get("/api/settings/llm").json()
+    assert initial["min_p"] == 0.08
+    assert initial["top_p"] == 1.0
+    assert initial["repetition_penalty"] == 1.02
+    assert initial["presence_penalty"] == 0.15
+    assert initial["frequency_penalty"] == 0.10
+    assert initial["dry_multiplier"] == 0.8
+    assert initial["dry_base"] == 1.75
+    assert initial["dry_allowed_length"] == 2
+    assert initial["dry_penalty_last_n"] == -1
+    assert initial["retry_temperature_step"] == 0.05
+    assert initial["max_retry_temperature"] == 1.15
+
+    # Update sampler settings
+    update_payload = {
+        "min_p": 0.12,
+        "presence_penalty": 0.20,
+        "frequency_penalty": 0.15,
+        "dry_multiplier": 1.0,
+        "dry_base": 1.80,
+        "dry_allowed_length": 3,
+        "dry_penalty_last_n": 512,
+        "retry_temperature_step": 0.08,
+        "max_retry_temperature": 1.20,
+    }
+    resp = client.put("/api/settings/llm", json=update_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["min_p"] == 0.12
+    assert data["presence_penalty"] == 0.20
+    assert data["frequency_penalty"] == 0.15
+    assert data["dry_multiplier"] == 1.0
+    assert data["dry_base"] == 1.80
+    assert data["dry_allowed_length"] == 3
+    assert data["dry_penalty_last_n"] == 512
+    assert data["retry_temperature_step"] == 0.08
+    assert data["max_retry_temperature"] == 1.20
+
+    # Verify GET returns the overrides
+    get_data = client.get("/api/settings/llm").json()
+    assert get_data["min_p"] == 0.12
+    assert get_data["presence_penalty"] == 0.20
+    assert get_data["dry_multiplier"] == 1.0
+
+
+def test_embeddings_settings_endpoint(client):
+    resp = client.get("/api/settings/embeddings")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "enabled" in data
+    assert "model" in data
+
+    put_resp = client.put("/api/settings/embeddings", json={"model": "Qwen3-Custom-Embedding", "timeout_seconds": 45})
+    assert put_resp.status_code == 200
+    assert put_resp.json()["model"] == "Qwen3-Custom-Embedding"
+    assert put_resp.json()["timeout_seconds"] == 45
+
+
+def test_scripting_settings_endpoint(client):
+    resp = client.get("/api/settings/scripting")
+    assert resp.status_code == 200
+    assert "input_modifier" in resp.json()
+
+    put_resp = client.put(
+        "/api/settings/scripting",
+        json={"input_modifier": "def modify(action): return action", "output_modifier": "def modify(text): return text"},
+    )
+    assert put_resp.status_code == 200
+    assert "def modify(action)" in put_resp.json()["input_modifier"]
+    assert "def modify(text)" in put_resp.json()["output_modifier"]
+

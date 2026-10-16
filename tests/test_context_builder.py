@@ -124,7 +124,34 @@ def test_stop_sequences_from_settings(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    assert built.stop_sequences == ["\n> You", "\n> you"]
+    assert built.stop_sequences == ["\n> You", "\n> you", "\nPlayer:", "\nUser:"]
+
+
+def test_dynamic_stop_sequences_with_protagonist_names(tmp_db):
+    adv = make_adventure(title="Protagonist Stop", plot_essentials="[Name: Caio\nClass: Sorcerer]")
+    add_action(adv["id"], 0, "start", "Intro.")
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        built = _build(adv, actions, _cfg(conn))
+    assert "\n> You" in built.stop_sequences
+    assert "\n> you" in built.stop_sequences
+    assert "\n> Caio" in built.stop_sequences
+    assert "\nCaio:" in built.stop_sequences
+    assert "\nPlayer:" in built.stop_sequences
+    assert "\nUser:" in built.stop_sequences
+
+
+def test_active_entity_recency_anchor_in_final_user_turn(tmp_db):
+    adv = make_adventure(title="Active Lore Test")
+    add_action(adv["id"], 0, "start", "You walk the desert path.")
+    add_action(adv["id"], 1, "do", "greet Princess Alusair with a deep bow")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Princess Alusair",
+                       triggers=["Alusair"], entry="Steel Regent of Cormyr.")
+        actions = db.list_actions(conn, adv["id"])
+        built = cb.build_context(adv, actions, _cfg(conn), conn)
+    final_content = built.messages[-1]["content"]
+    assert "[Active Lore: Princess Alusair — Steel Regent of Cormyr]" in final_content
 
 
 # ---------------------------------------------------------------- budgets
@@ -152,9 +179,36 @@ def test_recent_window_dynamic_rule(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    budgets = settings_store.load_file_settings()["context"]["budgets"]
-    expected = 32768 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200 + 200) - 1024
-    assert built.meta["budgets"]["recent_window"] == expected == 25544
+    expected = 65536 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200 + 200) - 1024
+    assert built.meta["budgets"]["recent_window"] == expected == 58312
+
+
+def test_long_context_dynamic_scaling_and_continuity_anchor(tmp_db):
+    adv = _adventure_full(
+        plot_essentials="You are Sir Roland, Knight of Cormyr.",
+        story_summary="Sir Roland recovered the Obsidian Key in the ruins of Myth Drannor.",
+    )
+    # 10 turns so len(chosen) >= 8 triggers the Long-Horizon Continuity Anchor
+    for i in range(10):
+        txt = f"Turn {i}: Lady Alusair studies the ancient map in the war tent." if i == 7 else f"Turn {i}: The march continues."
+        add_action(adv["id"], i, "continue" if i > 0 else "start", txt)
+    add_action(adv["id"], 10, "do", "ask her what the runes mean")
+
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Lady Alusair",
+                       triggers=["Alusair"], entry="Steel Regent of Cormyr. Wears silver plate.")
+        actions = db.list_actions(conn, adv["id"])
+        cfg = _cfg(conn, context_size=131072)
+        built = cb.build_context(adv, actions, cfg, conn)
+
+    assert built.meta["context_scale_factor"] == 3.0
+    assert built.meta.get("continuity_anchor_active") is True
+    final_msg = built.messages[-1]["content"]
+    # Even though turn 10 only says "ask her what the runes mean", Alusair from turn 7 (within last 3 turns) is anchored!
+    assert "[Active Lore: Lady Alusair — Steel Regent of Cormyr]" in final_msg
+    assert "[Continuity Anchor:" in final_msg
+    assert "Sir Roland" in final_msg
+    assert "Obsidian Key" in final_msg
 
 
 def test_window_truncates_by_whole_action(tmp_db):

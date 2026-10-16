@@ -72,9 +72,16 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     payload = captured[0]
     assert payload["model"] == "gguf-mock"                 # descoberto via /models
     assert payload["stream"] is True
-    assert payload["stop"] == ["\n> You", "\n> you"]
+    assert payload["stop"] == ["\n> You", "\n> you", "\nPlayer:", "\nUser:"]
     assert payload["max_tokens"] == 300
     assert payload["temperature"] == 0.85
+    assert payload["top_p"] == 1.0
+    assert payload["min_p"] == 0.08
+    assert payload["presence_penalty"] == 0.15
+    assert payload["frequency_penalty"] == 0.10
+    assert payload["dry_multiplier"] == 0.8
+    assert payload["dry_base"] == 1.75
+    assert payload["dry_sequence_breakers"] == ["\n", ":", "\"", "*"]
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     # última mensagem = pistas de estilo e cânone + última ação do jogador
     assert payload["messages"][-1]["role"] == "user"
@@ -216,3 +223,39 @@ def test_reasoning_only_response_becomes_config_error(adventure):
     with db.session() as conn:
         actions = db.list_actions(conn, adventure["id"])
     assert [a["type"] for a in actions] == ["start", "do"]
+
+
+def test_retry_temperature_stepping(adventure):
+    # Initial generation
+    _collect(game_engine.handle_action(
+        adventure["id"], "do", "explore the ruins",
+        transport=make_llm_transport(tokens=("First output.",)),
+    ))
+
+    # Retry 1: temperature should step from 0.85 to 0.90
+    cap1: list[dict] = []
+    t1 = make_llm_transport(tokens=("Variation 1.",), capture=cap1)
+    _collect(game_engine.handle_retry(adventure["id"], transport=t1))
+    assert len(cap1) == 1
+    assert round(cap1[0]["temperature"], 2) == 0.90
+
+    # Retry 2: temperature should step to 0.95
+    cap2: list[dict] = []
+    t2 = make_llm_transport(tokens=("Variation 2.",), capture=cap2)
+    _collect(game_engine.handle_retry(adventure["id"], transport=t2))
+    assert len(cap2) == 1
+    assert round(cap2[0]["temperature"], 2) == 0.95
+
+    # Retry with explicit retry_count=6: capped at 1.15 (0.85 + 0.05 * 6 = 1.15)
+    cap6: list[dict] = []
+    t6 = make_llm_transport(tokens=("Variation 6.",), capture=cap6)
+    _collect(game_engine.handle_retry(adventure["id"], transport=t6, retry_count=6))
+    assert len(cap6) == 1
+    assert round(cap6[0]["temperature"], 2) == 1.15
+
+    # Retry with explicit retry_count=10: capped at max_retry_temperature (1.15)
+    cap10: list[dict] = []
+    t10 = make_llm_transport(tokens=("Variation 10.",), capture=cap10)
+    _collect(game_engine.handle_retry(adventure["id"], transport=t10, retry_count=10))
+    assert len(cap10) == 1
+    assert round(cap10[0]["temperature"], 2) == 1.15

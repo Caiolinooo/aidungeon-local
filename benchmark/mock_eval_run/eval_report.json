@@ -1,0 +1,809 @@
+{
+  "timestamp": "2026-10-16T15:12:30Z",
+  "mode": "mock",
+  "situation_count": 10,
+  "baseline": [
+    {
+      "situation_id": "sit_01_combat_spellcasting",
+      "category": "Combat / action confrontation",
+      "title": "Arcane Binding in The Salty Mermaid",
+      "pipeline": "baseline",
+      "text": "Mara lunges forward, her claws flashing in the dim tavern light. You cast a binding spell on Mara and the tavern patrons who step forward with raised cudgels. Golden threads of light erupt from your fingertips, twisting around Mara's wrists and ankles. Mara thrashes against her magical bonds, her eyes wide with shock. You draw your dagger and prepare to strike.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.2542,
+          "inter_4gram_rate": 0.2414,
+          "composite_repetition": 0.075,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": true,
+          "total_violations": 1,
+          "violations_per_100_words": 1.64,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 1
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 3.877,
+          "tokens_generated": 61,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_02_dialogue_merchant_kaelen",
+      "category": "Dialogue / interrogation",
+      "title": "Extortion & Bargaining with Merchant Kaelen",
+      "pipeline": "baseline",
+      "text": "Kaelen hesitates, his eyes darting between you and Thuldan. A flicker of surprise crosses his face before he masks it with a neutral expression. \"Ten percent is steep, my lord, but the Zhentarim drive a hard bargain.\" You decide to accept his offer and nod firmly.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": true,
+          "total_violations": 1,
+          "violations_per_100_words": 2.17,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 1,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 3.034,
+          "tokens_generated": 46,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_03_stealth_intrigue_eavesdropping",
+      "category": "Stealth / intrigue",
+      "title": "Shadowing & Surveillance in the Bazaar",
+      "pipeline": "baseline",
+      "text": "You slip into the shadowed archway behind the silk stall, listening intently to the whispered exchange without revealing your presence. The scent of lilac and honey hangs in the cool evening air. The pasha's agent whispers low, passing a heavy velvet pouch to Thuldan.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.4762,
+          "inter_4gram_rate": 0.439,
+          "composite_repetition": 0.1391,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.922,
+          "tokens_generated": 44,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_04_exploration_atmosphere_calimport",
+      "category": "Exploration / atmosphere",
+      "title": "Arrival at the Grand Bazaar of Calimport",
+      "pipeline": "baseline",
+      "text": "The Grand Bazaar of Calimport teems with life under the setting sun. Sandstone arches glow amber while spice merchants hawk saffron and cumin from gilded carts. In the shadowed alleys, veiled cutthroats exchange glances as you pass.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0286,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0057,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.529,
+          "tokens_generated": 37,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_05_emotional_moral_dilemma_sanctuary",
+      "category": "Dramatic emotional moment / moral dilemma",
+      "title": "Refuge and Sovereign Choice for Thalia & Lyra",
+      "pipeline": "baseline",
+      "text": "Thalia looks at Lyra, tears shimmering in her eyes. \"My lord, we have known only servitude and cruelty. To be offered our freedom feels like a dream.\" She bows her head in quiet gratitude.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.36,
+          "tokens_generated": 34,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_06_ambiguous_skill_check_zone_of_truth",
+      "category": "Ambiguous outcome / skill check",
+      "title": "Zone of Truth in the Hostile Taproom",
+      "pipeline": "baseline",
+      "text": "You close your eyes and summon divine mana into the taproom. A shimmering circle of truth pulses outward. The scarred leader clutches his temples, groaning as the magical aura compels him to speak. He stammers, fighting the urge to confess.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.697,
+          "tokens_generated": 40,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_07_world_knowledge_lore_inquiry",
+      "category": "World knowledge / lore inquiry",
+      "title": "Inquiring on Calimport Factions & Black Network Politics",
+      "pipeline": "baseline",
+      "text": "Thuldan glances toward the arched colonnade. \"Word on the street is that the Shadow Thieves of Amn are backing Kaelen's defiance. They seek to undermine the Black Network's grip on the southern spice routes.\" He touches the hilt of his stiletto with a grim smile.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.978,
+          "tokens_generated": 45,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_08_pursuit_escape_alleys",
+      "category": "Fast-paced pursuit",
+      "title": "Desperate Escape through Calimport Dock Alleys",
+      "pipeline": "baseline",
+      "text": "You sprint through the twisting alleys of the Dock Ward, dragging Thalia and Lyra past piles of discarded crates. Behind you, the shouts of tavern enforcers echo off damp brick walls. A sudden dead end appears ahead.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.1143,
+          "inter_4gram_rate": 0.0588,
+          "composite_repetition": 0.0287,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.529,
+          "tokens_generated": 37,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_09_companion_npc_coordination_thuldan",
+      "category": "Companion / NPC coordination",
+      "title": "Tactical Flanking & Intimidation with Thuldan",
+      "pipeline": "baseline",
+      "text": "Thuldan catches your signal and slips silently behind the stacks of tarred timber. As you step into the smuggler's direct line of sight, Thuldan's blade presses lightly against the courier's spine.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.1034,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0207,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.192,
+          "tokens_generated": 31,
+          "tok_per_sec": 17.8
+        }
+      }
+    },
+    {
+      "situation_id": "sit_10_turning_point_royal_crisis_alusair",
+      "category": "Turning point / plot revelation",
+      "title": "Royal Standoff with Princess Alusair & the Purple Dragons",
+      "pipeline": "baseline",
+      "text": "Princess Alusair steps behind the line of Purple Dragon halberds, her expression icy and regal. \"Lord Caio, you have gravely overstepped the hospitality of Cormyr. Surrender your weapons at once.\" The captain advances with steel drawn.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0588,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0118,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.45,
+          "total_sec": 2.472,
+          "tokens_generated": 36,
+          "tok_per_sec": 17.8
+        }
+      }
+    }
+  ],
+  "new": [
+    {
+      "situation_id": "sit_01_combat_spellcasting",
+      "category": "Combat / action confrontation",
+      "title": "Arcane Binding in The Salty Mermaid",
+      "pipeline": "new",
+      "text": "A radiant surge of celestial mana bursts from your open palms, weaving into shimmering bands of violet force. The magical ribbons whip through the muggy air of The Salty Mermaid, snapping tight around Mara's arms and locking her knees together. The two charging patrons recoil in terror, their heavy cudgels slipping from numb fingers onto the beer-soaked floorboards. Mara strains against the luminous bonds, cursing through clenched teeth, while the remaining tavern patrons press themselves flat against the walls, waiting to see what the sorcerer will do next.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 4.249,
+          "tokens_generated": 88,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_02_dialogue_merchant_kaelen",
+      "category": "Dialogue / interrogation",
+      "title": "Extortion & Bargaining with Merchant Kaelen",
+      "pipeline": "new",
+      "text": "Kaelen flinches at the proposal, the blood draining from his jowls as his gaze flicks to the ledgers stacked behind his desk. He swallows hard, his knuckles white against the mahogany counter. \"Ten percent... and a crate of tempered steel from the Amnish shipment,\" he murmurs, his voice barely carrying over the distant rumble of the docks. Beside you, Thuldan tilts his head with quiet satisfaction, leaving the final terms hanging in the silence between you and the cornered merchant.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.891,
+          "tokens_generated": 80,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_03_stealth_intrigue_eavesdropping",
+      "category": "Stealth / intrigue",
+      "title": "Shadowing & Surveillance in the Bazaar",
+      "pipeline": "new",
+      "text": "The heavy folds of indigo silk muffle your footsteps as you meld into the stone alcove. Lanternlight flickers across the courtyard, casting the shadows of Thuldan and the pasha's emissary against the sandstone wall. \"The caravan departs at midnight through the Golden Gate,\" the emissary murmurs, slipping a stamped bronze token into Thuldan's palm. Neither man turns toward the shadowed archway, oblivious to your presence just paces away.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0152,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.003,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.356,
+          "tokens_generated": 68,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_04_exploration_atmosphere_calimport",
+      "category": "Exploration / atmosphere",
+      "title": "Arrival at the Grand Bazaar of Calimport",
+      "pipeline": "new",
+      "text": "Warm desert air carries the scent of roasted mutton, bitter incense, and pungent clove oil through the Grand Bazaar. Beneath soaring horseshoe arches of ochre stone, Calishite rug merchants haggle in rapid cadences with sailors from the Moonshae Isles. Near the fountain of the Three Pashas, half-cloaked figures wearing the winged viper of the Zhentarim watch the crowds, their watchful eyes tracking every purse and blade that enters the district.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0294,
+          "inter_4gram_rate": 0.0149,
+          "composite_repetition": 0.0074,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.445,
+          "tokens_generated": 70,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_05_emotional_moral_dilemma_sanctuary",
+      "category": "Dramatic emotional moment / moral dilemma",
+      "title": "Refuge and Sovereign Choice for Thalia & Lyra",
+      "pipeline": "new",
+      "text": "Thalia's fingers tremble against the warm earthenware goblet, her wide eyes searching your face for any hidden malice. Finding none, she lowers her guard, her shoulders dropping in a sudden wave of exhaustion. \"Allies... not servants,\" she whispers, clutching Lyra close as the younger girl exhales a soft sob into her apron. She looks toward the heavy oak door of the haven, then back to you, the choice settling deep within her.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.534,
+          "tokens_generated": 72,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_06_ambiguous_skill_check_zone_of_truth",
+      "category": "Ambiguous outcome / skill check",
+      "title": "Zone of Truth in the Hostile Taproom",
+      "pipeline": "new",
+      "text": "A resonant hum vibrates through the floorboards as a pale golden aura blossoms across the taproom. The scarred cutthroat stiffens, veins bulging at his temples as he clamps his jaw shut against the divine compulsion. His eyes water from the psychic pressure; a muffled curse escapes his lips, followed by a ragged gasp. \"Curse your celestial blood!\" he spits, clutching his head as the spell slowly cracks his defiance.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0299,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.006,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.4,
+          "tokens_generated": 69,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_07_world_knowledge_lore_inquiry",
+      "category": "World knowledge / lore inquiry",
+      "title": "Inquiring on Calimport Factions & Black Network Politics",
+      "pipeline": "new",
+      "text": "Thuldan leans closer, his voice dropping below the street noise. \"The merchant has been dining with Pasha Balik's factor, but the gold backing him bears the mark of the Shadow Thieves of Amn. They want to choke off our supply lines to Darkhold before winter freezes the trade passes.\" He tucks the scroll into his tunic and watches you steadily, awaiting your command.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.132,
+          "tokens_generated": 63,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_08_pursuit_escape_alleys",
+      "category": "Fast-paced pursuit",
+      "title": "Desperate Escape through Calimport Dock Alleys",
+      "pipeline": "new",
+      "text": "Cobblestones slick with sea brine flash beneath your boots as you guide the sisters into the maze of the Dock Ward. Behind, torchlight paints the fog in jagged crimson flares, accompanied by the baying of tavern hounds and the clatter of drawn scimitars. You veer sharply past an overturned fish cart into a narrow stairwell that climbs toward the upper avenues, the pursuers' furious shouts fading into the mist below.",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0294,
+          "inter_4gram_rate": 0.0149,
+          "composite_repetition": 0.0074,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.445,
+          "tokens_generated": 70,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_09_companion_npc_coordination_thuldan",
+      "category": "Companion / NPC coordination",
+      "title": "Tactical Flanking & Intimidation with Thuldan",
+      "pipeline": "new",
+      "text": "At your unspoken cue, Thuldan dissolves into the darkness behind a stack of corded hides, moving without a whisper of leather or steel. You step directly into the lantern's glow, drawing the courier's terrified gaze. As the man raises his stiletto to threaten you, cold steel touches the hollow of his neck from behind. \"Drop it,\" Thuldan whispers in the courier's ear, \"or this alley is where your story ends.\"",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0441,
+          "inter_4gram_rate": 0.0149,
+          "composite_repetition": 0.0103,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.445,
+          "tokens_generated": 70,
+          "tok_per_sec": 22.4
+        }
+      }
+    },
+    {
+      "situation_id": "sit_10_turning_point_royal_crisis_alusair",
+      "category": "Turning point / plot revelation",
+      "title": "Royal Standoff with Princess Alusair & the Purple Dragons",
+      "pipeline": "new",
+      "text": "The cold steel of eight halberd tips glints inches from your chest. Princess Alusair commands the room with the unyielding authority of the Obarskyr crown, her hand resting on the pommel of her side-sword. \"Stand fast, Captain,\" she commands quietly, her piercing gaze locked on yours across the leveled weapons. \"Lord Caio has words to speak before Cormyr renders judgment. Speak them swiftly, sorcerer.\"",
+      "metrics": {
+        "repetition": {
+          "intra_3gram_rate": 0.0,
+          "intra_4gram_rate": 0.0,
+          "inter_3gram_rate": 0.0,
+          "inter_4gram_rate": 0.0,
+          "composite_repetition": 0.0,
+          "repetition_loop": false
+        },
+        "impersonation": {
+          "has_impersonation": false,
+          "total_violations": 0,
+          "violations_per_100_words": 0.0,
+          "breakdown": {
+            "action_prompt": 0,
+            "dialogue_dictation": 0,
+            "internal_decision": 0,
+            "forced_action": 0
+          }
+        },
+        "truncation": {
+          "is_empty": false,
+          "is_truncated": false,
+          "empty_or_truncated": false,
+          "reason": "ok"
+        },
+        "latency": {
+          "ttft_sec": 0.32,
+          "total_sec": 3.177,
+          "tokens_generated": 64,
+          "tok_per_sec": 22.4
+        }
+      }
+    }
+  ]
+}

@@ -7,7 +7,8 @@ Todos rodam com Python padrão (sem dependências externas).
 |---|---|
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
-| `setup_llm_local.ps1` | **Somente fallback local**: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
+| `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
+| `setup_llm_local.sh` | **Linux.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.sh` |
 
 ---
 
@@ -111,6 +112,11 @@ curl -X PUT http://127.0.0.1:8000/api/settings/llm -H "Content-Type: application
 python tools\check_llm.py --base-url http://127.0.0.1:5001/v1
 python tools\bench_llm.py --base-url http://127.0.0.1:5001/v1   # KoboldCpp não exige key por padrão
 ```
+
+No Linux o equivalente é `bash tools/setup_llm_local.sh` (binário `koboldcpp-linux-x64`
+ou `koboldcpp-linux-arm64`, gravado em `data/koboldcpp/koboldcpp`). Ele gera
+`start_llm_local.sh`; o restante (porta 5001, `base_url`, `check_llm.py`) é o mesmo.
+`--model` e `--force` espelham `-Model` e `-Force`.
 
 Para voltar à VM, restaure `base_url = http://vm.groupabz.com:1234/v1` pela mesma via.
 

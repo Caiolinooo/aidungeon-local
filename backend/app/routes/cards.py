@@ -6,10 +6,10 @@ import json
 
 from fastapi import APIRouter, Depends, Response
 
-from app import db, npc_assets, settings_store
+from app import db, llm_client, npc_assets, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import StoryCardUpsert
+from app.schemas import CardBulkAction, StoryCardUpsert
 
 router = APIRouter()
 
@@ -43,10 +43,32 @@ def create_card(adventure_id: str, body: StoryCardUpsert) -> dict:
 
 
 @router.get("/{adventure_id}/cards")
-def list_cards(adventure_id: str) -> list[dict]:
+def list_cards(
+    adventure_id: str,
+    q: str | None = None,
+    type: str | None = None,
+    pinned: bool | None = None,
+) -> list[dict]:
     _adventure_or_404(adventure_id)
     with db.session() as conn:
-        return [db.attach_portrait(conn, c) for c in db.list_cards(conn, adventure_id)]
+        return [
+            db.attach_portrait(conn, c)
+            for c in db.list_cards(conn, adventure_id, q=q, card_type=type, pinned=pinned)
+        ]
+
+
+@router.post("/{adventure_id}/cards/bulk")
+def bulk_cards(adventure_id: str, body: CardBulkAction) -> dict:
+    _adventure_or_404(adventure_id)
+    if body.action == "retype":
+        if not body.new_type or not body.new_type.strip():
+            raise GameError.bad_request("invalid_payload", "new_type is required for retype action")
+    with db.session() as conn:
+        new_type = body.new_type.strip() if body.new_type else None
+        updated_count = db.bulk_cards_action(
+            conn, adventure_id, body.action, body.card_ids, new_type=new_type
+        )
+        return {"updated": updated_count, "action": body.action}
 
 
 @router.get("/{adventure_id}/cards/{card_id}")
@@ -91,7 +113,10 @@ def enrich_card(adventure_id: str, card_id: str,
     with db.session() as conn:
         adv, card = _card_or_404(conn, adventure_id, card_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
-        card = npc_assets.enrich_card(conn, adv, card, llm_cfg, transport=transport)
+        try:
+            card = npc_assets.enrich_card(conn, adv, card, llm_cfg, transport=transport)
+        except llm_client.LlmError as exc:
+            raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
         return db.attach_portrait(conn, card)
 
 
@@ -102,3 +127,4 @@ def delete_card(adventure_id: str, card_id: str) -> Response:
     if not ok:
         raise GameError.not_found(f"card {card_id} not found")
     return Response(status_code=204)
+

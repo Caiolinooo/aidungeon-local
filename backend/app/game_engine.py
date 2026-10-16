@@ -24,7 +24,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Iterator
 
-from app import context_builder, db, llm_client, npc_chronicle, settings_store
+from app import context_builder, db, llm_client, npc_chronicle, scripting, settings_store
 from app.errors import GameError
 
 _locks_guard = threading.Lock()
@@ -77,9 +77,21 @@ def _maybe_update_memory(adventure_id: str) -> None:
         pass
 
 
+_retry_counts: dict[tuple[str, int], int] = {}
+
+
+def reset_retry_counts() -> None:
+    _retry_counts.clear()
+
+
+def get_retry_count(adventure_id: str, seq: int) -> int:
+    return _retry_counts.get((adventure_id, seq), 0)
+
+
 # -------------------------------------------------------------- geração
 def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        retry_of: dict | None,
+                       retry_count: int = 0,
                        transport: Any) -> Iterator[dict]:
     """Gerador de eventos. Contexto = ações atuais (retry: sem a antiga)."""
 
@@ -94,7 +106,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 cfg = settings_store.runtime_config(conn)
                 built = context_builder.build_context(adventure, actions, cfg, conn)
                 llm_cfg = cfg["llm"]
-                sampler = cfg["sampler"]
+                sampler = dict(cfg["sampler"])
+                if retry_of is not None and retry_count > 0:
+                    base_t = float(sampler.get("temperature", 0.85))
+                    step = float(sampler.get("retry_temperature_step", 0.05))
+                    max_t = float(sampler.get("max_retry_temperature", 1.15))
+                    sampler["temperature"] = round(min(base_t + step * retry_count, max_t), 4)
+
+            # Scripting hook: context modifier (before LLM dispatch)
+            ctx_script = scripting.get_adventure_script(adventure_id, "context_modifier")
+            if ctx_script:
+                built.messages = scripting.run_context_modifier(ctx_script, built.messages)
 
             for token in llm_client.stream_chat_completion(
                     llm_cfg, built.messages, sampler=sampler,
@@ -103,6 +125,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 yield {"event": "token", "data": {"token": token}}
 
             text = "".join(full).rstrip()
+            # Scripting hook: output modifier (after generation completion)
+            out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
+            if out_script:
+                text = scripting.run_output_modifier(out_script, text)
+
             with db.session() as conn:
                 if retry_of is not None:
                     # substitui: mesmo seq, novo id (apaga a antiga só no sucesso)
@@ -141,9 +168,18 @@ def handle_action(adventure_id: str, type_: str, text: str,
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     try:
+        # Scripting hook: input modifier (before input processing)
+        in_script = scripting.get_adventure_script(adventure_id, "input_modifier")
+        if in_script:
+            mod_action = scripting.run_input_modifier(in_script, {"type": type_, "text": text})
+            if isinstance(mod_action, dict):
+                type_ = mod_action.get("type", type_)
+                text = mod_action.get("text", text)
+
         with db.session() as conn:
             last_seq = db.max_seq(conn, adventure_id)
             seq = 0 if last_seq is None else last_seq + 1
+            _retry_counts.pop((adventure_id, seq), None)
             player_action = db.insert_action(conn, adventure_id, seq,
                                              type_, _format_player_text(type_, text))
             db.touch_adventure(conn, adventure_id)
@@ -151,7 +187,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
         release_generation_lock(adventure_id)
         raise
     return _stream_generation(adventure_id, player_action=player_action,
-                              retry_of=None, transport=transport)
+                              retry_of=None, retry_count=0, transport=transport)
 
 
 def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
@@ -161,11 +197,12 @@ def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     return _stream_generation(adventure_id, player_action=None,
-                              retry_of=None, transport=transport)
+                              retry_of=None, retry_count=0, transport=transport)
 
 
-def handle_retry(adventure_id: str, transport: Any = None) -> Iterator[dict]:
-    """POST /retry: regenera a última resposta da IA (mesmo seq, novo id)."""
+def handle_retry(adventure_id: str, transport: Any = None, *,
+                 retry_count: int | None = None) -> Iterator[dict]:
+    """POST /retry: regenera a última resposta da IA com stepping de temperatura."""
     _adventure_or_404(adventure_id)
     with db.session() as conn:
         actions = db.list_actions(conn, adventure_id)
@@ -176,8 +213,16 @@ def handle_retry(adventure_id: str, transport: Any = None) -> Iterator[dict]:
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+
+    key = (adventure_id, int(old["seq"]))
+    if retry_count is None:
+        _retry_counts[key] = _retry_counts.get(key, 0) + 1
+        effective_count = _retry_counts[key]
+    else:
+        effective_count = retry_count
+
     return _stream_generation(adventure_id, player_action=None,
-                              retry_of=old, transport=transport)
+                              retry_of=old, retry_count=effective_count, transport=transport)
 
 
 # ------------------------------------------------------------------ undo

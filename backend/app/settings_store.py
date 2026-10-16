@@ -26,7 +26,10 @@ OVERRIDE_KEYS = (
     "llm.base_url", "llm.api_key", "llm.model_alias", "llm.context_size",
     "llm.max_tokens", "llm.streaming", "llm.disable_thinking", "llm.timeout_seconds",
     # sampler (expostos em GET/PUT /api/settings/llm)
-    "sampler.temperature", "sampler.top_p", "sampler.repetition_penalty",
+    "sampler.temperature", "sampler.top_p", "sampler.min_p",
+    "sampler.repetition_penalty", "sampler.presence_penalty", "sampler.frequency_penalty",
+    "sampler.dry_multiplier", "sampler.dry_base", "sampler.dry_allowed_length",
+    "sampler.dry_penalty_last_n", "sampler.retry_temperature_step", "sampler.max_retry_temperature",
     # imagem (v2; storage_dir/timeout_seconds são internos — não saem no PUT)
     "image.enabled", "image.provider", "image.sdwebui_base_url",
     "image.sdwebui_steps", "image.sdwebui_width", "image.sdwebui_height",
@@ -37,6 +40,9 @@ OVERRIDE_KEYS = (
     "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
     "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
     "voice.max_text_chars", "voice.stt_max_bytes",
+    # embeddings (v0.8.0 / M2)
+    "embeddings.enabled", "embeddings.base_url", "embeddings.model",
+    "embeddings.timeout_seconds",
 )
 
 _file_cache: dict | None = None
@@ -113,7 +119,16 @@ def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
                        # sampler: overrides gravados como sampler.* (não llm.*)
                        ("temperature", "sampler.temperature"),
                        ("top_p", "sampler.top_p"),
-                       ("repetition_penalty", "sampler.repetition_penalty")):
+                       ("min_p", "sampler.min_p"),
+                       ("repetition_penalty", "sampler.repetition_penalty"),
+                       ("presence_penalty", "sampler.presence_penalty"),
+                       ("frequency_penalty", "sampler.frequency_penalty"),
+                       ("dry_multiplier", "sampler.dry_multiplier"),
+                       ("dry_base", "sampler.dry_base"),
+                       ("dry_allowed_length", "sampler.dry_allowed_length"),
+                       ("dry_penalty_last_n", "sampler.dry_penalty_last_n"),
+                       ("retry_temperature_step", "sampler.retry_temperature_step"),
+                       ("max_retry_temperature", "sampler.max_retry_temperature")):
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
@@ -153,9 +168,18 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
         "timeout_seconds": int(ov("llm.timeout_seconds", llm.get("timeout_seconds", 180))),
         # sampler efetivo (override sampler.* > settings.json sampler)
         "temperature": float(ov("sampler.temperature", sampler.get("temperature", 0.85))),
-        "top_p": float(ov("sampler.top_p", sampler.get("top_p", 0.95))),
+        "top_p": float(ov("sampler.top_p", sampler.get("top_p", 1.0))),
+        "min_p": float(ov("sampler.min_p", sampler.get("min_p", 0.08))),
         "repetition_penalty": float(ov("sampler.repetition_penalty",
-                                       sampler.get("repetition_penalty", 1.08))),
+                                       sampler.get("repetition_penalty", 1.02))),
+        "presence_penalty": float(ov("sampler.presence_penalty", sampler.get("presence_penalty", 0.15))),
+        "frequency_penalty": float(ov("sampler.frequency_penalty", sampler.get("frequency_penalty", 0.10))),
+        "dry_multiplier": float(ov("sampler.dry_multiplier", sampler.get("dry_multiplier", 0.8))),
+        "dry_base": float(ov("sampler.dry_base", sampler.get("dry_base", 1.75))),
+        "dry_allowed_length": int(ov("sampler.dry_allowed_length", sampler.get("dry_allowed_length", 2))),
+        "dry_penalty_last_n": int(ov("sampler.dry_penalty_last_n", sampler.get("dry_penalty_last_n", -1))),
+        "retry_temperature_step": float(ov("sampler.retry_temperature_step", sampler.get("retry_temperature_step", 0.05))),
+        "max_retry_temperature": float(ov("sampler.max_retry_temperature", sampler.get("max_retry_temperature", 1.15))),
     }
 
 
@@ -307,6 +331,41 @@ def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
     return changed
 
 
+# ---------------------------------------------------------------- embeddings
+def effective_embeddings_settings(conn: sqlite3.Connection | None = None) -> dict:
+    """Config efetiva do cliente de embeddings (arquivo + overrides SQLite)."""
+    cfg = load_file_settings()
+    emb = cfg.get("embeddings", {})
+
+    def ov(key: str, default: Any) -> Any:
+        if conn is None:
+            return default
+        value = _get_override(conn, key)
+        return default if value is None else value
+
+    return {
+        "enabled": bool(ov("embeddings.enabled", emb.get("enabled", True))),
+        "base_url": str(ov("embeddings.base_url", emb.get("base_url", "http://127.0.0.1:8081/v1"))),
+        "model": str(ov("embeddings.model", emb.get("model", "Qwen3-Embedding-0.6B"))),
+        "timeout_seconds": int(ov("embeddings.timeout_seconds", emb.get("timeout_seconds", 30))),
+    }
+
+
+def apply_embeddings_update(conn: sqlite3.Connection, update: dict) -> set[str]:
+    """Persiste overrides de embeddings."""
+    changed: set[str] = set()
+    for field, key in (
+        ("enabled", "embeddings.enabled"),
+        ("base_url", "embeddings.base_url"),
+        ("model", "embeddings.model"),
+        ("timeout_seconds", "embeddings.timeout_seconds"),
+    ):
+        if field in update and update[field] is not None:
+            _set_override(conn, key, update[field])
+            changed.add(field)
+    return changed
+
+
 # ---------------------------------------------------- config p/ game engine
 def runtime_config(conn: sqlite3.Connection) -> dict:
     """Tudo que o context_builder/game_engine precisam (budgets, sampler, stops)."""
@@ -316,13 +375,24 @@ def runtime_config(conn: sqlite3.Connection) -> dict:
     sampler["max_tokens"] = llm["max_tokens"]
     sampler["temperature"] = llm["temperature"]
     sampler["top_p"] = llm["top_p"]
+    sampler["min_p"] = llm["min_p"]
     sampler["repetition_penalty"] = llm["repetition_penalty"]
+    sampler["presence_penalty"] = llm["presence_penalty"]
+    sampler["frequency_penalty"] = llm["frequency_penalty"]
+    sampler["dry_multiplier"] = llm["dry_multiplier"]
+    sampler["dry_base"] = llm["dry_base"]
+    sampler["dry_allowed_length"] = llm["dry_allowed_length"]
+    sampler["dry_penalty_last_n"] = llm["dry_penalty_last_n"]
+    sampler["retry_temperature_step"] = llm["retry_temperature_step"]
+    sampler["max_retry_temperature"] = llm["max_retry_temperature"]
     return {
         "context_size": llm["context_size"],
         "budgets": dict(cfg.get("context", {}).get("budgets", {})),
+        "dynamic_scaling": dict(cfg.get("context", {}).get("dynamic_scaling", {})),
         "stop_sequences": list(cfg.get("stop_sequences", ["\n> You", "\n> you"])),
         "sampler": sampler,
         "memory_bank": dict(cfg.get("memory_bank", {})),
+        "embeddings": effective_embeddings_settings(conn),
         "story_cards": dict(cfg.get("story_cards", {})),
         "llm": llm,
     }

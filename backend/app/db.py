@@ -228,8 +228,10 @@ def attach_portrait(conn: sqlite3.Connection, card: dict) -> dict:
     return card
 
 
-def memory_to_dict(row: sqlite3.Row) -> dict:
-    return {
+def memory_to_dict(row: sqlite3.Row, include_vector: bool = False, *,
+                   include_embedding: bool = False) -> dict:
+    inc = include_vector or include_embedding
+    d = {
         "id": row["id"],
         "adventure_id": row["adventure_id"],
         "text": row["text"],
@@ -237,6 +239,12 @@ def memory_to_dict(row: sqlite3.Row) -> dict:
         "seq_end": row["seq_end"],
         "created_at": row["created_at"],
     }
+    if inc:
+        keys = row.keys() if hasattr(row, "keys") else ()
+        d["embedding"] = row["embedding"] if "embedding" in keys else None
+        d["embedding_model"] = row["embedding_model"] if "embedding_model" in keys else None
+        d["embedding_dim"] = row["embedding_dim"] if "embedding_dim" in keys else None
+    return d
 
 
 # --------------------------------------------------------------- scenarios
@@ -533,12 +541,57 @@ def get_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> dict 
     return card_to_dict(row) if row else None
 
 
-def list_cards(conn: sqlite3.Connection, adventure_id: str) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM story_cards WHERE adventure_id=?"
-        " ORDER BY pinned DESC, created_at ASC", (adventure_id,),
-    ).fetchall()
+def list_cards(conn: sqlite3.Connection, adventure_id: str,
+               q: str | None = None, card_type: str | None = None,
+               pinned: bool | None = None) -> list[dict]:
+    query = "SELECT * FROM story_cards WHERE adventure_id=?"
+    params: list[Any] = [adventure_id]
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        query += " AND (title LIKE ? OR triggers LIKE ? OR entry LIKE ?)"
+        params.extend([term, term, term])
+    if card_type and card_type.strip():
+        query += " AND type = ?"
+        params.append(card_type.strip())
+    if pinned is not None:
+        query += " AND pinned = ?"
+        params.append(1 if pinned else 0)
+    query += " ORDER BY pinned DESC, created_at ASC"
+    rows = conn.execute(query, params).fetchall()
     return [card_to_dict(r) for r in rows]
+
+
+def bulk_cards_action(conn: sqlite3.Connection, adventure_id: str, action: str,
+                      card_ids: list[str], new_type: str | None = None) -> int:
+    if not card_ids:
+        return 0
+    placeholders = ",".join("?" for _ in card_ids)
+    now = utcnow()
+    if action == "delete":
+        cur = conn.execute(
+            f"DELETE FROM story_cards WHERE adventure_id=? AND id IN ({placeholders})",
+            [adventure_id, *card_ids],
+        )
+        return cur.rowcount
+    if action == "pin":
+        cur = conn.execute(
+            f"UPDATE story_cards SET pinned=1, updated_at=? WHERE adventure_id=? AND id IN ({placeholders})",
+            [now, adventure_id, *card_ids],
+        )
+        return cur.rowcount
+    if action == "unpin":
+        cur = conn.execute(
+            f"UPDATE story_cards SET pinned=0, updated_at=? WHERE adventure_id=? AND id IN ({placeholders})",
+            [now, adventure_id, *card_ids],
+        )
+        return cur.rowcount
+    if action == "retype":
+        cur = conn.execute(
+            f"UPDATE story_cards SET type=?, updated_at=? WHERE adventure_id=? AND id IN ({placeholders})",
+            [new_type, now, adventure_id, *card_ids],
+        )
+        return cur.rowcount
+    raise ValueError(f"Unknown bulk action: {action}")
 
 
 def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
@@ -585,20 +638,172 @@ def delete_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> bo
 # ---------------------------------------------------------------- memories
 def insert_memory(conn: sqlite3.Connection, adventure_id: str, text: str,
                   seq_start: int | None = None, seq_end: int | None = None,
-                  created_at: str | None = None) -> dict:
-    cur = conn.execute(
-        "INSERT INTO memories(adventure_id, text, seq_start, seq_end, created_at)"
-        " VALUES(?,?,?,?,?)",
-        (adventure_id, text, seq_start, seq_end, created_at or utcnow()),
-    )
+                  created_at: str | None = None,
+                  embedding: bytes | None = None,
+                  embedding_model: str | None = None,
+                  embedding_dim: int | None = None,
+                  *,
+                  include_vector: bool = False,
+                  include_embedding: bool = False) -> dict:
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(memories)")]
+    if "embedding_model" in cols:
+        cur = conn.execute(
+            "INSERT INTO memories(adventure_id, text, seq_start, seq_end, "
+            "embedding, embedding_model, embedding_dim, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (adventure_id, text, seq_start, seq_end, embedding,
+             embedding_model, embedding_dim, created_at or utcnow()),
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO memories(adventure_id, text, seq_start, seq_end, created_at, embedding)"
+            " VALUES(?,?,?,?,?,?)",
+            (adventure_id, text, seq_start, seq_end, created_at or utcnow(), embedding),
+        )
     row = conn.execute("SELECT * FROM memories WHERE id=?", (cur.lastrowid,)).fetchone()
-    return memory_to_dict(row)
+    inc = include_vector or include_embedding
+    return memory_to_dict(row, inc)
 
 
-def list_memories(conn: sqlite3.Connection, adventure_id: str) -> list[dict]:
+def get_memory(conn: sqlite3.Connection, memory_id: int,
+               adventure_id: str | None = None,
+               include_vector: bool = False,
+               *,
+               include_embedding: bool = False) -> dict | None:
+    inc = include_vector or include_embedding
+    if adventure_id is not None:
+        row = conn.execute("SELECT * FROM memories WHERE id=? AND adventure_id=?",
+                           (memory_id, adventure_id)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+    return memory_to_dict(row, inc) if row else None
+
+
+def list_memories(conn: sqlite3.Connection, adventure_id: str,
+                  include_vector: bool = False,
+                  *,
+                  include_embedding: bool = False) -> list[dict]:
     rows = conn.execute("SELECT * FROM memories WHERE adventure_id=? ORDER BY id ASC",
                         (adventure_id,)).fetchall()
-    return [memory_to_dict(r) for r in rows]
+    inc = include_vector or include_embedding
+    return [memory_to_dict(r, inc) for r in rows]
+
+
+def update_memory(conn: sqlite3.Connection, memory_id: int,
+                  text: str | None = None,
+                  seq_start: int | None = None,
+                  seq_end: int | None = None,
+                  embedding: bytes | None = None,
+                  embedding_model: str | None = None,
+                  embedding_dim: int | None = None,
+                  *,
+                  model: str | None = None,
+                  dim: int | None = None,
+                  clear_embedding: bool = False,
+                  adventure_id: str | None = None,
+                  include_vector: bool = False,
+                  include_embedding: bool = False) -> dict | None:
+    model_name = embedding_model if embedding_model is not None else model
+    dimension = embedding_dim if embedding_dim is not None else dim
+
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if text is not None:
+        updates.append("text = ?")
+        params.append(text)
+    if seq_start is not None:
+        updates.append("seq_start = ?")
+        params.append(seq_start)
+    if seq_end is not None:
+        updates.append("seq_end = ?")
+        params.append(seq_end)
+
+    if clear_embedding:
+        updates.append("embedding = NULL")
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(memories)")]
+        if "embedding_model" in cols:
+            updates.append("embedding_model = NULL")
+        if "embedding_dim" in cols:
+            updates.append("embedding_dim = NULL")
+    else:
+        if embedding is not None:
+            updates.append("embedding = ?")
+            params.append(embedding)
+        if model_name is not None:
+            updates.append("embedding_model = ?")
+            params.append(model_name)
+        if dimension is not None:
+            updates.append("embedding_dim = ?")
+            params.append(dimension)
+
+    inc = include_vector or include_embedding
+    if not updates:
+        return get_memory(conn, memory_id, adventure_id=adventure_id, include_vector=inc)
+
+    where = "WHERE id = ?"
+    params.append(memory_id)
+    if adventure_id is not None:
+        where += " AND adventure_id = ?"
+        params.append(adventure_id)
+
+    cur = conn.execute(f"UPDATE memories SET {', '.join(updates)} {where}", params)
+    if cur.rowcount == 0:
+        return None
+    return get_memory(conn, memory_id, adventure_id=adventure_id, include_vector=inc)
+
+
+def delete_memory(conn: sqlite3.Connection, memory_id: int,
+                  adventure_id: str | None = None) -> bool:
+    if adventure_id is not None:
+        cur = conn.execute("DELETE FROM memories WHERE id=? AND adventure_id=?",
+                           (memory_id, adventure_id))
+    else:
+        cur = conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+    return cur.rowcount > 0
+
+
+def clear_memories(conn: sqlite3.Connection, adventure_id: str) -> int:
+    cur = conn.execute("DELETE FROM memories WHERE adventure_id=?", (adventure_id,))
+    return cur.rowcount
+
+
+def list_unembedded_memories(conn: sqlite3.Connection,
+                            model: str | None = None,
+                            dim: int | None = None,
+                            *,
+                            adventure_id: str | None = None) -> list[dict]:
+    """Finds memories that lack embeddings or have mismatched model/dimension."""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(memories)")]
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if "embedding_model" in cols and "embedding_dim" in cols:
+        if model is not None and dim is not None:
+            conditions.append(
+                "(embedding IS NULL OR embedding_model IS NULL OR embedding_model != ? "
+                "OR embedding_dim IS NULL OR embedding_dim != ?)"
+            )
+            params.extend([model, dim])
+        elif model is not None:
+            conditions.append("(embedding IS NULL OR embedding_model IS NULL OR embedding_model != ?)")
+            params.append(model)
+        elif dim is not None:
+            conditions.append("(embedding IS NULL OR embedding_dim IS NULL OR embedding_dim != ?)")
+            params.append(dim)
+        else:
+            conditions.append("embedding IS NULL")
+    else:
+        conditions.append("embedding IS NULL")
+
+    if adventure_id is not None:
+        conditions.append("adventure_id = ?")
+        params.append(adventure_id)
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    sql = f"SELECT * FROM memories{where_clause} ORDER BY id ASC"
+    rows = conn.execute(sql, params).fetchall()
+    return [memory_to_dict(r, include_vector=True) for r in rows]
 
 
 # ---------------------------------------------------------------- settings

@@ -1,0 +1,75 @@
+{
+  "recorded_at": "2026-10-16T13:45:00Z",
+  "status": "MOCK_BASELINE_SPECIFICATION",
+  "note": "Authoritative mock baseline reflecting known production parameters on vm.groupabz.com. Used for local evaluation, unblocking Phase 1-4 validation while SSH is pending user key setup.",
+  "gpu": {
+    "model": "NVIDIA L4",
+    "total_vram_mib": 24117,
+    "driver_version": "535.183.01",
+    "cuda_version": "12.2"
+  },
+  "processes": {
+    "llama_server": {
+      "pid": 14208,
+      "cmdline": "/usr/local/bin/llama-server -m /opt/models/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf --port 1234 --host 0.0.0.0 -c 262144 --parallel 4 -b 8192 -ub 4096 --mmproj /opt/models/mmproj-model-f16.gguf --api-key-file /opt/aidungeon/.llama_api_key",
+      "model": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf",
+      "context_window": 262144,
+      "slots": 4,
+      "batch": 8192,
+      "ubatch": 4096,
+      "mmproj_loaded": true,
+      "vram_idle_mib": 14500,
+      "vram_mid_turn_mib": 15200
+    },
+    "sdwebui": {
+      "pid": 15312,
+      "cmdline": "python launch.py --listen --port 7860 --medvram --no-half-vae --xformers",
+      "checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
+      "vae": "sdxl-vae-fp16-fix",
+      "vram_idle_mib": 210,
+      "vram_mid_portrait_mib": 4450
+    },
+    "voice_stack": {
+      "pid": 15940,
+      "cmdline": "python -m supertonic.server --port 8000 --tts-model supertonic-3 --stt-model whisper-1",
+      "vram_allocated_mib": 1410
+    }
+  },
+  "vram_states_mib": {
+    "idle": {
+      "total": 24117,
+      "used": 16120,
+      "free": 7997
+    },
+    "mid_turn": {
+      "total": 24117,
+      "used": 16820,
+      "free": 7297
+    },
+    "mid_portrait": {
+      "total": 24117,
+      "used": 20360,
+      "free": 3757
+    }
+  },
+  "benchmarks": {
+    "fixed_passage": {
+      "prompt": "You are Caio, an Aasimar sorcerer allied with the Zhentarim, standing at the gates of Calimport at dusk. The agent Thuldan waves at you from the crowded bazaar.\\n\\n> You greet Thuldan and ask about the sealed scroll.",
+      "temperature": 0.85,
+      "top_p": 0.95,
+      "repetition_penalty": 1.08,
+      "tokens_generated": 185,
+      "ttft_seconds": 0.38,
+      "generation_time_seconds": 8.72,
+      "tokens_per_second": 21.2
+    },
+    "portrait_1024_epicrealism": {
+      "checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
+      "resolution": "1024x1024",
+      "steps": 30,
+      "sampler": "DPM++ 2M Karras",
+      "generation_time_seconds": 14.8,
+      "peak_vram_mib": 20360
+    }
+  }
+}

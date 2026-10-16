@@ -148,15 +148,17 @@ export default function ConfigTab() {
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className={labelCls}>Context size</span>
+          <span className={labelCls}>Context size (max 262144)</span>
           <input
             type="number"
             min={4096}
-            max={131072}
+            max={262144}
+            step={1024}
             value={form.context_size}
-            onChange={(e) => setForm({ ...form, context_size: e.target.value })}
+            onChange={(e) => setForm({ ...form, context_size: Math.min(262144, Number(e.target.value) || 0) })}
             className={inputCls}
           />
+
         </label>
         <label className="block">
           <span className={labelCls}>Timeout (s)</span>
@@ -175,15 +177,15 @@ export default function ConfigTab() {
         <input
           type="range"
           min={100}
-          max={600}
-          step={10}
+          max={2048}
+          step={16}
           value={form.max_tokens}
           onChange={(e) => setForm({ ...form, max_tokens: e.target.value })}
           className="w-full accent-emerald-600"
         />
         <div className="flex justify-between text-[10px] text-zinc-600">
           <span>100</span>
-          <span>600</span>
+          <span>2048</span>
         </div>
       </label>
 

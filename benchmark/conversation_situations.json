@@ -1,0 +1,367 @@
+[
+  {
+    "id": "sit_01_combat_spellcasting",
+    "category": "Combat / action confrontation",
+    "title": "Arcane Binding in The Salty Mermaid",
+    "reference_slice": "actions-001.json: actions 80-88",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer with royal blood and a vast reservoir of innate divine mana. You are affiliated with the Zhentarim. You carry a dagger and wield formidable arcane power.",
+    "authors_note": "Faerûn is a living, dangerous world. Combat is consequential, visceral, and grounded in Forgotten Realms physics. Magic manifests with sensory weight.",
+    "story_cards": [
+      {
+        "title": "Calimport",
+        "keys": "Calimport",
+        "content": "A sprawling, ancient desert port metropolis dominated by wealth, pashas, merchant houses, and shadows."
+      },
+      {
+        "title": "The Salty Mermaid",
+        "keys": "Salty Mermaid",
+        "content": "A grimy, low-ceilinged dockside tavern in Calimport known for sour ale, desperate sailors, and illicit trade."
+      },
+      {
+        "title": "Mara",
+        "keys": "Mara",
+        "content": "The shrewd and ruthless proprietor of The Salty Mermaid. She runs the taproom with iron authority."
+      }
+    ],
+    "memories": [
+      "Caio arrived in Calimport on Zhentarim business to secure tribute and political leverage.",
+      "Caio confronted bartender Mara at The Salty Mermaid after finding two young captive maids."
+    ],
+    "story_summary": "Caio tracked illicit activities to The Salty Mermaid tavern. After interrogating the owner Mara, Caio resolved to free the two captive girls by force.",
+    "recent_actions": [
+      {
+        "type": "do",
+        "text": "> You take the girls and step toward the door."
+      },
+      {
+        "type": "continue",
+        "text": "Mara moves with startling speed, seizing the younger girl's arm before you can clear the threshold. Her eyes blaze with cold fury. \"You don't walk out of my establishment with my property, stranger!\" Two burly patrons rise from the corner bench, drawing lead-weighted cudgels."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "cast a binding spell on Mara and the tavern patrons who step forward with raised cudgels."
+    },
+    "evaluation_focus": "Kinetic magic description, spell sensory details, crowd reaction, player agency preservation (do not narrate Caio's subsequent hits or dialogue)."
+  },
+  {
+    "id": "sit_02_dialogue_merchant_kaelen",
+    "category": "Dialogue / interrogation",
+    "title": "Extortion & Bargaining with Merchant Kaelen",
+    "reference_slice": "actions-001.json: actions 08-18",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer and Zhentarim operative in Calimport. You seek to expand the Black Network's tribute and political control over local merchants.",
+    "authors_note": "Characters are shrewd and self-interested. Bargaining requires leverage, tension, and realistic dialogue without breaking into modern slang.",
+    "story_cards": [
+      {
+        "title": "Zhentarim",
+        "keys": "Zhentarim, Black Network",
+        "content": "The Black Network of Faerûn, dealing in mercenaries, protection, intelligence, and ruthless commerce."
+      },
+      {
+        "title": "Thuldan",
+        "keys": "Thuldan",
+        "content": "A veteran Zhentarim enforcer in Calimport. Lean, calculating, ruthless, and loyal to the Black Network."
+      },
+      {
+        "title": "Merchant Kaelen",
+        "keys": "Kaelen",
+        "content": "A wealthy spice and steel merchant in Calimport who has refused to pay the Zhentarim protection tribute."
+      }
+    ],
+    "memories": [
+      "Thuldan delivered a sealed scroll identifying Kaelen as a delinquent merchant.",
+      "Caio and Thuldan cornered Kaelen in his trade office near the bazaar."
+    ],
+    "story_summary": "Caio and Thuldan cornered Kaelen to demand overdue tribute. Kaelen attempted to plead losses from pirate raids.",
+    "recent_actions": [
+      {
+        "type": "do",
+        "text": "> You go to the side of Thuldan and listen to the conversation."
+      },
+      {
+        "type": "continue",
+        "text": "Kaelen wipes a bead of sweat from his forehead, glancing anxiously between Thuldan's folded arms and your aristocratic presence. \"The spice caravans from Amn were delayed by gnolls, sirs! I don't have the gold on hand—surely the Black Network can grant an extension?\""
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "I think 10% of the total in taxes would be appropriate, or perhaps there is something in your warehouse of equal value."
+    },
+    "evaluation_focus": "Sharp dialogue cadence, NPC economic calculation, Thuldan's enforcer reaction, no dictation of player tone or follow-up decisions."
+  },
+  {
+    "id": "sit_03_stealth_intrigue_eavesdropping",
+    "category": "Stealth / intrigue",
+    "title": "Shadowing & Surveillance in the Bazaar",
+    "reference_slice": "actions-001.json: actions 05-10",
+    "plot_essentials": "You are Caio, Aasimar Sorcerer. You possess supernatural stealth and celestial aura control.",
+    "authors_note": "Intrigue thrives on sensory concealment, subtle body language, and environmental tension.",
+    "story_cards": [
+      {
+        "title": "Calimport Bazaar",
+        "keys": "Bazaar",
+        "content": "A maze of brightly colored awnings, hanging rugs, and crowded colonnades in Calimport."
+      },
+      {
+        "title": "Thuldan",
+        "keys": "Thuldan",
+        "content": "A Zhentarim operative who knows the back alleys of Calimport intimately."
+      }
+    ],
+    "memories": [
+      "Thuldan received word of a covert meeting behind the spice market."
+    ],
+    "story_summary": "Caio shadowed an elusive contact into the crowded market district to discover who is organizing resistance to the Zhentarim.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "You linger near a stall selling scented soaps and oils, the aroma of lilac and honey masking your scent. Ahead, Thuldan ducks beneath a tapestry-draped colonnade, meeting a cloaked figure wearing the signet of a local Pasha. Their voices drop to a conspiratorial murmur."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "slip into the shadowed archway behind the silk stall, listening intently to the whispered exchange without revealing your presence."
+    },
+    "evaluation_focus": "Environmental stealth tension, auditory details, avoiding breaking cover prematurely, preserving player agency."
+  },
+  {
+    "id": "sit_04_exploration_atmosphere_calimport",
+    "category": "Exploration / atmosphere",
+    "title": "Arrival at the Grand Bazaar of Calimport",
+    "reference_slice": "actions-001.json: actions 29-36",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer walking the storied streets of Calimport, the grand jewel of the Shining South.",
+    "authors_note": "Emphasize immersive sensory worldbuilding: sounds of haggling in Calishite dialects, wafting saffron, glinting brass minarets, and the looming heat of dusk.",
+    "story_cards": [
+      {
+        "title": "Calimport",
+        "keys": "Calimport",
+        "content": "One of the oldest metropolises in Faerûn, famous for glittering palaces, teeming slave-markets, spice trade, and cutthroat politics."
+      }
+    ],
+    "memories": [
+      "Caio settled the initial extortion debt with Kaelen, securing a crate of fine steel for the Zhentarim."
+    ],
+    "story_summary": "With his immediate mission completed, Caio takes time to survey the city and assess Calimport's power centers.",
+    "recent_actions": [
+      {
+        "type": "do",
+        "text": "> You say to Thuldan that you are going to take a walk through the city center."
+      },
+      {
+        "type": "continue",
+        "text": "Thuldan bows respectfully and melts into the alleys. The sun dips toward the Sea of Fallen Stars, casting long golden shadows across the sandstone boulevards."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "stroll through the Grand Bazaar toward the harbor district, observing the merchant stalls and the factions moving in the shadows."
+    },
+    "evaluation_focus": "Evocative worldbuilding prose, sensory immersion, vivid atmospheric setting, leaving the scene open for player exploration."
+  },
+  {
+    "id": "sit_05_emotional_moral_dilemma_sanctuary",
+    "category": "Dramatic emotional moment / moral dilemma",
+    "title": "Refuge and Sovereign Choice for Thalia & Lyra",
+    "reference_slice": "actions-001.json: actions 118-126 & 134-148",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer of royal lineage. Though aligned with the pragmatic Zhentarim, your celestial blood responds to injustice.",
+    "authors_note": "Handle emotional scenes with nuance and restraint. Avoid melodrama or patronizing clichés. Characters respond realistically to rescue and fear of new masters.",
+    "story_cards": [
+      {
+        "title": "Thalia",
+        "keys": "Thalia",
+        "content": "The elder of two enslaved sisters rescued from The Salty Mermaid. Protective, observant, and cautious."
+      },
+      {
+        "title": "Lyra",
+        "keys": "Lyra",
+        "content": "The younger sister, quiet and traumatized by their captivity."
+      }
+    ],
+    "memories": [
+      "Caio rescued Thalia and Lyra from Mara's abusive establishment in Calimport.",
+      "Caio used arcane teleportation to bring the girls to a safe private haven."
+    ],
+    "story_summary": "Having brought the sisters to safety, Caio provides warm food and fresh clothes. Now he must clarify the terms of their sanctuary.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Thalia and Lyra stand before the hearth in clean linen gowns, clutching warm goblets of cider. Thalia looks up at you, her voice trembling with cautious hope and lingering suspicion. \"My lord... why have you done this for us? What do you expect in return?\""
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "You are safe now. The choice is yours: stay under my protection as free allies, or leave with enough gold to start over."
+    },
+    "evaluation_focus": "Emotional realism, nuanced character reactions, respect for NPC vulnerability and autonomy, avoiding player emotional dictation."
+  },
+  {
+    "id": "sit_06_ambiguous_skill_check_zone_of_truth",
+    "category": "Ambiguous outcome / skill check",
+    "title": "Zone of Truth in the Hostile Taproom",
+    "reference_slice": "actions-001.json: actions 96-102",
+    "plot_essentials": "You are Caio, Aasimar Sorcerer. You channel innate celestial magic including divinations and enchantments.",
+    "authors_note": "Spellcasting against hostile crowds involves partial resistance, visible magical strain, and dynamic NPC will contests.",
+    "story_cards": [
+      {
+        "title": "Zone of Truth",
+        "keys": "Zone of Truth",
+        "content": "A magical enchantment that prevents deliberate falsehood within a designated radius, resisted by mental willpower."
+      }
+    ],
+    "memories": [
+      "Hostile enforcers at the tavern claimed ignorance regarding who commanded them to intercept Caio."
+    ],
+    "story_summary": "Caio confronted the tavern patrons to unmask who orchestrated the ambush against the Zhentarim convoy.",
+    "recent_actions": [
+      {
+        "type": "say",
+        "text": "> You say, \"Point to the man who gave you the gold to attack our caravan!\""
+      },
+      {
+        "type": "continue",
+        "text": "The scarred cutthroat spits on the floor, smirking through broken teeth. \"Don't know what you're babbling about, pretty boy. We're just honest sailors having a drink.\" Around him, three men shift their hands toward hidden boot daggers."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "channel your divine mana and unleash a Zone of Truth across the taproom, demanding that the ringleader speak."
+    },
+    "evaluation_focus": "Ambiguous contest of wills, visual and psychic manifestation of the spell, believable resistance vs failure, no forced player dialogue."
+  },
+  {
+    "id": "sit_07_world_knowledge_lore_inquiry",
+    "category": "World knowledge / lore inquiry",
+    "title": "Inquiring on Calimport Factions & Black Network Politics",
+    "reference_slice": "actions-001.json: actions 00-05",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer and Zhentarim noble. You must navigate the complex web of Forgotten Realms geopolitics in Calimshan.",
+    "authors_note": "Factions operate with realistic political motives. Lore must adhere strictly to established Forgotten Realms canon (Zhentarim, Shadow Thieves, Cowled Wizards, Pashas of Calimshan).",
+    "story_cards": [
+      {
+        "title": "Zhentarim",
+        "keys": "Zhentarim, Black Network",
+        "content": "A widespread shadow organization striving for commercial dominance and political influence across Faerûn."
+      },
+      {
+        "title": "Calimshan Pashas",
+        "keys": "Pashas, Calimshan",
+        "content": "The wealthy ruling oligarchy of Calimport, constantly engaged in intrigue and turf wars."
+      },
+      {
+        "title": "Shadow Thieves",
+        "keys": "Shadow Thieves",
+        "content": "The dominant thieves guild of Amn and Calimshan, sworn rivals of the Zhentarim in southern trade."
+      }
+    ],
+    "memories": [
+      "Thuldan brought a sealed report warning that local merchants are defying the Zhentarim tariff."
+    ],
+    "story_summary": "Caio meets his Zhentarim handler Thuldan in Calimport to examine intelligence on rival syndicates.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Thuldan hands you the cracked wax seal bearing the symbol of the winged viper. \"The merchant Kaelen isn't acting alone, my lord. Someone in the Upper District has guaranteed him protection from our enforcers.\""
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "Thuldan, who is backing this merchant? The Black Network doesn't tolerate rivals on the spice route."
+    },
+    "evaluation_focus": "Forgotten Realms canon fidelity, authentic factional dynamics, Thuldan's insider knowledge, avoidance of generic tropes."
+  },
+  {
+    "id": "sit_08_pursuit_escape_alleys",
+    "category": "Fast-paced pursuit",
+    "title": "Desperate Escape through Calimport Dock Alleys",
+    "reference_slice": "actions-001.json: actions 112-118",
+    "plot_essentials": "You are Caio, Aasimar Sorcerer. You are escorting two civilians while evading hostile pursuit through the night city.",
+    "authors_note": "Pursuit scenes demand kinetic pacing, environmental hazards, close calls, and palpable adrenaline.",
+    "story_cards": [
+      {
+        "title": "Calimport Dock Ward",
+        "keys": "Dock Ward",
+        "content": "A labyrinth of salt-crusted docks, narrow overhung alleys, fishmonger stalls, and dead-end alleys."
+      }
+    ],
+    "memories": [
+      "A brawl erupted in the tavern when Caio broke the enslavement chains."
+    ],
+    "story_summary": "Having incapacitated the tavern guards, Caio must now guide the girls through the maze of night alleys before reinforcements cut them off.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Behind you, the heavy wooden tavern doors splinter open. Horn blasts echo across the waterfront as harbor enforcers and mercenary thugs spill into the street, torches flaring in the humid night air. \"Find them! Cut them down before they reach the gate!\""
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "grab the two girls and sprint into the labyrinthine alleys of the Dock Ward, dodging through narrow market stalls to lose the pursuing cutthroats."
+    },
+    "evaluation_focus": "Kinetic chase momentum, sensory details of flight, environmental obstacles, immediate danger, keeping scene open."
+  },
+  {
+    "id": "sit_09_companion_npc_coordination_thuldan",
+    "category": "Companion / NPC coordination",
+    "title": "Tactical Flanking & Intimidation with Thuldan",
+    "reference_slice": "actions-001.json: actions 08-14",
+    "plot_essentials": "You are Caio, Aasimar Sorcerer. Thuldan is your veteran Zhentarim partner; you operate as a coordinated unit.",
+    "authors_note": "Allies have distinct combat and negotiation styles. Thuldan is practical, stealthy, and intimidating.",
+    "story_cards": [
+      {
+        "title": "Thuldan",
+        "keys": "Thuldan",
+        "content": "Zhentarim agent, master of daggers and street leverage, quick to capitalize on tactical openings."
+      }
+    ],
+    "memories": [
+      "Caio and Thuldan cornered a recalcitrant smuggler holding Zhentarim contraband."
+    ],
+    "story_summary": "In a shadowed warehouse alley, Caio and Thuldan cut off a courier attempting to flee with stolen ledgers.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "The courier backs against a stack of tarred timber, hand trembling on the hilt of a stiletto. Thuldan catches your eye from across the cobblestones, his hand resting lightly on his own blade, waiting for your lead."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "signal Thuldan with a subtle tilt of your chin to flank the merchant while you step directly into his line of sight."
+    },
+    "evaluation_focus": "Companion autonomy, silent tactical synergy, realistic partner behavior, no puppeting of the player."
+  },
+  {
+    "id": "sit_10_turning_point_royal_crisis_alusair",
+    "category": "Turning point / plot revelation",
+    "title": "Royal Standoff with Princess Alusair & the Purple Dragons",
+    "reference_slice": "actions-001.json: actions 188-200",
+    "plot_essentials": "You are Caio, an Aasimar Sorcerer of noble birth. Your clandestine presence in Cormyr's royal chambers has triggered an armed diplomatic crisis.",
+    "authors_note": "Royal court drama demands high political stakes, rigid protocol, lethal consequences, and suspenseful climaxes.",
+    "story_cards": [
+      {
+        "title": "Princess Alusair",
+        "keys": "Alusair, Princess",
+        "content": "Princess Alusair Obarskyr of Cormyr, known as the Steel Princess. Fierce, proud, devoted to Cormyr, and uncompromising in her dignity."
+      },
+      {
+        "title": "Purple Dragon Knights",
+        "keys": "Purple Dragons, Royal Guard",
+        "content": "The elite, disciplined military knights and royal guard of Cormyr."
+      }
+    ],
+    "memories": [
+      "Caio sought an audience with Princess Alusair to negotiate a Zhentarim treaty.",
+      "An intimate misstep in the royal chambers alarmed the guards outside."
+    ],
+    "story_summary": "An intense dispute in Princess Alusair's chambers brought the royal guard crashing through the doors.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "The chamber doors burst open with a resounding crash. A squad of Purple Dragon guards in burnished steel armor floods the room, halberds leveled and crossbolts loaded. The lead captain bellows, \"Step away from Her Highness! Lay down your steel or die where you stand!\" Princess Alusair steps back, her face flushed with fury."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "slowly raise both hands to show they are empty, locking eyes with Princess Alusair as the royal guards level their halberds at your throat."
+    },
+    "evaluation_focus": "Climactic political tension, royal decorum vs lethal force, suspenseful standoff, open-ended cliffhanger."
+  }
+]

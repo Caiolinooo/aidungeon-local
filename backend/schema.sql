@@ -41,6 +41,8 @@ CREATE TABLE memories(
   adventure_id TEXT NOT NULL REFERENCES adventures(id),
   text TEXT NOT NULL, seq_start INTEGER, seq_end INTEGER,
   embedding BLOB,                        -- fase 4 (pode ser NULL)
+  embedding_model TEXT,                  -- fase 4: nome do modelo (ex.: Qwen3-Embedding-0.6B)
+  embedding_dim INTEGER,                 -- fase 4: dimensão do vetor (ex.: 1024)
   created_at TEXT);
 
 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT);

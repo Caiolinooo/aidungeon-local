@@ -1,21 +1,37 @@
 {
   "sampler": {
     "temperature": 0.85,
-    "top_p": 0.95,
-    "repetition_penalty": 1.08,
+    "top_p": 1.0,
+    "min_p": 0.08,
+    "repetition_penalty": 1.02,
+    "presence_penalty": 0.15,
+    "frequency_penalty": 0.10,
+    "dry_multiplier": 0.8,
+    "dry_base": 1.75,
+    "dry_allowed_length": 2,
+    "dry_penalty_last_n": -1,
     "max_tokens": 300,
-    "max_tokens_slider": { "min": 100, "max": 600 }
+    "max_tokens_slider": { "min": 100, "max": 2048 },
+    "retry_temperature_step": 0.05,
+    "max_retry_temperature": 1.15
   },
   "context": {
-    "context_size": 32768,
+    "context_size": 65536,
     "recent_window_rule": "recent_window = context_size - soma(demais budgets) - response_reserve; budgets fixos sao pisos, a janela recente absorve a diferenca",
+    "dynamic_scaling": {
+      "enabled": true,
+      "base_context_size": 32768,
+      "max_scale_factor": 3.0,
+      "continuity_anchor_min_window_tokens": 1200,
+      "continuity_anchor_min_turns": 8
+    },
     "budgets": {
       "ai_instructions": 700,
       "plot_essentials": 1600,
       "story_cards": 1600,
       "memory_bank": 800,
       "story_summary": 800,
-      "recent_window": 25600,
+      "recent_window": 58312,
       "authors_note": 300,
       "last_action": 200,
       "player_state": 200,
@@ -34,8 +50,8 @@
       "pick": "first",
       "note": "auto = GET {base_url}/models em runtime usa o modelo que o servidor tem carregado; model_alias explicito sobrescreve"
     },
-    "context_size": 32768,
-    "context_size_limits": { "min": 4096, "max": 131072 },
+    "context_size": 65536,
+    "context_size_limits": { "min": 4096, "max": 262144 },
     "disable_thinking": true,
     "disable_thinking_note": "OBRIGATORIO p/ Qwen3.x hibrido: llm_client DEVE enviar chat_template_kwargs={\"enable_thinking\": false} em toda chamada; sem isso content volta vazio (tokens viram reasoning_content). Validado contra a VM em 2026-10-07.",
     "streaming": true,
@@ -43,7 +59,7 @@
   },
   "server_config_area": {
     "description": "Todos os campos de 'llm' + sampler sao expostos em GET/PUT /api/settings/llm e na aba Config da UI",
-    "adjustable": ["base_url", "api_key", "model_alias", "context_size", "sampler.max_tokens", "sampler.temperature", "sampler.top_p", "sampler.repetition_penalty", "streaming"]
+    "adjustable": ["base_url", "api_key", "model_alias", "context_size", "sampler.max_tokens", "sampler.temperature", "sampler.top_p", "sampler.min_p", "sampler.repetition_penalty", "sampler.presence_penalty", "sampler.frequency_penalty", "sampler.dry_multiplier", "sampler.dry_base", "sampler.dry_allowed_length", "sampler.dry_penalty_last_n", "sampler.retry_temperature_step", "sampler.max_retry_temperature", "streaming"]
   },
   "auth": {
     "enabled": true,
@@ -57,9 +73,16 @@
   "stop_sequences": ["\n> You", "\n> you"],
   "memory_bank": {
     "trigger_tokens": 800,
+    "archive_horizon_tokens": 4096,
     "summary_max_words": 120,
     "summary_temperature": 0.3,
     "top_k": 12
+  },
+  "embeddings": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8081/v1",
+    "model": "Qwen3-Embedding-0.6B",
+    "timeout_seconds": 30
   },
   "story_cards": {
     "scan_chars": 2500,

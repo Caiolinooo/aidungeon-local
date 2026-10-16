@@ -60,15 +60,25 @@ function DockAvatar({ card, avatarRef }) {
   const marked = status === 'dead' || status === 'missing' || status === 'injured'
   return (
     <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-24">
-      <div className="relative h-20 w-16 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/80 sm:h-32 sm:w-24">
+      <div className="relative h-20 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-32 sm:w-24">
         <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" />
         <PortraitCover imageId={card.portrait?.id} />
+        {card.voice && (
+          <span className="absolute right-1 top-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-bold uppercase text-accent-pri">
+            {card.voice}
+          </span>
+        )}
+        {cfg?.mood && (
+          <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[8px] font-medium capitalize text-zinc-200">
+            {cfg.mood}
+          </span>
+        )}
       </div>
-      <span className="max-w-full truncate text-[10px] font-medium text-zinc-300" title={card.title}>
+      <span className="max-w-full truncate text-[10px] font-semibold text-primary" title={card.title}>
         {card.title || 'Untitled'}
       </span>
       {marked && (
-        <span className="text-[9px] uppercase tracking-wide text-red-300">{status}</span>
+        <span className="text-[9px] uppercase tracking-wide text-red-400">{status}</span>
       )}
     </div>
   )

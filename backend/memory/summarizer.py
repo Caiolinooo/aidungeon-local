@@ -35,11 +35,20 @@ import sqlite3
 from typing import Any, Callable
 
 try:
-    from app import context_builder, db, settings_store
+    from app import context_builder, db, embeddings_client, settings_store
 except ImportError:  # pragma: no cover
-    from backend.app import context_builder, db, settings_store  # type: ignore
+    from backend.app import context_builder, db, embeddings_client, settings_store  # type: ignore
 
 log = logging.getLogger("aidungeon.memory")
+
+
+def _embeddings_module() -> Any:
+    for prefix in ("app.", "backend.app."):
+        try:
+            return importlib.import_module(prefix + "embeddings_client")
+        except ImportError:
+            continue
+    return None
 
 DEFAULT_TRIGGER_TOKENS = 800
 DEFAULT_SUMMARY_MAX_WORDS = 120
@@ -139,13 +148,46 @@ def _verbatim_excerpt(excerpt: str) -> str:
 
 
 # ------------------------------------------------------------- memory bank
+def _pending_archivable_actions(
+    actions: list[dict],
+    window_budget: int,
+    horizon_tokens: int,
+    chunk_tokens: int,
+    covered: int | None,
+    estimator: Estimator,
+) -> list[dict]:
+    """Retorna ações pendentes de arquivamento no Memory Bank / Story Summary.
+
+    1) Tudo que já saiu fisicamente da `window_budget` entra imediatamente.
+    2) Quando `window_budget` é grande (ex.: 64k–256k) e nada saiu ainda da
+       janela total, ações mais antigas que `horizon_tokens` (cena ativa,
+       default 4096 tk) são arquivadas proativamente assim que acumulam pelo
+       menos `chunk_tokens` (800 tk). Isso garante memórias vetoriais e
+       story_summary sempre atualizados em campanhas longas sem esperar
+       estourar 64k–256k tokens.
+    """
+    outside = _evicted_actions(actions, window_budget, estimator)
+    pending = [a for a in outside if covered is None or a["seq"] > covered]
+    if pending:
+        return pending
+    if horizon_tokens > 0 and window_budget > horizon_tokens:
+        beyond_horizon = _evicted_actions(actions, horizon_tokens, estimator)
+        proactive = [a for a in beyond_horizon if covered is None or a["seq"] > covered]
+        proactive_tokens = sum(estimator(_fmt(a)) for a in proactive)
+        if proactive_tokens >= chunk_tokens:
+            return proactive
+    return []
+
+
 def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
                         llm: Any, cfg: dict, estimator: Estimator,
-                        transport: Any) -> None:
+                        transport: Any,
+                        embeddings_client: Any = None) -> None:
     mem = _mem_cfg(cfg)
     chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
     if chunk_tokens <= 0:
         chunk_tokens = DEFAULT_TRIGGER_TOKENS
+    horizon_tokens = int(mem.get("archive_horizon_tokens", 4096))
     max_words = int(mem.get("summary_max_words", DEFAULT_SUMMARY_MAX_WORDS))
     temperature = float(mem.get("summary_temperature", DEFAULT_SUMMARY_TEMPERATURE))
 
@@ -156,8 +198,10 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
     covered = row["m"] if row else None
 
     actions = db.list_actions(conn, adventure_id)
-    outside = _evicted_actions(actions, _recent_window_budget(cfg), estimator)
-    pending = [a for a in outside if covered is None or a["seq"] > covered]
+    window_budget = _recent_window_budget(cfg)
+    pending = _pending_archivable_actions(
+        actions, window_budget, horizon_tokens, chunk_tokens, covered, estimator
+    )
     if not pending:
         return
 
@@ -192,10 +236,47 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
         text = _verbatim_excerpt(excerpt)
     if not text:
         return
-    db.insert_memory(conn, adventure_id, text,
-                     seq_start=chunk[0]["seq"], seq_end=chunk[-1]["seq"])
-    log.info("memory bank: memória gravada (adventure=%s seq %s..%s)",
-             adventure_id, chunk[0]["seq"], chunk[-1]["seq"])
+
+    # Geração de embedding para a nova memória (best-effort / fail-safe)
+    embedding_bytes: bytes | None = None
+    model_name: str | None = None
+    dim: int | None = None
+
+    emb_cfg = cfg.get("embeddings") if isinstance(cfg, dict) else None
+    if emb_cfg is None:
+        try:
+            emb_cfg = settings_store.effective_embeddings_settings(conn)
+        except Exception:
+            emb_cfg = {}
+
+    if emb_cfg.get("enabled", True):
+        try:
+            emb_mod = embeddings_client or _embeddings_module()
+            if emb_mod is not None:
+                vec = emb_mod.get_embedding(text, cfg=emb_cfg, transport=transport)
+                if vec and isinstance(vec, list):
+                    embedding_bytes = emb_mod.pack_vector(vec)
+                    model_name = emb_cfg.get("model", "Qwen3-Embedding-0.6B")
+                    dim = len(vec)
+        except Exception:
+            log.warning("memory bank: falha ao gerar embedding; salvando sem vetor (adventure=%s)",
+                        adventure_id, exc_info=True)
+            embedding_bytes = None
+            model_name = None
+            dim = None
+
+    db.insert_memory(
+        conn,
+        adventure_id,
+        text,
+        seq_start=chunk[0]["seq"],
+        seq_end=chunk[-1]["seq"],
+        embedding=embedding_bytes,
+        embedding_model=model_name,
+        embedding_dim=dim,
+    )
+    log.info("memory bank: memória gravada (adventure=%s seq %s..%s, embedding=%s)",
+             adventure_id, chunk[0]["seq"], chunk[-1]["seq"], bool(embedding_bytes))
 
 
 # ----------------------------------------------------------- story summary
@@ -205,9 +286,16 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     budgets = cfg.get("budgets", {}) if isinstance(cfg, dict) else {}
     summary_budget = int(budgets.get("story_summary", DEFAULT_SUMMARY_BUDGET))
     window_budget = _recent_window_budget(cfg)
+    mem = _mem_cfg(cfg)
+    horizon_tokens = int(mem.get("archive_horizon_tokens", 4096))
+    chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
 
     actions = db.list_actions(conn, adventure_id)
     old_actions = _evicted_actions(actions, window_budget, estimator)
+    if not old_actions and horizon_tokens > 0 and window_budget > horizon_tokens:
+        beyond_horizon = _evicted_actions(actions, horizon_tokens, estimator)
+        if sum(estimator(_fmt(a)) for a in beyond_horizon) >= chunk_tokens:
+            old_actions = beyond_horizon
     if not old_actions:
         return
 
@@ -250,9 +338,66 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
              adventure_id, new_old[-1]["seq"])
 
 
+# ---------------------------------------------------------------- backfill
+def backfill_memories(
+    conn: sqlite3.Connection,
+    adventure_id: str | None = None,
+    *,
+    transport: Any = None,
+    force_all: bool = False,
+    client: Any = None,
+) -> int:
+    """Percorre memórias sem vetor (ou todas se force_all=True) e gera embeddings.
+
+    Retorna a contagem de memórias atualizadas com sucesso.
+    """
+    emb_mod = client or _embeddings_module()
+    if emb_mod is None:
+        return 0
+    try:
+        cfg = settings_store.effective_embeddings_settings(conn)
+    except Exception:
+        cfg = {}
+    if not cfg.get("enabled", True):
+        return 0
+
+    query = "SELECT id, text FROM memories WHERE "
+    params: list[Any] = []
+    conditions = []
+    if not force_all:
+        conditions.append("embedding IS NULL")
+    if adventure_id:
+        conditions.append("adventure_id = ?")
+        params.append(adventure_id)
+
+    query += " AND ".join(conditions) if conditions else "1=1"
+    query += " ORDER BY id ASC"
+
+    rows = conn.execute(query, params).fetchall()
+    count = 0
+    model_name = cfg.get("model", "Qwen3-Embedding-0.6B")
+
+    for row in rows:
+        mid, text = row["id"], row["text"]
+        vec = emb_mod.get_embedding(text, cfg=cfg, transport=transport)
+        if vec is not None:
+            packed = emb_mod.pack_vector(vec)
+            db.update_memory(
+                conn,
+                mid,
+                embedding=packed,
+                embedding_model=model_name,
+                embedding_dim=len(vec),
+            )
+            count += 1
+    log.info("backfill_memories: %d memórias atualizadas com embeddings", count)
+    return count
+
+
 # ------------------------------------------------------------------- hook
 def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
-                 llm_client: Any = None, settings: dict | None = None,
+                 llm_client: Any = None, embeddings_client: Any = None,
+                 settings: dict | None = None,
                  estimator: Estimator | None = None,
                  transport: Any = None) -> None:
     """Hook best-effort pós-geração. NUNCA levanta exceção nem quebra o jogo."""
@@ -262,13 +407,19 @@ def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
 
         def run(c: sqlite3.Connection) -> None:
             cfg = settings or settings_store.runtime_config(c)
-            for step in (_update_memory_bank, _update_story_summary):
-                try:
-                    step(c, adventure_id, llm=llm, cfg=cfg,
-                         estimator=estimator, transport=transport)
-                except Exception:
-                    log.warning("maybe_update: passo %s falhou (adventure=%s)",
-                                step.__name__, adventure_id, exc_info=True)
+            try:
+                _update_memory_bank(c, adventure_id, llm=llm, cfg=cfg,
+                                    estimator=estimator, transport=transport,
+                                    embeddings_client=embeddings_client)
+            except Exception:
+                log.warning("maybe_update: _update_memory_bank falhou (adventure=%s)",
+                            adventure_id, exc_info=True)
+            try:
+                _update_story_summary(c, adventure_id, llm=llm, cfg=cfg,
+                                      estimator=estimator, transport=transport)
+            except Exception:
+                log.warning("maybe_update: _update_story_summary falhou (adventure=%s)",
+                            adventure_id, exc_info=True)
 
         if conn is not None:
             run(conn)
