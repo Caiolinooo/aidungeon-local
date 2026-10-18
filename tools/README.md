@@ -8,6 +8,8 @@ Todos rodam com Python padrão (sem dependências externas).
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
 | `replay_turn.py` | Replay de turnos pela API do backend (staging) com as metas de fluidez |
+| `repro_slot_hang.py` | Tenta reproduzir o slot preso do llama.cpp #28280 contra o llama-server |
+| `slot_watchdog.py` | Oneshot do `slot-watchdog.timer`: reinicia o llama-server com slot preso |
 | `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
 | `setup_llm_local.sh` | **Linux.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.sh` |
 
@@ -76,6 +78,34 @@ python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
     --turn "do:saiam todos, quero apenas a clara aqui" --turn "say:clara? tudo bem?" \
     --see-during-turn --expect-card Clara
 ```
+
+## 2.2 repro_slot_hang.py e slot_watchdog.py — slot preso (#28280)
+
+No #28280 um slot de modelo híbrido (GDN, caso do Qwen3.6-35B-A3B) fica
+`is_processing` para sempre, com o log repetindo "erasing old context
+checkpoint" na mesma posição. Os relatos pedem 2+ slots, prompt cache e um
+slot fixado trocando de conversa.
+
+`repro_slot_hang.py` fala direto com o llama-server (não grava nada no app).
+`--mode bug` repete o cenário dos relatos: o slot fixado alterna uma conversa
+longa de prefixo crescente e duas curtas, todas com cache, enquanto outro slot
+trabalha. `--mode app` repete o tráfego do app (narrativa no slot 0 com cache,
+auxiliares sem cache nos slots do contrato C1); `--external` soma um cliente
+sem `id_slot`. Slot ocupado sem passar do próprio máximo de progresso por
+`--stall-s` conta como travado: o script fecha a conexão e mede se o slot
+solta. Exit 0 sem travamento, 3 com. Precisa de `slot_watchdog.py` na mesma
+pasta.
+
+```bash
+python3 tools/repro_slot_hang.py --env-file /home/caio/aidungeon/.env --mode bug --rounds 15 --stall-s 90
+python3 tools/repro_slot_hang.py --env-file /home/caio/aidungeon/.env --mode app --external --rounds 20
+```
+
+`slot_watchdog.py` roda como root pelo `slot-watchdog.timer` (a cada 10 s) e
+reinicia o `llama-server` quando um slot passa de `--stall-s` (45 s) sem
+progresso ou `/slots` fica esse tempo sem responder, com `--cooldown` de 180 s
+entre reinícios. O estado legível pelo app fica em
+`/var/lib/slot-watchdog/status.json`. Instalação em `deploy/vm/README.md`.
 
 ## 3. Onde configurar a API key
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Watchdog de slots do llama-server (llama.cpp #28280)
+After=llama-server.service
+
+[Service]
+Type=oneshot
+# Root: reinicia o llama-server. O script fica fora da home (root:root 755).
+ExecStart=/usr/bin/python3 /usr/local/sbin/slot_watchdog.py --env-file /home/caio/aidungeon/.env --state-dir /var/lib/slot-watchdog
+StateDirectory=slot-watchdog
+StateDirectoryMode=0755
