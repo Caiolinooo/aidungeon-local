@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
-from app import db, events, llm_client, llm_scheduler  # noqa: E402
+from app import choices_service, db, events, llm_client, llm_scheduler  # noqa: E402
 
 # Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
 # `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
@@ -53,9 +53,11 @@ def _scheduler_reset():
 
 @pytest.fixture(autouse=True)
 def _events_reset():
-    """Canais de eventos não vazam entre testes."""
+    """Canais de eventos e cache de choices não vazam entre testes."""
     events.reset()
+    choices_service.reset()
     yield
+    choices_service.reset()
     events.reset()
 
 

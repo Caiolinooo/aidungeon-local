@@ -16,13 +16,16 @@ Semânticas do contrato:
 - `undo` remove o último turno (resposta da IA + ação do jogador que a
   originou) e NUNCA remove `start` (409 `nothing_to_undo`).
 - `PATCH` marca `edited_at`.
-- Após gerar, chama `memory.summarizer.maybe_update()` best-effort (import
-  tardio — o módulo pode ainda não existir).
+- Pós-turno (G3), depois do `done` e com o lock já solto: choices pré-geradas
+  (C7, slot 1) em paralelo com npc_chronicle e, depois dele,
+  `memory.summarizer.maybe_update()` (slot 2), best-effort. Ação nova cancela
+  choices e summary pendentes, nunca o chronicle.
 
 Eventos emitidos pelo gerador (a rota serializa em SSE):
     {"event": "token", "data": {"token": "..."}}
     {"event": "done",  "data": {"player_action"?: Action, "action": Action}}
     {"event": "error", "data": {"message": "..."}}
+Antes do `done`, `turn_done {action_id, seq}` sai em `events` (C2).
 """
 
 from __future__ import annotations
@@ -30,13 +33,14 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
 from app import (
+    choices_service,
     context_builder,
     db,
+    events as events_bus,
     llm_client,
     meta_commands,
     npc_chronicle,
@@ -54,6 +58,11 @@ _locks: dict[str, threading.Lock] = {}
 # dois passes de lerem os mesmos marcadores antes de qualquer um gravar.
 _post_turn_guard = threading.Lock()
 _post_turn_locks: dict[str, threading.Lock] = {}
+_post_turn_cancels: dict[str, threading.Event] = {}
+# Jogador rápido não pode deixar o resumo parado para sempre: depois de tantos
+# passes adiados seguidos, a ação nova deixa o summary terminar.
+_MAX_SUMMARY_DEFERRALS = 2
+_summary_deferrals: dict[str, int] = {}
 _append_guard = threading.Lock()
 _append_locks: dict[str, threading.Lock] = {}
 
@@ -134,13 +143,17 @@ def _format_player_text(type_: str, text: str) -> str:
     return inner  # story: prosa pura
 
 
-def _maybe_update_memory(adventure_id: str) -> None:
+def _maybe_update_memory(adventure_id: str,
+                         cancel: threading.Event | None = None) -> None:
     """Hook do memory bank/summarizer — best-effort, nunca quebra a geração."""
     mod = context_builder._memory_module("summarizer")
     if mod is None or not hasattr(mod, "maybe_update"):
         return
     try:
-        mod.maybe_update(adventure_id)
+        if cancel is None:
+            mod.maybe_update(adventure_id)
+        else:
+            mod.maybe_update(adventure_id, cancel=cancel)
     except Exception:
         pass
 
@@ -163,34 +176,63 @@ def _prime_memory_query(adventure_id: str) -> None:
         pass
 
 
-# Pausa antes do trabalho de fundo para o POST /choices (slot 1) entrar primeiro.
-_POST_TURN_DELAY_S = 1.5
-
-
 def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
     """Fora dos testes, roda em background, depois do done e com o lock da
-    aventura já solto: o vetor da cena das memórias e, em seguida,
-    summarizer + npc_chronicle."""
+    aventura já solto: choices pré-geradas, o vetor da cena das memórias e,
+    em série, npc_chronicle + summarizer."""
     if os.environ.get("AIDUNGEON_CHRONICLE", "1") == "0":
         # Modo de teste determinístico: summarizer roda síncrono e chronicle fica desligado
         _maybe_update_memory(adventure_id)
         return
+    choices_service.start(adventure_id, transport=transport)
+    cancel = threading.Event()
+    with _post_turn_guard:
+        _post_turn_cancels[adventure_id] = cancel
 
     def _bg() -> None:
-        # the client's onDone fires POST /choices immediately (Play.jsx fetchChoices)
-        # and both choices and post-turn work pin slot 1 — the delay lets the
-        # interactive call claim the slot first.
-        time.sleep(_POST_TURN_DELAY_S)
         with _post_turn_lock_for(adventure_id):
-            _maybe_update_memory(adventure_id)
             try:
                 npc_chronicle.update_from_turn(adventure_id, transport)
             except Exception:
                 pass
+            if not cancel.is_set():
+                _maybe_update_memory(adventure_id, cancel)
+        _finish_post_turn(adventure_id, cancel)
 
     threading.Thread(target=_prime_memory_query, args=(adventure_id,),
                      name="memory-query", daemon=True).start()
     threading.Thread(target=_bg, name="post-turn-worker", daemon=True).start()
+
+
+def _finish_post_turn(adventure_id: str, cancel: threading.Event) -> None:
+    with _post_turn_guard:
+        if _post_turn_cancels.get(adventure_id) is cancel:
+            del _post_turn_cancels[adventure_id]
+        if cancel.is_set():
+            _summary_deferrals[adventure_id] = _summary_deferrals.get(adventure_id, 0) + 1
+        else:
+            _summary_deferrals.pop(adventure_id, None)
+
+
+def cancel_post_turn(adventure_id: str) -> None:
+    """Ação nova do jogador: choices e summary pendentes do turno anterior
+    perdem a vez (o summary roda no pós-turno seguinte); o chronicle segue."""
+    with _post_turn_guard:
+        cancel = _post_turn_cancels.get(adventure_id)
+        if cancel is not None \
+                and _summary_deferrals.get(adventure_id, 0) < _MAX_SUMMARY_DEFERRALS:
+            cancel.set()
+    choices_service.cancel(adventure_id)
+
+
+def forget_adventure(adventure_id: str) -> None:
+    """Aventura apagada: pós-turno cancelado, choices e eventos descartados."""
+    with _post_turn_guard:
+        cancel = _post_turn_cancels.pop(adventure_id, None)
+    if cancel is not None:
+        cancel.set()
+    choices_service.forget(adventure_id)
+    events_bus.forget(adventure_id)
 
 
 _retry_counts: dict[tuple[str, int], int] = {}
@@ -289,6 +331,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
             release_generation_lock(adventure_id)
             lock_released = True
+            events_bus.publish(adventure_id, "turn_done",
+                               {"action_id": action["id"], "seq": action["seq"]})
             _spawn_post_turn(adventure_id, transport)
             yield {"event": "done", "data": data}
         except llm_client.LlmError as exc:
@@ -316,6 +360,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     try:
+        cancel_post_turn(adventure_id)
         # Scripting hook: input modifier (before input processing)
         in_script = scripting.get_adventure_script(adventure_id, "input_modifier")
         if in_script:
@@ -354,6 +399,7 @@ def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+    cancel_post_turn(adventure_id)
     return _stream_generation(adventure_id, player_action=None,
                               retry_of=None, retry_count=0, transport=transport)
 
@@ -371,6 +417,7 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+    cancel_post_turn(adventure_id)
 
     key = (adventure_id, int(old["seq"]))
     if retry_count is None:
@@ -414,6 +461,7 @@ def handle_undo(adventure_id: str) -> dict:
         removed.sort(key=lambda a: a["seq"])
         db.touch_adventure(conn, adventure_id)
         remaining = db.list_actions(conn, adventure_id)
+        choices_service.cancel(adventure_id)
         return {
             "removed": removed,
             "last_action": remaining[-1] if remaining else None,
@@ -430,4 +478,7 @@ def handle_edit(action_id: int, text: str) -> dict:
             raise GameError.not_found(f"action {action_id} not found")
         db.update_action_text(conn, action_id, text)
         db.touch_adventure(conn, action["adventure_id"])
-        return db.get_action(conn, action_id)
+        edited = db.get_action(conn, action_id)
+    # O cache das choices é preso a (id, seq): texto editado não muda a chave.
+    choices_service.forget(action["adventure_id"])
+    return edited

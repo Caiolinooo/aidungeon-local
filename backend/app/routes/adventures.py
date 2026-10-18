@@ -126,6 +126,7 @@ def delete_adventure(adventure_id: str) -> dict:
     with db.session() as conn:
         if not db.delete_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
+    game_engine.forget_adventure(adventure_id)
     return {"deleted": True, "id": adventure_id}
 
 

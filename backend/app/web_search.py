@@ -24,7 +24,7 @@ from app import llm_client
 
 log = logging.getLogger("aidungeon.web_search")
 
-SEARCH_TIMEOUT = 6.0
+SEARCH_TIMEOUT = 5.0
 CACHE_TTL_SECONDS = 900.0
 
 _USER_AGENT = (

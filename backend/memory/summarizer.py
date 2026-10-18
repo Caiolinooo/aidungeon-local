@@ -25,6 +25,10 @@ Hook best-effort chamado pelo game_engine após cada geração:
     NUNCA bloqueia a resposta ao jogador. Falha do LLM no memory bank grava o
     extrato verbatim e avança o seq coberto. Falha no story summary não
     reescreve o resumo nem avança a posição (tenta de novo na próxima geração).
+
+(d) `cancel` (ação nova do jogador, G3): chamada cancelada, breaker aberto ou
+    fila estourada não é falha do resumo. Nada é gravado, nem o extrato, e a
+    passada seguinte tenta de novo.
 """
 
 from __future__ import annotations
@@ -32,12 +36,14 @@ from __future__ import annotations
 import importlib
 import logging
 import sqlite3
+import threading
 from typing import Any, Callable
 
 try:
-    from app import context_builder, db, embeddings_client, settings_store
+    from app import context_builder, db, embeddings_client, llm_client, settings_store
 except ImportError:  # pragma: no cover
-    from backend.app import context_builder, db, embeddings_client, settings_store  # type: ignore
+    from backend.app import (  # type: ignore
+        context_builder, db, embeddings_client, llm_client, settings_store)
 
 log = logging.getLogger("aidungeon.memory")
 
@@ -78,8 +84,20 @@ ROLLING_SUMMARY_PROMPT = (
 )
 
 
+_DEFERRED = (llm_client.LlmCancelled, llm_client.LlmDegraded, llm_client.LlmQueueTimeout)
+
+
 def _default_estimator(text: str) -> int:
     return (len(text) + 3) // 4
+
+
+def _summarize(llm: Any, llm_cfg: dict, prompt: str, *, temperature: float,
+               max_tokens: int, transport: Any, cancel: threading.Event | None) -> str:
+    kwargs: dict[str, Any] = {"role": "summary", "temperature": temperature,
+                              "max_tokens": max_tokens, "transport": transport}
+    if cancel is not None:
+        kwargs["cancel"] = cancel
+    return llm.chat_completion(llm_cfg, [{"role": "user", "content": prompt}], **kwargs)
 
 
 def _llm_module() -> Any:
@@ -179,7 +197,8 @@ def _pending_archivable_actions(
 def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
                         llm: Any, cfg: dict, estimator: Estimator,
                         transport: Any,
-                        embeddings_client: Any = None) -> None:
+                        embeddings_client: Any = None,
+                        cancel: threading.Event | None = None) -> None:
     mem = _mem_cfg(cfg)
     chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
     if chunk_tokens <= 0:
@@ -219,12 +238,12 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
 
     prompt = MEMORY_BANK_PROMPT.format(max_words=max_words, text=excerpt)
     try:
-        text = llm.chat_completion(
-            _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-            role="summary", temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
-            transport=transport,
-        )
+        text = _summarize(llm, _llm_cfg(conn, cfg), prompt, temperature=temperature,
+                          max_tokens=MEMORY_MAX_TOKENS, transport=transport, cancel=cancel)
         text = (text or "").strip()
+    except _DEFERRED as exc:
+        log.info("memory bank: adiado (%s) (adventure=%s)", exc.code, adventure_id)
+        return
     except Exception:
         log.warning("memory bank: LLM falhou; gravando extrato (adventure=%s)",
                     adventure_id, exc_info=True)
@@ -279,7 +298,7 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
 # ----------------------------------------------------------- story summary
 def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
                           llm: Any, cfg: dict, estimator: Estimator,
-                          transport: Any) -> None:
+                          transport: Any, cancel: threading.Event | None = None) -> None:
     budgets = cfg.get("budgets", {}) if isinstance(cfg, dict) else {}
     summary_budget = int(budgets.get("story_summary", DEFAULT_SUMMARY_BUDGET))
     window_budget = _recent_window_budget(cfg)
@@ -319,11 +338,8 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     temperature = float(_mem_cfg(cfg).get("summary_temperature",
                                           DEFAULT_SUMMARY_TEMPERATURE))
     prompt = ROLLING_SUMMARY_PROMPT.format(summary=current, text=excerpt)
-    text = llm.chat_completion(
-        _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-        role="summary", temperature=temperature, max_tokens=ROLLING_MAX_TOKENS,
-        transport=transport,
-    )
+    text = _summarize(llm, _llm_cfg(conn, cfg), prompt, temperature=temperature,
+                      max_tokens=ROLLING_MAX_TOKENS, transport=transport, cancel=cancel)
     text = (text or "").strip()
     if not text:
         return
@@ -396,7 +412,8 @@ def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
                  llm_client: Any = None, embeddings_client: Any = None,
                  settings: dict | None = None,
                  estimator: Estimator | None = None,
-                 transport: Any = None) -> None:
+                 transport: Any = None,
+                 cancel: threading.Event | None = None) -> None:
     """Hook best-effort pós-geração. NUNCA levanta exceção nem quebra o jogo."""
     try:
         estimator = estimator or _default_estimator
@@ -407,13 +424,18 @@ def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
             try:
                 _update_memory_bank(c, adventure_id, llm=llm, cfg=cfg,
                                     estimator=estimator, transport=transport,
-                                    embeddings_client=embeddings_client)
+                                    embeddings_client=embeddings_client, cancel=cancel)
             except Exception:
                 log.warning("maybe_update: _update_memory_bank falhou (adventure=%s)",
                             adventure_id, exc_info=True)
+            if cancel is not None and cancel.is_set():
+                return
             try:
                 _update_story_summary(c, adventure_id, llm=llm, cfg=cfg,
-                                      estimator=estimator, transport=transport)
+                                      estimator=estimator, transport=transport,
+                                      cancel=cancel)
+            except _DEFERRED as exc:
+                log.info("story summary: adiado (%s) (adventure=%s)", exc.code, adventure_id)
             except Exception:
                 log.warning("maybe_update: _update_story_summary falhou (adventure=%s)",
                             adventure_id, exc_info=True)

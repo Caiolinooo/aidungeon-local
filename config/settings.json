@@ -170,7 +170,8 @@
     "count": 3,
     "max_tokens": 220,
     "temperature": 0.8,
-    "note": "POST /api/adventures/{id}/choices: LLM sugere 'count' opcoes curtas de proxima acao (type do/say/story, texto <= 120 chars, EN) como array JSON. enabled=false -> 200 {\"choices\": []}."
+    "wait_s": 8,
+    "note": "Contrato C7. O LLM sugere 'count' opcoes curtas de proxima acao (type do/say/story, texto <= 120 chars, EN) como array JSON, geradas logo depois do done e publicadas em choices_ready. POST /api/adventures/{id}/choices devolve esse cache ou espera ate wait_s pela geracao em curso (503 llm_timeout depois disso). enabled=false -> 200 {\"choices\": []} e nada e pre-gerado."
   },
   "ui_profile": {
     "enabled": true,
