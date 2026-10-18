@@ -63,6 +63,16 @@ def test_task_bouncing_between_two_positions_still_counts_as_stuck(watchdog):
     assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
 
 
+def test_slot_waiting_behind_a_long_prompt_is_left_alone(watchdog):
+    for step in range(6):
+        watchdog([_slot(0, busy=True, processed=2048 * (step + 1)), _slot(1, busy=True, task=8)],
+                 1000.0 + step * 20)
+    assert watchdog.restarts == []
+    watchdog([_slot(0, busy=False), _slot(1, busy=True, task=8)], 1120.0)
+    watchdog([_slot(0, busy=False), _slot(1, busy=True, task=8)], 1150.0)
+    assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
+
+
 def test_new_task_resets_the_clock(watchdog):
     watchdog([_slot(0, busy=True, task=1)], 1000.0)
     watchdog([_slot(0, busy=True, task=2)], 1040.0)

@@ -8,8 +8,12 @@ Roda como oneshot a cada 10 s (slot-watchdog.timer). Guarda em
 <state-dir>/state.json, por slot, a tarefa (id_task), o maior
 n_prompt_tokens_processed e o maior n_decoded vistos nela e desde quando
 nenhum dos dois passa do máximo. Slot ocupado sem progresso por mais de
---stall-s, ou /slots sem responder por esse tempo, reinicia o serviço (com
---cooldown entre reinícios).
+--stall-s, sem nenhum outro slot andando nesse tempo, ou /slots sem responder
+por esse tempo, reinicia o serviço (com --cooldown entre reinícios).
+
+O lote de prompt é montado na ordem dos slots: um prompt longo num slot
+deixa os slots seguintes parados até acabar. Por isso slot parado enquanto
+outro anda só espera.
 
 Na build atual fechar a conexão já solta o slot, e o app faz isso no prazo de
 cada role. O watchdog cobre o caso do #28280 em que nem isso resolve.
@@ -149,14 +153,19 @@ def check(args: argparse.Namespace, now: float) -> int:
             report.append({"id": slot.get("id"), "busy": busy, "stalled_s": round(stalled_s, 1)})
             if busy:
                 stalled.append((key, stalled_s))
+                if stalled_s == 0.0:
+                    state["moved_at"] = now
         marks = fresh
 
     status.update(checked_at=iso(now), slots=report,
                   unreachable_s=round(stalled[0][1], 1) if slots is None else 0.0)
     worst = max(stalled, key=lambda item: item[1], default=(None, 0.0))
     last_restart = state.get("last_restart_ts", 0.0)
+    quiet_s = now - state.get("moved_at", 0.0)
     if worst[0] is not None and worst[1] > args.stall_s:
-        if now - last_restart < args.cooldown:
+        if worst[0] != SERVER_KEY and quiet_s <= args.stall_s:
+            print(f"slot {worst[0]} parado há {worst[1]:.0f}s; outro slot andou há {quiet_s:.0f}s")
+        elif now - last_restart < args.cooldown:
             print(f"slot {worst[0]} parado há {worst[1]:.0f}s; reinício recente, aguardando cooldown")
         else:
             reason = (f"/slots sem resposta há {worst[1]:.0f}s" if worst[0] == SERVER_KEY
