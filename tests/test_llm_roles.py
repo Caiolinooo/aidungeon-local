@@ -151,6 +151,17 @@ def test_unreachable_server_drops_the_slot_count():
     assert _aux_payload(cfg, two, "summary", capture)["id_slot"] == 1
 
 
+def test_timeout_drops_the_slot_count():
+    capture: list = []
+    cfg = _cfg()
+    _aux_payload(cfg, _transport(total_slots=4, capture=capture), "summary", capture)
+    stuck = _transport(total_slots=4, chat_error=httpx.ReadTimeout("slot 2 is gone"))
+    with pytest.raises(llm_client.LlmTimeout):
+        llm_client.chat_completion(cfg, MESSAGES, role="summary", transport=stuck)
+    two = _transport(total_slots=2, capture=capture)
+    assert _aux_payload(cfg, two, "summary", capture)["id_slot"] == 1
+
+
 def test_aux_cache_prompt_can_be_turned_back_on():
     capture: list = []
     transport = _transport(total_slots=4, capture=capture)

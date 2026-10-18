@@ -274,6 +274,13 @@ def server_slot_count(cfg: dict, transport: httpx.BaseTransport | None = None) -
     return count
 
 
+def _forget_slots(cfg: dict) -> None:
+    """Relê `total_slots` na próxima chamada. O servidor pode ter voltado com
+    menos slots, e um `id_slot` que não existe fica na fila do llama-server
+    até o prazo."""
+    _slot_cache.pop(_props_base(cfg), None)
+
+
 def normalize_role(role: str | None) -> str:
     if role == "aux" or not role:
         return "assistant"
@@ -532,8 +539,7 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
     except httpx.TransportError as exc:
         if guard.reason:
             raise guard.error() from exc
-        # Servidor caiu ou reiniciou (watchdog, outro -np): relê os slots.
-        _slot_cache.pop(_props_base(cfg), None)
+        _forget_slots(cfg)
         raise LlmUnreachable(f"llm unreachable: {type(exc).__name__}") from exc
 
     if not saw_content and saw_reasoning:
@@ -579,6 +585,7 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
         raise
     except LlmTimeout:
         outcome = "timeout"
+        _forget_slots(cfg)
         raise
     finally:
         guard.stop()
@@ -635,6 +642,7 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
         raise
     except LlmTimeout:
         outcome = "timeout"
+        _forget_slots(cfg)
         raise
     finally:
         guard.stop()
