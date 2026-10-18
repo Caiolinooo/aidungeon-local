@@ -187,6 +187,18 @@ def test_undo_never_removes_start(adventure):
     assert exc.value.code == "nothing_to_undo"
 
 
+def test_undo_skips_see_recorded_mid_turn(adventure):
+    add_action(adventure["id"], 1, "do", "\n> You knock\n")
+    add_action(adventure["id"], 2, "see", "A heavy oak gate in the rain")
+    add_action(adventure["id"], 3, "continue", "The gate opens.")
+    result = game_engine.handle_undo(adventure["id"])
+    assert [a["type"] for a in result["removed"]] == ["do", "continue"]
+    assert result["last_action"]["type"] == "see"
+    with db.session() as conn:
+        actions = db.list_actions(conn, adventure["id"])
+    assert [(a["seq"], a["type"]) for a in actions] == [(0, "start"), (2, "see")]
+
+
 def test_undo_removes_orphan_player_action(adventure):
     add_action(adventure["id"], 1, "say", '\n> You say "hi"\n')  # sem resposta da IA
     result = game_engine.handle_undo(adventure["id"])

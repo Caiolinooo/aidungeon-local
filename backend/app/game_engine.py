@@ -379,7 +379,9 @@ def handle_undo(adventure_id: str) -> dict:
         if last["type"] == "continue":
             db.delete_action(conn, last["id"])
             removed.append(last)
-            prev = actions[-2] if len(actions) >= 2 else None
+            # Um See pedido no meio do turno grava entre a ação e a resposta;
+            # ele não é parte do turno e fica.
+            prev = next((a for a in reversed(actions[:-1]) if a["type"] != "see"), None)
             if prev and prev["type"] in db.PLAYER_TYPES:
                 db.delete_action(conn, prev["id"])
                 removed.append(prev)

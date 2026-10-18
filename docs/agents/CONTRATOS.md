@@ -131,6 +131,9 @@ def clean_narration(text: str, truncated: bool) -> str: ...
   `game_engine.append_action(conn, adventure_id, type_, text)`: o seq é
   calculado e commitado sob um lock, porque See, jogador e narrador gravam em
   paralelo.
+- Por isso um `see` pode cair entre a ação do jogador e a resposta. Quem lê o
+  turno pula `see` (contexto, choices, chronicle, scene); o undo remove a
+  resposta e a ação do jogador e deixa o `see`.
 
 ## C4 ImagePlan (dono: Kimi; renderização: Grok)
 
