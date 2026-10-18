@@ -42,6 +42,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SERVER_KEY = "server"
+WARNING, NOTICE = 4, 5
+
+
+def say(level: int, message: str) -> None:
+    """No journal o prefixo <n> vira a prioridade (a unit usa LogLevelMax=notice)."""
+    prefix = f"<{level}>" if os.environ.get("JOURNAL_STREAM") else ""
+    print(prefix + message, flush=True)
 
 
 def read_key(args: argparse.Namespace) -> str:
@@ -71,7 +78,7 @@ def fetch_slots(base_url: str, api_key: str, timeout: float) -> list[dict] | Non
         with opener.open(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        print(f"GET /slots: HTTP {exc.code} (API key? --no-slots?)", flush=True)
+        say(WARNING, f"GET /slots: HTTP {exc.code} (API key? --no-slots?)")
         return []
     except (TimeoutError, urllib.error.URLError) as exc:
         reason = getattr(exc, "reason", exc)
@@ -164,13 +171,13 @@ def check(args: argparse.Namespace, now: float) -> int:
     quiet_s = now - state.get("moved_at", 0.0)
     if worst[0] is not None and worst[1] > args.stall_s:
         if worst[0] != SERVER_KEY and quiet_s <= args.stall_s:
-            print(f"slot {worst[0]} parado há {worst[1]:.0f}s; outro slot andou há {quiet_s:.0f}s")
+            say(NOTICE, f"slot {worst[0]} parado há {worst[1]:.0f}s; outro slot andou há {quiet_s:.0f}s")
         elif now - last_restart < args.cooldown:
-            print(f"slot {worst[0]} parado há {worst[1]:.0f}s; reinício recente, aguardando cooldown")
+            say(NOTICE, f"slot {worst[0]} parado há {worst[1]:.0f}s; reinício recente, aguardando cooldown")
         else:
             reason = (f"/slots sem resposta há {worst[1]:.0f}s" if worst[0] == SERVER_KEY
                       else f"slot {worst[0]} sem progresso há {worst[1]:.0f}s")
-            print(f"REINICIANDO {args.service}: {reason}", flush=True)
+            say(WARNING, f"REINICIANDO {args.service}: {reason}")
             if not args.dry_run:
                 subprocess.run(["systemctl", "restart", args.service], check=False)
             state["last_restart_ts"] = now
