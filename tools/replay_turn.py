@@ -15,7 +15,8 @@ Cada turno:
 No fim: p50/p95 de TTFT, turno e choices, os jobs criados durante o replay
 (espera na fila e duração) e, com --expect-card, quanto tempo cada card levou
 para existir. Soak: --repeat repete a lista de turnos; turno acima de
---slow-turn conta como falha (slot preso no llama-server).
+--slow-turn conta como falha (slot preso no llama-server). --yield-to e
+--yield-db pausam o soak enquanto o jogador do app principal está ativo.
 
 Token: mintado com AUTH_USER/AUTH_SECRET do .env, no formato de
 backend/app/auth.py, e nunca impresso. Ou --token / env AIDUNGEON_TOKEN.
@@ -32,6 +33,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -209,6 +211,45 @@ def _fmt(seconds: float | None) -> str:
     return "-" if seconds is None else f"{seconds:6.1f}s"
 
 
+# Tudo o que o jogador dispara grava aqui, inclusive o que roda depois do turno
+# (card, retrato, memória, See). O updated_at da aventura não pega isso.
+_ACTIVITY_SQL = (
+    "SELECT max(updated_at) FROM adventures",
+    "SELECT max(max(coalesce(created_at, ''), coalesce(edited_at, ''))) FROM actions",
+    "SELECT max(max(coalesce(created_at, ''), coalesce(updated_at, ''))) FROM story_cards",
+    "SELECT max(created_at) FROM memories",
+    "SELECT max(created_at) FROM images",
+    "SELECT max(max(coalesce(created_at, ''), coalesce(started_at, ''),"
+    " coalesce(finished_at, ''))) FROM jobs",
+)
+# Job pendente ou rodando mais velho que isto é resto de queda, não jogador.
+_LIVE_JOB_S = 1800
+
+
+def db_quiet_s(path: str) -> float | None:
+    """Segundos desde a última escrita no banco do app principal (só leitura).
+
+    0 com job pendente ou rodando criado há menos de _LIVE_JOB_S; None se o
+    banco não abrir."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        for created, in conn.execute(
+                "SELECT created_at FROM jobs WHERE status IN ('pending', 'running')"):
+            stamp = _iso_seconds(created)
+            if stamp is not None and time.time() - stamp < _LIVE_JOB_S:
+                return 0.0
+        stamps = [_iso_seconds(conn.execute(sql).fetchone()[0] or None)
+                  for sql in _ACTIVITY_SQL]
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    return time.time() - max((s for s in stamps if s), default=0.0)
+
+
 def _pct(values: list[float], q: float) -> float | None:
     if not values:
         return None
@@ -238,17 +279,25 @@ class Replay:
         self.log(f"FALHA: {message}")
 
     def player_quiet_s(self) -> float | None:
-        """Segundos desde a última mudança em qualquer aventura do app principal."""
-        res = self.main.call("GET", "/api/adventures")
-        if res["status"] != 200:
+        """Segundos desde a última mudança do jogador no app principal: pela
+        API (--yield-to) e pelo banco (--yield-db); vale o menor."""
+        quiet: list[float | None] = []
+        if self.main is not None:
+            res = self.main.call("GET", "/api/adventures")
+            if res["status"] != 200:
+                return None
+            stamps = [_iso_seconds(a.get("updated_at")) for a in res["body"] or []]
+            quiet.append(time.time() - max((s for s in stamps if s), default=0.0))
+        if self.args.yield_db:
+            quiet.append(db_quiet_s(self.args.yield_db))
+        if any(q is None for q in quiet):
             return None
-        stamps = [_iso_seconds(a.get("updated_at")) for a in res["body"] or []]
-        return time.time() - max((s for s in stamps if s), default=0.0)
+        return min(quiet)
 
     def yield_to_player(self) -> None:
         """Staging e app principal dividem o llama-server e o A1111: o replay
         espera o jogador ficar parado por --idle-s."""
-        if self.main is None:
+        if self.main is None and not self.args.yield_db:
             return
         paused = False
         while True:
@@ -431,8 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yield-to", metavar="URL",
                    help="app principal (ex.: http://127.0.0.1:2122): antes de cada turno espera "
                         "nenhuma aventura de lá mudar por --idle-s")
+    p.add_argument("--yield-db", metavar="CAMINHO",
+                   help="banco do app principal (só leitura): antes de cada turno espera nenhuma "
+                        "escrita (ação, card, memória, imagem, job) por --idle-s e nenhum job vivo")
     p.add_argument("--idle-s", type=float, default=300.0,
-                   help="silêncio do jogador exigido pelo --yield-to (padrão 300 s)")
+                   help="silêncio do jogador exigido pelo --yield-to/--yield-db (padrão 300 s)")
     p.add_argument("--expect-card", action="append", default=[], metavar="NOME",
                    help="card que deve existir depois do replay (repetível)")
     p.add_argument("--card-wait", type=float, default=60.0,
