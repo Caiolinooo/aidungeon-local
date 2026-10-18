@@ -131,6 +131,50 @@ def test_explicit_scene_does_not_restore_the_outfit(client, tmp_path):
     assert "nude" not in image["negative_prompt"].lower()
 
 
+def test_explicit_backdrop_locks_the_vampire_face(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        db.insert_card(
+            conn, adv["id"], type="character", title="Selene",
+            triggers=["Selene", "vampira"], entry="A vampira.",
+            portrait_prompt=(
+                "Selene is a pale gothic vampiress with long black hair and dark eyes, "
+                "wearing a black velvet dress, captured in a bust portrait against a neutral background."
+            ),
+            sheet=json.dumps({
+                "appearance": (
+                    "Pele pálida como mármore, lábios vermelhos vibrantes, "
+                    "cabelos pretos longos e lisos, olhos escuros profundos"
+                ),
+                "body": "Estrutura fina mas atlética, postura elegante e fluida",
+                "clothing": "Vestido de veludo preto",
+            }),
+        )
+    add_action(adv["id"], 0, "continue", "Selene is naked on the sofa, rain on the window.")
+    resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert resp.status_code == 200, resp.text
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+    prompt = job["payload"]["prompt"]
+    head = prompt.lower()
+    assert job["payload"]["explicit"] is True
+    assert head.index("black hair") < head.index("naked")
+    assert head.index("pale") < head.index("naked")
+    assert "straight" in head
+    assert "velvet" not in head
+    assert "bust portrait" not in head
+    assert "pele pálida" not in head
+    assert jobs.process_pending(make_assets_transport()) >= 1
+    with db.session() as conn:
+        image = db.latest_image(conn, adv["id"], "backdrop")
+    negative = image["negative_prompt"].lower()
+    assert "wrong skin tone" in negative
+    assert "different person" in negative
+    assert "nude" not in negative
+
+
 def test_scene_new_atmosphere_paints_again(client, tmp_path):
     use_tmp_storage(tmp_path)
     adv = _seed()

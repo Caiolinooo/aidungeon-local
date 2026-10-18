@@ -3,9 +3,9 @@
 Fluxo do /see (contrato docs/openapi.yaml):
 1) o momento é os dois últimos trechos (não a história inteira); o LLM
    descreve o gesto em inglês, com quem faz o quê;
-2) o primeiro bloco do CLIP é essa frase (uma só), o lugar e o rosto.
-   A prosa crua não entra. Estilo fica depois do BREAK. O retrato não
-   vira img2img;
+2) o primeiro bloco do CLIP abre com o rosto do card (nome, cabelo, pele).
+   A frase em inglês da ação vem depois. A prosa crua não entra. Estilo
+   fica depois do BREAK. O retrato não vira img2img;
 3) grava a linha em `images` + action type=see (mesmo seq vinculando);
 4) devolve ImageResult.
 
@@ -38,6 +38,8 @@ Keep the place. Do not paint an earlier scene and do not invent a new one.
 Name only the people listed. Include the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not turn the moment into a portrait or a close-up of one face.
+Do not replace a named person with a different face, hair, or skin tone.
+Do not add a person who is not listed.
 If a player instruction for the picture is given, obey it.
 No dialogue, no quotes, no style words. Output ONLY that sentence."""
 
@@ -45,6 +47,7 @@ _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive st
 Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
 Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
+Do not replace a named person with a different face, hair, or skin tone.
 Do not add people who are not in the moment. Do not change the place.
 Do not sexualize a child. Output ONLY that sentence."""
 
@@ -58,12 +61,28 @@ _INTERACTION_WORDS = (
 # Palavras de rosto e roupa. Se não estão no card, saem do prompt do See:
 # a prosa descreve a princesa de vestido e o modelo pintava outra mulher.
 _LOOK_WORDS = (
-    "eyes", "eye", "hair", "gown", "dress", "robe", "armor", "armour",
+    "eyes", "eye", "hair", "haired", "gown", "dress", "robe", "armor", "armour",
     "skin", "beard", "scar", "blonde", "brunette", "redhead", "helm",
     "cloak", "cape", "silk", "shirt",
-    "cabelo", "olhos", "olho", "vestido", "armadura", "elmo", "barba",
+    "cabelo", "cabelos", "olhos", "olho", "vestido", "armadura", "elmo", "barba",
     "cicatriz", "pele", "tunica", "túnica", "manto", "capa",
 )
+
+# O que decide se a frase contradiz o card. Verbo e lugar não entram:
+# "curly-haired woman kisses" perde "curly", não o beijo.
+_APPEARANCE_TOKENS = {
+    "pale", "fair", "tan", "olive", "ebony", "ivory",
+    "brown", "black", "white", "dark", "blonde", "brunette", "redhead",
+    "auburn", "ginger", "golden", "silver", "gray", "grey", "red", "blue", "green",
+    "straight", "curly", "wavy", "long", "short", "bald", "braided",
+    "skin", "hair", "haired", "eye", "eyes", "beard", "scar", "freckle", "freckles",
+    "gown", "dress", "robe", "armor", "armour", "plate", "helm", "cloak", "cape", "silk",
+    "shirt", "tunic", "cabelo", "cabelos", "olhos", "olho", "vestido", "armadura",
+    "pele", "barba", "cicatriz", "preto", "pretos", "preta", "loiro", "loira",
+    "ruivo", "ruiva", "liso", "lisos", "cacheado", "cacheados",
+}
+_BODY_NOUNS = {"skin", "hair", "haired", "eye", "eyes", "beard", "scar"}
+_GLUE = {"and", "the", "with", "her", "his", "its", "from", "into", "over"}
 
 
 def moment_for_painter(actions: list[dict], action_seq: int) -> str:
@@ -100,11 +119,40 @@ def current_moment(actions: list[dict], action_seq: int) -> str:
     return "\n".join(action["text"].strip() for action in eligible[-2:])[-1400:]
 
 
+def _token_in_canon(token: str, canon_l: str) -> bool:
+    if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", canon_l):
+        return True
+    if token.endswith("s") and re.search(rf"(?<!\w){re.escape(token[:-1])}(?!\w)", canon_l):
+        return True
+    return False
+
+
+def _phrase_agrees(phrase: str, canon_l: str) -> bool:
+    """A frase descreve o mesmo rosto do card.
+
+    Só cor, cabelo, pele e roupa contam. "glowing" e o verbo ficam, e um
+    adjetivo que o card confirma (pale) não vai para o negative só porque
+    a palavra ao lado (glowing) não está na ficha.
+    """
+    tokens = [
+        token for token in re.findall(r"[^\W\d_]{3,}", phrase.casefold())
+        if token not in _GLUE
+    ]
+    appearance = [token for token in tokens if token in _APPEARANCE_TOKENS]
+    if not appearance:
+        return True
+    return all(
+        token in _BODY_NOUNS or _token_in_canon(token, canon_l)
+        for token in appearance
+    )
+
+
 def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
     """Tira o visual que o card não confirma. Devolve (texto limpo, negative).
 
     Sem card, a prosa fica — é ela que descreve a pessoa. Com card, "vestido
-    branco" não entra no prompt e ainda vai para o negative.
+    branco" não entra no prompt e ainda vai para o negative. "pele pálida"
+    do próprio card não vai para o negative.
     """
     if not text:
         return "", ""
@@ -113,21 +161,14 @@ def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
     canon_l = canon.casefold()
     words = "|".join(re.escape(word) for word in _LOOK_WORDS)
     pattern = re.compile(
-        rf"(?:\b[\w']+\b\s+){{0,2}}\b(?:{words})\b(?:\s+\b[\w']+\b){{0,2}}",
+        rf"(?:\b[\w']+\b[\s-]+){{0,2}}(?:[\w']+-)?(?:{words})\b(?:[\s-]+\b[\w']+\b){{0,1}}",
         re.IGNORECASE,
     )
     banned: list[str] = []
 
     def scrub(match: re.Match) -> str:
         phrase = " ".join(match.group(0).split())
-        # "and" / "the" no meio da frase não são visual. Sem isso
-        # "long red hair and plate" sai inteiro, mesmo estando no card.
-        glue = {"and", "the", "with", "her", "his", "its", "from", "into", "over"}
-        tokens = [
-            token for token in re.findall(r"[^\W\d_]{3,}", phrase.casefold())
-            if token not in glue
-        ]
-        if tokens and all(token in canon_l for token in tokens):
+        if _phrase_agrees(phrase, canon_l):
             return match.group(0)
         banned.append(phrase)
         return " "
@@ -259,18 +300,7 @@ def _look_clause(frame: list[dict], *, explicit: bool = False) -> str:
 
     Cena nua ou sexual guarda o rosto e solta a roupa do card.
     """
-    lines = []
-    for card in frame:
-        bits = npc_assets.identity_bits(card) if explicit else npc_assets.visual_bits(card)
-        title = (card.get("title") or "").strip()
-        if not bits:
-            if title:
-                lines.append(title)
-            continue
-        lines.append(f"{title}: " + "; ".join(bits) if title else "; ".join(bits))
-    if not lines:
-        return ""
-    return "exact likeness, " + ", ".join(lines)
+    return npc_assets.likeness_clause(frame, explicit=explicit)
 
 
 def _is_interaction(text: str, names: list[str]) -> bool:
@@ -286,9 +316,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         transport: Any) -> tuple[str, str, str]:
     """O momento atual + o rosto do card. Devolve (prompt, negative, caption).
 
-    O CLIP pinta o começo de cada bloco. O primeiro bloco abre com a frase
-    em inglês do modelo; o beat cru só entra se essa frase vier vazia. O
-    rosto vem depois; o estilo fica depois do BREAK. caption é a frase
+    O CLIP pinta o começo de cada bloco. O primeiro bloco abre com o rosto
+    do card (cabelo, pele, porte); a frase em inglês vem em seguida. A
+    prosa crua não entra. O estilo fica depois do BREAK. caption é a frase
     limpa gravada na action see. O retrato não entra como img2img.
     """
     pb = img_cfg["prompt_builder"]
@@ -351,6 +381,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
     lead_bits = []
+    # O rosto ocupa o primeiro chunk do CLIP. A frase da ação vem depois:
+    # na frente, "kisses on the sofa" pintava um casal genérico.
+    if clause:
+        lead_bits.append(clip_words(clause, 420))
     if sentence:
         lead_bits.append(sentence)
     if body.extra_prompt.strip():
@@ -362,8 +396,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(", ".join(where))
     if names:
         lead_bits.append("people present: " + ", ".join(names))
-    if clause:
-        lead_bits.append(clip_words(clause, 260))
     if _is_interaction(moment, names):
         lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
     lead = ", ".join(lead_bits)
@@ -377,6 +409,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     else:
         prompt = lead or tail
     negative = _dedupe_negative(neg_summary, neg_moment)
+    if clause:
+        negative = _dedupe_negative(negative, npc_assets.IDENTITY_NEGATIVE)
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     caption = sentence or summarized

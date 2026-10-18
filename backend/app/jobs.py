@@ -60,9 +60,15 @@ PORTRAIT_DENOISE = 0.35
 
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
 # Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
-_CAST_NEGATIVE = "extra person, crowd, duplicate face, wrong hair, different outfit, costume change"
+_CAST_NEGATIVE = (
+    "extra person, crowd, duplicate face, wrong hair, different outfit, costume change, "
+    + npc_assets.IDENTITY_NEGATIVE
+)
 # Cena nua: a roupa do card não é negativa. "costume change" vestia de novo.
-_CAST_NEGATIVE_EXPLICIT = "extra person, crowd, duplicate face, wrong hair"
+_CAST_NEGATIVE_EXPLICIT = (
+    "extra person, crowd, duplicate face, wrong hair, "
+    + npc_assets.IDENTITY_NEGATIVE
+)
 
 
 def worker_enabled() -> bool:

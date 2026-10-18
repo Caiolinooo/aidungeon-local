@@ -149,24 +149,11 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
 def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda.
 
-    Cena nua não carrega a roupa do card.
+    Cena nua não carrega a roupa do card. O rosto sai em inglês, na frente.
     """
     if not cast:
         return ""
-    if explicit:
-        lines = []
-        for card in cast:
-            bits = npc_assets.identity_bits(card)
-            title = (card.get("title") or "").strip()
-            if bits:
-                lines.append(f"{title}: " + "; ".join(bits) if title else "; ".join(bits))
-            elif title:
-                lines.append(title)
-        if not lines:
-            return ""
-        return "exact likeness, " + ", ".join(lines)
-    text = " ".join((card.get("title") or "") for card in cast)
-    return npc_assets.image_canon_clause(cast, text)
+    return npc_assets.likeness_clause(cast, explicit=explicit)
 
 
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
@@ -179,11 +166,18 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     """
     explicit = is_explicit(moment)
     clause = _visual_clause(cast, explicit=explicit)
+    if clause:
+        # images.py importa scene no topo; o scrub fica aqui por isso.
+        from app.routes.images import contradicting_looks
+        beat, _banned = contradicting_looks(moment, clause)
+        beat = " ".join(beat.split())
+    else:
+        beat = ""
     if clause and explicit:
         parts = [
             clause,
             "clothes off, nude, do not restore outfits, uncensored",
-            (moment or "")[-400:],
+            beat[-400:],
             style,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face and hair",
@@ -194,10 +188,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         text = " ".join(part.strip() for part in parts if part and part.strip())
         return text[:1400], True
     if clause:
-        # images.py importa scene no topo; o scrub fica lá.
-        from app.routes.images import contradicting_looks
-        beat, _banned = contradicting_looks(moment, clause)
-        beat = " ".join(beat.split())[-280:]
+        beat = beat[-280:]
         parts = [
             clause,
             style,

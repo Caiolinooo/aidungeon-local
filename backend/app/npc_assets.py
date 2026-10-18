@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from typing import Any
 
 from app import db, llm_client
@@ -154,16 +155,80 @@ _OUTFIT_WORDS = (
     "clothed", "robe", "robes", "lace", "vestido", "roupa", "camis",
     "tunic", "túnica", "tunica", "coat", "jacket", "suit", "lingerie",
     "bra", "panties", "jeans", "skirt", "uniform", "cloak", "cape",
-    "silk", "plate", "helmet", "helm", "boots", "glove", "casaco",
+    "silk", "plate", "helmet", "helm", "boots", "boot", "glove", "casaco",
+    "choker", "necklace", "heel", "heels", "stocking", "corset", "colar",
+)
+
+# Enquadramento de retrato. Na cena ele puxa um busto e apaga o gesto.
+_FRAMING_WORDS = (
+    "bust", "portrait", "headshot", "close-up", "closeup", "background",
+    "captured", "framing",
+)
+
+# Negative quando o card já tem rosto. Não lista a roupa: cena nua pode trocá-la.
+IDENTITY_NEGATIVE = "different person, wrong hair color, wrong skin tone, extra unnamed person"
+
+_HAIR_COLORS = (
+    "black", "blonde", "brown", "red", "white", "gray", "grey", "silver",
+    "auburn", "ginger", "dark",
+)
+
+# Frases da ficha em português. O CLIP do SDXL ignora "pele pálida" e pinta
+# outra pessoa; a mesma ficha vira pele, cabelo e porte em inglês.
+_PT_LOOK_PHRASES = (
+    ("cabelos pretos longos e lisos", "long straight black hair"),
+    ("cabelo preto longo e liso", "long straight black hair"),
+    ("cabelos longos e lisos", "long straight hair"),
+    ("cabelos pretos longos", "long black hair"),
+    ("cabelos loiros longos", "long blonde hair"),
+    ("cabelos ruivos longos", "long red hair"),
+    ("pele palida como marmore", "pale marble skin"),
+    ("pele palida", "pale skin"),
+    ("pele morena", "brown skin"),
+    ("pele negra", "dark skin"),
+    ("pele branca", "fair skin"),
+    ("labios vermelhos", "red lips"),
+    ("olhos escuros", "dark eyes"),
+    ("olhos verdes", "green eyes"),
+    ("olhos azuis", "blue eyes"),
+    ("olhos castanhos", "brown eyes"),
+    ("cabelos pretos", "black hair"),
+    ("cabelos loiros", "blonde hair"),
+    ("cabelos ruivos", "red hair"),
+    ("cabelos castanhos", "brown hair"),
+    ("cabelos cacheados", "curly hair"),
+    ("cabelos lisos", "straight hair"),
+    ("estrutura fina mas atletica", "slim athletic build"),
+    ("postura elegante", "elegant posture"),
+    ("jovem adulta", "young adult woman"),
+    ("jovem adulto", "young adult man"),
+)
+
+_PT_WORD = re.compile(
+    r"(?<!\w)(?:pele|cabelo|cabelos|olhos|olho|labios|boca|vestido|estrutura|"
+    r"atletica|palida|pretos|preto|lisos|liso|cachead\w*|ruivos|ruivo|loiros|"
+    r"loiro|morena|moreno|sobrancelha|nariz|postura)(?!\w)"
 )
 
 
-def without_outfit(text: str) -> str:
-    """Tira o trecho de roupa. O rosto fica, para a cena nua não herdar o vestido."""
+def _fold(text: str) -> str:
+    ascii_text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
+    return " ".join(ascii_text.casefold().split())
+
+
+def _looks_portuguese(text: str) -> bool:
+    if re.search(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]", text or ""):
+        return True
+    return _PT_WORD.search(_fold(text)) is not None
+
+
+def _drop_clauses(text: str, words: tuple[str, ...], *, cut: re.Pattern[str] | None = None) -> str:
     kept: list[str] = []
     for part in re.split(r"[,;]", text or ""):
+        if cut is not None:
+            part = cut.split(part, maxsplit=1)[0]
         folded = part.casefold()
-        if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _OUTFIT_WORDS):
+        if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in words):
             continue
         bit = " ".join(part.split())
         if bit:
@@ -171,20 +236,180 @@ def without_outfit(text: str) -> str:
     return ", ".join(kept)
 
 
-def identity_bits(card: dict) -> list[str]:
-    """Rosto e corpo, sem a roupa de sempre. Usado quando a cena está nua."""
+def without_outfit(text: str) -> str:
+    """Tira o trecho de roupa. O rosto fica, para a cena nua não herdar o vestido."""
+    return _drop_clauses(
+        text,
+        tuple(word for word in _OUTFIT_WORDS if word != "wearing"),
+        cut=re.compile(r"(?i)\bwearing\b"),
+    )
+
+
+_PORTRAIT_OF = re.compile(
+    r"(?i)^(?:a\s+|an\s+)?(?:bust\s+|headshot\s+|close-up\s+|closeup\s+)?portrait\s+of\s+"
+)
+
+
+def without_framing(text: str) -> str:
+    """Tira 'bust portrait' e o fundo neutro. O rosto depois de 'portrait of' fica."""
+    kept: list[str] = []
+    for part in re.split(r"[,;]", text or ""):
+        part = _PORTRAIT_OF.sub("", part.strip())
+        part = re.split(
+            r"(?i)\b(?:captured|bust|headshot|close-up|closeup)\b",
+            part,
+            maxsplit=1,
+        )[0]
+        folded = part.casefold()
+        if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _FRAMING_WORDS):
+            continue
+        bit = " ".join(part.split())
+        if bit:
+            kept.append(bit)
+    return ", ".join(kept)
+
+
+def english_appearance(text: str) -> str:
+    """Aparência em inglês curto. Texto que já está em inglês passa inteiro.
+
+    Ficha em português não entra no prompt: o modelo pinta um estranho.
+    """
+    raw = " ".join((text or "").split())
+    if not raw or not _looks_portuguese(raw):
+        return raw
+    folded = _fold(raw)
+    hits: list[tuple[int, str]] = []
+    occupied = [False] * len(folded)
+    phrases = sorted(_PT_LOOK_PHRASES, key=lambda item: len(item[0]), reverse=True)
+    for phrase, english in phrases:
+        start = 0
+        while True:
+            at = folded.find(phrase, start)
+            if at < 0:
+                break
+            end = at + len(phrase)
+            if not any(occupied[at:end]):
+                hits.append((at, english))
+                for index in range(at, end):
+                    occupied[index] = True
+            start = end
+    hits.sort(key=lambda item: item[0])
+    # Cláusula que já está em inglês fica. O resto em português não entra.
+    kept = [english for _, english in hits]
+    for part in re.split(r"[,;]", raw):
+        bit = " ".join(part.split())
+        if bit and not _looks_portuguese(bit):
+            kept.append(bit)
+    return ", ".join(dict.fromkeys(kept))
+
+
+def _portrait_face(card: dict) -> str:
+    prompt = " ".join(str(card.get("portrait_prompt") or "").split())
+    if not prompt:
+        return ""
+    return without_framing(without_outfit(prompt))[:240]
+
+
+def _sheet_person_parts(card: dict) -> list[str]:
     sheet = parse_sheet(card.get("sheet") or "")
-    bits: list[str] = []
+    parts: list[str] = []
     for key in ("appearance", "body"):
         value = sheet.get(key)
-        if isinstance(value, str) and value.strip():
-            bits.append(value.strip())
-    if bits:
-        return bits
-    prompt = without_outfit(" ".join(str(card.get("portrait_prompt") or "").split()))
-    if prompt:
-        return [prompt[:240]]
-    return []
+        if not isinstance(value, str) or not value.strip():
+            continue
+        text = without_framing(without_outfit(english_appearance(value)))
+        if text:
+            parts.append(text)
+    return parts
+
+
+def _hair_colors(text: str) -> set[str]:
+    found: set[str] = set()
+    folded = (text or "").casefold()
+    for match in re.finditer(r"(?<!\w)hair(?:ed)?(?!\w)", folded):
+        window = folded[max(0, match.start() - 32):match.end() + 8]
+        for color in _HAIR_COLORS:
+            if re.search(rf"(?<!\w){color}(?!\w)", window):
+                found.add(color)
+    return found
+
+
+def _has_face(text: str) -> bool:
+    return re.search(
+        r"(?<!\w)(?:hair|haired|skin|eyes|eye)(?!\w)",
+        text or "",
+        re.IGNORECASE,
+    ) is not None
+
+
+def _covered(part: str, blob: str) -> bool:
+    """True se cada palavra do trecho já está no outro texto."""
+    blob_l = (blob or "").casefold()
+    tokens = re.findall(r"[^\W\d_]{4,}", (part or "").casefold())
+    if not tokens:
+        return True
+    return all(
+        re.search(rf"(?<!\w){re.escape(token)}(?!\w)", blob_l) for token in tokens
+    )
+
+
+def identity_bits(card: dict) -> list[str]:
+    """Rosto, cabelo, pele e porte. Sem a roupa, em palavras que o CLIP lê.
+
+    A cor de cabelo do retrato aceito vence a ficha. A ficha em português
+    entra traduzida e só acrescenta o que o retrato não contradiz (liso,
+    mármore, porte). Sem isso o See nu repetia a ficha crua no fim do bloco
+    e o modelo pintava outra mulher.
+    """
+    portrait = _portrait_face(card)
+    portrait_colors = _hair_colors(portrait)
+    agreed: list[str] = []
+    for part in _sheet_person_parts(card):
+        colors = _hair_colors(part)
+        if portrait_colors and colors and colors.isdisjoint(portrait_colors):
+            continue
+        agreed.append(part)
+    joined = " ".join(agreed)
+    sheet_has_portrait_hair = bool(portrait_colors & _hair_colors(joined))
+    if portrait and (not _has_face(joined) or (portrait_colors and not sheet_has_portrait_hair)):
+        extras = [part for part in agreed if not _covered(part, portrait)]
+        return [bit for bit in (portrait, *extras) if bit]
+    return agreed
+
+
+def scene_bits(card: dict, *, explicit: bool = False) -> list[str]:
+    """O que a cena mostra da pessoa. Nudez não herda roupa nem busto."""
+    if explicit:
+        return identity_bits(card)
+    bits: list[str] = []
+    for bit in visual_bits(card):
+        cleaned = without_framing(bit)
+        if cleaned:
+            bits.append(cleaned)
+    return bits
+
+
+def likeness_clause(cards: list[dict], *, explicit: bool = False) -> str:
+    """Nome e rosto no começo do prompt. Vazio se ninguém tem visual ainda."""
+    lines: list[str] = []
+    any_bits = False
+    for card in cards:
+        bits = scene_bits(card, explicit=explicit)
+        title = (card.get("title") or "").strip()
+        if bits:
+            any_bits = True
+            line = f"{title}: " + "; ".join(bits) if title else "; ".join(bits)
+        elif title:
+            line = title
+        else:
+            continue
+        status = parse_sheet(card.get("sheet") or "").get("status") or ""
+        if isinstance(status, str) and status in ("dead", "missing", "injured"):
+            line += f"; status {status}"
+        lines.append(line)
+    if not any_bits or not lines:
+        return ""
+    return "exact likeness, " + ", ".join(lines)
 
 
 def visual_bits(card: dict) -> list[str]:
