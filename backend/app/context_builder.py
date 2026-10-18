@@ -203,6 +203,12 @@ def format_action_text(type_: str, text: str) -> str:
     return text  # start/continue/story: prosa pura, verbatim
 
 
+def story_text(actions: list[dict]) -> str:
+    """A história como o narrador lê: ações formatadas, sem `see`."""
+    return "".join(format_action_text(a["type"], a["text"])
+                   for a in narrative_actions(actions))
+
+
 # ---------------------------------------------------- módulos de memória
 def _memory_module(name: str) -> Any | None:
     """Import tardio de backend/memory/<name> (interface injetável)."""
@@ -418,8 +424,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # que já saiu da janela continua puxando a ficha.
     cards_cfg = dict(cfg.get("story_cards", {}))
     scan_chars = int(int(cards_cfg.get("scan_chars", 1000)) * scale)
-    recent_text = "".join(format_action_text(a["type"], a["text"]) for a in actions)
-    recent_tail = recent_text[-scan_chars:]
+    recent_tail = story_text(actions)[-scan_chars:]
 
     mem_cfg = dict(cfg.get("memory_bank", {}))
     if scale > 1.0:

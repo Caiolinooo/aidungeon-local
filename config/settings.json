@@ -88,7 +88,9 @@
     "archive_horizon_tokens": 4096,
     "summary_max_words": 120,
     "summary_temperature": 0.3,
-    "top_k": 12
+    "top_k": 12,
+    "query_chars": 1500,
+    "query_timeout_s": 1.5
   },
   "embeddings": {
     "enabled": true,

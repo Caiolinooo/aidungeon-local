@@ -145,13 +145,32 @@ def _maybe_update_memory(adventure_id: str) -> None:
         pass
 
 
+def _prime_memory_query(adventure_id: str) -> None:
+    """Vetor da cena para as memórias do próximo turno, fora do TTFT."""
+    mod = context_builder._memory_module("retrieval")
+    if mod is None or not hasattr(mod, "prime_scene_vector"):
+        return
+    try:
+        with db.session() as conn:
+            actions = db.list_actions(conn, adventure_id)
+            mem_cfg = settings_store.runtime_config(conn).get("memory_bank", {})
+            emb_cfg = settings_store.effective_embeddings_settings(conn)
+        mod.prime_scene_vector(
+            adventure_id, context_builder.story_text(actions),
+            actions[-1]["seq"] if actions else None, emb_cfg,
+            query_chars=int(mem_cfg.get("query_chars", mod.DEFAULT_QUERY_CHARS)))
+    except Exception:
+        pass
+
+
 # Pausa antes do trabalho de fundo para o POST /choices (slot 1) entrar primeiro.
 _POST_TURN_DELAY_S = 1.5
 
 
 def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
-    """Fora dos testes, roda summarizer + npc_chronicle em background (Slot 1)
-    após o evento done e após liberar o lock da aventura."""
+    """Fora dos testes, roda em background, depois do done e com o lock da
+    aventura já solto: o vetor da cena das memórias e, em seguida,
+    summarizer + npc_chronicle."""
     if os.environ.get("AIDUNGEON_CHRONICLE", "1") == "0":
         # Modo de teste determinístico: summarizer roda síncrono e chronicle fica desligado
         _maybe_update_memory(adventure_id)
@@ -169,6 +188,8 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
             except Exception:
                 pass
 
+    threading.Thread(target=_prime_memory_query, args=(adventure_id,),
+                     name="memory-query", daemon=True).start()
     threading.Thread(target=_bg, name="post-turn-worker", daemon=True).start()
 
 
