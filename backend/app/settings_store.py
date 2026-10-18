@@ -185,6 +185,9 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
     # Never write the stored override back down.
     cap = int(llm.get("context_size_limits", {}).get("max", 106496))
     effective["context_size"] = min(effective["context_size"], cap)
+    scheduler = cfg.get("scheduler", {}) or {}
+    effective["role_timeouts"] = dict(scheduler.get("timeouts", {}) or {})
+    effective["aux_cache_prompt"] = bool(scheduler.get("aux_cache_prompt", False))
     return effective
 
 

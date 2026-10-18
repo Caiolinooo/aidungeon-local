@@ -57,6 +57,18 @@
     "streaming": true,
     "timeout_seconds": 180
   },
+  "scheduler": {
+    "timeouts": {
+      "choices": 15,
+      "chronicle": 45,
+      "summary": 60,
+      "image_prompt": 20,
+      "assistant": 90,
+      "meta": 45
+    },
+    "aux_cache_prompt": false,
+    "note": "Contrato C1 (docs/agents/CONTRATOS.md). timeouts = prazo total (s) de cada chamada auxiliar; estourou, o socket cai e o llama-server solta o slot. Narrativa no slot 0 com prompt cache; auxiliares fora do slot 0 e sem cache (aux_cache_prompt=false) por causa do livelock do llama.cpp #28280 com slot fixado em modelo hibrido."
+  },
   "server_config_area": {
     "description": "Todos os campos de 'llm' + sampler sao expostos em GET/PUT /api/settings/llm e na aba Config da UI",
     "adjustable": ["base_url", "api_key", "model_alias", "context_size", "sampler.max_tokens", "sampler.temperature", "sampler.top_p", "sampler.min_p", "sampler.repetition_penalty", "sampler.presence_penalty", "sampler.frequency_penalty", "sampler.dry_multiplier", "sampler.dry_base", "sampler.dry_allowed_length", "sampler.dry_penalty_last_n", "sampler.retry_temperature_step", "sampler.max_retry_temperature", "streaming"]

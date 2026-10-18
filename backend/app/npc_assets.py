@@ -108,7 +108,7 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
 
 # ------------------------------------------------------------------- enrich
 def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
-                transport: Any) -> dict:
+                transport: Any, *, role: str = "assistant") -> dict:
     """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado."""
     existing = parse_sheet(card["sheet"])
     user = (
@@ -120,7 +120,7 @@ def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
         user += f"\nExisting sheet (improve, don't contradict): {json.dumps(existing, ensure_ascii=False)[:800]}"
     messages = [{"role": "system", "content": _ENRICH_SYSTEM},
                 {"role": "user", "content": user}]
-    content = llm_client.chat_completion(llm_cfg, messages, temperature=0.4,
+    content = llm_client.chat_completion(llm_cfg, messages, role=role, temperature=0.4,
                                          max_tokens=600, transport=transport)
     try:
         data = _extract_json(content)

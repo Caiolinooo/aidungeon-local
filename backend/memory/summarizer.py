@@ -221,7 +221,7 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
     try:
         text = llm.chat_completion(
             _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-            temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
+            role="summary", temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
             transport=transport,
         )
         text = (text or "").strip()
@@ -321,7 +321,7 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     prompt = ROLLING_SUMMARY_PROMPT.format(summary=current, text=excerpt)
     text = llm.chat_completion(
         _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-        temperature=temperature, max_tokens=ROLLING_MAX_TOKENS,
+        role="summary", temperature=temperature, max_tokens=ROLLING_MAX_TOKENS,
         transport=transport,
     )
     text = (text or "").strip()

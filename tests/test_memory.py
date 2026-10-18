@@ -44,9 +44,9 @@ class FakeLLM:
         self.fail = fail
         self.calls: list[dict] = []
 
-    def chat_completion(self, cfg, messages, *, temperature, max_tokens,
+    def chat_completion(self, cfg, messages, *, role, temperature, max_tokens,
                         transport=None):
-        self.calls.append({"cfg": cfg, "messages": messages,
+        self.calls.append({"cfg": cfg, "messages": messages, "role": role,
                            "temperature": temperature, "max_tokens": max_tokens})
         if self.fail:
             raise RuntimeError("llm fora do ar")
@@ -382,17 +382,20 @@ def test_maybe_update_opens_own_session(tmp_db):
 
 
 # ------------------------------------------- llm_client real (transport fake)
-def test_chat_completion_non_streaming_payload():
+def test_chat_completion_aux_payload():
+    """Auxiliar: JSON (stream=false), sem prompt cache e sem slot com 1 slot só."""
     captured: list[dict] = []
     transport = _json_llm_transport(reply="Resumo.", capture=captured)
     cfg = {"base_url": "http://fake/v1", "model_alias": "auto",
            "disable_thinking": True, "timeout_seconds": 30}
     text = llm_client.chat_completion(cfg, [{"role": "user", "content": "hi"}],
-                                      temperature=0.3, max_tokens=50,
+                                      role="summary", temperature=0.3, max_tokens=50,
                                       transport=transport)
     assert text == "Resumo."
     payload = captured[0]
     assert payload["stream"] is False
+    assert payload["cache_prompt"] is False
+    assert "id_slot" not in payload
     assert payload["model"] == "mock-model"
     assert payload["temperature"] == 0.3
     assert payload["max_tokens"] == 50

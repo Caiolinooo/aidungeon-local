@@ -237,8 +237,10 @@ def _chat(llm_cfg: dict, system: str, user: str, *, max_tokens: int,
           temperature: float, transport: Any) -> str:
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
-    return llm_client.chat_completion(llm_cfg, messages, temperature=temperature,
-                                      max_tokens=max_tokens, transport=transport)
+    return llm_client.chat_completion(
+        llm_cfg, messages, role="assistant",
+        timeout_s=llm_client.scaled_timeout(llm_cfg, "assistant", max_tokens),
+        temperature=temperature, max_tokens=max_tokens, transport=transport)
 
 
 def _assistant_cfg(cfg: dict | None) -> dict:

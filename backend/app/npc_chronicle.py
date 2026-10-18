@@ -427,7 +427,7 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     content = llm_client.chat_completion(
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        temperature=0.2, max_tokens=550, transport=transport,
+        role="chronicle", temperature=0.2, max_tokens=550, transport=transport,
     )
     try:
         payload = npc_assets._extract_json(content)
