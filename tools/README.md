@@ -7,6 +7,7 @@ Todos rodam com Python padrão (sem dependências externas).
 |---|---|
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
+| `replay_turn.py` | Replay de turnos pela API do backend (staging) com as metas de fluidez |
 | `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
 | `setup_llm_local.sh` | **Linux.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.sh` |
 
@@ -54,6 +55,27 @@ python tools\bench_llm.py --help
 ```
 
 Se retornar `HTTP 401`, a chave está errada/ausente — configure por uma das vias abaixo.
+
+## 2.1 replay_turn.py — replay no staging
+
+Joga turnos reais pela API, como o front: `POST /action` (SSE) e, no `done`,
+`/choices` e `/scene` em paralelo, com o turno seguinte saindo na hora.
+`--see-during-turn` dispara um See no primeiro token. No fim lista os jobs
+criados (espera na fila e duração) e, com `--expect-card`, quanto cada card
+levou para existir depois do último `done`.
+
+Metas (exit 1 se alguma falhar): nenhum 409; choices em até 16 s ou 503 limpo;
+See no meio do turno sem 409; backdrop até 60 s na fila; cards esperados em
+até `--card-wait`. O token é mintado com `AUTH_USER`/`AUTH_SECRET` do `.env` e
+nunca é impresso.
+
+```bash
+# na VM, contra o staging (127.0.0.1:2123). Grava turnos: nunca rode contra o app principal.
+python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
+    --adventure dd5a6fa4c0394dd3832a1261778ef5a2 \
+    --turn "do:saiam todos, quero apenas a clara aqui" --turn "say:clara? tudo bem?" \
+    --see-during-turn --expect-card Clara
+```
 
 ## 3. Onde configurar a API key
 
