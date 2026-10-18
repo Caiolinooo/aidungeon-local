@@ -107,3 +107,39 @@ Ajuste `User`/caminhos se instalar em outro diretório.
 2. Aponte `VITE_API_BASE_URL` do frontend para este backend (idem §3).
 3. Backup: copiar `/opt/aidungeon/data/aidungeon.db` (com o serviço parado ou via
    `.backup` do sqlite3).
+
+## 8. A1111 na VM (sd-webui, porta 7860)
+
+O WebUI não entra no zip. Na VM ele é o `sd-webui.service`, código em
+`/home/caio/sd-webui`, flags `--medvram --no-half-vae --opt-sdp-attention`.
+Checkpoint `epicrealismXL_vxviiCrystalclear.safetensors`, VAE
+`sdxl-vae-fp16-fix.safetensors`.
+
+Em 18/10/2026 o `txt2img` passou a responder HTTP 500 depois de um CUDA OOM.
+A linha completa:
+
+```text
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0! (when checking argument for argument index in method wrapper_CUDA__index_select)
+```
+
+O `send_me_to_gpu` (`modules/lowvram.py`) estourou no meio do `module.to(cuda)`
+durante o `sample_dpmpp_2m` (pediu 20 MiB, sobravam 33,75 MiB; o PyTorch tinha
+210,84 MiB reservados e fragmentados). O embedding de token do CLIP ficou na
+CPU e o `input_ids` em `cuda:0`. Os pedidos seguintes morriam no
+`index_select`, antes do sampler. `--medvram` ficou: no pico de 1344×768
+sobraram 21 MiB, abaixo dos 2 GB exigidos para `--medvram-sdxl`.
+
+Dois arquivos, já aplicados na unit. Não reiniciar o `llama-server`.
+
+```bash
+sudo cp deploy/vm/sd-webui-alloc.conf /etc/systemd/system/sd-webui.service.d/alloc.conf
+sudo systemctl daemon-reload
+# patch já está em /home/caio/sd-webui; para reaplicar:
+patch -p1 -d /home/caio/sd-webui < deploy/vm/sd-webui-lowvram-device.patch
+sudo systemctl restart sd-webui
+```
+
+Medido com o llama-server carregado (~14424 MiB) e o alocador
+`expandable_segments:True`: 512² em 1 passo, HTTP 200, pico do A1111 5286 MiB
+(304 MiB livres na placa); 1344×768 em 4 passos, HTTP 200, pico 5568 MiB
+(21 MiB livres). Em idle o A1111 fica em ~300 MiB e a placa tem ~5286 MiB livres.

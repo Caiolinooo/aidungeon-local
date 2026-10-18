@@ -1,0 +1,23 @@
+--- a/modules/lowvram.py
++++ b/modules/lowvram.py
+@@ -54,7 +54,19 @@ def setup_for_low_vram(sd_model, use_medvram):
+         if module_in_gpu is not None:
+             module_in_gpu.to(cpu)
+ 
+-        module.to(devices.device)
++        try:
++            module.to(devices.device)
++        except Exception:
++            # Partial module.to(cuda) after OOM leaves the CLIP token embedding
++            # on CPU while input_ids stay on cuda:0. Later txt2img then dies in
++            # torch.embedding / index_select until the process is restarted.
++            module_in_gpu = None
++            try:
++                module.to(cpu)
++            except Exception:
++                pass
++            devices.torch_gc()
++            raise
+         module_in_gpu = module
+ 
+     # see below for register_forward_pre_hook;
