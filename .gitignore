@@ -19,6 +19,7 @@ frontend/node_modules/
 data/*.db
 data/*.db-journal
 data/*.db-wal
+data/llm_stall_hint.json*
 data/models/*.gguf
 data/koboldcpp/
 

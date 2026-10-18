@@ -14,6 +14,16 @@
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`). Cancelar
   (`cancel`) ou estourar o prazo do role derruba o socket; o llama-server
   percebe o cliente desconectado e libera o slot (vale para os dois modos).
+  Isso também é o cancelamento das auxiliares: sem stream, o socket derrubado
+  faz o servidor largar a tarefa do mesmo jeito.
+- Toda chamada pede a vez ao `llm_scheduler` (prioridade, uma auxiliar por
+  slot, teto de auxiliares, circuit breaker). O prazo do role começa quando a
+  chamada é admitida.
+- Narrativa parada (G3): sem token em `scheduler.stall.first_token_s` (30 s) e
+  sem `prompt_progress` em `scheduler.stall.progress_s` (15 s), o socket cai e
+  a narrativa é repetida uma vez no slot de image_prompt, sem cache, tomando o
+  slot de quem estiver nele. A dica em `scheduler.stall_hint_path` deixa o
+  watchdog reiniciar o servidor mais cedo se o slot continuar preso.
 - `disable_thinking=true` (default; OBRIGATÓRIO p/ Qwen3.x híbrido) → toda
   chamada inclui `chat_template_kwargs={"enable_thinking": false}`. Sem isso o
   servidor consome os tokens como `reasoning_content` e devolve content VAZIO.
@@ -32,9 +42,13 @@ import logging
 import socket
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterator
 
 import httpx
+
+from app import llm_scheduler
 
 log = logging.getLogger("aidungeon.llm")
 
@@ -84,8 +98,20 @@ class LlmTimeout(LlmError):
     code = "llm_timeout"
 
 
+class LlmQueueTimeout(LlmTimeout):
+    """A chamada nem foi admitida pelo scheduler; não conta para o breaker."""
+
+
+class LlmStalled(LlmTimeout):
+    """Narrativa sem token e sem progresso de prompt."""
+
+
 class LlmCancelled(LlmError):
     code = "llm_cancelled"
+
+
+class LlmPreempted(LlmCancelled):
+    """O fallback da narrativa tomou o slot; a auxiliar é repetida uma vez."""
 
 
 class LlmDegraded(LlmError):
@@ -97,13 +123,17 @@ class StreamState:
 
     `timings` guarda o bloco de tempos do llama-server da última resposta
     (prompt_n, cache_n, predicted_per_second...); `ttft_s` o tempo até o
-    primeiro token."""
+    primeiro token; `progress` o último `prompt_progress`; `fallback` diz que
+    a narrativa foi repetida fora do slot 0."""
 
     def __init__(self) -> None:
         self.truncated = False
         self.timings: dict = {}
         self.ttft_s: float | None = None
         self.slot: int | None = None
+        self.progress: dict = {}
+        self.fallback = False
+        self.waited_s = 0.0
 
 
 def invalidate_discovery_cache() -> None:
@@ -134,19 +164,23 @@ def _record_call(role: str, slot: int | None, state: StreamState,
         "outcome": outcome,
         "at": time.time(),
         "total_s": round(time.monotonic() - started, 3),
+        "waited_s": round(state.waited_s, 3),
         "ttft_s": round(state.ttft_s, 3) if state.ttft_s is not None else None,
         "prompt_n": timings.get("prompt_n"),
         "cache_n": timings.get("cache_n"),
         "predicted_n": timings.get("predicted_n"),
         "prompt_per_second": timings.get("prompt_per_second"),
         "predicted_per_second": timings.get("predicted_per_second"),
+        "fallback": state.fallback,
     }
     with _recent_lock:
         _recent_calls.append(entry)
     if role == "narrative" or outcome != "ok":
-        log.info("llm %s slot=%s %s total=%.1fs ttft=%s prompt_n=%s cache_n=%s tok/s=%s",
-                 role, slot, outcome, entry["total_s"], entry["ttft_s"],
-                 entry["prompt_n"], entry["cache_n"], entry["predicted_per_second"])
+        log.info("llm %s slot=%s %s total=%.1fs wait=%.1fs ttft=%s prompt_n=%s cache_n=%s"
+                 " tok/s=%s%s",
+                 role, slot, outcome, entry["total_s"], entry["waited_s"], entry["ttft_s"],
+                 entry["prompt_n"], entry["cache_n"], entry["predicted_per_second"],
+                 " fallback" if state.fallback else "")
 
 
 # ---------------------------------------------------------------- helpers
@@ -335,6 +369,80 @@ def _cache_prompt(cfg: dict, role: str) -> bool:
     return bool(cfg.get("aux_cache_prompt", False))
 
 
+# --------------------------------------------------------------- scheduler
+def _scheduler_cfg(cfg: dict) -> dict:
+    raw = cfg.get("scheduler")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _acquire(cfg: dict, role: str, slot: int | None, cancel: threading.Event | None,
+             max_wait: float | None, state: StreamState) -> llm_scheduler.Ticket:
+    """Vez no scheduler; erros dele viram os do contrato C1. A espera que
+    estoura também vai para `recent_calls`."""
+    started = time.monotonic()
+    limits = llm_scheduler.Limits.from_settings(_scheduler_cfg(cfg))
+    try:
+        ticket = llm_scheduler.acquire(role, slot, cancel=cancel, max_wait=max_wait,
+                                       limits=limits)
+    except llm_scheduler.SchedulerError as exc:
+        state.waited_s = time.monotonic() - started
+        if isinstance(exc, llm_scheduler.Degraded):
+            error: LlmError = LlmDegraded(str(exc))
+            outcome = "degraded"
+        elif isinstance(exc, llm_scheduler.Cancelled):
+            error, outcome = LlmCancelled(str(exc)), "cancelled"
+        else:
+            error, outcome = LlmQueueTimeout(str(exc)), "queue_timeout"
+        _record_call(role, slot, state, started, outcome)
+        raise error from None
+    state.waited_s = ticket.waited_s
+    return ticket
+
+
+def _stall_limits(cfg: dict) -> tuple[float, float] | None:
+    """(sem token, sem progresso) em segundos; None desliga o fallback."""
+    stall = _scheduler_cfg(cfg).get("stall")
+    stall = stall if isinstance(stall, dict) else {}
+    if stall.get("enabled", True) is False:
+        return None
+    try:
+        first_token_s = float(stall.get("first_token_s", 30.0))
+        progress_s = float(stall.get("progress_s", 15.0))
+    except (TypeError, ValueError):
+        return 30.0, 15.0
+    if first_token_s <= 0 or progress_s <= 0:
+        return None
+    return first_token_s, progress_s
+
+
+def _fallback_slot(cfg: dict, transport: httpx.BaseTransport | None) -> int | None:
+    """Slot do image_prompt (3 com 4+ slots); None com menos de 2 slots."""
+    return slot_for(cfg, "image_prompt", transport)
+
+
+def _write_stall_hint(cfg: dict, slot: int | None) -> None:
+    """Dica para o slot_watchdog: o app viu o slot parado e largou a conexão."""
+    raw = str(_scheduler_cfg(cfg).get("stall_hint_path") or "").strip()
+    if not raw or slot is None:
+        return
+    path = Path(raw)
+    now = time.time()
+    hint = {
+        "ts": now,
+        "at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+        "slot": slot,
+        "reason": "narrative_stalled",
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(hint), encoding="utf-8")
+        tmp.chmod(0o644)
+        tmp.replace(path)
+    except OSError as exc:
+        log.warning("não gravou a dica de slot parado em %s: %s", path, exc)
+
+
 # ------------------------------------------------------------ cancelamento
 def _stream_socket(stream: Any) -> socket.socket | None:
     if stream is None:
@@ -347,27 +455,42 @@ def _stream_socket(stream: Any) -> socket.socket | None:
 
 
 class _CallGuard:
-    """Vigia `cancel` e o prazo. Ao disparar, derruba o socket (shutdown): a
-    leitura bloqueada acorda na hora e o llama-server solta o slot.
+    """Vigia `cancel`, a preempção do scheduler, o prazo e (na narrativa) a
+    parada sem token nem progresso. Ao disparar, derruba o socket (shutdown):
+    a leitura bloqueada acorda na hora e o llama-server solta o slot.
 
     O socket vem do trace `connection.connect_tcp.complete`: sem stream o
     llama-server só manda os headers no fim da geração, então esperar a
     resposta para pegar o socket deixaria o cancelamento sem efeito."""
 
-    def __init__(self, cancel: threading.Event | None, deadline: float | None):
+    def __init__(self, cancel: threading.Event | None, deadline: float | None, *,
+                 preempt: threading.Event | None = None,
+                 stall: tuple[float, float] | None = None):
         self.cancel = cancel
+        self.preempt = preempt
         self.deadline = deadline
+        self.stall = stall
         self.reason: str | None = None
+        self.started = time.monotonic()
+        self.last_progress = self.started
+        self.got_token = False
         self._sock: socket.socket | None = None
         self._done = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        if self.cancel is None and self.deadline is None:
+        if (self.cancel is None and self.deadline is None and self.preempt is None
+                and self.stall is None):
             return
         self._thread = threading.Thread(target=self._run, name="llm-call-guard",
                                         daemon=True)
         self._thread.start()
+
+    def token(self) -> None:
+        self.got_token = True
+
+    def progress(self) -> None:
+        self.last_progress = time.monotonic()
 
     def attach(self, sock: socket.socket | None) -> None:
         if sock is None:
@@ -389,11 +512,22 @@ class _CallGuard:
     def _expired(self) -> bool:
         if self.reason:
             return True
+        now = time.monotonic()
         if self.cancel is not None and self.cancel.is_set():
             self.reason = "cancel"
-        elif self.deadline is not None and time.monotonic() >= self.deadline:
+        elif self.preempt is not None and self.preempt.is_set():
+            self.reason = "preempt"
+        elif self.deadline is not None and now >= self.deadline:
             self.reason = "timeout"
+        elif self._stalled(now):
+            self.reason = "stall"
         return self.reason is not None
+
+    def _stalled(self, now: float) -> bool:
+        if self.stall is None or self.got_token:
+            return False
+        first_token_s, progress_s = self.stall
+        return now - self.started >= first_token_s and now - self.last_progress >= progress_s
 
     def _shutdown(self) -> None:
         sock = self._sock
@@ -411,6 +545,10 @@ class _CallGuard:
     def error(self) -> LlmError:
         if self.reason == "cancel":
             return LlmCancelled("llm call cancelled")
+        if self.reason == "preempt":
+            return LlmPreempted("llm call preempted by the narrative fallback")
+        if self.reason == "stall":
+            return LlmStalled("narrative stalled: no token and no prompt progress")
         return LlmTimeout("llm call timed out")
 
     def stop(self) -> None:
@@ -495,6 +633,7 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                     content = msg.get("content") or ""
                     if content:
                         state.ttft_s = time.monotonic() - started
+                        guard.token()
                         yield content
                         return
                     if msg.get("reasoning_content"):
@@ -514,6 +653,9 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                             continue
                         if isinstance(chunk.get("timings"), dict):
                             state.timings = chunk["timings"]
+                        if isinstance(chunk.get("prompt_progress"), dict):
+                            state.progress = chunk["prompt_progress"]
+                            guard.progress()
                         for choice in chunk.get("choices") or []:
                             delta = choice.get("delta") or {}
                             token = delta.get("content")
@@ -521,6 +663,7 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                                 if not saw_content:
                                     state.ttft_s = time.monotonic() - started
                                 saw_content = True
+                                guard.token()
                                 yield token
                             elif delta.get("reasoning_content"):
                                 saw_reasoning = True
@@ -551,32 +694,30 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                        "ative llm.disable_thinking para modelos Qwen3.x híbridos")
 
 
-def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
-                           stop: list[str],
-                           transport: httpx.BaseTransport | None = None,
-                           state: StreamState | None = None,
-                           role: str = "narrative",
-                           cancel: threading.Event | None = None,
-                           timeout_s: float | None = None) -> Iterator[str]:
-    """Stream de tokens via SSE. Levanta LlmError e subclasses."""
-    role = normalize_role(role)
-    state = state if state is not None else StreamState()
-    model = resolve_model(cfg, transport)
-    if not model:
-        raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
-    payload = build_chat_payload(cfg, messages, sampler=sampler, stop=stop, model=model,
-                                 transport=transport, role=role)
-    state.slot = payload.get("id_slot")
-    read_timeout = float(cfg.get("timeout_seconds", 180))
-    deadline = time.monotonic() + timeout_s if timeout_s else None
-    guard = _CallGuard(cancel, deadline)
+def _stream_attempt(cfg: dict, payload: dict, *, role: str,
+                    transport: httpx.BaseTransport | None, read_timeout: float,
+                    deadline: float | None, cancel: threading.Event | None,
+                    preempt: threading.Event | None,
+                    stall: tuple[float, float] | None,
+                    state: StreamState) -> Iterator[str]:
+    """Uma tentativa em stream. Devolve o outcome; "stalled" só quando nenhum
+    token saiu (depois do primeiro token, parada vira timeout)."""
+    guard = _CallGuard(cancel, deadline, preempt=preempt, stall=stall)
     guard.start()
     started = time.monotonic()
     outcome = "error"
+    yielded = False
     try:
-        yield from _iter_content(cfg, payload, transport=transport,
-                                 read_timeout=read_timeout, guard=guard, state=state)
+        for token in _iter_content(cfg, payload, transport=transport,
+                                   read_timeout=read_timeout, guard=guard, state=state):
+            yielded = True
+            yield token
         outcome = "ok"
+    except LlmStalled:
+        if yielded:
+            outcome = "timeout"
+            raise LlmTimeout("llm stream stalled after the first token") from None
+        outcome = "stalled"
     except GeneratorExit:
         outcome = "aborted"
         raise
@@ -590,6 +731,86 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
     finally:
         guard.stop()
         _record_call(role, state.slot, state, started, outcome)
+    return outcome
+
+
+def _narrative_fallback(cfg: dict, payload: dict, *, role: str,
+                        transport: httpx.BaseTransport | None, read_timeout: float,
+                        deadline: float | None, cancel: threading.Event | None,
+                        stall: tuple[float, float] | None,
+                        state: StreamState) -> Iterator[str]:
+    """Slot da narrativa parado: repete uma vez no slot do image_prompt, sem
+    cache, tomando o slot de quem estiver nele."""
+    stuck = state.slot
+    _write_stall_hint(cfg, stuck)
+    slot = _fallback_slot(cfg, transport)
+    if slot is None or slot == stuck:
+        raise LlmStalled("narrative stalled and there is no fallback slot")
+    llm_scheduler.note_outcome("stalled")
+    log.warning("narrativa parada no slot %s; repetindo no slot %s sem cache", stuck, slot)
+    retry = dict(payload, id_slot=slot, cache_prompt=False)
+    state.slot = slot
+    state.fallback = True
+    state.timings = {}
+    state.ttft_s = None
+    state.progress = {}
+    with llm_scheduler.preempt(slot):
+        outcome = yield from _stream_attempt(
+            cfg, retry, role=role, transport=transport, read_timeout=read_timeout,
+            deadline=deadline, cancel=cancel, preempt=None, stall=stall, state=state)
+    if outcome == "stalled":
+        raise LlmStalled("narrative stalled on the fallback slot too")
+    return outcome
+
+
+def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
+                           stop: list[str],
+                           transport: httpx.BaseTransport | None = None,
+                           state: StreamState | None = None,
+                           role: str = "narrative",
+                           cancel: threading.Event | None = None,
+                           timeout_s: float | None = None) -> Iterator[str]:
+    """Stream de tokens via SSE. Levanta LlmError e subclasses.
+
+    A narrativa nunca espera na fila do scheduler e pede `return_progress`:
+    parada sem token nem progresso, é repetida uma vez fora do slot 0."""
+    role = normalize_role(role)
+    state = state if state is not None else StreamState()
+    model = resolve_model(cfg, transport)
+    if not model:
+        raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
+    payload = build_chat_payload(cfg, messages, sampler=sampler, stop=stop, model=model,
+                                 transport=transport, role=role)
+    stall = _stall_limits(cfg) if role == "narrative" else None
+    if stall is not None:
+        payload["return_progress"] = True
+    state.slot = payload.get("id_slot")
+    read_timeout = float(cfg.get("timeout_seconds", 180))
+    ticket = _acquire(cfg, role, state.slot, cancel,
+                      float(timeout_s) if timeout_s else role_timeout(cfg, role), state)
+    deadline = time.monotonic() + timeout_s if timeout_s else None
+    outcome = "error"
+    try:
+        outcome = yield from _stream_attempt(
+            cfg, payload, role=role, transport=transport, read_timeout=read_timeout,
+            deadline=deadline, cancel=cancel, preempt=ticket.preempt, stall=stall,
+            state=state)
+        if outcome == "stalled":
+            outcome = "error"
+            outcome = yield from _narrative_fallback(
+                cfg, payload, role=role, transport=transport, read_timeout=read_timeout,
+                deadline=deadline, cancel=cancel, stall=stall, state=state)
+    except GeneratorExit:
+        outcome = "aborted"
+        raise
+    except LlmCancelled:
+        outcome = "cancelled"
+        raise
+    except LlmTimeout:
+        outcome = "timeout"
+        raise
+    finally:
+        llm_scheduler.release(ticket, outcome)
 
 
 def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
@@ -602,8 +823,9 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
     """Chamada auxiliar: devolve o texto inteiro (stripped).
 
     Slot e `cache_prompt` seguem o role (C1). `timeout_s` (padrão: prazo do
-    role) é o tempo total; `cancel` aborta a qualquer momento. Levanta
-    LlmError e subclasses.
+    role) limita a espera na fila e, depois, a chamada; `cancel` aborta a
+    qualquer momento. Preemptada pelo fallback da narrativa, é repetida uma
+    vez. Levanta LlmError e subclasses.
     """
     role = normalize_role(role)
     state = state if state is not None else StreamState()
@@ -627,7 +849,23 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     total = float(timeout_s) if timeout_s else role_timeout(cfg, role)
-    guard = _CallGuard(cancel, time.monotonic() + total)
+    try:
+        return _complete_once(cfg, payload, role=role, slot=slot, total=total,
+                              cancel=cancel, transport=transport, state=state)
+    except LlmPreempted:
+        log.info("llm %s preemptada no slot %s; repetindo uma vez", role, slot)
+    state.timings = {}
+    state.ttft_s = None
+    return _complete_once(cfg, payload, role=role, slot=slot, total=total,
+                          cancel=cancel, transport=transport, state=state)
+
+
+def _complete_once(cfg: dict, payload: dict, *, role: str, slot: int | None,
+                   total: float, cancel: threading.Event | None,
+                   transport: httpx.BaseTransport | None, state: StreamState) -> str:
+    """Uma tentativa: espera a vez (até `total`) e tem `total` depois dela."""
+    ticket = _acquire(cfg, role, slot, cancel, total, state)
+    guard = _CallGuard(cancel, time.monotonic() + total, preempt=ticket.preempt)
     guard.start()
     started = time.monotonic()
     outcome = "error"
@@ -637,6 +875,9 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
                                    read_timeout=total + 1.0, guard=guard, state=state):
             parts.append(piece)
         outcome = "ok"
+    except LlmPreempted:
+        outcome = "preempted"
+        raise
     except LlmCancelled:
         outcome = "cancelled"
         raise
@@ -646,5 +887,6 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
         raise
     finally:
         guard.stop()
+        llm_scheduler.release(ticket, outcome)
         _record_call(role, slot, state, started, outcome)
     return "".join(parts).strip()

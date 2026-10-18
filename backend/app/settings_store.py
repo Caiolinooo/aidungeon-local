@@ -188,7 +188,18 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
     scheduler = cfg.get("scheduler", {}) or {}
     effective["role_timeouts"] = dict(scheduler.get("timeouts", {}) or {})
     effective["aux_cache_prompt"] = bool(scheduler.get("aux_cache_prompt", False))
+    effective["scheduler"] = _scheduler_settings(scheduler)
     return effective
+
+
+def _scheduler_settings(raw: dict) -> dict:
+    """Bloco `scheduler` para o llm_client, com `stall_hint_path` absoluto."""
+    out = {key: value for key, value in raw.items() if key not in ("timeouts", "note")}
+    hint = str(raw.get("stall_hint_path") or "").strip()
+    if hint:
+        path = Path(hint)
+        out["stall_hint_path"] = str(path if path.is_absolute() else db.REPO_ROOT / path)
+    return out
 
 
 def mask_api_key(key: str | None) -> str | None:
