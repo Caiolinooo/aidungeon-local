@@ -105,6 +105,21 @@ def _set_override(conn: sqlite3.Connection, key: str, value: Any) -> None:
     db.set_setting(conn, key, json.dumps(value, ensure_ascii=False))
 
 
+def _apply_key(conn: sqlite3.Connection, key: str, value: str | None) -> bool:
+    """Grava a chave ("" apaga). A chave vira header HTTP: a mascarada que o
+    front reenvia ("sk-…1234") e qualquer valor fora de ASCII imprimível são
+    ignorados. Devolve se mudou algo."""
+    if value is None:
+        return False
+    if value == "":
+        db.delete_setting(conn, key)
+        return True
+    if not (value.isascii() and value.isprintable()):
+        return False
+    _set_override(conn, key, value)
+    return True
+
+
 def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
     """Persiste overrides (campos omitidos permanecem). Devolve chaves mudadas.
 
@@ -132,11 +147,7 @@ def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "api_key" in update and update["api_key"] is not None:
-        if update["api_key"] == "":
-            db.delete_setting(conn, "llm.api_key")
-        else:
-            _set_override(conn, "llm.api_key", update["api_key"])
+    if _apply_key(conn, "llm.api_key", update.get("api_key")):
         changed.add("api_key")
     return changed
 
@@ -280,11 +291,7 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "openai_api_key" in update and update["openai_api_key"] is not None:
-        if update["openai_api_key"] == "":
-            db.delete_setting(conn, "image.openai_api_key")
-        else:
-            _set_override(conn, "image.openai_api_key", update["openai_api_key"])
+    if _apply_key(conn, "image.openai_api_key", update.get("openai_api_key")):
         changed.add("openai_api_key")
     return changed
 
@@ -341,11 +348,7 @@ def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "api_key" in update and update["api_key"] is not None:
-        if update["api_key"] == "":
-            db.delete_setting(conn, "voice.api_key")
-        else:
-            _set_override(conn, "voice.api_key", update["api_key"])
+    if _apply_key(conn, "voice.api_key", update.get("api_key")):
         changed.add("api_key")
     return changed
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 
-from app import deps
+import pytest
+
+from app import db, deps, settings_store
 
 from conftest import make_llm_transport
 
@@ -49,6 +51,23 @@ def test_api_key_empty_string_removes_it(client):
     assert resp.status_code == 200
     assert resp.json()["api_key"] is None
     assert client.get("/api/settings/llm").json()["api_key"] is None
+
+
+@pytest.mark.parametrize(("path", "field", "key"), [
+    ("/api/settings/llm", "api_key", "llm.api_key"),
+    ("/api/settings/image", "openai_api_key", "image.openai_api_key"),
+    ("/api/settings/voice", "api_key", "voice.api_key"),
+])
+@pytest.mark.parametrize("echoed", ["sk-…1234", "chave-ção", "sk-new\r\nX-Evil: 1"])
+def test_masked_or_non_ascii_key_is_ignored(client, path, field, key, echoed):
+    assert client.put(path, json={field: "sk-secret-1234"}).status_code == 200
+    resp = client.put(path, json={field: echoed})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[field] == "sk-…1234"
+    with db.session() as conn:
+        assert settings_store._get_override(conn, key) == "sk-secret-1234"
+    resp = client.put(path, json={field: "sk-other-5678"})
+    assert resp.json()[field] == "sk-…5678"
 
 
 def test_put_partial_update_keeps_other_fields(client):
