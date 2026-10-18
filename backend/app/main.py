@@ -32,6 +32,7 @@ from app.routes import (actions, adventures, assistant, cards, choices,
                         memory, scenarios, scene as scene_routes, settings, ui_profile,
                         voice)
 from app.routes import auth as auth_routes
+from app.routes import events as events_routes
 from app.routes import users as users_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -146,6 +147,10 @@ app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)
 app.include_router(health.router, prefix="/api", tags=["health"],
                    dependencies=_protected)
+
+# --- Grok (G4): eventos em SSE. Fora do _protected porque o EventSource do
+# navegador não manda header: a rota aceita Bearer ou ?token= e checa o dono.
+app.include_router(events_routes.router, prefix="/api/adventures", tags=["events"])
 
 
 # ------------------------------------------------------------------ frontend
