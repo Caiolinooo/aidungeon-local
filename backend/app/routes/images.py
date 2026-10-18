@@ -9,7 +9,8 @@ Fluxo do /see (contrato docs/openapi.yaml):
 3) grava a linha em `images` + action type=see (mesmo seq vinculando);
 4) devolve ImageResult.
 
-Mesmo lock por aventura do game_engine → 409 generation_in_progress.
+Não usa o lock de geração: o jogador segue agindo enquanto a imagem sai, e o
+`see` entra no fim da aventura (`game_engine.appending`).
 """
 
 from __future__ import annotations
@@ -312,7 +313,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         {"role": "user", "content": user},
     ]
     summarized = llm_client.chat_completion(
-        llm_cfg, messages, temperature=0.2,
+        llm_cfg, messages, role="image_prompt", temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
     summarized, neg_summary = contradicting_looks(summarized, clause)
     _, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
@@ -368,54 +369,47 @@ def post_see(adventure_id: str, body: SeeRequest,
         img_cfg = settings_store.effective_image_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
 
-    if not game_engine.acquire_generation_lock(adventure_id):
-        raise GameError.conflict("generation_in_progress",
-                                 "a generation is already running for this adventure")
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_disabled",
+                        "image generation is disabled (settings.image.enabled)")
+
     try:
-        if not img_cfg["enabled"]:
-            raise GameError(503, "image_disabled",
-                            "image generation is disabled (settings.image.enabled)")
+        prompt, negative_extra, caption = _build_final_prompt(
+            adv, actions, body, img_cfg, llm_cfg, cards, transport)
+    except llm_client.LlmError as exc:
+        raise GameError(503, exc.code, exc.message) from exc
 
-        try:
-            prompt, negative_extra, caption = _build_final_prompt(
-                adv, actions, body, img_cfg, llm_cfg, cards, transport)
-        except llm_client.LlmError as exc:
-            raise GameError(503, exc.code, exc.message) from exc
+    image_id = db.new_id()
+    try:
+        result = image_client.generate_image(
+            img_cfg, prompt, adventure_id=adventure_id, image_id=image_id,
+            transport=transport, negative_extra=negative_extra)
+    except image_client.ImageError as exc:
+        raise GameError(503, exc.code, exc.message) from exc
 
-        image_id = db.new_id()
-        try:
-            result = image_client.generate_image(
-                img_cfg, prompt, adventure_id=adventure_id, image_id=image_id,
-                transport=transport, negative_extra=negative_extra)
-        except image_client.ImageError as exc:
-            raise GameError(503, exc.code, exc.message) from exc
+    # Sem lock de geração: o jogador pode ter agido enquanto a imagem saía, e
+    # o `see` entra no fim da aventura.
+    with game_engine.appending(adventure_id) as conn:
+        action = game_engine.append_action(conn, adventure_id, "see", caption)
+        db.insert_image(conn, adventure_id=adventure_id, action_seq=action["seq"],
+                        prompt=prompt,
+                        negative_prompt=_dedupe_negative(
+                            img_cfg["negative_prompt"], negative_extra),
+                        file_path=result["file_path"],
+                        provider=result["provider"],
+                        width=result["width"], height=result["height"],
+                        image_id=image_id)
+        action = db.get_action(conn, action["id"])
 
-        with db.session() as conn:
-            last_seq = db.max_seq(conn, adventure_id)
-            seq = 0 if last_seq is None else last_seq + 1
-            action = db.insert_action(conn, adventure_id, seq, "see", caption)
-            db.insert_image(conn, adventure_id=adventure_id, action_seq=seq,
-                            prompt=prompt,
-                            negative_prompt=_dedupe_negative(
-                                img_cfg["negative_prompt"], negative_extra),
-                            file_path=result["file_path"],
-                            provider=result["provider"],
-                            width=result["width"], height=result["height"],
-                            image_id=image_id)
-            db.touch_adventure(conn, adventure_id)
-            action = db.get_action(conn, action["id"])
-
-        log.info("see: imagem %s gerada para aventura %s (%s)",
-                 image_id, adventure_id, result["provider"])
-        return {
-            "id": image_id,
-            "url": f"/api/images/{image_id}",
-            "prompt": prompt,
-            "provider": result["provider"],
-            "action": action,
-        }
-    finally:
-        game_engine.release_generation_lock(adventure_id)
+    log.info("see: imagem %s gerada para aventura %s (%s)",
+             image_id, adventure_id, result["provider"])
+    return {
+        "id": image_id,
+        "url": f"/api/images/{image_id}",
+        "prompt": prompt,
+        "provider": result["provider"],
+        "action": action,
+    }
 
 
 # ------------------------------------------------------------- arquivo PNG

@@ -2,6 +2,12 @@
 
 Semânticas do contrato:
 - Lock por aventura: geração concorrente → 409 `generation_in_progress`.
+  Só a narração (action/continue/retry) usa esse lock; choices, See e
+  ui-profile rodam em paralelo como auxiliares (contrato C1).
+- Toda ação nova entra por `appending` + `append_action`: max_seq, insert e
+  commit sob um lock próprio, porque See e narrador gravam ao mesmo tempo.
+- Ganchos C3: `meta_commands.match` antes do narrador (se casar, o narrador
+  não roda) e `output_sanitizer.clean_narration` antes de gravar.
 - `action` persiste a ação do jogador FORMATADA (do → "\\n> You {text}\\n";
   say → '\\n> You say "{text}"\\n'; story → prosa) — byte a byte como o backup.
 - `retry` só sobre a última action `continue`: regenera com o mesmo contexto
@@ -22,15 +28,19 @@ Eventos emitidos pelo gerador (a rota serializa em SSE):
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Iterator
 
 from app import (
     context_builder,
     db,
     llm_client,
+    meta_commands,
     npc_chronicle,
+    output_sanitizer,
     scripting,
     settings_store,
     web_search as web_search_mod,
@@ -44,6 +54,8 @@ _locks: dict[str, threading.Lock] = {}
 # dois passes de lerem os mesmos marcadores antes de qualquer um gravar.
 _post_turn_guard = threading.Lock()
 _post_turn_locks: dict[str, threading.Lock] = {}
+_append_guard = threading.Lock()
+_append_locks: dict[str, threading.Lock] = {}
 
 
 # --------------------------------------------------------------- locking
@@ -57,9 +69,34 @@ def _post_turn_lock_for(adventure_id: str) -> threading.Lock:
         return _post_turn_locks.setdefault(adventure_id, threading.Lock())
 
 
+def _append_lock_for(adventure_id: str) -> threading.Lock:
+    with _append_guard:
+        return _append_locks.setdefault(adventure_id, threading.Lock())
+
+
+@contextmanager
+def appending(adventure_id: str) -> Iterator[sqlite3.Connection]:
+    """Transação que grava no fim da aventura. O lock cobre até o commit:
+    `actions` tem UNIQUE(adventure_id, seq) e See, jogador e narrador gravam
+    em paralelo."""
+    with _append_lock_for(adventure_id):
+        with db.session() as conn:
+            yield conn
+
+
+def append_action(conn: sqlite3.Connection, adventure_id: str, type_: str,
+                  text: str) -> dict:
+    """Ação no próximo seq. Só dentro de `appending`."""
+    last_seq = db.max_seq(conn, adventure_id)
+    seq = 0 if last_seq is None else last_seq + 1
+    action = db.insert_action(conn, adventure_id, seq, type_, text)
+    db.touch_adventure(conn, adventure_id)
+    return action
+
+
 def acquire_generation_lock(adventure_id: str) -> bool:
-    """Lock por aventura (não-bloqueante) — compartilhado por geração de texto,
-    imagem (see) e choices, que não podem rodar concorrentemente."""
+    """Lock por aventura (não-bloqueante) da narração: action, continue e
+    retry não rodam juntos na mesma aventura."""
     return _lock_for(adventure_id).acquire(blocking=False)
 
 
@@ -73,7 +110,7 @@ def release_generation_lock(adventure_id: str) -> None:
 
 
 def is_any_generation_active() -> bool:
-    """True quando qualquer aventura está gerando texto/see no momento."""
+    """True quando qualquer aventura está narrando no momento."""
     with _locks_guard:
         return any(lock.locked() for lock in _locks.values())
 
@@ -95,17 +132,6 @@ def _format_player_text(type_: str, text: str) -> str:
     if type_ == "say":
         return f'\n> You say "{inner}"\n'
     return inner  # story: prosa pura
-
-
-def cut_incomplete_sentence(text: str) -> str:
-    """O teto de tokens cortou no meio. A prosa gravada para no último . ! ?"""
-    stripped = text.rstrip()
-    if not stripped or stripped[-1] in ".!?":
-        return stripped
-    end = max(stripped.rfind("."), stripped.rfind("!"), stripped.rfind("?"))
-    if end < 0:
-        return stripped
-    return stripped[: end + 1].rstrip()
 
 
 def _maybe_update_memory(adventure_id: str) -> None:
@@ -216,25 +242,21 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 full.append(token)
                 yield {"event": "token", "data": {"token": token}}
 
-            text = "".join(full).rstrip()
-            if stream_state.truncated:
-                text = cut_incomplete_sentence(text)
+            text = output_sanitizer.clean_narration("".join(full), stream_state.truncated)
             # Scripting hook: output modifier (after generation completion)
             out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
             if out_script:
                 text = scripting.run_output_modifier(out_script, text)
 
-            with db.session() as conn:
+            with appending(adventure_id) as conn:
                 if retry_of is not None:
                     # substitui: mesmo seq, novo id (apaga a antiga só no sucesso)
                     db.delete_action(conn, retry_of["id"])
                     action = db.insert_action(conn, adventure_id, retry_of["seq"],
                                               "continue", text)
+                    db.touch_adventure(conn, adventure_id)
                 else:
-                    last_seq = db.max_seq(conn, adventure_id)
-                    seq = 0 if last_seq is None else last_seq + 1
-                    action = db.insert_action(conn, adventure_id, seq, "continue", text)
-                db.touch_adventure(conn, adventure_id)
+                    action = append_action(conn, adventure_id, "continue", text)
 
             data: dict[str, Any] = {"action": action}
             if player_action is not None:
@@ -266,6 +288,9 @@ def handle_action(adventure_id: str, type_: str, text: str,
     _adventure_or_404(adventure_id)
     if type_ not in db.PLAYER_TYPES:
         raise GameError.conflict("invalid_action_type", f"type must be one of {db.PLAYER_TYPES}")
+    cmd = meta_commands.match(text, type_)
+    if cmd is not None:
+        return _meta_command_events(adventure_id, cmd, transport)
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
@@ -278,13 +303,10 @@ def handle_action(adventure_id: str, type_: str, text: str,
                 type_ = mod_action.get("type", type_)
                 text = mod_action.get("text", text)
 
-        with db.session() as conn:
-            last_seq = db.max_seq(conn, adventure_id)
-            seq = 0 if last_seq is None else last_seq + 1
-            _retry_counts.pop((adventure_id, seq), None)
-            player_action = db.insert_action(conn, adventure_id, seq,
-                                             type_, _format_player_text(type_, text))
-            db.touch_adventure(conn, adventure_id)
+        with appending(adventure_id) as conn:
+            player_action = append_action(conn, adventure_id, type_,
+                                          _format_player_text(type_, text))
+            _retry_counts.pop((adventure_id, player_action["seq"]), None)
     except Exception:
         release_generation_lock(adventure_id)
         raise
@@ -292,6 +314,17 @@ def handle_action(adventure_id: str, type_: str, text: str,
                               retry_of=None, retry_count=0,
                               web_search=web_search, raw_query_text=text,
                               transport=transport)
+
+
+def _meta_command_events(adventure_id: str, cmd: meta_commands.MetaCommand,
+                         transport: Any) -> Iterator[dict]:
+    """Meta-comando no lugar do narrador: sem lock de geração, nada vira prosa."""
+    try:
+        yield from meta_commands.execute(adventure_id, cmd, transport)
+    except llm_client.LlmError as exc:
+        yield {"event": "error", "data": {"message": exc.message}}
+    except Exception as exc:  # defesa — o stream sempre termina com erro legível
+        yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
 
 
 def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
@@ -332,7 +365,7 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
 # ------------------------------------------------------------------ undo
 def handle_undo(adventure_id: str) -> dict:
     """POST /undo: remove o último turno; nunca remove a action `start`."""
-    with db.session() as conn:
+    with appending(adventure_id) as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
         actions = db.list_actions(conn, adventure_id)

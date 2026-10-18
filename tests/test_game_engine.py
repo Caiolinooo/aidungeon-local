@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import context_builder, db, game_engine
+from app import context_builder, db, game_engine, output_sanitizer
 from app.errors import GameError
 
 from conftest import add_action, make_adventure, make_llm_transport
@@ -280,5 +280,5 @@ def test_a_finished_reply_keeps_a_trailing_fragment(adventure):
 
 
 def test_cut_without_punctuation_keeps_the_fragment():
-    assert game_engine.cut_incomplete_sentence("apesar") == "apesar"
-    assert game_engine.cut_incomplete_sentence("Done.") == "Done."
+    assert output_sanitizer.cut_incomplete_sentence("apesar") == "apesar"
+    assert output_sanitizer.cut_incomplete_sentence("Done.") == "Done."

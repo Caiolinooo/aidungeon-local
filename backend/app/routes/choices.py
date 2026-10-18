@@ -2,8 +2,9 @@
 
 Após ler a cena recente, o LLM sugere `settings.choices.count` opções curtas
 (type do/say/story, texto ≤ 120 chars, em inglês). Desabilitado
-(settings.choices.enabled=false) → 200 {"choices": []}. Mesmo lock por
-aventura do game_engine → 409 generation_in_progress.
+(settings.choices.enabled=false) → 200 {"choices": []}. Não usa o lock de
+geração: roda no slot de choices (C1) com prazo curto, em paralelo à
+narrativa, e falha limpa (503 llm_timeout) em vez de travar a aventura.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app import db, game_engine, llm_client, settings_store
+from app import db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -82,27 +83,21 @@ def post_choices(adventure_id: str,
         actions = db.list_actions(conn, adventure_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
 
-    if not game_engine.acquire_generation_lock(adventure_id):
-        raise GameError.conflict("generation_in_progress",
-                                 "a generation is already running for this adventure")
+    scene = "".join(a["text"] for a in actions if a["type"] != "see")[-2000:]
+    messages = [
+        {"role": "system", "content": _SYSTEM.replace("{count}", str(cfg["count"]))},
+        {"role": "user", "content": f"Recent scene:\n{scene.strip() or '(beginning of the adventure)'}"},
+    ]
     try:
-        scene = "".join(a["text"] for a in actions if a["type"] != "see")[-2000:]
-        messages = [
-            {"role": "system", "content": _SYSTEM.replace("{count}", str(cfg["count"]))},
-            {"role": "user", "content": f"Recent scene:\n{scene.strip() or '(beginning of the adventure)'}"},
-        ]
-        try:
-            content = llm_client.chat_completion(
-                llm_cfg, messages, temperature=cfg["temperature"],
-                max_tokens=cfg["max_tokens"], transport=transport)
-        except llm_client.LlmError as exc:
-            raise GameError(503, exc.code, exc.message) from exc
-        try:
-            choices = _parse_choices(content, cfg["count"])
-        except (ValueError, TypeError) as exc:
-            log.warning("choices: resposta do LLM não parseável: %s", exc)
-            raise GameError(503, "generation_failed",
-                            "LLM returned an unparseable choices response") from exc
-        return {"choices": choices}
-    finally:
-        game_engine.release_generation_lock(adventure_id)
+        content = llm_client.chat_completion(
+            llm_cfg, messages, role="choices", temperature=cfg["temperature"],
+            max_tokens=cfg["max_tokens"], transport=transport)
+    except llm_client.LlmError as exc:
+        raise GameError(503, exc.code, exc.message) from exc
+    try:
+        choices = _parse_choices(content, cfg["count"])
+    except (ValueError, TypeError) as exc:
+        log.warning("choices: resposta do LLM não parseável: %s", exc)
+        raise GameError(503, "generation_failed",
+                        "LLM returned an unparseable choices response") from exc
+    return {"choices": choices}
