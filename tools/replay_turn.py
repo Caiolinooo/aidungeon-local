@@ -8,12 +8,14 @@ jogo: 409 na ação seguinte, choices lento, See recusado no meio do turno,
 espera dos jobs de fundo na fila e o card que não aparece.
 
 Cada turno:
-  1. POST /action (SSE): TTFT, total e tokens. Com --see-during-turn, um
-     POST /see sai assim que chega o primeiro token.
+  1. POST /action (SSE): TTFT, total e tokens. Com --see-during-turn (ou a
+     cada --see-every turnos), um POST /see sai assim que chega o primeiro token.
   2. No `done`, POST /choices e POST /scene em paralelo (como o Play.jsx).
   3. O turno seguinte sai logo depois do `done`, sem esperar o choices.
-No fim: os jobs criados durante o replay (espera na fila e duração) e, com
---expect-card, quanto tempo cada card levou para existir.
+No fim: p50/p95 de TTFT, turno e choices, os jobs criados durante o replay
+(espera na fila e duração) e, com --expect-card, quanto tempo cada card levou
+para existir. Soak: --repeat repete a lista de turnos; turno acima de
+--slow-turn conta como falha (slot preso no llama-server).
 
 Token: mintado com AUTH_USER/AUTH_SECRET do .env, no formato de
 backend/app/auth.py, e nunca impresso. Ou --token / env AIDUNGEON_TOKEN.
@@ -207,6 +209,13 @@ def _fmt(seconds: float | None) -> str:
     return "-" if seconds is None else f"{seconds:6.1f}s"
 
 
+def _pct(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))]
+
+
 class Replay:
     def __init__(self, api: Api, args: argparse.Namespace) -> None:
         self.api = api
@@ -216,6 +225,9 @@ class Replay:
         self.failures: list[str] = []
         self.t0 = time.monotonic()
         self.last_done: float | None = None
+        self.stats: dict[str, list[float]] = {"ttft": [], "turn": [], "choices": []}
+        self.choices_503 = 0
+        self.see_every = 1 if args.see_during_turn else args.see_every
 
     def log(self, message: str) -> None:
         print(f"[{time.monotonic() - self.t0:7.1f}s] {message}", flush=True)
@@ -238,9 +250,10 @@ class Replay:
         started_at = time.time() - 2
 
         pending: list[tuple[str, Future]] = []
-        for index, (type_, text) in enumerate(self.args.turn, start=1):
+        for index, (type_, text) in enumerate(self.args.turn * self.args.repeat, start=1):
             see: list[Future] = []
             see_seq = last_seq
+            wants_see = bool(self.see_every) and index % self.see_every == 0
 
             def fire_see(seq: int = see_seq, bucket: list = see) -> None:
                 bucket.append(self.pool.submit(
@@ -249,8 +262,7 @@ class Replay:
 
             gap = None if self.last_done is None else time.monotonic() - self.last_done
             turn = self.api.stream_action(
-                self.adv, type_, text,
-                on_first_token=fire_see if self.args.see_during_turn else None)
+                self.adv, type_, text, on_first_token=fire_see if wants_see else None)
             gap_note = "" if gap is None else f" (saiu {gap:.1f}s após o done anterior)"
             self.log(f"turno {index} {type_}: HTTP {turn['status']} ttft {_fmt(turn['ttft_s'])} "
                      f"total {_fmt(turn['total_s'])} tokens {turn['tokens']} seq {turn['seq']}"
@@ -260,6 +272,11 @@ class Replay:
             elif turn["status"] != 200 or turn["error"] or turn["seq"] is None:
                 self.fail(f"turno {index}: HTTP {turn['status']} {turn['error']}")
             else:
+                if turn["ttft_s"] is not None:
+                    self.stats["ttft"].append(turn["ttft_s"])
+                self.stats["turn"].append(turn["total_s"])
+                if turn["total_s"] > self.args.slow_turn:
+                    self.fail(f"turno {index}: {turn['total_s']:.0f}s > {self.args.slow_turn:.0f}s")
                 last_seq = turn["seq"]
                 self.last_done = time.monotonic()
                 pending.append((f"choices após turno {index}", self.pool.submit(
@@ -267,7 +284,7 @@ class Replay:
                 pending.append((f"scene após turno {index}", self.pool.submit(
                     self.api.call, "POST", f"/api/adventures/{self.adv}/scene", {})))
             pending.extend((f"see durante turno {index}", fut) for fut in see)
-            if self.args.see_during_turn and not see:
+            if wants_see and not see:
                 self.log(f"turno {index}: sem token, o See não saiu")
 
         for label, fut in pending:
@@ -276,6 +293,7 @@ class Replay:
             self.wait_cards(known_cards)
         self.report_jobs(started_at)
         self.pool.shutdown(wait=True)
+        self.report_stats()
 
         if self.failures:
             print(f"\nRESULTADO: {len(self.failures)} meta(s) falharam")
@@ -295,6 +313,11 @@ class Replay:
             backdrop = (res["body"] or {}).get("backdrop") or {}
             detail += f" fundo {backdrop.get('status')}"
         self.log(f"{label}: {detail}")
+        if label.startswith("choices"):
+            if res["status"] == 200:
+                self.stats["choices"].append(res["elapsed_s"])
+            elif res["status"] == 503:
+                self.choices_503 += 1
         if res["status"] == 409:
             self.fail(f"{label}: 409 {res['error']}")
         elif label.startswith("choices"):
@@ -304,6 +327,13 @@ class Replay:
                 self.fail(f"{label}: HTTP {res['status']} {res['error']}")
         elif res["status"] not in (200, 503):
             self.fail(f"{label}: HTTP {res['status']} {res['error']}")
+
+    def report_stats(self) -> None:
+        print()
+        for name, values in self.stats.items():
+            print(f"{name:<8} n={len(values):<4} p50 {_fmt(_pct(values, 0.5))} "
+                  f"p95 {_fmt(_pct(values, 0.95))} máx {_fmt(max(values, default=None))}")
+        print(f"choices 503: {self.choices_503}")
 
     def wait_cards(self, known: set[str]) -> None:
         wanted = {name.lower(): name for name in self.args.expect_card}
@@ -364,6 +394,12 @@ def build_parser() -> argparse.ArgumentParser:
                    metavar="TIPO:TEXTO", help="turno do jogador (repetível): do:..., say:..., story:...")
     p.add_argument("--see-during-turn", action="store_true",
                    help="dispara POST /see no primeiro token de cada turno")
+    p.add_argument("--see-every", type=int, default=0, metavar="N",
+                   help="dispara o See no primeiro token a cada N turnos (padrão: nunca)")
+    p.add_argument("--repeat", type=int, default=1,
+                   help="repete a lista de --turn N vezes (soak; padrão 1)")
+    p.add_argument("--slow-turn", type=float, default=120.0,
+                   help="turno acima disso falha: indício de slot preso (padrão 120 s)")
     p.add_argument("--expect-card", action="append", default=[], metavar="NOME",
                    help="card que deve existir depois do replay (repetível)")
     p.add_argument("--card-wait", type=float, default=60.0,

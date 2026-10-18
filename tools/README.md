@@ -8,6 +8,7 @@ Todos rodam com Python padrão (sem dependências externas).
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
 | `replay_turn.py` | Replay de turnos pela API do backend (staging) com as metas de fluidez |
+| `bench_slots.py` | Benchmark do llama-server nos papéis do app (C1) contra as metas da seção 2 do plano |
 | `repro_slot_hang.py` | Tenta reproduzir o slot preso do llama.cpp #28280 contra o llama-server |
 | `slot_watchdog.py` | Oneshot do `slot-watchdog.timer`: reinicia o llama-server com slot preso |
 | `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
@@ -79,6 +80,16 @@ python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
     --see-during-turn --expect-card Clara
 ```
 
+Soak: `--repeat N` repete a lista de `--turn`, `--see-every K` dispara o See a
+cada K turnos e turno acima de `--slow-turn` (120 s) conta como falha. No fim
+saem p50/p95 de TTFT, turno e choices, mais quantos choices deram 503.
+
+```bash
+python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
+    --adventure <id de uma aventura de teste no staging> \
+    --turn "do:olho em volta" --turn "say:e agora?" --repeat 100 --see-every 5
+```
+
 ## 2.2 repro_slot_hang.py e slot_watchdog.py — slot preso (#28280)
 
 No #28280 um slot de modelo híbrido (GDN, caso do Qwen3.6-35B-A3B) fica
@@ -106,6 +117,27 @@ reinicia o `llama-server` quando um slot passa de `--stall-s` (45 s) sem
 progresso ou `/slots` fica esse tempo sem responder, com `--cooldown` de 180 s
 entre reinícios. O estado legível pelo app fica em
 `/var/lib/slot-watchdog/status.json`. Instalação em `deploy/vm/README.md`.
+
+## 2.3 bench_slots.py — llama-server nos papéis do app
+
+Fala direto com o llama-server, nos slots do contrato C1. Cenários (cada um
+`--repeat` vezes, com p50/p95):
+
+| Cenário | O que mede |
+|---|---|
+| `pp` | prompt longo sem cache num slot auxiliar: prompt tok/s do servidor |
+| `frio` | narrativa inteira reprocessada no slot 0 (topo do prompt mudou): TTFT |
+| `solo` | narrativa só acrescentando turnos no slot 0: TTFT e tok/s de geração |
+| `carga` | a narrativa do `solo` com `--aux` chamadas sem cache ao mesmo tempo: TTFT, tok/s e latência das auxiliares |
+
+Com `nvidia-smi` no PATH registra o pico de VRAM de cada cenário. Exit 0 com
+as metas ok, 4 com alguma meta falhando. Não grava nada no app, mas ocupa os
+slots: rode com o jogador parado.
+
+```bash
+python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --json /tmp/bench.json
+python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --scenarios carga --aux 2
+```
 
 ## 3. Onde configurar a API key
 
