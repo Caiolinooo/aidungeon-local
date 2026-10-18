@@ -14,7 +14,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | Banco | `/home/caio/aidungeon/data/aidungeon.db` |
 | Imagens | `/home/caio/aidungeon/data/images/` |
 | Frontend | `/home/caio/aidungeon/frontend/dist` (servido pelo FastAPI) |
-| HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt) |
+| HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt); access log sem query string, porque o EventSource do SSE leva o token em `?token=` |
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (CPU, 0 MiB de VRAM) na porta 8091 |
