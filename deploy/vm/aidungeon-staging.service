@@ -1,0 +1,15 @@
+[Unit]
+Description=AIDungeon staging (FastAPI + SPA, porta 2123, copia do DB)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+WorkingDirectory=/home/caio/aidungeon-staging/backend
+Environment=AIDUNGEON_ENV_PATH=/home/caio/aidungeon/.env
+ExecStart=/home/caio/aidungeon/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 2123
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

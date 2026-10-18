@@ -24,7 +24,7 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 
 | ID | Tarefa | Depende de | Status |
 |---|---|---|---|
-| G1 | Hotfix: auxiliares sem cache e fora do slot 0, choices/See sem lock, timeouts curtos, stubs C3, A1111 com `MemoryMax` | F0 | em andamento (código pronto; falta VM) |
+| G1 | Hotfix: auxiliares sem cache e fora do slot 0, choices/See sem lock, timeouts curtos, stubs C3, A1111 com `MemoryMax` | F0 | feito (no app principal em 2026-10-18) |
 | G2 | llama-server `-np 4`, repro do #28280, watchdog de slots | G1 | pendente |
 | G3 | Scheduler de LLM (prioridade, cancelamento, breaker, pós-turno) | G1 | pendente |
 | G4 | Event bus + SSE | G3 | pendente |
@@ -34,6 +34,27 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 | G8 | Segurança: `--api-key-file`, SSH por chave, bind local, ufw | F0 | pendente |
 | G9 | Deploy git + staging (2123) | F0 | pendente |
 | G10 | Observabilidade (`/api/health/llm`, log por turno) | G3 | pendente |
+
+### G1: aceite e pendências
+
+Replay da Costazul no staging (`tools/replay_turn.py`, turno das 23:18 e o
+seguinte logo após o `done`, com See no meio de cada turno):
+
+- 0 respostas 409; o segundo turno saiu 0,0 s depois do `done` e streamou.
+- Choices: 200 em 9,7 s e um 503 limpo em 8,2 s (resposta sem array JSON).
+- Backdrop: 28 s na fila (antes, 180 s ou mais) e 20,5 s de render.
+- See no meio do turno: 200 em 20,9 s e um 503 `llm_timeout` em 20 s, porque
+  com `-np 2` todos os auxiliares dividem o slot 1. Resolve na G2 (`-np 4`).
+- Narração: TTFT 4–6 s, 10–14 tok/s.
+- A1111 com tcmalloc dentro de 12G/14G: 1024² em 15,2 s quente, sem swap.
+
+Ficou para outras tarefas:
+
+- K3/K7: chronicle e choices às vezes devolvem JSON quebrado. Gerar com
+  `response_format` (JSON schema do llama-server) em vez de só parsear melhor.
+- K7: choices saem em inglês numa história em pt-BR.
+- See que termina durante o turno seguinte grava entre a ação e a resposta. O
+  undo já pula esse See; o planejador da K5 deve decidir onde ele aparece.
 
 ## Kimi K3: Narrativa, Imagens e Frontend
 
