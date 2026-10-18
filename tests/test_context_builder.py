@@ -54,34 +54,41 @@ def test_sandwich_order_exact(tmp_db):
     assert roles == ["system", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
-    # ordem dos blocos 1–5 preservada DENTRO da system única
+    # system estável: base, ai_instructions e plot (blocos 1–2)
     sys_msg = built.messages[0]["content"]
     order = [
         cb.BASE_SYSTEM_PROMPT,          # 1a base
         "Sandbox em Faerûn",            # 1b ai_instructions
         "[Plot]",                       # 2 plot_essentials
         "Name: Caio",
-        "[World info]",                 # 3 story cards
-        "Baldur's Gate",
-        "[Memories]",                   # 4 memory bank
-        "Zhentarim",
-        "[Summary]",                    # 5 story_summary
-        "Caio chegou a Calimport",
     ]
     positions = [sys_msg.index(fragment) for fragment in order]
     assert positions == sorted(positions)
+    for volatile in ("[World info]", "[Memories]", "[Summary]"):
+        assert volatile not in sys_msg
 
     # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
     window = built.messages[1]["content"]
     assert "You stand in Calimport." in window
     assert "\n> You look around\n" in window
 
-    # 7+8 — user final: author's note em linha própria ANTES da última ação
+    # 7+8 — user final: voláteis no topo, author's note e a última ação no fim
     final = built.messages[2]["content"]
-    assert final == ("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
-                     f"{cb.STYLE_CUE}\n"
-                     f"{cb.CANON_CUE}\n"
-                     "The market is busy.")
+    order = [
+        "[World info]",                 # 3 story cards
+        "Baldur's Gate",
+        "[Memories]",                   # 4 memory bank
+        "Zhentarim",
+        "[Summary]",                    # 5 story_summary
+        "Caio chegou a Calimport",
+        "[Author's note: Mundo vivo; NPCs agem por conta própria.]",
+    ]
+    positions = [final.index(fragment) for fragment in order]
+    assert positions == sorted(positions)
+    assert final.endswith("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                          f"{cb.STYLE_CUE}\n"
+                          f"{cb.CANON_CUE}\n"
+                          "The market is busy.")
 
 
 def test_empty_blocks_are_skipped(tmp_db):
@@ -168,7 +175,8 @@ def test_block_budget_truncation(tmp_db):
     assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
     # author's note truncada a 300 tk dentro da user final
     final = built.messages[-1]["content"]
-    assert final.startswith("[Author's note: " + "y" * 1200 + "]\n")
+    assert final.startswith("[Summary]\n")
+    assert "[Author's note: " + "y" * 1200 + "]\n" in final
     assert "y" * 1201 not in final
     assert final.endswith("Intro.")
 
@@ -236,18 +244,23 @@ def test_window_truncates_by_whole_action(tmp_db):
 def test_window_keeps_newest_whole_actions_first(tmp_db):
     adv = make_adventure(title="Trunc2")
     add_action(adv["id"], 0, "start", "S" + "0" * 800)     # ~201 tk
-    add_action(adv["id"], 1, "continue", "M" + "1" * 400)  # ~101 tk
-    add_action(adv["id"], 2, "continue", "CURRENT.")
+    for seq in range(1, 11):                               # 10 × ~26 tk
+        add_action(adv["id"], seq, "continue", f"M{seq:02d}" + "1" * 97)
+    add_action(adv["id"], 11, "continue", "CURRENT.")
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
-        # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0
+        # budget da janela = 250 tokens: cabem as 10 curtas (~260 não; ~234
+        # sem a mais antiga), não a ação 0. O descarte sobe para múltiplo de
+        # WINDOW_DROP_CHUNK (8): saem as ações 0..7 e ficam 8..10, inteiras.
         # (6200 = budgets fixos, incl. player_state=200 do v0.7.0)
         cfg = _cfg(conn, context_size=6200 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
-    assert built.meta["window_action_count"] == 1
+    assert cb.WINDOW_DROP_CHUNK == 8
+    assert built.meta["window_action_count"] == 3
     window = built.messages[1]["content"]
-    assert window.startswith("M") and len(window) == 401   # inteira, sem corte
+    assert window.startswith("M08") and "S000" not in window
+    assert window.count("M") == 3 and len(window) == 3 * 100   # inteiras, sem corte
 
 
 def test_card_triggers_from_memory_outside_the_window(tmp_db):
@@ -262,10 +275,10 @@ def test_card_triggers_from_memory_outside_the_window(tmp_db):
                          seq_start=0, seq_end=0)
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, _cfg(conn), conn)
-    system = built.messages[0]["content"]
+    final = built.messages[-1]["content"]
     assert "Alusair" not in "You walk the road. The rain keeps falling."
-    assert "Steel Regent of Cormyr." in system
-    assert "swore an oath" in system
+    assert "Steel Regent of Cormyr." in final
+    assert "swore an oath" in final
 
 
 def test_see_prompt_stays_out_of_the_narrator(tmp_db):

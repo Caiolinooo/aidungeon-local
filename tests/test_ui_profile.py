@@ -239,9 +239,11 @@ def test_context_includes_player_state_block(tmp_db):
         cfg = settings_store.runtime_config(conn)
         built = cb.build_context(adv, actions, cfg, conn)
     sys_msg = built.messages[0]["content"]
-    assert "[Player state]" in sys_msg
-    assert "stats: HP 7" in sys_msg
-    assert "inventory: Torch×2" in sys_msg
+    final = built.messages[-1]["content"]
+    assert "[Player state]" not in sys_msg
+    assert "[Player state]" in final
+    assert "stats: HP 7" in final
+    assert "inventory: Torch×2" in final
 
 
 def test_context_without_ui_state_has_no_block(tmp_db):

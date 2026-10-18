@@ -138,11 +138,11 @@ def test_rendered_card_carries_the_sheet_into_the_prompt(tmp_db):
         )
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, settings_store.runtime_config(conn), conn)
-    system = built.messages[0]["content"]
-    assert "long red hair" in system
-    assert "Status: alive" in system
-    assert "str 14" in system
-    assert cb.CANON_CUE in built.messages[-1]["content"]
+    final = built.messages[-1]["content"]
+    assert "long red hair" in final
+    assert "Status: alive" in final
+    assert "str 14" in final
+    assert cb.CANON_CUE in final
 
 
 def test_status_and_face_survive_a_long_entry():
