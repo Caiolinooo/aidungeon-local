@@ -135,12 +135,25 @@ app.include_router(health.router, prefix="/api", tags=["health"],
 # /api/* mantém precedência; 404s de /api/* não caem no fallback SPA.
 class _SpaStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
+        served = path
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404 and not path.startswith("api/"):
-                return await super().get_response("index.html", scope)
-            raise
+                # SPA fallback: client routes such as /play/:id serve index.html.
+                served = "index.html"
+                response = await super().get_response(served, scope)
+            else:
+                raise
+        else:
+            # GET / is a directory. Starlette serves dist/index.html with path ".".
+            if path in (".", ""):
+                served = "index.html"
+        if served in ("index.html", "sw.js", "manifest.webmanifest"):
+            response.headers["Cache-Control"] = "no-cache"
+        elif served.startswith("assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
 
 _frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

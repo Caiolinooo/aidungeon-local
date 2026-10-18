@@ -28,11 +28,13 @@ def create_adventure(body: AdventureCreate) -> dict:
                 conn, scenario_id=sc["id"],
                 title=body.title or sc["title"],
                 description=sc["description"],
-                ai_instructions=sc["ai_instructions"],
-                plot_essentials=sc["plot_essentials"],
-                authors_note=sc["authors_note"],
+                ai_instructions=body.ai_instructions if body.ai_instructions is not None else sc["ai_instructions"],
+                plot_essentials=body.plot_essentials if body.plot_essentials is not None else sc["plot_essentials"],
+                authors_note=body.authors_note if body.authors_note is not None else sc["authors_note"],
+                image_style=body.image_style if body.image_style is not None else (sc.get("image_style") or ""),
                 tags=body.tags if body.tags is not None else sc["tags"],
-                third_person=sc["third_person"], source="new",
+                third_person=body.third_person if body.third_person is not None else sc["third_person"],
+                source="new",
             )
             db.insert_action(conn, adv["id"], 0, "start", sc["opening_text"])
             # v2: cards do rascunho do assistente trilham scenario → aventura
@@ -45,6 +47,7 @@ def create_adventure(body: AdventureCreate) -> dict:
                     triggers=card.get("triggers") or [], entry=card.get("entry") or "",
                     pinned=bool(card.get("pinned")),
                     use_for_character_creation=bool(card.get("use_for_character_creation")),
+                    portrait_prompt=card.get("portrait_prompt") or "",
                     # v0.5.0: ficha estruturada trilha scenario → aventura
                     sheet=(json.dumps(card["sheet"], ensure_ascii=False)
                            if isinstance(card.get("sheet"), dict) else ""),
@@ -53,8 +56,17 @@ def create_adventure(body: AdventureCreate) -> dict:
             # em background; a UI aplica cada um quando o job conclui.
             jobs.enqueue_all_portraits(conn, adv["id"])
         else:
-            adv = db.insert_adventure(conn, title=body.title or "Untitled Adventure",
-                                      tags=body.tags or [], source="new")
+            adv = db.insert_adventure(
+                conn,
+                title=body.title or "Untitled Adventure",
+                ai_instructions=body.ai_instructions or "",
+                plot_essentials=body.plot_essentials or "",
+                authors_note=body.authors_note or "",
+                image_style=body.image_style or "",
+                tags=body.tags or [],
+                third_person=bool(body.third_person),
+                source="new",
+            )
         return db.adventure_state(conn, adv["id"])
 
 

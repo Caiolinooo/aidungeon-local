@@ -33,6 +33,9 @@ def _memory_state(adventure_id: str) -> dict:
             "plot_essentials": adv["plot_essentials"],
             "authors_note": adv["authors_note"],
             "story_summary": adv["story_summary"],
+            "ai_instructions": adv.get("ai_instructions", ""),
+            "image_style": adv.get("image_style", ""),
+            "third_person": adv.get("third_person", False),
             "memories": db.list_memories(conn, adventure_id, include_vector=False),
         }
 

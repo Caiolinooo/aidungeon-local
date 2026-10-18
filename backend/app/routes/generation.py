@@ -59,7 +59,8 @@ async def _sse(events: Iterator[dict]) -> AsyncIterator[str]:
 async def post_action(adventure_id: str, body: ActionRequest,
                       transport: Any = Depends(get_http_transport)) -> StreamingResponse:
     events = game_engine.handle_action(adventure_id, body.type, body.text,
-                                       transport=transport)
+                                       transport=transport,
+                                       web_search=bool(body.web_search))
     return StreamingResponse(_sse(events), media_type="text/event-stream")
 
 

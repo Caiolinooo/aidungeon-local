@@ -125,18 +125,15 @@ def _recent_window_budget(cfg: dict) -> int:
 
 def _evicted_actions(actions: list[dict], window_budget: int,
                      estimator: Estimator) -> list[dict]:
-    """Ações fora da janela recente. A última ação nunca é antiga."""
-    if len(actions) < 2:
-        return []
-    kept = 0
-    used = 0
-    for action in reversed(actions[:-1]):
-        cost = estimator(_fmt(action))
-        if used + cost > window_budget:
-            break
-        used += cost
-        kept += 1
-    return actions[: len(actions) - 1 - kept]
+    """Ações fora da janela recente. Mesmo corte do context_builder.
+
+    `see` não entra (não consome budget nem some sem arquivo). A última
+    ação narrativa nunca é antiga. O descarte sobe em WINDOW_DROP_CHUNK,
+    igual ao prompt — o que sai da janela é o que se arquiva.
+    """
+    _narrative, _kept, evicted, _tokens = context_builder.narrative_window(
+        actions, window_budget, estimator)
+    return evicted
 
 
 def _verbatim_excerpt(excerpt: str) -> str:

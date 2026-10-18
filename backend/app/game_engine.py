@@ -21,20 +21,40 @@ Eventos emitidos pelo gerador (a rota serializa em SSE):
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 from typing import Any, Iterator
 
-from app import context_builder, db, llm_client, npc_chronicle, scripting, settings_store
+from app import (
+    context_builder,
+    db,
+    llm_client,
+    npc_chronicle,
+    scripting,
+    settings_store,
+    web_search as web_search_mod,
+)
 from app.errors import GameError
 
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
+# Trabalho pós-turno (summarizer + chronicle) não usa o lock de geração:
+# esse já foi solto antes do thread. Um lock próprio por aventura impede
+# dois passes de lerem os mesmos marcadores antes de qualquer um gravar.
+_post_turn_guard = threading.Lock()
+_post_turn_locks: dict[str, threading.Lock] = {}
 
 
 # --------------------------------------------------------------- locking
 def _lock_for(adventure_id: str) -> threading.Lock:
     with _locks_guard:
         return _locks.setdefault(adventure_id, threading.Lock())
+
+
+def _post_turn_lock_for(adventure_id: str) -> threading.Lock:
+    with _post_turn_guard:
+        return _post_turn_locks.setdefault(adventure_id, threading.Lock())
 
 
 def acquire_generation_lock(adventure_id: str) -> bool:
@@ -44,7 +64,18 @@ def acquire_generation_lock(adventure_id: str) -> bool:
 
 
 def release_generation_lock(adventure_id: str) -> None:
-    _lock_for(adventure_id).release()
+    lock = _lock_for(adventure_id)
+    if lock.locked():
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+
+
+def is_any_generation_active() -> bool:
+    """True quando qualquer aventura está gerando texto/see no momento."""
+    with _locks_guard:
+        return any(lock.locked() for lock in _locks.values())
 
 
 # --------------------------------------------------------------- helpers
@@ -77,6 +108,33 @@ def _maybe_update_memory(adventure_id: str) -> None:
         pass
 
 
+# Pausa antes do trabalho de fundo para o POST /choices (slot 1) entrar primeiro.
+_POST_TURN_DELAY_S = 1.5
+
+
+def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
+    """Fora dos testes, roda summarizer + npc_chronicle em background (Slot 1)
+    após o evento done e após liberar o lock da aventura."""
+    if os.environ.get("AIDUNGEON_CHRONICLE", "1") == "0":
+        # Modo de teste determinístico: summarizer roda síncrono e chronicle fica desligado
+        _maybe_update_memory(adventure_id)
+        return
+
+    def _bg() -> None:
+        # the client's onDone fires POST /choices immediately (Play.jsx fetchChoices)
+        # and both choices and post-turn work pin slot 1 — the delay lets the
+        # interactive call claim the slot first.
+        time.sleep(_POST_TURN_DELAY_S)
+        with _post_turn_lock_for(adventure_id):
+            _maybe_update_memory(adventure_id)
+            try:
+                npc_chronicle.update_from_turn(adventure_id, transport)
+            except Exception:
+                pass
+
+    threading.Thread(target=_bg, name="post-turn-worker", daemon=True).start()
+
+
 _retry_counts: dict[tuple[str, int], int] = {}
 
 
@@ -92,11 +150,15 @@ def get_retry_count(adventure_id: str, seq: int) -> int:
 def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        retry_of: dict | None,
                        retry_count: int = 0,
+                       web_search: bool = False,
+                       raw_query_text: str = "",
                        transport: Any) -> Iterator[dict]:
     """Gerador de eventos. Contexto = ações atuais (retry: sem a antiga)."""
 
     def events() -> Iterator[dict]:
         full: list[str] = []
+        lock_released = False
+        web_sources: list[dict] = []
         try:
             with db.session() as conn:
                 adventure = db.get_adventure(conn, adventure_id)
@@ -112,6 +174,23 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     step = float(sampler.get("retry_temperature_step", 0.05))
                     max_t = float(sampler.get("max_retry_temperature", 1.15))
                     sampler["temperature"] = round(min(base_t + step * retry_count, max_t), 4)
+
+            if web_search and raw_query_text.strip():
+                research = web_search_mod.research_context(
+                    raw_query_text,
+                    llm_cfg=llm_cfg,
+                    language="pt",
+                    mode="always",
+                    max_results=3,
+                    transport=transport,
+                )
+                web_sources = research.get("sources") or []
+                ctx_block = research.get("context_block") or ""
+                if ctx_block and built.messages:
+                    built.messages[-1] = {
+                        "role": built.messages[-1]["role"],
+                        "content": f"{ctx_block}\n\n{built.messages[-1]['content']}",
+                    }
 
             # Scripting hook: context modifier (before LLM dispatch)
             ctx_script = scripting.get_adventure_script(adventure_id, "context_modifier")
@@ -145,21 +224,29 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             data: dict[str, Any] = {"action": action}
             if player_action is not None:
                 data["player_action"] = player_action
+            if web_sources:
+                data["web_sources"] = web_sources
+
+            # Libera o lock antes de emitir 'done' para que chamadas imediatas do
+            # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
+            release_generation_lock(adventure_id)
+            lock_released = True
+            _spawn_post_turn(adventure_id, transport)
             yield {"event": "done", "data": data}
-            _maybe_update_memory(adventure_id)
-            npc_chronicle.spawn_after_turn(adventure_id, transport)
         except llm_client.LlmError as exc:
             yield {"event": "error", "data": {"message": exc.message}}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
             yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         finally:
-            release_generation_lock(adventure_id)
+            if not lock_released:
+                release_generation_lock(adventure_id)
 
     return events()
 
 
 def handle_action(adventure_id: str, type_: str, text: str,
-                  transport: Any = None) -> Iterator[dict]:
+                  transport: Any = None, *,
+                  web_search: bool = False) -> Iterator[dict]:
     """POST /action: persiste a ação do jogador e streama a resposta da IA."""
     _adventure_or_404(adventure_id)
     if type_ not in db.PLAYER_TYPES:
@@ -187,7 +274,9 @@ def handle_action(adventure_id: str, type_: str, text: str,
         release_generation_lock(adventure_id)
         raise
     return _stream_generation(adventure_id, player_action=player_action,
-                              retry_of=None, retry_count=0, transport=transport)
+                              retry_of=None, retry_count=0,
+                              web_search=web_search, raw_query_text=text,
+                              transport=transport)
 
 
 def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:

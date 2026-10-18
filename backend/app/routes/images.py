@@ -3,7 +3,8 @@
 Fluxo do /see (contrato docs/openapi.yaml):
 1) o momento é os dois últimos trechos (não a história inteira); o LLM
    descreve o gesto em inglês, com quem faz o quê;
-2) o primeiro bloco do CLIP é a ação, o lugar e só então o rosto travado.
+2) o primeiro bloco do CLIP abre com a frase em inglês do modelo (o beat
+   cru só entra se ela vier vazia), depois o lugar e o rosto travado.
    Estilo fica depois do BREAK. O retrato não vira img2img;
 3) grava a linha em `images` + action type=see (mesmo seq vinculando);
 4) devolve ImageResult.
@@ -224,12 +225,13 @@ def _is_interaction(text: str, names: list[str]) -> bool:
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
-                        transport: Any) -> tuple[str, str]:
-    """O momento atual + o rosto do card. Devolve (prompt, negative).
+                        transport: Any) -> tuple[str, str, str]:
+    """O momento atual + o rosto do card. Devolve (prompt, negative, caption).
 
-    O CLIP pinta o começo de cada bloco. O primeiro bloco é o gesto e quem
-    faz o quê; o rosto vem depois; o estilo fica depois do BREAK. O retrato
-    não entra como img2img — um busto reimprime a foto e apaga a ação.
+    O CLIP pinta o começo de cada bloco. O primeiro bloco abre com a frase
+    em inglês do modelo; o beat cru só entra se essa frase vier vazia. O
+    rosto vem depois; o estilo fica depois do BREAK. caption é a frase
+    limpa gravada na action see. O retrato não entra como img2img.
     """
     pb = img_cfg["prompt_builder"]
     moment = current_moment(actions, body.action_seq)
@@ -279,8 +281,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         llm_cfg, messages, temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
     summarized, neg_summary = contradicting_looks(summarized, clause)
-    beat, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
-    # O começo do trecho é a ação. O fim é o que o CLIP jogava fora.
+    moment_clean = re.sub(
+        r"(?m)^\s*>\s*(?:You(?:\s+say)?\s+)?", "", moment or "", flags=re.IGNORECASE
+    )
+    beat, neg_moment = contradicting_looks(
+        re.sub(r"\.\s*\.", ".", moment_clean.replace("\n", ". ")), clause
+    )
+    # O beat cru só lidera quando o modelo não devolveu a frase.
     beat = beat[:320].strip(" ,.;")
     where: list[str] = []
     if location and location != "the current scene":
@@ -288,7 +295,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
     lead_bits = []
-    if beat:
+    if summarized:
+        lead_bits.append(summarized)
+    elif beat:
         lead_bits.append(beat)
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
@@ -301,9 +310,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if _is_interaction(moment, names):
         lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
     lead = ", ".join(lead_bits)
-    # A frase do modelo fica, mas depois da ação e antes do estilo.
     tail = ", ".join(part for part in (
-        summarized,
         (entry or "")[:160] if location and location != "the current scene" else "",
         adv.get("image_style") or "",
         img_cfg["style_suffix"],
@@ -316,7 +323,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     negative = _dedupe_negative(neg_summary, neg_moment)
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
-    return prompt, negative
+    caption = summarized or beat
+    return prompt, negative, caption
 
 
 @router.post("/adventures/{adventure_id}/see")
@@ -341,7 +349,7 @@ def post_see(adventure_id: str, body: SeeRequest,
                             "image generation is disabled (settings.image.enabled)")
 
         try:
-            prompt, negative_extra = _build_final_prompt(
+            prompt, negative_extra, caption = _build_final_prompt(
                 adv, actions, body, img_cfg, llm_cfg, cards, transport)
         except llm_client.LlmError as exc:
             raise GameError(503, exc.code, exc.message) from exc
@@ -357,7 +365,7 @@ def post_see(adventure_id: str, body: SeeRequest,
         with db.session() as conn:
             last_seq = db.max_seq(conn, adventure_id)
             seq = 0 if last_seq is None else last_seq + 1
-            action = db.insert_action(conn, adventure_id, seq, "see", prompt)
+            action = db.insert_action(conn, adventure_id, seq, "see", caption)
             db.insert_image(conn, adventure_id=adventure_id, action_seq=seq,
                             prompt=prompt,
                             negative_prompt=_dedupe_negative(

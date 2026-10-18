@@ -144,6 +144,7 @@ def _dumps(value: Any, default: Any) -> str:
 
 
 def scenario_to_dict(row: sqlite3.Row) -> dict:
+    keys = row.keys() if hasattr(row, "keys") else ()
     return {
         "id": row["id"],
         "title": row["title"],
@@ -152,6 +153,7 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "plot_essentials": row["plot_essentials"] or "",
         "authors_note": row["authors_note"] or "",
         "opening_text": row["opening_text"] or "",
+        "image_style": (row["image_style"] if "image_style" in keys else "") or "",
         "tags": _loads(row["tags"], []),
         "story_cards": _loads(row["story_cards"], []),
         "third_person": bool(row["third_person"]),
@@ -251,6 +253,7 @@ def memory_to_dict(row: sqlite3.Row, include_vector: bool = False, *,
 def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = "",
                     ai_instructions: str = "", plot_essentials: str = "",
                     authors_note: str = "", opening_text: str = "",
+                    image_style: str = "",
                     tags: list | None = None, story_cards: list | None = None,
                     third_person: bool = False,
                     created_at: str | None = None, updated_at: str | None = None) -> dict:
@@ -258,10 +261,10 @@ def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = 
     sid = new_id()
     conn.execute(
         "INSERT INTO scenarios(id, title, description, ai_instructions, plot_essentials,"
-        " authors_note, opening_text, tags, story_cards, third_person, created_at, updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        " authors_note, opening_text, image_style, tags, story_cards, third_person, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (sid, title, description, ai_instructions, plot_essentials, authors_note,
-         opening_text, _dumps(tags, []), _dumps(story_cards, []), int(third_person),
+         opening_text, image_style, _dumps(tags, []), _dumps(story_cards, []), int(third_person),
          created_at or now, updated_at or now),
     )
     return scenario_to_dict(conn.execute("SELECT * FROM scenarios WHERE id=?", (sid,)).fetchone())
@@ -283,6 +286,45 @@ def list_scenarios(conn: sqlite3.Connection, tag: str | None = None,
         out = [s for s in out if needle in s["title"].casefold()
                or needle in s["description"].casefold()]
     return out
+
+
+def update_scenario(conn: sqlite3.Connection, scenario_id: str, **fields: Any) -> dict | None:
+    """Edita um scenario existente (campos omitidos/None permanecem)."""
+    current = get_scenario(conn, scenario_id)
+    if not current:
+        return None
+    merged = {
+        "title": current["title"] if fields.get("title") is None else fields["title"],
+        "description": current["description"] if fields.get("description") is None else fields["description"],
+        "ai_instructions": current["ai_instructions"] if fields.get("ai_instructions") is None else fields["ai_instructions"],
+        "plot_essentials": current["plot_essentials"] if fields.get("plot_essentials") is None else fields["plot_essentials"],
+        "authors_note": current["authors_note"] if fields.get("authors_note") is None else fields["authors_note"],
+        "opening_text": current["opening_text"] if fields.get("opening_text") is None else fields["opening_text"],
+        "image_style": current["image_style"] if fields.get("image_style") is None else fields["image_style"],
+        "tags": current["tags"] if fields.get("tags") is None else fields["tags"],
+        "story_cards": current["story_cards"] if fields.get("story_cards") is None else fields["story_cards"],
+        "third_person": current["third_person"] if fields.get("third_person") is None else bool(fields["third_person"]),
+    }
+    conn.execute(
+        "UPDATE scenarios SET title=?, description=?, ai_instructions=?, plot_essentials=?,"
+        " authors_note=?, opening_text=?, image_style=?, tags=?, story_cards=?, third_person=?,"
+        " updated_at=? WHERE id=?",
+        (
+            merged["title"], merged["description"], merged["ai_instructions"],
+            merged["plot_essentials"], merged["authors_note"], merged["opening_text"],
+            merged["image_style"], _dumps(merged["tags"], []),
+            _dumps(merged["story_cards"], []), int(merged["third_person"]),
+            utcnow(), scenario_id,
+        ),
+    )
+    return get_scenario(conn, scenario_id)
+
+
+def delete_scenario(conn: sqlite3.Connection, scenario_id: str) -> bool:
+    """Remove o scenario e desvincula aventuras existentes (SET scenario_id=NULL)."""
+    conn.execute("UPDATE adventures SET scenario_id=NULL WHERE scenario_id=?", (scenario_id,))
+    cur = conn.execute("DELETE FROM scenarios WHERE id=?", (scenario_id,))
+    return cur.rowcount > 0
 
 
 # -------------------------------------------------------------- adventures
@@ -315,22 +357,43 @@ def touch_adventure(conn: sqlite3.Connection, adventure_id: str) -> None:
     conn.execute("UPDATE adventures SET updated_at=? WHERE id=?", (utcnow(), adventure_id))
 
 
-def update_adventure(conn: sqlite3.Connection, adventure_id: str, *,
-                     title: str | None = None, description: str | None = None,
-                     tags: list[str] | None = None) -> dict | None:
-    """Edita metadados da aventura (título/descrição/tags). None = não altera."""
+_ADVENTURE_PATCH_FIELDS = (
+    "title", "description", "tags", "ai_instructions", "plot_essentials",
+    "authors_note", "story_summary", "image_style", "third_person",
+)
+
+
+def update_adventure(conn: sqlite3.Connection, adventure_id: str, **fields: Any) -> dict | None:
+    """Edita metadados e configurações da aventura. None = não altera.
+
+    O UPDATE lista só as colunas passadas com valor não-None. Um PATCH só com
+    `title` não regrava `story_summary` lido no início — o summarizer pode
+    tê-lo gravado nesse meio tempo. Quem passa o objeto inteiro continua
+    atualizando cada campo enviado.
+    """
     current = get_adventure(conn, adventure_id)
     if not current:
         return None
-    merged = {
-        "title": current["title"] if title is None else title,
-        "description": current["description"] if description is None else description,
-        "tags": current["tags"] if tags is None else tags,
-    }
+    sets: list[str] = []
+    params: list[Any] = []
+    for key in _ADVENTURE_PATCH_FIELDS:
+        if key not in fields or fields[key] is None:
+            continue
+        value = fields[key]
+        if key == "tags":
+            value = _dumps(value, [])
+        elif key == "third_person":
+            value = int(bool(value))
+        sets.append(f"{key}=?")
+        params.append(value)
+    if not sets:
+        return current
+    sets.append("updated_at=?")
+    params.append(utcnow())
+    params.append(adventure_id)
     conn.execute(
-        "UPDATE adventures SET title=?, description=?, tags=?, updated_at=? WHERE id=?",
-        (merged["title"], merged["description"], _dumps(merged["tags"], []),
-         utcnow(), adventure_id),
+        f"UPDATE adventures SET {', '.join(sets)} WHERE id=?",
+        params,
     )
     return get_adventure(conn, adventure_id)
 
@@ -345,13 +408,29 @@ def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
 
 def update_adventure_memory(conn: sqlite3.Connection, adventure_id: str, *,
                             plot_essentials: str | None = None,
-                            authors_note: str | None = None) -> None:
+                            authors_note: str | None = None,
+                            story_summary: str | None = None,
+                            ai_instructions: str | None = None,
+                            image_style: str | None = None,
+                            third_person: bool | None = None) -> None:
     if plot_essentials is not None:
         conn.execute("UPDATE adventures SET plot_essentials=? WHERE id=?",
                      (plot_essentials, adventure_id))
     if authors_note is not None:
         conn.execute("UPDATE adventures SET authors_note=? WHERE id=?",
                      (authors_note, adventure_id))
+    if story_summary is not None:
+        conn.execute("UPDATE adventures SET story_summary=? WHERE id=?",
+                     (story_summary, adventure_id))
+    if ai_instructions is not None:
+        conn.execute("UPDATE adventures SET ai_instructions=? WHERE id=?",
+                     (ai_instructions, adventure_id))
+    if image_style is not None:
+        conn.execute("UPDATE adventures SET image_style=? WHERE id=?",
+                     (image_style, adventure_id))
+    if third_person is not None:
+        conn.execute("UPDATE adventures SET third_person=? WHERE id=?",
+                     (int(bool(third_person)), adventure_id))
     touch_adventure(conn, adventure_id)
 
 

@@ -1,8 +1,10 @@
 """Router /api/settings/llm — configuração do servidor LLM.
 
 GET: config efetiva (arquivo + overrides), api_key SEMPRE mascarada.
-PUT: persiste overrides na tabela settings; mudança de base_url/model_alias
-     invalida o cache de descoberta e refaz GET {base_url}/models (best-effort).
+PUT: persiste overrides na tabela settings e SEMPRE invalida os caches do
+     llm_client (descoberta de modelo e sonda de slots). Mudança de
+     base_url/model_alias ainda refaz GET {base_url}/models (best-effort).
+     Sem isso, um /props que falhou (cache 0) sobrevive a um PUT só de api_key.
 """
 
 from __future__ import annotations
@@ -27,6 +29,12 @@ def _settings_response(conn, transport: Any = None) -> dict:
         "model_alias": cfg["model_alias"],
         "model_discovered": llm_client.cached_discovery(cfg["base_url"], cfg["model_alias"]),
         "context_size": cfg["context_size"],
+        "context_size_max": int(
+            settings_store.load_file_settings()
+            .get("llm", {})
+            .get("context_size_limits", {})
+            .get("max", 106496)
+        ),
         "max_tokens": cfg["max_tokens"],
         "streaming": cfg["streaming"],
         "disable_thinking": cfg["disable_thinking"],
@@ -58,9 +66,11 @@ def put_llm_settings(body: LlmSettingsUpdate,
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         changed = settings_store.apply_llm_update(conn, update)
+        # api_key (e qualquer outro campo) também: a sonda de slots fica
+        # cacheada por base_url, então um 0 de falha sobreviveria ao PUT.
+        llm_client.invalidate_discovery_cache()
         if changed & {"base_url", "model_alias"}:
             # refaz a descoberta de modelo contra o novo endpoint
-            llm_client.invalidate_discovery_cache()
             cfg = settings_store.effective_llm_settings(conn)
             try:
                 if (cfg.get("model_alias") or "auto") == "auto":
