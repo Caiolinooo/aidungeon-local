@@ -28,7 +28,7 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 | G2 | llama-server `-np 5 --kv-unified -cram 0`, repro do #28280, watchdog de slots | G1 | em andamento (soak de 200 turnos no staging) |
 | G3 | Scheduler de LLM (prioridade, cancelamento, breaker, pós-turno) | G1 | feito no código (testes locais); falta medir no staging |
 | G4 | Event bus + SSE | G3 | feito no código (teste de integração com uvicorn); falta o staging |
-| G5 | Jobs com prioridade + See assíncrono | G3 | pendente |
+| G5 | Jobs com prioridade + See assíncrono | G3 | feito no código (testes locais: 202 < 300 ms, jogador age durante o render, fundo velho cancelado); falta o staging |
 | G6 | Forge + DMD2 + FaceID/InstantID, presets SDXL | G1 | pendente |
 | G7 | Orçamento de RAM/VRAM, `-ub`/`-ncmoe`/`-t` | G2 | pendente |
 | G8 | Segurança: `--api-key-file`, SSH por chave, bind local, ufw | F0 | pendente |

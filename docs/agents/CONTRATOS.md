@@ -142,9 +142,9 @@ def subscribe(adventure_id: str, last_event_id: int | None = None) -> Subscripti
   | `card_updated` | `{card}` |
   | `job_queued` | `{job_id, type, ref_id}` |
   | `job_progress` | `{job_id, type, status}` |
-  | `portrait_ready` | `{card_id, image_id}` |
-  | `backdrop_ready` | `{image_id}` |
-  | `see_ready` | `{job_id, image}` |
+  | `portrait_ready` | `{job_id, card_id, image: {id, url, prompt}}` |
+  | `backdrop_ready` | `{job_id, ref_id, image: {id, url, prompt}}` |
+  | `see_ready` | `{job_id, image}` (`image` no formato `ImageResult`) |
   | `see_failed` | `{job_id, code, message}` |
   | `llm_degraded` | `{reason, until}` |
   | `llm_recovered` | `{}` |
@@ -224,24 +224,66 @@ class ImagePlan:
 
 ```python
 # backend/app/jobs.py
+PRIORITY_SEE, PRIORITY_PRESENT_PORTRAIT, PRIORITY_BACKDROP, PRIORITY_BULK_PORTRAIT = 0, 1, 2, 3
+
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
-            payload: dict | None = None, priority: int = 2,
+            payload: dict | None = None, priority: int = PRIORITY_BACKDROP,
             supersede_key: str | None = None) -> dict: ...
+def enqueue_portrait(conn, adventure_id: str, card_id: str, *, replace: bool = False,
+                     priority: int = PRIORITY_PRESENT_PORTRAIT) -> dict | None: ...
+def cancel(conn, job_id: str) -> dict | None: ...
 ```
 
-- Prioridades (menor roda antes): 0 `see_image`; 1 retrato de NPC presente;
-  2 `scene_backdrop`; 3 retratos em lote.
-- `supersede_key`: um job novo com a mesma chave cancela os pendentes antigos
-  (ex.: `backdrop:<adventure_id>`).
-- Cada mudança de estado publica `job_queued` / `job_progress` (C2).
+- Tipos: `character_portrait`, `scene_backdrop`, `see_image`. Status:
+  `preparing` (só o See, enquanto o LLM escreve o prompt), `pending`,
+  `running`, `done`, `error`, `canceled`. Colunas novas (migration 021):
+  `priority` e `supersede_key`.
+- Prioridades (menor roda antes; no empate, o mais antigo): 0 `see_image`;
+  1 retrato de NPC presente (cena, chronicle, botão de regenerar);
+  2 `scene_backdrop`; 3 retratos em lote (aventura nova, "gerar todos").
+  Com narrativa em curso o worker só tira o See da fila.
+- Retrato já na fila (dedupe por card) passa à frente quando o pedido novo
+  é mais urgente; nunca vai para trás.
+- `supersede_key`: um job novo com a mesma chave cancela os que ainda não
+  rodam (`canceled`, `error="superseded"`). O fundo usa `backdrop:<adventure_id>`.
+  Job em `running` termina (cancelamento cooperativo).
+- Eventos (C2): `job_queued` ao entrar; `job_progress` a cada mudança
+  (`pending` depois do `preparing`, `running`, `done`, `error`, `canceled`);
+  no `done`, `portrait_ready` / `backdrop_ready` / `see_ready`; no erro do
+  See, `see_failed`. `enqueue` publica antes do commit de quem chamou: o
+  evento é aviso, a verdade é a linha do job.
+- `result` no `done`: retrato `{image, card_id, prompt}`, fundo
+  `{image, ref_id}`, See `{image}` (`ImageResult`). No `error`: `{code}`, com
+  a mensagem em `error`.
+- O render roda fora de transação: o lock de escrita do SQLite não fica preso
+  enquanto a GPU pinta.
+- Aventura apagada no meio do render: o PNG é apagado e o job termina
+  `canceled` (a linha some junto com a aventura), sem evento.
+- Reinício do app: retrato e fundo que estavam em `running` voltam para
+  `pending`; See em `preparing`, `pending` ou `running` vira `error` com
+  `code="interrupted"`.
 
 ## C6 See assíncrono
 
-- `POST /api/adventures/{id}/see` responde `202 {"job_id": ...}` em < 300 ms,
-  sem lock de geração. O jogador pode agir enquanto a imagem é pintada.
-- O prompt (chamada `image_prompt`) roda dentro do job, antes da fila do SD.
-- O resultado chega por `see_ready` (com a imagem e a action `see`) ou
-  `see_failed`. Fallback por polling: `GET /api/jobs/{id}`.
+- `POST /api/adventures/{id}/see` com `Prefer: respond-async` (ou `?async=1`)
+  responde `202 {"job_id": ...}` em < 300 ms, com
+  `Preference-Applied: respond-async` e sem lock de geração. O jogador pode
+  agir enquanto a imagem é pintada.
+- Sem o header a rota segue síncrona (200 `ImageResult`, também sem lock),
+  porque o frontend v0.9.0 espera a imagem na resposta. O frontend passa a
+  mandar o header quando usar o SSE (K8).
+- 404 da aventura e 503 `image_disabled` saem antes do 202.
+- O job nasce em `preparing`: o prompt (chamada `image_prompt`) roda numa
+  thread, fora da fila do SD, e só então o job vai para `pending` com
+  prioridade 0. Hoje o prompt vem de `routes/images._plan_see`; na K5 ele
+  passa a chamar `images.plan_see` (C4).
+- O resultado chega por `see_ready` (`{job_id, image}`, com a imagem e a
+  action `see`) ou `see_failed` (`{job_id, code, message}`). Fallback por
+  polling: `GET /api/jobs/{id}`; job de história de outra pessoa responde 404.
+- Cancelar: `DELETE /api/adventures/{id}/jobs/{job_id}` vale em `preparing` e
+  `pending`.
+- A action `see` entra no fim da aventura (o jogador pode ter agido), presa à
+  imagem pelo mesmo seq.
 - Recusa do guardrail (cena explícita com pessoa real) chega como `see_failed`
   com `code="real_person_explicit"`.
 

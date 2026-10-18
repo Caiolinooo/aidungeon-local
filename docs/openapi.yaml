@@ -648,7 +648,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [pending, running, done, error, canceled]
+            enum: [preparing, pending, running, done, error, canceled]
       responses:
         '200':
           description: Fila em ordem de criação.
@@ -680,9 +680,9 @@ paths:
           $ref: '#/components/responses/NotFound'
     delete:
       tags: [assets]
-      summary: Cancelar job pendente
+      summary: Cancelar job que ainda não roda (preparing ou pending)
       operationId: cancelJob
-      description: Jobs running são devolvidos sem alteração (cancelamento cooperativo — v1); jobs finalizados dão 409 job_not_cancelable.
+      description: Jobs running são devolvidos sem alteração (cancelamento cooperativo — v1); jobs finalizados dão 409 job_not_cancelable. Publica job_progress canceled.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
         - $ref: '#/components/parameters/JobId'
@@ -701,6 +701,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/jobs/{jobId}:
+    get:
+      tags: [assets]
+      summary: Obter job pelo id (polling do See assíncrono, contrato C6)
+      operationId: getJobById
+      description: Job de história de outra pessoa responde 404, como um id que não existe.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   # ------------------------------------------------------------------- memory
   /api/adventures/{adventureId}/memory:
@@ -1019,12 +1037,27 @@ paths:
         `openai_compatible` → POST {base_url}/images/generations com Bearer);
         (3) salva o arquivo em settings.image.storage_dir/<adventure_id>/;
         (4) grava linha em `images` e uma action `type=see` (text = prompt
-        resumido) vinculada pelo mesmo seq; (5) devolve a imagem.
-        Resposta JSON (não-SSE); geração local pode levar minutos — o frontend
-        mostra spinner. 503 se provider inalcançável; 409 se geração de imagem
-        já em andamento para a aventura.
+        resumido) vinculada pelo mesmo seq, no fim da aventura; (5) devolve a imagem.
+        Sem lock de geração: o jogador age enquanto a imagem sai.
+        Com `Prefer: respond-async` (ou `?async=1`) responde 202 {job_id} na
+        hora e o resto vira o job `see_image` (contrato C6): resultado em
+        `see_ready`/`see_failed` no SSE ou por polling em GET /api/jobs/{id}.
+        Sem o header, resposta JSON síncrona (geração local pode levar
+        minutos — o frontend mostra spinner). 503 se provider inalcançável.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
+        - name: Prefer
+          in: header
+          required: false
+          schema:
+            type: string
+          description: '`respond-async` pede o 202.'
+        - name: async
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: 'Mesmo efeito do `Prefer: respond-async`.'
       requestBody:
         required: true
         content:
@@ -1038,14 +1071,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImageResult'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          description: Geração de imagem em andamento.
+        '202':
+          description: Job see_image criado em `preparing` (header Preference-Applied respond-async).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                required: [job_id]
+                properties:
+                  job_id:
+                    type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
         '503':
           description: Provedor de imagem indisponível.
           content:
@@ -1893,7 +1930,7 @@ components:
 
     Job:
       type: object
-      description: Job do pipeline assíncrono de assets (v0.3.0).
+      description: Job do pipeline assíncrono de assets (v0.3.0; prioridade e See no contrato C5/C6).
       required: [id, adventure_id, type, status]
       properties:
         id:
@@ -1902,19 +1939,26 @@ components:
           type: string
         type:
           type: string
-          enum: [character_portrait]
+          enum: [character_portrait, scene_backdrop, see_image]
         status:
           type: string
-          enum: [pending, running, done, error, canceled]
+          enum: [preparing, pending, running, done, error, canceled]
+          description: '`preparing` só no see_image, enquanto o LLM escreve o prompt.'
         ref_id:
           type: string
-          description: Alvo do job (character_portrait → id do story card).
+          description: Alvo do job (character_portrait → id do story card; scene_backdrop → "<adventure_id>:<assinatura>").
         payload:
           type: object
+        priority:
+          type: integer
+          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote.
+        supersede_key:
+          type: string
+          description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>").
         result:
           type: object
           nullable: true
-          description: 'character_portrait done → {"image": {id, url, prompt}, "card_id", "prompt"}.'
+          description: 'done → character_portrait {"image": {id, url, prompt}, "card_id", "prompt"}; scene_backdrop {"image", "ref_id"}; see_image {"image": ImageResult}. error → {"code"}.'
         error:
           type: string
           nullable: true
