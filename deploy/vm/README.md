@@ -7,7 +7,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 
 | Item | Valor |
 |---|---|
-| Diretório do app | `/home/caio/aidungeon` (cópia, ainda não é checkout git; ver G9 em `tasks.md`) |
+| Diretório do app | `/home/caio/aidungeon` (código copiado do checkout `/home/caio/aidungeon-git` pelo `tools/deploy.sh`) |
 | Serviço | `aidungeon.service` (usuário `caio`), uvicorn na porta **2122** |
 | Python | venv em `/home/caio/aidungeon/backend/venv` |
 | Segredos | `/home/caio/aidungeon/.env` (lido via `AIDUNGEON_ENV_PATH`) |
@@ -17,7 +17,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt); access log sem query string, porque o EventSource do SSE leva o token em `?token=` |
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
-| Embeddings | `llama-embeddings.service` (CPU, 0 MiB de VRAM) na porta 8091 |
+| Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
 | Imagem | `sd-webui.service` (A1111) na porta 7860, com o drop-in de memória abaixo |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -42,35 +42,67 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-## Atualizar o código (até a G9 existir)
+## Atualizar o código (G9)
 
 Sempre passa pelo staging antes (seção abaixo).
 
-```bash
-# na máquina local, a partir da raiz do repositório
-tar czf /tmp/aidungeon-src.tgz --exclude=__pycache__ backend/app backend/memory \
-    backend/migrations backend/schema.sql backend/requirements.txt config
-scp /tmp/aidungeon-src.tgz caio@vm.groupabz.com:/tmp/
+O código chega por git. O repositório é privado e a VM não tem credencial do
+GitHub, então o checkout `/home/caio/aidungeon-git` tem como `origin` um
+repositório bare na própria VM (`/home/caio/aidungeon.git`), que recebe
+`git push` por SSH de quem faz o deploy. Com uma deploy key do GitHub na VM,
+basta `git -C /home/caio/aidungeon-git remote set-url origin
+git@github.com:Caiolinooo/aidungeon-local.git`.
 
-# na VM: backup do banco (online, API de backup do sqlite) e do código atual
-TS=$(date +%Y%m%d-%H%M); B=/home/caio/aidungeon-backups; mkdir -p $B
-cd /home/caio/aidungeon
-python3 -c "import sqlite3,sys; s=sqlite3.connect('data/aidungeon.db'); d=sqlite3.connect(sys.argv[1]); s.backup(d)" $B/aidungeon.db.pre-$TS
-tar czf $B/code.pre-$TS.tgz --exclude=__pycache__ backend/app backend/memory \
-    backend/migrations backend/schema.sql backend/requirements.txt config
-tar xzf /tmp/aidungeon-src.tgz
-backend/venv/bin/pip install -r backend/requirements.txt
-sudo systemctl restart aidungeon
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:2122/api/adventures   # 401 = no ar
+Os diretórios dos apps continuam onde estão: `.env`, `data/` e o venv ficam
+neles, porque staging, watchdog e ferramentas usam esses caminhos fixos. O
+`tools/deploy.sh` copia só o código do checkout (`backend/app`, `memory`,
+`migrations`, `schema.sql`, `requirements.txt`, `exporter.py`, `importer.py`
+e `config/`).
+
+```bash
+# instalação (uma vez)
+ssh caio@vm.groupabz.com git init --bare /home/caio/aidungeon.git
+git push ssh://caio@vm.groupabz.com/home/caio/aidungeon.git <branch>     # na máquina local
+ssh caio@vm.groupabz.com git clone /home/caio/aidungeon.git /home/caio/aidungeon-git
+
+# cada deploy
+git push ssh://caio@vm.groupabz.com/home/caio/aidungeon.git <branch>     # na máquina local
+cd /home/caio/aidungeon-git                                               # na VM
+tools/deploy.sh --target staging --ref origin/<branch>
+tools/deploy.sh --target main --ref <commit testado no staging>
 ```
 
-As migrations em `backend/migrations/` rodam sozinhas no boot (`db.init_db`).
-Frontend: `cd frontend && npm ci && npm run build` na máquina local e copie
-`frontend/dist/` para `/home/caio/aidungeon/frontend/dist/`.
+O `deploy.sh`:
 
-Rollback: `sudo systemctl stop aidungeon`, `tar xzf $B/code.pre-$TS.tgz` na raiz
-do app, copie `$B/aidungeon.db.pre-$TS` por cima de `data/aidungeon.db` (só se
-uma migration mexeu no banco) e `sudo systemctl start aidungeon`.
+1. com `--ref`, faz `fetch` e `checkout --detach` e reexecuta a versão nova
+   de si mesmo (recusa checkout com mudança local);
+2. no app principal, recusa se o jogador mexeu nos últimos 10 min
+   (`--idle-min`, `--force` ignora);
+3. faz backup do banco (API de backup do sqlite) e do código, com o `DEPLOYED`
+   anterior, em `/home/caio/aidungeon-backups/deploy-<alvo>-<data>/`;
+4. copia o código, roda `pip install` se o `requirements.txt` mudou (o venv é o
+   do app principal, o staging usa o mesmo) e, só com `--frontend`, faz
+   `npm ci && npm run build` no checkout e copia o `dist`. Sem a flag o
+   `frontend/dist` do alvo fica como está;
+5. grava `DEPLOYED` (commit, data, backup) no diretório do app, reinicia o
+   serviço (as migrations rodam no boot, em `db.init_db`) e roda
+   `tools/smoke_check.py`: 401 sem token, `GET /api/adventures` 200,
+   `GET /api/health/llm` 200 e as migrations registradas no banco. LLM fora do
+   ar só gera aviso;
+6. smoke falhou: volta o código do backup, reinicia e sai com 1.
+
+Rollback manual:
+
+```bash
+tools/deploy.sh --target main --rollback /home/caio/aidungeon-backups/deploy-main-<data>
+tools/deploy.sh --target main --rollback /home/caio/aidungeon-backups/deploy-main-<data> --with-db
+```
+
+O rollback também salva o estado atual antes. As migrations só acrescentam
+(colunas, tabelas e índices) e o código anterior roda no banco novo, então o
+`--with-db` só é preciso se uma migration estragou dados; ele perde o que foi
+gravado depois do backup. Deploy, rollback e o rollback automático foram
+testados com um uvicorn local (`tools/README.md`, seção 2.4).
 
 ## Staging
 
@@ -79,13 +111,13 @@ Usa o mesmo llama-server e o mesmo A1111 do app principal: teste fora do horári
 de jogo. Unit em [`aidungeon-staging.service`](aidungeon-staging.service).
 
 ```bash
-# na VM: copia o banco do app principal e sobe o código novo no staging
+# na VM: renova o banco do staging com uma cópia do app principal (opcional)
 S=/home/caio/aidungeon-staging; mkdir -p $S/data
 python3 -c "import sqlite3,sys; s=sqlite3.connect('/home/caio/aidungeon/data/aidungeon.db'); d=sqlite3.connect(sys.argv[1]); s.backup(d)" $S/data/aidungeon.db
 rsync -a /home/caio/aidungeon/data/images/ $S/data/images/
 rsync -a /home/caio/aidungeon/frontend/dist/ $S/frontend/dist/
-tar xzf /tmp/aidungeon-src.tgz -C $S
-sudo systemctl restart aidungeon-staging
+# e sobe o código novo
+cd /home/caio/aidungeon-git && tools/deploy.sh --target staging --ref origin/<branch>
 ```
 
 Aceite com `tools/replay_turn.py` (ver `tools/README.md`), rodando na própria VM:
@@ -147,16 +179,24 @@ Rollback: copiar o backup por cima, `sudo systemctl daemon-reload` e
 `sudo systemctl restart llama-server` (~30 s para carregar o modelo). Reinicie
 só com os slots ociosos (`GET /slots`), fora do horário de jogo.
 
-## Embeddings fora da GPU
+## Embeddings e VRAM
 
-`llama-embeddings.service` roda em CPU, mas o CUDA ainda reservava 646 MiB
-(186 MiB só com `--device none`). Com as duas linhas abaixo, 0 MiB (backup
-`llama-embeddings.service.g7.bak`):
+`llama-embeddings.service` roda com `--n-gpu-layers 0`, mas o CUDA reserva
+~700 MiB (646 a 698 MiB medidos) e faz os lotes na GPU. Com as duas linhas
+abaixo fica em 0 MiB:
 
 ```ini
 Environment=CUDA_VISIBLE_DEVICES=
 ExecStart=... --n-gpu-layers 0 --device none ...
 ```
+
+Essa variante ficou no ar de 16:16 a 16:54 de 18/10, durante benchmarks e o
+primeiro soak, e gastou 15,6 min de CPU em 38 min; a original tinha gastado
+6,6 min em 2 dias de uso leve do jogador. A carga não foi a mesma, mas é CPU
+que os experts do llama-server (`-ncmoe 24`) também usam. A unit voltou para
+a original (igual a `llama-embeddings.service.g7.bak`); a variante está em
+`llama-embeddings.service.devnone` e a G7 compara as duas com a mesma carga,
+junto com o `-t` do llama-server.
 
 ## Watchdog de slots
 
@@ -175,8 +215,12 @@ sudo /usr/bin/python3 /usr/local/sbin/slot_watchdog.py --env-file /home/caio/aid
 sudo systemctl enable --now slot-watchdog.timer
 ```
 
-Estado em `/var/lib/slot-watchdog/status.json`. O journal da unit só mostra
-reinícios (`warning`) e esperas (`notice`):
+Estado em `/var/lib/slot-watchdog/status.json`, que o app mostra em
+`GET /api/health/llm` (`slots.watchdog`, caminho em
+`scheduler.watchdog_status_path`). Os `--hint-file` da unit são as dicas de
+narrativa parada do app principal e do staging. Versão anterior (sem dica) em
+`slot_watchdog.py.g2.bak` e `slot-watchdog.service.g2.bak`. O journal da unit
+só mostra reinícios (`warning`) e esperas (`notice`):
 `journalctl -u slot-watchdog -p notice`. Desligar:
 `sudo systemctl disable --now slot-watchdog.timer`.
 
