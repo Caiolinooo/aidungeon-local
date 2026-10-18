@@ -69,9 +69,34 @@ def invalidate_slot_cache() -> None: ...
   `scaled_timeout`. A narrativa não tem prazo total: `llm.timeout_seconds` é o
   timeout de leitura entre tokens.
 - Erros (todos herdam de `LlmError`, com `code` e `message`):
-  - `LlmTimeout` (`code="llm_timeout"`): estourou o prazo;
-  - `LlmCancelled` (`code="llm_cancelled"`): `cancel` foi setado;
+  - `LlmTimeout` (`code="llm_timeout"`): estourou o prazo. Subclasses:
+    `LlmQueueTimeout` (a vez não chegou dentro do prazo) e `LlmStalled`
+    (narrativa parada sem fallback possível);
+  - `LlmCancelled` (`code="llm_cancelled"`): `cancel` foi setado. Subclasse
+    interna `LlmPreempted`: a chamada perdeu o slot para o fallback da narrativa
+    e o `chat_completion` repete uma vez;
   - `LlmDegraded` (`code="llm_degraded"`): circuit breaker aberto (G3).
+- Scheduler (G3, `backend/app/llm_scheduler.py`): toda chamada pede a vez antes
+  de abrir a conexão.
+  - Prioridade (menor primeiro): `narrative` 0, que nunca espera; `choices` 1;
+    `image_prompt` e `meta` 2; `assistant` 3; `chronicle` 4; `summary` 5.
+  - Uma auxiliar por slot fixado e no máximo `scheduler.aux_cap` (3) em voo,
+    `aux_cap_during_narrative` (2) com narrativa em curso. Entra a primeira da
+    fila que couber.
+  - A espera na fila vai até o prazo do role e respeita `cancel`. Estourou:
+    `LlmQueueTimeout`, que não conta para o breaker. O prazo do role conta da
+    admissão.
+  - Breaker: `scheduler.breaker.threshold` (3) falhas de servidor seguidas
+    (timeout ou narrativa parada) abrem por `breaker.open_s` (60 s). Aberto, as
+    auxiliares levantam `LlmDegraded` na hora; a narrativa nunca é barrada.
+    Passado o prazo, a próxima chamada decide: falha reabre, sucesso fecha.
+    `llm_degraded` e `llm_recovered` (C2) vão para todas as aventuras com canal
+    aberto.
+  - Narrativa parada (`scheduler.stall`): a narrativa pede `return_progress`.
+    Sem token em 30 s e sem `prompt_progress` em 15 s, o socket cai, o app grava
+    `scheduler.stall_hint_path` (`data/llm_stall_hint.json`) para o
+    `slot_watchdog` e repete uma vez no slot do `image_prompt`, sem cache,
+    tomando o slot da auxiliar que estiver nele.
 - `cancel` é um `threading.Event`. Ao ser setado (ou no fim do prazo), a chamada
   derruba o socket com `shutdown` e levanta `LlmCancelled` (ou `LlmTimeout`).
   O socket é capturado no connect TCP, porque sem stream o llama-server só
@@ -92,14 +117,26 @@ def subscribe(adventure_id: str, last_event_id: int | None = None) -> Subscripti
   - Reconexão com `Last-Event-ID` (header) ou `?last_event_id=` reentrega o que
     ainda estiver no buffer curto da aventura.
   - Autenticação: o mesmo Bearer das outras rotas, ou `?token=` (o
-    `EventSource` do navegador não manda header).
+    `EventSource` do navegador não manda header). História de outra pessoa
+    responde 404. O `?token=` sai do access log do uvicorn; no nginx, a
+    location de `/events` não pode logar a query (G8).
+  - Ao conectar: `retry: 3000` e o evento `ready` (`data: {}`) com `id` igual
+    ao ponto de partida (o `Last-Event-ID` pedido ou o último id publicado), para
+    o navegador já ter um `Last-Event-ID` se cair antes do primeiro evento. Com
+    o breaker aberto, `llm_degraded` (sem `id`) vem logo depois.
+  - Aventura apagada encerra o stream.
 - Formato de cada evento: `id: <int>`, `event: <type>`, `data: <json>`.
+- Ids: inteiros crescentes no processo, começando no relógio em ms do boot;
+  um `Last-Event-ID` de antes de um reinício não esconde os eventos novos. O
+  buffer guarda os últimos 100 eventos por aventura; inscrito lento perde os
+  mais antigos (fila de 500).
+- `turn_done` sai antes do `done` do stream da geração.
 - Tipos:
 
   | tipo | `data` |
   |---|---|
   | `turn_done` | `{action_id, seq}` |
-  | `choices_ready` | `{for_seq, choices: [str]}` |
+  | `choices_ready` | `{for_seq, choices: [{type, text}]}` |
   | `choices_failed` | `{for_seq, code, message}` |
   | `card_created` | `{card}` |
   | `card_updated` | `{card}` |
@@ -211,10 +248,17 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
 ## C7 Choices
 
 - Pré-geradas no backend logo depois do `done` (role `choices`, slot 1) e
-  publicadas em `choices_ready`.
+  publicadas em `choices_ready` (`choices` no formato da rota, `[{type, text}]`)
+  ou `choices_failed`.
 - `POST /api/adventures/{id}/choices` devolve o cache da última ação ou espera
-  no máximo 8 s pela geração em curso; nunca responde 409.
+  no máximo `choices.wait_s` (8 s) pela geração em curso (sem geração, começa
+  uma); nunca responde 409. Prazo estourado: 503 `llm_timeout`, e o resultado
+  ainda sai em `choices_ready`. Falha: 503 com o código da geração.
+- O cache é preso a (id, seq) da última ação que não é `see`: `retry`, `undo` e
+  edição não reaproveitam opções velhas.
 - Ação nova cancela as choices pendentes (e o summary), nunca o chronicle.
+  Depois de 2 summaries adiados seguidos, o seguinte termina mesmo com o
+  jogador agindo.
 - Idioma: `assistant.adventure_language(adventure) -> "pt-BR" | "en" | ...`
   (helper do Kimi).
 

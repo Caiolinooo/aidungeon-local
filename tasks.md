@@ -26,8 +26,8 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 |---|---|---|---|
 | G1 | Hotfix: auxiliares sem cache e fora do slot 0, choices/See sem lock, timeouts curtos, stubs C3, A1111 com `MemoryMax` | F0 | feito (no app principal em 2026-10-18) |
 | G2 | llama-server `-np 5 --kv-unified -cram 0`, repro do #28280, watchdog de slots | G1 | em andamento (soak de 200 turnos no staging) |
-| G3 | Scheduler de LLM (prioridade, cancelamento, breaker, pós-turno) | G1 | pendente |
-| G4 | Event bus + SSE | G3 | pendente |
+| G3 | Scheduler de LLM (prioridade, cancelamento, breaker, pós-turno) | G1 | feito no código (testes locais); falta medir no staging |
+| G4 | Event bus + SSE | G3 | feito no código (teste de integração com uvicorn); falta o staging |
 | G5 | Jobs com prioridade + See assíncrono | G3 | pendente |
 | G6 | Forge + DMD2 + FaceID/InstantID, presets SDXL | G1 | pendente |
 | G7 | Orçamento de RAM/VRAM, `-ub`/`-ncmoe`/`-t` | G2 | pendente |
