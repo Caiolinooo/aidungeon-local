@@ -193,13 +193,19 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         text = " ".join(part.strip() for part in parts if part and part.strip())
         return text[:1400], True
     if clause:
+        # images.py importa scene no topo; o scrub fica lá.
+        from app.routes.images import contradicting_looks
+        beat, _banned = contradicting_looks(moment, clause)
+        beat = " ".join(beat.split())[-280:]
         parts = [
             clause,
             style,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face, hair, age and clothing",
+            beat,
             (entry or "")[:400],
             f"atmosphere: {atmosphere}",
+            "what is happening now, same continuous scene, coherent bodies, "
             "detailed scene painting, no text, no watermark, no logo",
         ]
         text = " ".join(part.strip() for part in parts if part and part.strip())

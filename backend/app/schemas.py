@@ -17,6 +17,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class UserPassword(BaseModel):
+    password: str
+
+
 class StoryCardUpsert(BaseModel):
     title: str | None = None
     type: str | None = None

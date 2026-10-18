@@ -180,6 +180,7 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "tags": _loads(row["tags"], []),
         "third_person": bool(row["third_person"]),
         "source": row["source"] or "new",
+        "owner": (row["owner"] if "owner" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -334,16 +335,17 @@ def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str |
                      story_summary: str = "", image_style: str = "",
                      tags: list | None = None,
                      third_person: bool = False, source: str = "new",
+                     owner: str = "",
                      created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     aid = new_id()
     conn.execute(
         "INSERT INTO adventures(id, scenario_id, title, description, ai_instructions,"
         " plot_essentials, authors_note, story_summary, image_style, tags, third_person,"
-        " source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " source, owner, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (aid, scenario_id, title, description, ai_instructions, plot_essentials,
          authors_note, story_summary, image_style, _dumps(tags, []), int(third_person),
-         source, created_at or now, updated_at or now),
+         source, owner or "", created_at or now, updated_at or now),
     )
     return adventure_to_dict(conn.execute("SELECT * FROM adventures WHERE id=?", (aid,)).fetchone())
 
@@ -468,7 +470,8 @@ def list_adventure_summaries(conn: sqlite3.Connection) -> list[dict]:
             excerpt = " ".join(last["text"].split())[:160]
         out.append({
             "id": adv["id"], "title": adv["title"], "description": adv["description"],
-            "tags": adv["tags"], "source": adv["source"], "action_count": count,
+            "tags": adv["tags"], "source": adv["source"], "owner": adv.get("owner") or "",
+            "action_count": count,
             "last_excerpt": excerpt, "updated_at": adv["updated_at"],
         })
     return out

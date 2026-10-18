@@ -129,7 +129,7 @@
     },
     "prompt_builder": {
       "max_scene_chars": 1200,
-      "style_suffix": "photorealistic photograph, natural skin texture, real lighting, sharp detail",
+      "style_suffix": "photorealistic photograph, natural skin texture, real lighting, sharp focus, coherent anatomy, one continuous scene",
       "max_tokens": 120,
       "note": "LLM (cliente existente, disable_thinking) resume a cena recente em prompt de imagem EN; adventures.image_style entra como prefixo de estilo"
     }

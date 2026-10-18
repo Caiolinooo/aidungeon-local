@@ -97,6 +97,14 @@ export const api = {
   login: (username, password) =>
     request('/auth/login', { method: 'POST', body: { username, password } }),
   checkAuth: () => request('/auth/check'),
+  changePassword: (current_password, new_password) =>
+    request('/auth/password', { method: 'POST', body: { current_password, new_password } }),
+  listUsers: () => request('/users'),
+  createUser: (username, password) =>
+    request('/users', { method: 'POST', body: { username, password } }),
+  deleteUser: (username) => request(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  resetUserPassword: (username, password) =>
+    request(`/users/${encodeURIComponent(username)}/password`, { method: 'PUT', body: { password } }),
 
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),

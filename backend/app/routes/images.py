@@ -31,13 +31,14 @@ log = logging.getLogger("aidungeon.images")
 
 router = APIRouter()
 
-_PROMPT_BUILDER_SYSTEM = """You describe one moment of an interactive story for a text-to-image model.
-Write a single English sentence whose subject is the action happening right now: who does what to whom, in the place.
-Name every person in the moment, including the player character when the text says "you".
+_PROMPT_BUILDER_SYSTEM = """You write one caption for a text-to-image model of the moment happening right now.
+One English sentence, present tense, under 40 words. Its main verb is the player order when one is given, otherwise what just happened.
+Keep the place. Do not paint an earlier scene and do not invent a new one.
+Name only the people listed. Include the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
-Do not add people who are not in the moment. Do not change the place.
 Do not turn the moment into a portrait or a close-up of one face.
-No dialogue, no quotes, no meta text. Output ONLY that sentence."""
+If a player instruction for the picture is given, obey it.
+No dialogue, no quotes, no style words. Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
@@ -62,6 +63,27 @@ _LOOK_WORDS = (
     "cabelo", "olhos", "olho", "vestido", "armadura", "elmo", "barba",
     "cicatriz", "pele", "tunica", "túnica", "manto", "capa",
 )
+
+
+def moment_for_painter(actions: list[dict], action_seq: int) -> str:
+    """Os dois últimos trechos, com o pedido do jogador marcado à parte.
+
+    O modelo de imagem tem de pintar isto, não um trecho anterior.
+    """
+    eligible = [
+        action for action in actions
+        if action.get("type") != "see"
+        and action.get("seq", 0) <= action_seq
+        and (action.get("text") or "").strip()
+    ]
+    lines = []
+    for action in eligible[-2:]:
+        text = action["text"].strip()
+        if action.get("type") in ("do", "say", "story"):
+            lines.append("Player order (the picture must show this action): " + text)
+        else:
+            lines.append("What just happened (paint this, not an earlier scene): " + text)
+    return "\n".join(lines)
 
 
 def current_moment(actions: list[dict], action_seq: int) -> str:
@@ -301,12 +323,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if location and location != "the current scene":
         place = f"Place: {location}. {clip_words(entry or '', 200)}\n"
     who = ", ".join(names) if names else "only the people named in the moment"
+    order = body.extra_prompt.strip()
     user = (
         (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
         + place
+        + ("Player instruction for the picture (obey it): " + order + "\n" if order else "")
         + "Moment to paint:\n"
-        + (moment or "(an empty scene)")
+        + (moment_for_painter(actions, body.action_seq) or "(an empty scene)")
     )
     messages = [
         {"role": "system", "content": _EXPLICIT_BUILDER_SYSTEM if explicit else _PROMPT_BUILDER_SYSTEM},
@@ -328,6 +352,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     lead_bits = []
     if sentence:
         lead_bits.append(sentence)
+    if body.extra_prompt.strip():
+        lead_bits.append(body.extra_prompt.strip())
+    lead_bits.append("the action just described, same continuous scene, coherent bodies")
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
@@ -343,7 +370,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         (entry or "")[:160] if location and location != "the current scene" else "",
         adv.get("image_style") or "",
         img_cfg["style_suffix"],
-        body.extra_prompt.strip(),
     ) if part)
     if lead and tail:
         prompt = f"{lead} BREAK {tail}"

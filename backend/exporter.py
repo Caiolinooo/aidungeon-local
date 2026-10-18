@@ -124,13 +124,19 @@ def _slug(title: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-")[:40] or "adventure"
 
 
-def export_all_zip() -> tuple[bytes, int]:
+def export_all_zip(owner: str | None = None) -> tuple[bytes, int]:
     """Backup completo: um .zip com uma pasta por aventura (NNN-slug/), cada
     pasta no formato do backup individual (metadata.json + actions-001.json).
-    Devolve (bytes, nº de aventuras)."""
+    Devolve (bytes, nº de aventuras). `owner` limita às histórias dessa pessoa
+    (e às sem dono); None exporta todas."""
     with db.session() as conn:
-        ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM adventures ORDER BY updated_at DESC").fetchall()]
+        if owner is None:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM adventures ORDER BY updated_at DESC").fetchall()]
+        else:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM adventures WHERE owner=? OR owner IS NULL OR owner=''"
+                " ORDER BY updated_at DESC", (owner,)).fetchall()]
         bundles = [
             (db.get_adventure(conn, aid), db.list_actions(conn, aid),
              db.list_cards(conn, aid), db.list_memories(conn, aid))
