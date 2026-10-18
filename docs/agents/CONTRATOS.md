@@ -175,10 +175,16 @@ def clean_narration(text: str, truncated: bool) -> str: ...
   evento `error`.
 - Depois do stream e antes de gravar (e antes do `output_modifier`),
   `game_engine` chama `output_sanitizer.clean_narration(text, truncated)`. O
-  evento `done` leva o texto já limpo.
+  evento `done` leva o texto já limpo. Texto que fica vazio (depois da limpeza
+  e do `output_modifier`) vira `error` e nada é gravado.
 - Entregues na G1: `match` nunca casa e `clean_narration` só corta a frase
   incompleta quando `truncated` (`output_sanitizer.cut_incomplete_sentence`).
   A K1/K2 trocam a implementação sem mudar as assinaturas.
+- K1: os voláteis da user final vão num `<lore>…</lore>`, e os marcadores do
+  contexto (`context_builder.CONTEXT_STOPS`: `<lore>`, `[World info]`,
+  `[Author's note` …) entram nas stop sequences. `clean_narration` tira as
+  variantes que escapam e as falas `> You`; bloco no início sai até a linha em
+  branco, marcador no meio corta dali até o fim.
 - Quem grava ação nova usa `game_engine.appending(adventure_id)` +
   `game_engine.append_action(conn, adventure_id, type_, text)`: o seq é
   calculado e commitado sob um lock, porque See, jogador e narrador gravam em

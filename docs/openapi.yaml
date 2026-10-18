@@ -2365,6 +2365,8 @@ components:
         - `done`:  `data: {"player_action"?: {Action}, "action": {Action}}` —
           fim da geração, com a(s) action(s) persistida(s);
         - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
+          Resposta que fica sem prosa depois da limpeza (só blocos de contexto
+          copiados pelo narrador) também vira `error`, sem gravar o `continue`.
 
     # ------------------------------------------------------- v2: assistant/images
     ChoicesResponse:

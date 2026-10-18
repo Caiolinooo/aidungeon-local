@@ -289,7 +289,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 if ctx_block and built.messages:
                     built.messages[-1] = {
                         "role": built.messages[-1]["role"],
-                        "content": f"{ctx_block}\n\n{built.messages[-1]['content']}",
+                        "content": context_builder.with_reference(
+                            built.messages[-1]["content"], ctx_block),
                     }
 
             # Scripting hook: context modifier (before LLM dispatch)
@@ -310,6 +311,12 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
             if out_script:
                 text = scripting.run_output_modifier(out_script, text)
+            if not text.strip():
+                # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
+                # resposta vazia: um continue vazio quebraria choices e chronicle.
+                yield {"event": "error", "data": {
+                    "message": "the narrator returned no story text; nothing was saved, try again"}}
+                return
 
             with appending(adventure_id) as conn:
                 if retry_of is not None:

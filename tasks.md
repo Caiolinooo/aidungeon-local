@@ -61,7 +61,7 @@ Ficou para outras tarefas:
 | ID | Tarefa | Depende de | Status |
 |---|---|---|---|
 | K0 | Frontend v0.9.0 reconstruído a partir do bundle da VM | F0 | pendente |
-| K1 | `output_sanitizer.clean_narration` + blocos voláteis delimitados | F0 | pendente |
+| K1 | `output_sanitizer.clean_narration` + blocos voláteis delimitados | F0 | feito no código (`<lore>`, stops, sanitizer, `test_prompt_prefix_stability`); falta o replay no staging |
 | K2 | Meta-comandos `/card`, `/foto`, `/cena` + linguagem natural | K1 | pendente |
 | K3 | Chronicle confiável, retrato automático, `scene_state` (migration 010) | G3 | pendente |
 | K4 | Summarizer em `role=summary` + `tools/backfill_chronicle.py` | K3 | pendente |

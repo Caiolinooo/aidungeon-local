@@ -20,18 +20,22 @@ posição. A system da posição 0 leva SÓ os blocos estáveis, concatenados co
 "\\n\\n":
     bloco 1  sem cabeçalho (é a diretiva central do narrador)
     bloco 2  "[Plot]"        — quem é você, mundo, regras (Plot Essentials)
-Os blocos voláteis vão no TOPO da mensagem user final (antes da author's
-note, Active Lore, Continuity Anchor, STYLE_CUE, CANON_CUE e da última
-ação), para cards/memórias/resumo/estado não invalidarem o prefixo cacheado:
+Os blocos voláteis vão no TOPO da mensagem user final, dentro de um
+elemento <lore>…</lore>, para cards/memórias/resumo/estado não invalidarem
+o prefixo cacheado:
     bloco 3  "[World info]"  — story cards disparados/pinned (lorebook)
     bloco 4  "[Memories]"    — memory bank (resumos de eventos antigos)
     bloco 5  "[Summary]"     — story summary rolante
     bloco 5b "[Player state]"
-A author's note (bloco 7) continua na user final, no formato clássico
-"[Author's note: {texto}]". Budgets, escala dinâmica e a contabilidade de
-extra_canon_tokens não mudam — só a posição. A janela recente descarta
-ações inteiras e, quando descarta, sobe o corte para um múltiplo de
-WINDOW_DROP_CHUNK. Ações "see" (prompt SDXL) não entram na narração.
+    âncoras  "[Active Lore: …]" e "[Continuity Anchor: …]"
+Depois do </lore> vêm a author's note (bloco 7, no formato clássico
+"[Author's note: {texto}]"), STYLE_CUE, CANON_CUE, LORE_CUE (nunca repetir
+as notas) e a última ação. Os marcadores do contexto (CONTEXT_STOPS) entram
+nas stop sequences: o narrador que começa a copiar um bloco para ali.
+Budgets, escala dinâmica e a contabilidade de extra_canon_tokens não mudam
+— só a posição. A janela recente descarta ações inteiras e, quando
+descarta, sobe o corte para um múltiplo de WINDOW_DROP_CHUNK. Ações "see"
+(prompt SDXL) não entram na narração.
 
 Cada ação da janela é uma user própria, com o texto que teria na janela
 corrida. O Qwen3.6 é híbrido: o llama-server só reaproveita o prefixo a
@@ -80,7 +84,8 @@ BASE_SYSTEM_PROMPT = (
     "- Describe only the immediate sensory consequences of the player's action and NPC reactions.\n"
     "- Conclude each response with the scene active and unresolved, inviting the player's next move.\n"
     "- If an NPC asks a question or initiates a conflict, stop immediately to let the player answer.\n"
-    "- Never break the fourth wall.\n\n"
+    "- Never break the fourth wall. The <lore> notes and the bracketed notes are private\n"
+    "  reference: never repeat, quote or continue them, and never write tags or headers.\n\n"
     "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
     "- Write complete sentences in the story's language. Keep articles and\n"
     "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
@@ -91,8 +96,8 @@ BASE_SYSTEM_PROMPT = (
     "- Show events through action, dialogue and the senses. Stop while the scene is\n"
     "  still open — never wrap up the scene or narrate an epilogue.\n\n"
     "Setting fidelity rules:\n"
-    "- The Plot, World info, Memories and Summary blocks below define the world, genre\n"
-    "  and premise. Everything you write MUST be consistent with them.\n"
+    "- The Plot block and the <lore> notes (World info, Memories, Summary) define the\n"
+    "  world, genre and premise. Everything you write MUST be consistent with them.\n"
     "- NEVER import stock genre tropes that the story has not established (e.g. knights, castles,\n"
     "  horses or dragons in a sci-fi/superhero story; spaceships in a medieval story).\n"
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
@@ -121,6 +126,26 @@ CANON_CUE = (
     "[Canon: a character card overrides earlier prose. Keep their appearance, "
     "clothing, status and recorded facts. Do not resurrect the dead, invent a "
     "relative's fate, or redesign a face the card already describes.]"
+)
+
+LORE_OPEN = "<lore>"
+LORE_CLOSE = "</lore>"
+
+# Vai no fim, colado na última ação: a regra do system perde para o exemplo
+# do próprio contexto, e um pedido fora da história faz o narrador devolver
+# um card no formato do [World info].
+LORE_CUE = (
+    "[Private: the <lore> notes and every bracketed note are for you alone. "
+    "Use them silently; never repeat, quote or continue them or their tags. "
+    "Reply only with the next part of the story.]"
+)
+
+# Marcadores do contexto. Viram stop sequences: a geração para no primeiro
+# que o narrador escrever. O output_sanitizer limpa as variantes que escapam.
+CONTEXT_STOPS = (
+    LORE_OPEN, LORE_CLOSE, "[World info]", "[Memories]", "[Summary]",
+    "[Player state]", "[Plot]", "[Author's note", "[Active Lore",
+    "[Continuity Anchor", "[Style:", "[Canon:", "[Private:", "[Web Research",
 )
 
 # A borda esquerda da janela só anda em múltiplos disto, para o prefixo
@@ -394,7 +419,8 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     """Monta as mensagens na ordem do sanduíche (PLANO.md §4.2), no formato
     do template Qwen3: UMA system na posição 0 (blocos estáveis 1–2), uma
     user por ação da janela e a user final. Blocos voláteis (cards,
-    memórias, resumo, player state) ficam no topo da user final."""
+    memórias, resumo, player state, âncoras) ficam no <lore> do topo da
+    user final."""
     # Prompt de imagem, não prosa: fora da janela, da varredura de
     # cards/memórias e da escolha da última ação. O summarizer usa o mesmo filtro.
     actions = narrative_actions(actions)
@@ -497,7 +523,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
 
-    # 7+8 — user(final): author's note, active lore anchors, lembrete de prosa, última ação
+    # 7+8 — user(final): <lore> com voláteis e âncoras, author's note, lembretes, última ação
     note = (adventure.get("authors_note") or "").strip()
     if note:
         note = _fit_budget(note, int(budgets.get("authors_note", 300)))
@@ -507,10 +533,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                                int(budgets.get("last_action", 200)))
     else:
         last_txt = "Begin the story."
-    final_parts: list[str] = []
-    final_parts.extend(volatile_parts)
-    if note:
-        final_parts.append(f"[Author's note: {note}]")
+    lore_parts: list[str] = list(volatile_parts)
 
     # Active entity recency anchor: cards disparados pelo turno imediato
     anchored_titles: set[str] = set()
@@ -521,7 +544,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                 snippet = _card_snippet(c)
                 title = c.get("title") or ""
                 if title and snippet:
-                    final_parts.append(f"[Active Lore: {title} — {snippet}]")
+                    lore_parts.append(f"[Active Lore: {title} — {snippet}]")
                     anchored_titles.add(title)
 
     # Long-Horizon Anti-Hallucination & Continuity Anchor:
@@ -541,7 +564,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                 if _card_matches_immediate_turn(c, recent_scene_norm):
                     snippet = _card_snippet(c)
                     if title and snippet:
-                        final_parts.append(f"[Active Lore: {title} — {snippet}]")
+                        lore_parts.append(f"[Active Lore: {title} — {snippet}]")
                         anchored_titles.add(title)
                         if len(anchored_titles) >= 4:
                             break
@@ -558,14 +581,17 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
             if mem_tail:
                 continuity_bits.append(f"Recent memory: {mem_tail}")
         if continuity_bits:
-            final_parts.append(
+            lore_parts.append(
                 "[Continuity Anchor: " + " | ".join(continuity_bits) + "]"
             )
             meta["continuity_anchor_active"] = True
 
-    final_parts.append(STYLE_CUE)
-    final_parts.append(CANON_CUE)
-    final_parts.append(last_txt)
+    final_parts: list[str] = []
+    if lore_parts:
+        final_parts.append("\n".join([LORE_OPEN, *lore_parts, LORE_CLOSE]))
+    if note:
+        final_parts.append(f"[Author's note: {note}]")
+    final_parts.extend((STYLE_CUE, CANON_CUE, LORE_CUE, last_txt))
     messages.append({"role": "user", "content": "\n".join(final_parts)})
 
     # Dynamic stop sequence hardening (protagonista + player/user boundaries)
@@ -584,10 +610,19 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
         except Exception:
             pass
 
-    for extra in ("\nPlayer:", "\nUser:"):
+    for extra in ("\nPlayer:", "\nUser:", *CONTEXT_STOPS):
         if extra not in stops:
             stops.append(extra)
 
     return BuiltContext(messages=messages,
                         stop_sequences=stops,
                         meta=meta)
+
+
+def with_reference(content: str, block: str) -> str:
+    """Bloco de referência montado fora daqui (pesquisa web) no topo do <lore>
+    da user final; sem <lore>, abre um."""
+    head = LORE_OPEN + "\n"
+    if content.startswith(head):
+        return head + block + "\n" + content[len(head):]
+    return f"{head}{block}\n{LORE_CLOSE}\n{content}"
