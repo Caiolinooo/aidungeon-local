@@ -11,6 +11,8 @@ Todos rodam com Python padrão (sem dependências externas).
 | `bench_slots.py` | Benchmark do llama-server nos papéis do app (C1) contra as metas da seção 2 do plano |
 | `repro_slot_hang.py` | Tenta reproduzir o slot preso do llama.cpp #28280 contra o llama-server |
 | `slot_watchdog.py` | Oneshot do `slot-watchdog.timer`: reinicia o llama-server com slot preso |
+| `deploy.sh` | Na VM: deploy do checkout git no staging ou no app principal, com backup, smoke e rollback |
+| `smoke_check.py` | Smoke test de uma instância do backend (usado pelo `deploy.sh`) e checagem de jogador parado |
 | `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
 | `setup_llm_local.sh` | **Linux.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.sh` |
 
@@ -153,6 +155,21 @@ slots: rode com o jogador parado.
 python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --json /tmp/bench.json
 python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --scenarios carga --aux 2
 ```
+
+## 2.4 deploy.sh e smoke_check.py — deploy na VM
+
+Fluxo e rollback em [`deploy/vm/README.md`](../deploy/vm/README.md#atualizar-o-código-g9).
+O `smoke_check.py` também roda sozinho:
+
+```bash
+python3 tools/smoke_check.py --base http://127.0.0.1:2123 --db /home/caio/aidungeon-staging/data/aidungeon.db
+python3 tools/smoke_check.py --player-idle-min 10 --idle-db /home/caio/aidungeon/data/aidungeon.db   # exit 0 = parado
+```
+
+Fora da VM, as variáveis `DEPLOY_APP`, `DEPLOY_PORT`, `DEPLOY_BACKUPS`,
+`DEPLOY_ENV_FILE`, `DEPLOY_VENV`, `DEPLOY_MAIN_DB`, `DEPLOY_RESTART` e
+`DEPLOY_STOP` trocam caminhos e comandos (foi assim que deploy, rollback e o
+rollback automático foram testados com um uvicorn local).
 
 ## 3. Onde configurar a API key
 
