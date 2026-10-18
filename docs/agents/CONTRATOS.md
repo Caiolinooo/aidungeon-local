@@ -326,3 +326,5 @@ def cancel(conn, job_id: str) -> dict | None: ...
 `backend/app/db.py`, `backend/app/schemas.py`, `backend/app/main.py` (só registro
 de routers) e `backend/schema.sql` são append-only: cada lado escreve numa seção
 própria com comentário de cabeçalho. Migrations: Kimi 010–019, Grok 020–029.
+O runner registra cada número aplicado em `schema_migrations`, então uma
+migration 010–019 nova entra mesmo num banco que já passou da 020.

@@ -101,12 +101,34 @@ def _apply_migration(conn: sqlite3.Connection, path: Path) -> None:
         conn.execute(stmt)
 
 
+def _mark_applied(conn: sqlite3.Connection, numbers: list[int]) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations("
+                 "number INTEGER PRIMARY KEY, applied_at TEXT)")
+    conn.executemany("INSERT OR IGNORE INTO schema_migrations(number, applied_at)"
+                     " VALUES(?, ?)", [(number, utcnow()) for number in numbers])
+
+
+def _applied_migrations(conn: sqlite3.Connection, migrations: list[tuple[int, Path]]) -> set[int]:
+    """Números já aplicados. Banco de antes da tabela ganha os números até o
+    user_version, menos a faixa 010–019: o runner antigo aplicava em sequência
+    e essa faixa (Kimi) só nasceu depois da 020, então nunca rodou."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
+    if not exists:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        _mark_applied(conn, [number for number, _ in migrations
+                             if number <= version and not 10 <= number <= 19])
+    return {row[0] for row in conn.execute("SELECT number FROM schema_migrations")}
+
+
 def init_db() -> None:
     """Aplica schema.sql na primeira execução (idempotente — schema é contrato,
     sem IF NOT EXISTS, então verificamos se já foi aplicado) e depois roda as
-    migrations versionadas (PRAGMA user_version): aplica 00X_*.sql quando
-    user_version < X e grava user_version=X após cada uma. Bancos frescos já
-    recebem os objetos v2 pelo schema.sql, então só marcam a versão mais alta."""
+    migrations: cada 0XX_*.sql roda uma vez, em ordem, registrada pelo número
+    em `schema_migrations` — uma 010 nova entra mesmo num banco que já passou
+    da 020. Bancos frescos já recebem tudo pelo schema.sql e só registram os
+    números. user_version fica com o maior número aplicado."""
     with connect() as conn:
         applied = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scenarios'"
@@ -115,14 +137,17 @@ def init_db() -> None:
         latest = migrations[-1][0] if migrations else 0
         if not applied:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            _mark_applied(conn, [number for number, _ in migrations])
             conn.execute(f"PRAGMA user_version = {latest}")
             return
-        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        done = _applied_migrations(conn, migrations)
         for number, path in migrations:
-            if version < number:
+            if number not in done:
                 _apply_migration(conn, path)
-                conn.execute(f"PRAGMA user_version = {number}")
-                version = number
+                _mark_applied(conn, [number])
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if latest > version:
+            conn.execute(f"PRAGMA user_version = {latest}")
 
 
 # ----------------------------------------------------------- serialização
