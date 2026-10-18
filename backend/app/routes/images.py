@@ -10,7 +10,8 @@ Fluxo do /see (contrato docs/openapi.yaml):
 4) devolve ImageResult.
 
 Não usa o lock de geração: o jogador segue agindo enquanto a imagem sai, e o
-`see` entra no fim da aventura (`game_engine.appending`).
+`see` entra no fim da aventura (`jobs.store_see`). Com `Prefer: respond-async`
+(ou `?async=1`) a rota devolve 202 {job_id} e o resto vira o job `see_image`.
 """
 
 from __future__ import annotations
@@ -19,10 +20,10 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Header, Query
+from fastapi.responses import FileResponse, JSONResponse
 
-from app import db, game_engine, image_client, llm_client, npc_assets, scene, settings_store
+from app import db, image_client, jobs, llm_client, npc_assets, scene, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import ImageSettingsUpdate, SeeRequest
@@ -382,9 +383,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     return prompt, negative, caption
 
 
-@router.post("/adventures/{adventure_id}/see")
-def post_see(adventure_id: str, body: SeeRequest,
-             transport: Any = Depends(get_http_transport)) -> dict:
+def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
+    """Prompt do See com o estado da aventura agora. No 202 roda na thread do
+    job, fora da fila do SD."""
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
@@ -394,48 +395,57 @@ def post_see(adventure_id: str, body: SeeRequest,
                  for card in db.list_cards(conn, adventure_id)]
         img_cfg = settings_store.effective_image_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
-
-    if not img_cfg["enabled"]:
-        raise GameError(503, "image_disabled",
-                        "image generation is disabled (settings.image.enabled)")
-
     try:
         prompt, negative_extra, caption = _build_final_prompt(
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
+    return {
+        "prompt": prompt,
+        "negative_extra": negative_extra,
+        "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
+        "caption": caption,
+    }
 
+
+@router.post("/adventures/{adventure_id}/see", response_model=None)
+def post_see(adventure_id: str, body: SeeRequest,
+             prefer: str = Header(default=""),
+             respond_async: bool = Query(default=False, alias="async"),
+             transport: Any = Depends(get_http_transport)) -> dict | JSONResponse:
+    """Sem lock de geração: o jogador age enquanto a imagem sai, e o `see`
+    entra no fim da aventura. O 202 (C6) é opt-in porque o frontend v0.9.0
+    espera o ImageResult na resposta."""
+    with db.session() as conn:
+        if not db.get_adventure(conn, adventure_id):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        img_cfg = settings_store.effective_image_settings(conn)
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_disabled",
+                        "image generation is disabled (settings.image.enabled)")
+
+    if respond_async or "respond-async" in prefer.lower():
+        job = jobs.start_see(
+            adventure_id,
+            {"action_seq": body.action_seq, "extra_prompt": body.extra_prompt},
+            plan=lambda: _plan_see(adventure_id, body, transport),
+        )
+        return JSONResponse(status_code=202, content={"job_id": job["id"]},
+                            headers={"Preference-Applied": "respond-async"})
+
+    plan = _plan_see(adventure_id, body, transport)
     image_id = db.new_id()
     try:
         result = image_client.generate_image(
-            img_cfg, prompt, adventure_id=adventure_id, image_id=image_id,
-            transport=transport, negative_extra=negative_extra)
+            img_cfg, plan["prompt"], adventure_id=adventure_id, image_id=image_id,
+            transport=transport, negative_extra=plan["negative_extra"])
     except image_client.ImageError as exc:
         raise GameError(503, exc.code, exc.message) from exc
-
-    # Sem lock de geração: o jogador pode ter agido enquanto a imagem saía, e
-    # o `see` entra no fim da aventura.
-    with game_engine.appending(adventure_id) as conn:
-        action = game_engine.append_action(conn, adventure_id, "see", caption)
-        db.insert_image(conn, adventure_id=adventure_id, action_seq=action["seq"],
-                        prompt=prompt,
-                        negative_prompt=_dedupe_negative(
-                            img_cfg["negative_prompt"], negative_extra),
-                        file_path=result["file_path"],
-                        provider=result["provider"],
-                        width=result["width"], height=result["height"],
-                        image_id=image_id)
-        action = db.get_action(conn, action["id"])
-
+    image = jobs.store_see(adventure_id, plan["caption"], result, image_id=image_id,
+                           prompt=plan["prompt"], negative_prompt=plan["negative_prompt"])
     log.info("see: imagem %s gerada para aventura %s (%s)",
              image_id, adventure_id, result["provider"])
-    return {
-        "id": image_id,
-        "url": f"/api/images/{image_id}",
-        "prompt": prompt,
-        "provider": result["provider"],
-        "action": action,
-    }
+    return image
 
 
 # ------------------------------------------------------------- arquivo PNG

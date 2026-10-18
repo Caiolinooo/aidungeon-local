@@ -151,6 +151,9 @@ app.include_router(health.router, prefix="/api", tags=["health"],
 # --- Grok (G4): eventos em SSE. Fora do _protected porque o EventSource do
 # navegador não manda header: a rota aceita Bearer ou ?token= e checa o dono.
 app.include_router(events_routes.router, prefix="/api/adventures", tags=["events"])
+# --- Grok (G5): GET /api/jobs/{id}, polling do See assíncrono (C6).
+app.include_router(jobs_routes.by_id, prefix="/api", tags=["assets"],
+                   dependencies=_protected)
 
 
 # ------------------------------------------------------------------ frontend

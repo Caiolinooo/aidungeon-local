@@ -7,7 +7,8 @@ Os NPCs presentes são os cards type=character mencionados; quem não tem
 retrato entra na fila de portraits que já existe.
 
 A pintura em si é o job `scene_backdrop` (app/jobs.py) — esta função só
-decide e enfileira, para o POST /scene responder na hora.
+decide e enfileira, para o POST /scene responder na hora. Fundo novo cancela
+o pendente antigo da mesma aventura (`supersede_key`, contrato C5).
 """
 
 from __future__ import annotations
@@ -244,12 +245,11 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
     if previous and previous["status"] == "error" and not retry:
         return {"status": "error", "image": image, "error": previous.get("error")}
 
-    db.insert_job(conn, adventure_id=adventure_id, type="scene_backdrop",
-                  ref_id=ref, payload={
-                      "prompt": prompt,
-                      "include_people": include_people,
-                      "explicit": explicit,
-                  })
+    jobs.enqueue(conn, "scene_backdrop", adventure_id, ref, {
+        "prompt": prompt,
+        "include_people": include_people,
+        "explicit": explicit,
+    }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
     return {"status": "pending", "image": image, "error": None}
 
 
