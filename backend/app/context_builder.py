@@ -71,6 +71,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app import npc_bonds
+
 BASE_SYSTEM_PROMPT = (
     "You are the narrator and environment in an interactive text adventure. You control NPCs,\n"
     "sensory consequences, and the immediate world. The player has absolute agency over You.\n"
@@ -613,6 +615,18 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     for extra in ("\nPlayer:", "\nUser:", *CONTEXT_STOPS):
         if extra not in stops:
             stops.append(extra)
+
+    # Momento do NPC: volátil, só na user final. A janela (uma user por
+    # ação já gravada) não recebe este bloco — senão o prefixo cacheado muda.
+    scene_text = "\n".join(
+        (action.get("text") or "") for action in narrative_actions(actions)[-3:]
+    )
+    moment = npc_bonds.moment_for(conn, adventure["id"], scene_text)
+    if moment and messages:
+        messages[-1]["content"] = npc_bonds.insert_into_final(
+            messages[-1]["content"], moment)
+        if npc_bonds.MOMENT_MARKER not in stops:
+            stops.append(npc_bonds.MOMENT_MARKER)
 
     return BuiltContext(messages=messages,
                         stop_sequences=stops,

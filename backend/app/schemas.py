@@ -198,9 +198,16 @@ class SceneSyncRequest(BaseModel):
 
 
 class TtsRequest(BaseModel):
-    """POST /api/tts — voice omitida (null) usa narrator_voice da config."""
+    """POST /api/tts — voice omitida (null) usa narrator_voice da config.
+
+    `emotion` é uma dica (joy, anger, fear, sadness, tenderness, surprise,
+    disgust, neutral). A linha vence; sem palavra de emoção, vale a ficha
+    do NPC citado quando `adventure_id` vem junto.
+    """
     text: str
     voice: str | None = None
+    emotion: str | None = None
+    adventure_id: str | None = None
 
 
 class VoiceSettingsUpdate(BaseModel):

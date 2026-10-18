@@ -12,7 +12,7 @@ import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
 import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
-import { splitNarration } from '../ttsText.js'
+import { emotionForLine, splitNarration } from '../ttsText.js'
 import { loosenProse } from '../prose.js'
 import { Edit2, Volume2, Square, Loader2 } from 'lucide-react'
 
@@ -28,7 +28,7 @@ async function getNarratorVoice() {
   return narratorVoiceCache
 }
 
-export default function FeedItem({ action, onEdit, disabled, isLatest = false }) {
+export default function FeedItem({ action, onEdit, disabled, isLatest = false, adventureId = '' }) {
   const { type, text, edited_at } = action
   const isPlayer = type === 'do' || type === 'say'
   const isSee = type === 'see'
@@ -60,7 +60,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
         <span>Edit</span>
       </button>
 
-      {!isPlayer && !isSee && <NarrateButton text={display} />}
+      {!isPlayer && !isSee && <NarrateButton text={display} adventureId={adventureId} />}
 
 
       {isSee ? (
@@ -97,7 +97,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false })
 // teto da rota. Avatar no dock (avatarBus) fala com lip-sync, enfileirando
 // os pedaços; senão, cada mp3 toca via Audio() em sequência.
 // Clique durante loading/play = stop.
-function NarrateButton({ text }) {
+function NarrateButton({ text, adventureId = '' }) {
   const toast = useToast()
   const [state, setState] = useState('idle') // idle | loading | playing
   const audioRef = useRef(null)
@@ -177,12 +177,16 @@ function NarrateButton({ text }) {
         setState('idle')
         return
       }
-      let upcoming = api.voice.tts(parts[0], voice)
+      const speakPart = (part) => api.voice.tts(part, voice, {
+        emotion: emotionForLine(part),
+        adventureId,
+      })
+      let upcoming = speakPart(parts[0])
       let useAvatar = null
       for (let i = 0; i < parts.length; i++) {
         const blob = await upcoming
         if (!alive()) return
-        if (i + 1 < parts.length) upcoming = api.voice.tts(parts[i + 1], voice)
+        if (i + 1 < parts.length) upcoming = speakPart(parts[i + 1])
         const last = i === parts.length - 1
         const finish = last
           ? () => {

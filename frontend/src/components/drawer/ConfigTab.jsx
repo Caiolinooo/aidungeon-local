@@ -371,6 +371,13 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
         <p className="mt-0.5 text-xs text-zinc-600">
           Text-to-speech narration and speech-to-text dictation (OpenAI-compatible provider).
         </p>
+        {loaded.drama3_enabled ? (
+          <p className="mt-1 text-xs text-emerald-500">Drama-3 is on. Lines go out with an emotion direction.</p>
+        ) : (
+          <p className="mt-1 text-xs text-zinc-600">
+            Drama-3 is off on this machine (not enough free VRAM). Supertonic still speaks, and each line sends an emotion tag.
+          </p>
+        )}
       </div>
 
       <label className="flex items-center gap-2 text-sm text-zinc-300">

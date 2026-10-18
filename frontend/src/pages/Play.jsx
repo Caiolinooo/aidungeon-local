@@ -568,6 +568,7 @@ export default function Play() {
                   onEdit={setEditing}
                   disabled={generating}
                   isLatest={a.id === lastAiTextId}
+                  adventureId={id}
                 />
               ))}
 

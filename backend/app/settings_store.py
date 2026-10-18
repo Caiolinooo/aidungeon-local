@@ -40,6 +40,7 @@ OVERRIDE_KEYS = (
     "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
     "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
     "voice.max_text_chars", "voice.stt_max_bytes",
+    "voice.drama3_model", "voice.drama3_enabled",
     # embeddings (v0.8.0 / M2)
     "embeddings.enabled", "embeddings.base_url", "embeddings.model",
     "embeddings.timeout_seconds",
@@ -334,6 +335,9 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
                                  voice.get("max_text_chars", 2000))),
         "stt_max_bytes": int(ov("voice.stt_max_bytes",
                                 voice.get("stt_max_bytes", 10485760))),
+        "drama3_model": ov("voice.drama3_model", voice.get("drama3_model", "drama-3")),
+        "drama3_enabled": bool(ov("voice.drama3_enabled",
+                                  voice.get("drama3_enabled", False))),
     }
 
 

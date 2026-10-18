@@ -3,8 +3,10 @@ OpenAI-compatível da VM. Espelha a estrutura de app/image_client.py.
 
 Provider único (settings.voice, config efetiva de settings_store):
 - TTS: POST {base_url}/audio/speech com Bearer, JSON {model: tts_model,
-  voice, input, response_format: "mp3"} → 200 audio/mpeg (bytes devolvidos
-  ao chamador sem tocar em disco — passthrough para a UI).
+  voice, input, response_format: "mp3", instructions?} → 200 audio/mpeg
+  (bytes devolvidos ao chamador sem tocar em disco — passthrough para a UI).
+  `instructions` leva a direção emocional. O modelo drama-3 só entra se
+  voice.drama3_enabled estiver ligado; senão o texto falado fica limpo.
 - STT: POST {base_url}/audio/transcriptions multipart (campo `file` com
   filename/content_type originais, data={model: stt_model}) → {"text": ...}
   (formato OpenAI whisper).
@@ -20,6 +22,8 @@ import logging
 from typing import Any
 
 import httpx
+
+from app.voice_emotion import direction_for
 
 log = logging.getLogger("aidungeon.voice")
 
@@ -65,17 +69,9 @@ def _base(cfg: dict) -> str:
 
 
 # ------------------------------------------------------------------ público
-def synthesize(cfg: dict, text: str, voice: str, *,
-               transport: httpx.BaseTransport | None = None) -> bytes:
-    """Sintetiza `text` com `voice` no provider efetivo; devolve bytes mp3.
-    Levanta VoiceError subclasses."""
+def _post_speech(cfg: dict, payload: dict, *,
+                 transport: httpx.BaseTransport | None) -> bytes:
     timeout = float(cfg.get("timeout_seconds", 60))
-    payload = {
-        "model": cfg["tts_model"],
-        "voice": voice,
-        "input": text,
-        "response_format": "mp3",
-    }
     with _make_client(transport, timeout) as client:
         try:
             resp = client.post(f"{_base(cfg)}/audio/speech", json=payload,
@@ -89,6 +85,40 @@ def synthesize(cfg: dict, text: str, voice: str, *,
     if not resp.content:
         raise VoiceError("resposta de audio/speech vazia")
     return resp.content
+
+
+def synthesize(cfg: dict, text: str, voice: str, *,
+               emotion: str | None = None,
+               transport: httpx.BaseTransport | None = None) -> bytes:
+    """Sintetiza `text` com `voice` no provider efetivo; devolve bytes mp3.
+
+    `emotion` vira o campo `instructions` (o audio_server atual aceita e
+    ignora). Com `drama3_enabled`, o modelo pedido é o Drama-3 e a direção
+    entra no texto, no formato dos colchetes. Se esse modelo recusar, a
+    fala volta ao `tts_model` (Supertonic) sem a etiqueta — senão ele leria
+    o colchete em voz alta. Levanta VoiceError subclasses.
+    """
+    instruction = direction_for(emotion) if emotion else None
+    use_drama = bool(cfg.get("drama3_enabled"))
+    payload = {
+        "model": (cfg.get("drama3_model") or "drama-3") if use_drama else cfg["tts_model"],
+        "voice": voice,
+        "input": f"{instruction} {text}" if use_drama and instruction else text,
+        "response_format": "mp3",
+    }
+    if instruction:
+        payload["instructions"] = instruction
+    try:
+        return _post_speech(cfg, payload, transport=transport)
+    except (VoiceAuthError, VoiceUnreachable):
+        raise
+    except VoiceError as exc:
+        if not use_drama:
+            raise
+        log.warning("drama-3 indisponível (%s); fallback %s", exc.code, cfg.get("tts_model"))
+        payload["model"] = cfg["tts_model"]
+        payload["input"] = text
+        return _post_speech(cfg, payload, transport=transport)
 
 
 def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,

@@ -264,14 +264,21 @@ export const api = {
     list: () => request('/voices'),
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
-    tts: async (text, voice) => {
+    // extra: { emotion, adventureId } — a emoção da linha e, se a linha
+    // não disser, a ficha do NPC citado nessa aventura.
+    tts: async (text, voice, extra) => {
+      const body = { text }
+      if (voice) body.voice = voice
+      if (extra && typeof extra === 'object') {
+        if (extra.emotion) body.emotion = extra.emotion
+        if (extra.adventureId) body.adventure_id = extra.adventureId
+      }
       let res
       try {
         res = await fetch(`${API_BASE}/api/tts`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          // voice omitida → backend usa narrator_voice (contrato)
-          body: JSON.stringify(voice ? { text, voice } : { text }),
+          body: JSON.stringify(body),
         })
       } catch {
         throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')

@@ -1295,7 +1295,11 @@ paths:
       description: |
         Chama `POST {voice.base_url}/audio/speech` (Supertonic, formato OpenAI
         TTS) e devolve os bytes em passthrough. `voice` omitida (null) usa
-        `narrator_voice` da config. Validações: `voice_disabled` (400),
+        `narrator_voice` da config. `emotion` é dica; a linha vence e, sem
+        palavra de emoção, vale a ficha do NPC citado em `adventure_id`.
+        A emoção escolhida volta no header `X-Voice-Emotion` e no campo
+        `instructions` do provider. Com `drama3_enabled` falso o texto falado
+        continua limpo (Supertonic). Validações: `voice_disabled` (400),
         `invalid_payload` (texto vazio, 400), `text_too_long` (acima de
         max_text_chars, 400), `invalid_voice` (fora da lista ou '', 400).
         Provider indisponível → 502 (`unreachable`/`auth_error`/`error`).
@@ -1308,6 +1312,11 @@ paths:
       responses:
         '200':
           description: Áudio sintetizado (bytes mp3, NÃO JSON).
+          headers:
+            X-Voice-Emotion:
+              description: Emoção escolhida (joy, anger, fear, sadness, tenderness, surprise, disgust, neutral).
+              schema:
+                type: string
           content:
             audio/mpeg:
               schema:
@@ -2683,6 +2692,19 @@ components:
           type: string
           nullable: true
           description: Voz TTS (M1–M3, F1–F3); omitida usa narrator_voice.
+        emotion:
+          type: string
+          nullable: true
+          description: >
+            Dica de emoção (joy, anger, fear, sadness, tenderness, surprise,
+            disgust, neutral; apelidos happy/sad/angry/love também). A linha
+            vence. Omitida, o servidor escolhe.
+        adventure_id:
+          type: string
+          nullable: true
+          description: >
+            Se a linha não declara emoção, a ficha do NPC citado nesta
+            aventura entra na escolha. Id desconhecido é ignorado.
 
     SttResult:
       type: object
@@ -2725,6 +2747,14 @@ components:
         api_key_set:
           type: boolean
           description: true se há chave efetiva (override ou env VOICE_API_KEY).
+        drama3_model:
+          type: string
+          example: drama-3
+        drama3_enabled:
+          type: boolean
+          description: >
+            false nesta VM: o Drama-3 não cabe na L4 junto com o narrador
+            e o gerador de imagem. A fala segue no tts_model.
 
     VoiceSettingsUpdate:
       type: object

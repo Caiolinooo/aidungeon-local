@@ -19,6 +19,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
 | Imagem | `sd-webui.service` (A1111) na porta 7860, com o drop-in de memória abaixo |
+| Voz | `abz-voice-audio.service`, Supertonic 3 em `https://vm.groupabz.com/voice/v1`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
 

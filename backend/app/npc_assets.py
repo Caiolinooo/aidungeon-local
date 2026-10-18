@@ -104,6 +104,10 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
             sheet["notes"] = (sheet.get("notes", "") + "\n" + previous["notes"]).strip()
         if previous.get("stats") and "stats" not in sheet:
             sheet["stats"] = previous["stats"]
+        # Vínculo vivo (npc_bonds). O enriquecimento não reinventa o número:
+        # o que o turno gravou continua na ficha.
+        if isinstance(previous.get("bonds"), dict):
+            sheet["bonds"] = previous["bonds"]
     return sheet
 
 

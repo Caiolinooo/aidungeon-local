@@ -30,6 +30,7 @@ Antes do `done`, `turn_done {action_id, seq}` sai em `events` (C2).
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -43,6 +44,7 @@ from app import (
     events as events_bus,
     llm_client,
     meta_commands,
+    npc_bonds,
     npc_chronicle,
     output_sanitizer,
     scripting,
@@ -50,6 +52,8 @@ from app import (
     web_search as web_search_mod,
 )
 from app.errors import GameError
+
+log = logging.getLogger("aidungeon.game")
 
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
@@ -307,6 +311,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 yield {"event": "token", "data": {"token": token}}
 
             text = output_sanitizer.clean_narration("".join(full), stream_state.truncated)
+            text = npc_bonds.strip_leaked(text)
             # Scripting hook: output modifier (after generation completion)
             out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
             if out_script:
@@ -327,6 +332,13 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     db.touch_adventure(conn, adventure_id)
                 else:
                     action = append_action(conn, adventure_id, "continue", text)
+                # Pesos no mesmo commit da prosa: o turno seguinte já lê
+                # os números novos. Falha aqui não apaga a narração.
+                try:
+                    player_text = (player_action or {}).get("text") or ""
+                    npc_bonds.apply_turn(conn, adventure_id, player_text, text)
+                except Exception:
+                    log.warning("npc_bonds: pesos não atualizados", exc_info=True)
 
             data: dict[str, Any] = {"action": action}
             if player_action is not None:
