@@ -35,6 +35,11 @@ def _build(adv, actions, cfg):
         return cb.build_context(adv, actions, cfg, conn)
 
 
+def _window(built) -> str:
+    """As users da janela (entre a system e a user final), coladas."""
+    return "".join(m["content"] for m in built.messages[1:-1])
+
+
 # --------------------------------------------------------------- ordem
 def test_sandwich_order_exact(tmp_db):
     adv = _adventure_full()
@@ -49,9 +54,9 @@ def test_sandwich_order_exact(tmp_db):
         cfg = _cfg(conn)
     built = _build(adv, actions, cfg)
 
-    # wire format Qwen3: UMA system (blocos 1–5) + user janela + user final
+    # wire format Qwen3: UMA system + uma user por ação da janela + user final
     roles = [m["role"] for m in built.messages]
-    assert roles == ["system", "user", "user"]
+    assert roles == ["system", "user", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
     # system estável: base, ai_instructions e plot (blocos 1–2)
@@ -67,13 +72,12 @@ def test_sandwich_order_exact(tmp_db):
     for volatile in ("[World info]", "[Memories]", "[Summary]"):
         assert volatile not in sys_msg
 
-    # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
-    window = built.messages[1]["content"]
-    assert "You stand in Calimport." in window
-    assert "\n> You look around\n" in window
+    # 6 — uma user por ação da janela (0..1; a última vai p/ o bloco 8)
+    assert built.messages[1]["content"] == "You stand in Calimport."
+    assert built.messages[2]["content"] == "\n> You look around\n"
 
     # 7+8 — user final: voláteis no topo, author's note e a última ação no fim
-    final = built.messages[2]["content"]
+    final = built.messages[3]["content"]
     order = [
         "[World info]",                 # 3 story cards
         "Baldur's Gate",
@@ -116,7 +120,7 @@ def test_player_action_formatting(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    window = built.messages[1]["content"]  # user: janela (ações 0..3)
+    window = _window(built)  # users da janela (ações 0..3)
     assert "\n> You draw my sword\n" in window
     assert '\n> You say "Hello, guard."\n' in window
     assert "\n> You sheathe the blade\n" in window
@@ -258,9 +262,40 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     assert built.meta["budgets"]["recent_window"] == 250
     assert cb.WINDOW_DROP_CHUNK == 8
     assert built.meta["window_action_count"] == 3
-    window = built.messages[1]["content"]
+    assert len(built.messages) == 5
+    window = _window(built)
     assert window.startswith("M08") and "S000" not in window
     assert window.count("M") == 3 and len(window) == 3 * 100   # inteiras, sem corte
+
+
+def test_next_turn_repeats_every_message_before_the_final_user(tmp_db):
+    """O checkpoint do llama-server fica no início da última user. O turno
+    seguinte só reaproveita o cache se repetir tudo o que vinha antes dela."""
+    adv = _adventure_full()
+    turns = [
+        ("start", "You stand in Calimport."),
+        ("do", "look for Thuldan"),
+        ("continue", "Thuldan waves from the docks."),
+        ("say", "Any news?"),
+        ("continue", "He shakes his head."),
+        ("see", "people present: Thuldan, docks at dusk"),
+        ("do", "walk to the market"),
+        ("continue", "The market is loud."),
+    ]
+    for seq, (type_, text) in enumerate(turns):
+        add_action(adv["id"], seq, type_, text)
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Thuldan", triggers=["Thuldan"],
+                       entry="Contrabandista halfling.")
+        db.insert_memory(conn, adv["id"], "Caio deve um favor a Thuldan.")
+        actions = db.list_actions(conn, adv["id"])
+        cfg = _cfg(conn)
+        built = [cb.build_context(adv, actions[:n], cfg, conn)
+                 for n in range(2, len(actions) + 1)]
+    for before, now in zip(built, built[1:]):
+        shared = before.messages[:-1]
+        assert now.messages[:len(shared)] == shared
+        assert now.messages[len(shared)]["role"] == "user"
 
 
 def test_card_triggers_from_memory_outside_the_window(tmp_db):

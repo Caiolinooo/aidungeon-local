@@ -53,6 +53,14 @@ def invalidate_slot_cache() -> None: ...
   servidor (`-cram` > 0) o llama-server salva e restaura slots a cada tarefa
   nova, e o livelock voltou em 2026-10-18 15:42 com `cache_prompt=false`. Por
   isso o `-cram 0` (registro em `docs/vm_runbooks/phase5_slots_record.md`).
+- Prompt da narrativa (`context_builder.build_context`): system estável, uma
+  user por ação da janela e a user final com tudo o que muda a cada turno
+  (cards, memórias, resumo, estado, author's note, âncoras, última ação). O
+  Qwen3.6 é híbrido e o llama-server só reaproveita o prefixo a partir de um
+  checkpoint; o útil é o do início da última user. O turno seguinte precisa
+  repetir byte a byte todas as mensagens anteriores à user final, senão o
+  slot 0 reprocessa a história inteira (7–14 s de TTFT). Teste:
+  `test_next_turn_repeats_every_message_before_the_final_user`.
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`).
 - Timeouts padrão (prazo total em segundos, sobrescrevíveis em
   `config/settings.json → scheduler.timeouts`): `choices` 15, `chronicle` 45,

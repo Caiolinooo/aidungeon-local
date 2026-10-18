@@ -183,7 +183,7 @@ monta o prompt nesta ordem exata (PLANO.md §4.2, contexto 8192 tokens):
 | 3 | System: Story Cards (pinned + disparados por keyword) | ≤ 1200 |
 | 4 | System: Memory Bank (top-k relevantes) | ≤ 600 |
 | 5 | System: Story Summary (resumo rolante) | ≤ 400 |
-| 6 | User: janela recente verbatim (`> You ...` nas ações do jogador) | ~3800 |
+| 6 | User: janela recente verbatim, uma mensagem por ação (`> You ...` nas ações do jogador) | ~3800 |
 | 7 | System(final): Author's Note — perto do fim, alta influência por recência | ≤ 300 |
 | 8 | User(final): última ação do jogador formatada | ≤ 200 |
 | — | Reserva para a resposta | 512 |

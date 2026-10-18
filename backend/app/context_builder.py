@@ -7,8 +7,8 @@ Ordem lógica EXATA dos blocos (budgets de config/settings.json):
     3. story cards (pinned + disparados)                          (≤ 1200)
     4. memory bank (top-k)                                        (≤ 600)
     5. story_summary                                              (≤ 400)
-    6. user:   janela recente verbatim (dinâmica, trunca POR AÇÃO INTEIRA,
-              e só em múltiplos de WINDOW_DROP_CHUNK)
+    6. user:   janela recente verbatim, UMA mensagem por ação (dinâmica,
+              trunca POR AÇÃO INTEIRA, e só em múltiplos de WINDOW_DROP_CHUNK)
     7. authors_note                                               (≤ 300)
     8. user:   última ação formatada                              (≤ 200)
     reserva de resposta                                           (512)
@@ -32,6 +32,15 @@ A author's note (bloco 7) continua na user final, no formato clássico
 extra_canon_tokens não mudam — só a posição. A janela recente descarta
 ações inteiras e, quando descarta, sobe o corte para um múltiplo de
 WINDOW_DROP_CHUNK. Ações "see" (prompt SDXL) não entram na narração.
+
+Cada ação da janela é uma user própria, com o texto que teria na janela
+corrida. O Qwen3.6 é híbrido: o llama-server só reaproveita o prefixo a
+partir de um checkpoint, e o checkpoint útil é o do início da última user.
+Com uma user por ação, o prompt do turno seguinte repete byte a byte tudo
+o que vinha antes da user final, e esse checkpoint continua valendo. Uma
+janela numa user só termina com <|im_end|> logo depois do texto, que o
+turno seguinte troca pela ação nova, e o servidor reprocessa a janela
+inteira. Nada volátil pode entrar antes da user final.
 
 Formatação das ações do jogador (byte a byte como no backup):
     do   → "\\n> You {text}\\n"
@@ -383,9 +392,9 @@ def _card_snippet(card: dict) -> str:
 def build_context(adventure: dict, actions: list[dict], cfg: dict,
                   conn: sqlite3.Connection) -> BuiltContext:
     """Monta as mensagens na ordem do sanduíche (PLANO.md §4.2), no formato
-    do template Qwen3: UMA system na posição 0 (blocos estáveis 1–2) + users.
-    Blocos voláteis (cards, memórias, resumo, player state) ficam no topo da
-    user final."""
+    do template Qwen3: UMA system na posição 0 (blocos estáveis 1–2), uma
+    user por ação da janela e a user final. Blocos voláteis (cards,
+    memórias, resumo, player state) ficam no topo da user final."""
     # Prompt de imagem, não prosa: fora da janela, da varredura de
     # cards/memórias e da escolha da última ação. O summarizer usa o mesmo filtro.
     actions = narrative_actions(actions)
@@ -477,15 +486,14 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
 
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 
-    # 6 — user: janela recente verbatim (trunca POR AÇÃO INTEIRA)
+    # 6 — user por ação: janela recente verbatim (trunca POR AÇÃO INTEIRA)
     base_window_budget = recent_window_budget(cfg)
     window_budget = max(0, base_window_budget - extra_canon_tokens)
     meta["budgets"]["recent_window"] = base_window_budget
     # Mesma seleção do summarizer: see já saiu, descarte em WINDOW_DROP_CHUNK.
     _narrative, window_kept, _evicted, used = narrative_window(actions, window_budget)
     chosen = [format_action_text(a["type"], a["text"]) for a in window_kept]
-    if chosen:
-        messages.append({"role": "user", "content": "".join(chosen)})
+    messages.extend({"role": "user", "content": text} for text in chosen if text.strip())
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
 
