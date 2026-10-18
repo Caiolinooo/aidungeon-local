@@ -13,7 +13,8 @@ por esse tempo, reinicia o serviço (com --cooldown entre reinícios).
 
 O lote de prompt é montado na ordem dos slots: um prompt longo num slot
 deixa os slots seguintes parados até acabar. Por isso slot parado enquanto
-outro anda só espera.
+outro anda só espera, até --hard-stall-s: no #28280 os outros slots seguem
+servindo, e tráfego contínuo adiaria o reinício para sempre.
 
 Na build atual fechar a conexão já solta o slot, e o app faz isso no prazo de
 cada role. O watchdog cobre o caso do #28280 em que nem isso resolve.
@@ -170,7 +171,7 @@ def check(args: argparse.Namespace, now: float) -> int:
     last_restart = state.get("last_restart_ts", 0.0)
     quiet_s = now - state.get("moved_at", 0.0)
     if worst[0] is not None and worst[1] > args.stall_s:
-        if worst[0] != SERVER_KEY and quiet_s <= args.stall_s:
+        if worst[0] != SERVER_KEY and quiet_s <= args.stall_s and worst[1] <= args.hard_stall_s:
             say(NOTICE, f"slot {worst[0]} parado há {worst[1]:.0f}s; outro slot andou há {quiet_s:.0f}s")
         elif now - last_restart < args.cooldown:
             say(NOTICE, f"slot {worst[0]} parado há {worst[1]:.0f}s; reinício recente, aguardando cooldown")
@@ -198,6 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--service", default="llama-server", help="unit a reiniciar")
     p.add_argument("--stall-s", type=float, default=45.0,
                    help="segundos sem progresso até reiniciar (padrão 45)")
+    p.add_argument("--hard-stall-s", type=float, default=300.0,
+                   help="reinicia mesmo com outro slot andando (padrão 300 s: nenhum prompt "
+                        "cabe em 262144 tokens e leva tanto)")
     p.add_argument("--cooldown", type=float, default=180.0,
                    help="intervalo mínimo entre reinícios (padrão 180 s)")
     p.add_argument("--request-timeout", type=float, default=10.0,

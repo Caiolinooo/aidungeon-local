@@ -121,7 +121,8 @@ reinicia o `llama-server` quando um slot passa de `--stall-s` (45 s) sem
 progresso e nenhum outro slot andou nesse tempo, ou quando `/slots` fica esse
 tempo sem responder, com `--cooldown` de 180 s entre reinícios. Slot parado
 atrás do prompt longo de outro slot (o lote é montado na ordem dos slots) só
-espera. O estado legível pelo app fica em
+espera, até `--hard-stall-s` (300 s): no #28280 os outros slots seguem
+servindo, e tráfego contínuo adiaria o reinício para sempre. O estado legível pelo app fica em
 `/var/lib/slot-watchdog/status.json`. Instalação em `deploy/vm/README.md`.
 
 ## 2.3 bench_slots.py — llama-server nos papéis do app

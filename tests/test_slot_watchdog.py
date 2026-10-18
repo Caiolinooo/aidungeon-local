@@ -73,6 +73,15 @@ def test_slot_waiting_behind_a_long_prompt_is_left_alone(watchdog):
     assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
 
 
+def test_stuck_slot_restarts_even_while_another_slot_keeps_serving(watchdog):
+    for step in range(16):
+        watchdog([_slot(0, busy=True, processed=2048 * (step + 1)), _slot(1, busy=True, task=8)],
+                 1000.0 + step * 20)
+    assert watchdog.restarts == []
+    watchdog([_slot(0, busy=True, processed=99999), _slot(1, busy=True, task=8)], 1320.0)
+    assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
+
+
 def test_new_task_resets_the_clock(watchdog):
     watchdog([_slot(0, busy=True, task=1)], 1000.0)
     watchdog([_slot(0, busy=True, task=2)], 1040.0)
