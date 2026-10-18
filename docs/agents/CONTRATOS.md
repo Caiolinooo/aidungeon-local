@@ -15,39 +15,54 @@ ROLES = ("narrative", "choices", "chronicle", "summary",
 def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
                     timeout_s: float | None = None,
                     cancel: threading.Event | None = None,
-                    temperature: float = 0.7, max_tokens: int = 1024,
-                    transport=None, **sampler) -> str: ...
+                    temperature: float = 0.3, max_tokens: int = 200,
+                    stop: list[str] | None = None, transport=None,
+                    state: StreamState | None = None) -> str: ...
 
-def stream_chat(cfg: dict, messages: list[dict], *, role: str = "narrative",
-                state: StreamState | None = None, cancel=None,
-                transport=None, **sampler) -> Iterator[str]: ...
+def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
+                           stop: list[str], transport=None,
+                           state: StreamState | None = None,
+                           role: str = "narrative", cancel=None,
+                           timeout_s: float | None = None) -> Iterator[str]: ...
+
+def scaled_timeout(cfg: dict, role: str, max_tokens: int) -> float: ...
+def recent_calls(limit: int = 50) -> list[dict]: ...   # role, slot, ttft, prompt_n, cache_n, tok/s
+def invalidate_slot_cache() -> None: ...
 ```
 
-- Mapa padrão com 4 slots no llama-server (`-np 4`):
+- Mapa de slots pelo `total_slots` de `GET /props`:
 
-  | slot | roles | `cache_prompt` |
-  |---|---|---|
-  | 0 | `narrative` | `true` |
-  | 1 | `choices` | `false` |
-  | 2 | `chronicle`, `summary` | `false` |
-  | 3 | `image_prompt`, `assistant`, `meta` | `false` |
+  | slots no servidor | narrative | choices | chronicle, summary | image_prompt, assistant, meta |
+  |---|---|---|---|---|
+  | 4 ou mais (`-np 4`) | 0 | 1 | 2 | 3 |
+  | 3 | 0 | 1 | 2 | 2 |
+  | 2 | 0 | 1 | 1 | 1 |
+  | 1 ou `/props` ilegível | sem `id_slot` | sem `id_slot` | sem `id_slot` | sem `id_slot` |
 
-- Chamadas auxiliares (todo role ≠ `narrative`) usam `cache_prompt=false` até o
-  livelock [llama.cpp #28280](https://github.com/ggml-org/llama.cpp/issues/28280)
-  ser resolvido. Nunca usam o slot 0.
-- Com menos de 4 slots, as auxiliares vão sem `id_slot` (o servidor escolhe) e a
-  narrativa continua no slot 0 quando houver ≥ 2 slots.
-- Timeouts padrão (segundos, sobrescrevíveis em `config/settings.json →
-  scheduler.timeouts`): `choices` 15, `chronicle` 45, `summary` 60,
-  `image_prompt` 20, `assistant` 90, `meta` 45. A narrativa usa o timeout de
-  streaming (`llm.stream_timeout_s`).
+  Com 1 slot o `id_slot` fica de fora porque um slot inexistente trava o
+  llama.cpp. O total fica em cache por 300 s (falha: 30 s) e é relido quando o
+  servidor fica inacessível.
+- `cache_prompt`: `true` só na narrativa. Auxiliares (todo role ≠ `narrative`)
+  vão com `false` (`scheduler.aux_cache_prompt`) até o livelock
+  [llama.cpp #28280](https://github.com/ggml-org/llama.cpp/issues/28280) ser
+  resolvido. Nunca usam o slot 0.
+- A narrativa vem em SSE; as auxiliares em JSON (`stream=false`).
+- Timeouts padrão (prazo total em segundos, sobrescrevíveis em
+  `config/settings.json → scheduler.timeouts`): `choices` 15, `chronicle` 45,
+  `summary` 60, `image_prompt` 20, `assistant` 90, `meta` 45. `timeout_s`
+  explícito vence o padrão; saídas longas (rascunho de cenário) usam
+  `scaled_timeout`. A narrativa não tem prazo total: `llm.timeout_seconds` é o
+  timeout de leitura entre tokens.
 - Erros (todos herdam de `LlmError`, com `code` e `message`):
-  - `LlmTimeout` (`code="llm_timeout"`): estourou `timeout_s`;
+  - `LlmTimeout` (`code="llm_timeout"`): estourou o prazo;
   - `LlmCancelled` (`code="llm_cancelled"`): `cancel` foi setado;
-  - `LlmDegraded` (`code="llm_degraded"`): circuit breaker aberto.
-- `cancel` é um `threading.Event`. Ao ser setado, a chamada fecha a conexão HTTP
-  (o llama-server libera o slot ao perceber o cliente desconectado) e levanta
-  `LlmCancelled`.
+  - `LlmDegraded` (`code="llm_degraded"`): circuit breaker aberto (G3).
+- `cancel` é um `threading.Event`. Ao ser setado (ou no fim do prazo), a chamada
+  derruba o socket com `shutdown` e levanta `LlmCancelled` (ou `LlmTimeout`).
+  O socket é capturado no connect TCP, porque sem stream o llama-server só
+  manda os headers no fim. O llama-server libera o slot ao perceber o cliente
+  desconectado. Um stream encerrado pelo cancelamento nunca conta como
+  resposta completa.
 
 ## C2 Eventos (dono: Grok)
 
@@ -101,14 +116,21 @@ def execute(adventure_id: str, cmd: MetaCommand,
 def clean_narration(text: str, truncated: bool) -> str: ...
 ```
 
-- Antes do narrador, `game_engine.handle_action` chama `meta_commands.match`.
+- Antes do narrador (e antes do lock de geração e do `input_modifier`),
+  `game_engine.handle_action` chama `meta_commands.match` com o texto cru.
   Se casar, repassa os eventos de `execute` (que termina com `meta_done`) e o
-  narrador não roda. Nada é gravado como prosa.
-- Depois do stream e antes de gravar, `game_engine` chama
-  `output_sanitizer.clean_narration(text, truncated)`. O evento `done` leva o
-  texto já limpo.
-- Na G1 os dois módulos existem como stub no-op; a K1/K2 trocam a implementação
-  sem mudar as assinaturas.
+  narrador não roda. Nada é gravado como prosa. Exceção em `execute` vira um
+  evento `error`.
+- Depois do stream e antes de gravar (e antes do `output_modifier`),
+  `game_engine` chama `output_sanitizer.clean_narration(text, truncated)`. O
+  evento `done` leva o texto já limpo.
+- Entregues na G1: `match` nunca casa e `clean_narration` só corta a frase
+  incompleta quando `truncated` (`output_sanitizer.cut_incomplete_sentence`).
+  A K1/K2 trocam a implementação sem mudar as assinaturas.
+- Quem grava ação nova usa `game_engine.appending(adventure_id)` +
+  `game_engine.append_action(conn, adventure_id, type_, text)`: o seq é
+  calculado e commitado sob um lock, porque See, jogador e narrador gravam em
+  paralelo.
 
 ## C4 ImagePlan (dono: Kimi; renderização: Grok)
 

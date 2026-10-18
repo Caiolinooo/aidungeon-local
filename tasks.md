@@ -24,7 +24,7 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 
 | ID | Tarefa | Depende de | Status |
 |---|---|---|---|
-| G1 | Hotfix: auxiliares sem cache e fora do slot 0, choices/See sem lock, timeouts curtos, stubs C3, A1111 com `MemoryMax` | F0 | pendente |
+| G1 | Hotfix: auxiliares sem cache e fora do slot 0, choices/See sem lock, timeouts curtos, stubs C3, A1111 com `MemoryMax` | F0 | em andamento (código pronto; falta VM) |
 | G2 | llama-server `-np 4`, repro do #28280, watchdog de slots | G1 | pendente |
 | G3 | Scheduler de LLM (prioridade, cancelamento, breaker, pós-turno) | G1 | pendente |
 | G4 | Event bus + SSE | G3 | pendente |
