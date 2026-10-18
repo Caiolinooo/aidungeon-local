@@ -39,6 +39,7 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import math
 import socket
 import threading
 import time
@@ -153,6 +154,34 @@ def cached_discovery(base_url: str, model_alias: str) -> str | None:
 def recent_calls(limit: int = 50) -> list[dict]:
     with _recent_lock:
         return list(_recent_calls)[-limit:]
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    """Nearest-rank sobre a lista já ordenada."""
+    if not values:
+        return None
+    return values[min(len(values) - 1, max(0, math.ceil(q * len(values)) - 1))]
+
+
+def narrative_stats(window: int = 20) -> dict:
+    """TTFT e tok/s das últimas `window` narrativas ok e a última narrativa
+    (qualquer outcome), para /api/health/llm."""
+    with _recent_lock:
+        calls = [dict(c) for c in _recent_calls if c["role"] == "narrative"]
+    ok = [c for c in calls if c["outcome"] == "ok"][-window:]
+    ttfts = sorted(c["ttft_s"] for c in ok if c["ttft_s"] is not None)
+    speeds = sorted(c["predicted_per_second"] for c in ok if c["predicted_per_second"])
+    last = calls[-1] if calls else None
+    if last is not None:
+        last["at"] = datetime.fromtimestamp(last["at"], timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z")
+    return {
+        "samples": len(ok),
+        "ttft_p50_s": _percentile(ttfts, 0.50),
+        "ttft_p95_s": _percentile(ttfts, 0.95),
+        "tok_s_p50": _percentile(speeds, 0.50),
+        "last": last,
+    }
 
 
 def _record_call(role: str, slot: int | None, state: StreamState,
@@ -343,6 +372,12 @@ def slot_for(cfg: dict, role: str,
     if total == 3:
         return 1 if role == "choices" else 2
     return 1
+
+
+def slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
+    """`total_slots` do servidor e o slot de cada role (None: o servidor escolhe)."""
+    return {"total": server_slot_count(cfg, transport),
+            "roles": {role: slot_for(cfg, role, transport) for role in ROLES}}
 
 
 def role_timeout(cfg: dict, role: str) -> float:

@@ -204,12 +204,14 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
 
 
 def _scheduler_settings(raw: dict) -> dict:
-    """Bloco `scheduler` para o llm_client, com `stall_hint_path` absoluto."""
+    """Bloco `scheduler` para o llm_client, com os caminhos absolutos
+    (relativos à raiz do repo)."""
     out = {key: value for key, value in raw.items() if key not in ("timeouts", "note")}
-    hint = str(raw.get("stall_hint_path") or "").strip()
-    if hint:
-        path = Path(hint)
-        out["stall_hint_path"] = str(path if path.is_absolute() else db.REPO_ROOT / path)
+    for key in ("stall_hint_path", "watchdog_status_path"):
+        raw_path = str(raw.get(key) or "").strip()
+        if raw_path:
+            path = Path(raw_path)
+            out[key] = str(path if path.is_absolute() else db.REPO_ROOT / path)
     return out
 
 

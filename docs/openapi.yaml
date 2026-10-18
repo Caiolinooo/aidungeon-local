@@ -1419,12 +1419,19 @@ paths:
   /api/health/llm:
     get:
       tags: [health]
-      summary: Status do servidor LLM + modelo descoberto
+      summary: Status do servidor LLM, scheduler, slots, fila de jobs e memória
       operationId: healthLlm
       description: |
         Sonda `GET {base_url}/models` em tempo real: confirma alcance, auth e
         devolve o modelo que será usado na geração (descoberta automática
         quando `model_alias = "auto"`).
+
+        Também traz, sem cache (VRAM: 5 s), o estado do scheduler (breaker,
+        fila, slots ocupados), o slot de cada role, o `status.json` do
+        slot_watchdog, a fila de jobs, RAM/swap/VRAM e TTFT/tok/s das últimas
+        narrativas. Com o servidor respondendo, `status` vira `degraded`
+        quando o breaker está aberto ou o watchdog vê `/slots` sem resposta
+        ou um slot ocupado sem progresso há 30 s ou mais.
       responses:
         '200':
           description: Sempre 200; o campo `status` informa a saúde do LLM.
@@ -2184,7 +2191,7 @@ components:
       properties:
         status:
           type: string
-          enum: [ok, unreachable, auth_error, error]
+          enum: [ok, degraded, unreachable, auth_error, error]
         provider:
           type: string
           example: llamacpp
@@ -2203,7 +2210,152 @@ components:
         details:
           type: string
           nullable: true
-          description: Mensagem de erro ou informação extra do runtime.
+          description: Mensagem de erro, motivo do `degraded` ou informação extra do runtime.
+        scheduler:
+          type: object
+          description: Snapshot do llm_scheduler.
+          properties:
+            breaker:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum: [closed, open, half_open]
+                failures:
+                  type: integer
+                until:
+                  type: string
+                  nullable: true
+                  description: Fim do breaker aberto (ISO UTC); null fora de `open`.
+            narratives:
+              type: integer
+            aux_in_flight:
+              type: integer
+            aux_cap:
+              type: integer
+            busy_slots:
+              type: array
+              items:
+                type: integer
+            reserved_slots:
+              type: array
+              items:
+                type: integer
+              description: Slots tomados pelo fallback da narrativa.
+            waiting:
+              type: array
+              items:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  slot:
+                    type: integer
+                    nullable: true
+                  waited_s:
+                    type: number
+        slots:
+          type: object
+          properties:
+            total:
+              type: integer
+              nullable: true
+              description: total_slots de /props; null com o servidor fora do ar.
+            roles:
+              type: object
+              additionalProperties:
+                type: integer
+                nullable: true
+              example: {narrative: 0, choices: 1, chronicle: 2, summary: 2, image_prompt: 3, assistant: 3, meta: 3}
+            watchdog:
+              type: object
+              nullable: true
+              description: |
+                `status.json` do slot_watchdog (`scheduler.watchdog_status_path`)
+                mais `age_s` e `stale` (sem leitura há mais de 60 s); null sem o arquivo.
+              properties:
+                checked_at:
+                  type: string
+                age_s:
+                  type: number
+                  nullable: true
+                stale:
+                  type: boolean
+                slots:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      busy:
+                        type: boolean
+                      stalled_s:
+                        type: number
+                unreachable_s:
+                  type: number
+                restarts:
+                  type: integer
+                last_restart:
+                  type: object
+                  nullable: true
+                hint:
+                  type: object
+                  nullable: true
+        jobs:
+          type: object
+          description: 'Jobs ativos por status e tipo (`{tipo: quantidade}`).'
+          properties:
+            preparing:
+              type: object
+              additionalProperties:
+                type: integer
+            pending:
+              type: object
+              additionalProperties:
+                type: integer
+            running:
+              type: object
+              additionalProperties:
+                type: integer
+            oldest_pending_s:
+              type: number
+              nullable: true
+        memory:
+          type: object
+          description: /proc/meminfo e nvidia-smi; campos ausentes quando a fonte não existe.
+          properties:
+            ram_total_mb:
+              type: integer
+            ram_available_mb:
+              type: integer
+            swap_total_mb:
+              type: integer
+            swap_used_mb:
+              type: integer
+            vram_used_mb:
+              type: integer
+            vram_total_mb:
+              type: integer
+        narrative:
+          type: object
+          description: Últimas 20 narrativas ok e a última narrativa (qualquer outcome).
+          properties:
+            samples:
+              type: integer
+            ttft_p50_s:
+              type: number
+              nullable: true
+            ttft_p95_s:
+              type: number
+              nullable: true
+            tok_s_p50:
+              type: number
+              nullable: true
+            last:
+              type: object
+              nullable: true
+              description: role, slot, outcome, at, total_s, waited_s, ttft_s, prompt_n, cache_n, predicted_n, prompt_per_second, predicted_per_second, fallback.
 
     SseStream:
       type: string

@@ -1118,3 +1118,21 @@ def requeue_interrupted_jobs(conn: sqlite3.Connection) -> tuple[int, int]:
         " WHERE type<>'see_image' AND status='running'"
     ).rowcount
     return requeued, failed
+
+
+def job_queue_summary(conn: sqlite3.Connection) -> dict:
+    """Jobs ativos por status e tipo, mais o created_at do pendente mais velho
+    (/api/health/llm)."""
+    summary: dict = {status: {} for status in JOB_ACTIVE}
+    oldest = None
+    rows = conn.execute(
+        "SELECT status, type, COUNT(*) AS n, MIN(created_at) AS oldest FROM jobs"
+        f" WHERE status IN ({','.join('?' * len(JOB_ACTIVE))}) GROUP BY status, type",
+        JOB_ACTIVE,
+    ).fetchall()
+    for row in rows:
+        summary[row["status"]][row["type"]] = row["n"]
+        if row["status"] == "pending" and (oldest is None or row["oldest"] < oldest):
+            oldest = row["oldest"]
+    summary["oldest_pending_at"] = oldest
+    return summary
