@@ -31,9 +31,9 @@ Status: `pendente` · `em andamento` · `feito` · `bloqueado`.
 | G5 | Jobs com prioridade + See assíncrono | G3 | feito no código (testes locais: 202 < 300 ms, jogador age durante o render, fundo velho cancelado); falta o staging |
 | G6 | Forge + DMD2 + FaceID/InstantID, presets SDXL | G1 | pendente |
 | G7 | Orçamento de RAM/VRAM, `-ub`/`-ncmoe`/`-t` | G2 | pendente |
-| G8 | Segurança: `--api-key-file`, SSH por chave, bind local, ufw | F0 | pendente |
-| G9 | Deploy git + staging (2123) | F0 | pendente |
-| G10 | Observabilidade (`/api/health/llm`, log por turno) | G3 | pendente |
+| G8 | Segurança: `--api-key-file`, SSH por chave, bind local, ufw | F0 | em andamento: PUT de settings ignora chave mascarada (e180253); nginx sem query no access log e `.env` 600 aplicados na VM em 2026-10-18; `--api-key-file`, SSH por chave, bind 127.0.0.1 e ufw esperam a troca de senha e de chave pelo usuário |
+| G9 | Deploy git + staging (2123) | F0 | feito: `tools/deploy.sh` + `smoke_check.py` (backup, smoke, rollback automático), repositório git na VM (`/home/caio/aidungeon.git` + checkout `/home/caio/aidungeon-git`); o `git fetch` direto do GitHub precisa de deploy key (usuário) |
+| G10 | Observabilidade (`/api/health/llm`, log por turno) | G3 | feito no código (7896e8b); falta conferir no staging |
 
 ### G1: aceite e pendências
 
