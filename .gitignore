@@ -41,3 +41,4 @@ Thumbs.db
 !.env.example
 deploy/vm/*.zip
 data/images/
+data/references/
