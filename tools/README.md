@@ -83,11 +83,15 @@ python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
 Soak: `--repeat N` repete a lista de `--turn`, `--see-every K` dispara o See a
 cada K turnos e turno acima de `--slow-turn` (120 s) conta como falha. No fim
 saem p50/p95 de TTFT, turno e choices, mais quantos choices deram 503.
+Staging e app principal dividem o llama-server e o A1111: com `--yield-to`, o
+replay só manda o próximo turno depois de nenhuma aventura do app principal
+mudar por `--idle-s` (300 s).
 
 ```bash
 python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
     --adventure <id de uma aventura de teste no staging> \
-    --turn "do:olho em volta" --turn "say:e agora?" --repeat 100 --see-every 5
+    --turn "do:olho em volta" --turn "say:e agora?" --repeat 100 --see-every 5 \
+    --yield-to http://127.0.0.1:2122
 ```
 
 ## 2.2 repro_slot_hang.py e slot_watchdog.py — slot preso (#28280)

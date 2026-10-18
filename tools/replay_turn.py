@@ -217,8 +217,9 @@ def _pct(values: list[float], q: float) -> float | None:
 
 
 class Replay:
-    def __init__(self, api: Api, args: argparse.Namespace) -> None:
+    def __init__(self, api: Api, args: argparse.Namespace, main: Api | None = None) -> None:
         self.api = api
+        self.main = main
         self.args = args
         self.adv = args.adventure
         self.pool = ThreadPoolExecutor(max_workers=8)
@@ -235,6 +236,32 @@ class Replay:
     def fail(self, message: str) -> None:
         self.failures.append(message)
         self.log(f"FALHA: {message}")
+
+    def player_quiet_s(self) -> float | None:
+        """Segundos desde a última mudança em qualquer aventura do app principal."""
+        res = self.main.call("GET", "/api/adventures")
+        if res["status"] != 200:
+            return None
+        stamps = [_iso_seconds(a.get("updated_at")) for a in res["body"] or []]
+        return time.time() - max((s for s in stamps if s), default=0.0)
+
+    def yield_to_player(self) -> None:
+        """Staging e app principal dividem o llama-server e o A1111: o replay
+        espera o jogador ficar parado por --idle-s."""
+        if self.main is None:
+            return
+        paused = False
+        while True:
+            quiet = self.player_quiet_s()
+            if quiet is not None and quiet >= self.args.idle_s:
+                if paused:
+                    self.log(f"jogador parado há {quiet:.0f}s; retomando")
+                return
+            if not paused:
+                why = "app principal sem resposta" if quiet is None else f"última mudança há {quiet:.0f}s"
+                self.log(f"jogador ativo ({why}); pausando")
+                paused = True
+            time.sleep(15)
 
     def run(self) -> int:
         state = self.api.call("GET", f"/api/adventures/{self.adv}")
@@ -254,6 +281,7 @@ class Replay:
             see: list[Future] = []
             see_seq = last_seq
             wants_see = bool(self.see_every) and index % self.see_every == 0
+            self.yield_to_player()
 
             def fire_see(seq: int = see_seq, bucket: list = see) -> None:
                 bucket.append(self.pool.submit(
@@ -400,6 +428,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="repete a lista de --turn N vezes (soak; padrão 1)")
     p.add_argument("--slow-turn", type=float, default=120.0,
                    help="turno acima disso falha: indício de slot preso (padrão 120 s)")
+    p.add_argument("--yield-to", metavar="URL",
+                   help="app principal (ex.: http://127.0.0.1:2122): antes de cada turno espera "
+                        "nenhuma aventura de lá mudar por --idle-s")
+    p.add_argument("--idle-s", type=float, default=300.0,
+                   help="silêncio do jogador exigido pelo --yield-to (padrão 300 s)")
     p.add_argument("--expect-card", action="append", default=[], metavar="NOME",
                    help="card que deve existir depois do replay (repetível)")
     p.add_argument("--card-wait", type=float, default=60.0,
@@ -424,7 +457,8 @@ def main() -> int:
     except SystemExit as exc:
         print(exc)
         return EXIT_USAGE
-    return Replay(Api(args.base, token, args.timeout), args).run()
+    main_api = Api(args.yield_to, token, 15.0) if args.yield_to else None
+    return Replay(Api(args.base, token, args.timeout), args, main_api).run()
 
 
 if __name__ == "__main__":
