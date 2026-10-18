@@ -125,6 +125,14 @@ espera, até `--hard-stall-s` (300 s): no #28280 os outros slots seguem
 servindo, e tráfego contínuo adiaria o reinício para sempre. O estado legível pelo app fica em
 `/var/lib/slot-watchdog/status.json`. Instalação em `deploy/vm/README.md`.
 
+Com `--hint-file` (um por instância do app: `data/llm_stall_hint.json`) o
+watchdog lê a dica que o app grava quando a narrativa fica sem token e sem
+`prompt_progress` e é repetida em outro slot. Dica de até `--hint-max-age`
+(120 s) com o slot dela ainda ocupado sem progresso por `--hint-stall-s`
+(20 s) reinicia sem a espera dos 300 s; só aguarda o fallback terminar
+(`--hint-quiet-s`, 10 s sem nenhum slot andando) até `--hint-defer-s` (60 s)
+depois da dica.
+
 ## 2.3 bench_slots.py — llama-server nos papéis do app
 
 Fala direto com o llama-server, nos slots do contrato C1. Cenários (cada um

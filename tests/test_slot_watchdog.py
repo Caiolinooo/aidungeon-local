@@ -121,3 +121,74 @@ def test_dry_run_records_without_restarting(watchdog):
     status = watchdog(stuck, 1050.0, "--dry-run")
     assert watchdog.restarts == []
     assert status["last_restart"]["dry_run"] is True
+
+
+# --------------------------------------------------------------- dica do app
+def _hint(tmp_path: Path, ts: float, slot: int = 0) -> str:
+    path = tmp_path / "hint.json"
+    path.write_text(json.dumps({"ts": ts, "slot": slot, "reason": "narrative_stalled"}))
+    return str(path)
+
+
+def test_app_hint_restarts_a_stuck_slot_sooner(watchdog, tmp_path):
+    hint = _hint(tmp_path, 1000.0)
+    stuck = [_slot(0, busy=True), _slot(1, busy=False)]
+    watchdog(stuck, 1000.0, "--hint-file", hint)
+    status = watchdog(stuck, 1010.0, "--hint-file", hint)
+    assert watchdog.restarts == []
+    assert status["hint"] == {"slot": 0, "at": "1970-01-01T00:16:40+00:00", "age_s": 10.0}
+    status = watchdog(stuck, 1025.0, "--hint-file", hint)
+    assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
+    assert "dica do app" in status["last_restart"]["reason"]
+    assert status["hint"] is None
+
+
+def test_app_hint_waits_for_the_fallback_slot_up_to_the_defer(watchdog, tmp_path):
+    hint = _hint(tmp_path, 1000.0)
+    for step in range(6):
+        reply = [_slot(0, busy=True), _slot(3, busy=True, task=9, decoded=step * 40)]
+        watchdog(reply, 1000.0 + step * 10, "--hint-file", hint)
+    assert watchdog.restarts == []
+    watchdog([_slot(0, busy=True), _slot(3, busy=True, task=9, decoded=400)], 1061.0,
+             "--hint-file", hint)
+    assert watchdog.restarts == [["systemctl", "restart", "llama-server"]]
+
+
+def test_stale_app_hint_is_ignored(watchdog, tmp_path):
+    hint = _hint(tmp_path, 800.0)
+    stuck = [_slot(0, busy=True)]
+    watchdog(stuck, 1000.0, "--hint-file", hint)
+    status = watchdog(stuck, 1025.0, "--hint-file", hint)
+    assert watchdog.restarts == []
+    assert status["hint"] is None
+
+
+def test_app_hint_from_before_the_last_restart_is_ignored(watchdog, tmp_path):
+    stuck = [_slot(0, busy=True, task=7)]
+    watchdog(stuck, 1000.0)
+    watchdog(stuck, 1050.0)
+    assert len(watchdog.restarts) == 1
+    hint = _hint(tmp_path, 1045.0)
+    again = [_slot(0, busy=True, task=8)]
+    watchdog(again, 1240.0, "--hint-file", hint)
+    status = watchdog(again, 1265.0, "--hint-file", hint)
+    assert len(watchdog.restarts) == 1
+    assert status["hint"] is None
+
+
+def test_app_hint_for_a_released_slot_does_nothing(watchdog, tmp_path):
+    hint = _hint(tmp_path, 1000.0)
+    for step in range(7):
+        watchdog([_slot(0, busy=False), _slot(1, busy=False)], 1000.0 + step * 10,
+                 "--hint-file", hint)
+    assert watchdog.restarts == []
+
+
+def test_unreadable_app_hint_is_ignored(watchdog, tmp_path):
+    bad = tmp_path / "hint.json"
+    bad.write_text("{not json")
+    stuck = [_slot(0, busy=True)]
+    watchdog(stuck, 1000.0, "--hint-file", str(bad), "--hint-file", str(tmp_path / "none"))
+    status = watchdog(stuck, 1025.0, "--hint-file", str(bad))
+    assert watchdog.restarts == []
+    assert status["hint"] is None
