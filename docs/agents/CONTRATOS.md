@@ -34,18 +34,25 @@ def invalidate_slot_cache() -> None: ...
 
   | slots no servidor | narrative | choices | chronicle, summary | image_prompt, assistant, meta |
   |---|---|---|---|---|
-  | 4 ou mais (`-np 4`) | 0 | 1 | 2 | 3 |
+  | 4 ou mais (a VM roda `-np 5`) | 0 | 1 | 2 | 3 |
   | 3 | 0 | 1 | 2 | 2 |
   | 2 | 0 | 1 | 1 | 1 |
   | 1 ou `/props` ilegível | sem `id_slot` | sem `id_slot` | sem `id_slot` | sem `id_slot` |
 
   Com 1 slot o `id_slot` fica de fora porque um slot inexistente trava o
   llama.cpp. O total fica em cache por 300 s (falha: 30 s) e é relido quando o
-  servidor fica inacessível.
+  servidor fica inacessível ou uma chamada estoura o prazo.
+- Servidor (G2): `-np 5 --kv-unified -cram 0`. O app usa os slots 0 a 3; o 4
+  fica livre para clientes sem `id_slot` (open-webui, agente de voz, hermes),
+  que normalmente caem nele por ser o menos usado. Cliente externo que cair
+  no slot 0 apaga o cache da narrativa: o turno seguinte reprocessa tudo.
 - `cache_prompt`: `true` só na narrativa. Auxiliares (todo role ≠ `narrative`)
   vão com `false` (`scheduler.aux_cache_prompt`) até o livelock
   [llama.cpp #28280](https://github.com/ggml-org/llama.cpp/issues/28280) ser
-  resolvido. Nunca usam o slot 0.
+  resolvido. Nunca usam o slot 0. Só isso não basta: com prompt cache no
+  servidor (`-cram` > 0) o llama-server salva e restaura slots a cada tarefa
+  nova, e o livelock voltou em 2026-10-18 15:42 com `cache_prompt=false`. Por
+  isso o `-cram 0` (registro em `docs/vm_runbooks/phase5_slots_record.md`).
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`).
 - Timeouts padrão (prazo total em segundos, sobrescrevíveis em
   `config/settings.json → scheduler.timeouts`): `choices` 15, `chronicle` 45,

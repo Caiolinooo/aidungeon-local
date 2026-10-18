@@ -15,8 +15,9 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | Imagens | `/home/caio/aidungeon/data/images/` |
 | Frontend | `/home/caio/aidungeon/frontend/dist` (servido pelo FastAPI) |
 | HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt) |
-| LLM | `llama-server.service` na porta 1234 (ver `docs/vm_runbooks/`) |
-| Embeddings | `llama-embeddings.service` (CPU) na porta 8091 |
+| LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
+| Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
+| Embeddings | `llama-embeddings.service` (CPU, 0 MiB de VRAM) na porta 8091 |
 | Imagem | `sd-webui.service` (A1111) na porta 7860, com o drop-in de memória abaixo |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -116,6 +117,68 @@ Com ele, o anon fica em ~9 GB e o drop-in
 Medido na G1: 1024² em 20 passos leva 37,7 s a frio e 15,2 s quente, sem swap e
 sem evento `max`/`oom` em `memory.events`. Sem tcmalloc o render trava sob o
 `MemoryHigh`; se o pacote sumir, tire o drop-in até reinstalar.
+
+## llama-server (G2)
+
+Unit `/etc/systemd/system/llama-server.service` (root, modo 600 enquanto a
+chave estiver na linha de comando; a G8 troca por `--api-key-file`). Build
+`b10281-c8064719f` do fork `Indras-Mirror/llama.cpp-turboq-mtp`:
+
+```ini
+ExecStart=/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server --host 0.0.0.0 --port 1234 \
+  -t 8 --threads-batch 16 -np 5 --kv-unified -cram 0 --ctx-checkpoints 8 --metrics \
+  -c 262144 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024 --api-key <chave> -rea auto -fa on \
+  --tools all --jinja -m /home/caio/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
+  --mmproj /home/caio/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf \
+  --n-gpu-layers 99 -ncmoe 24 --no-mmap --image-min-tokens 1024
+```
+
+| Flag | Por quê |
+|---|---|
+| `-np 5 --kv-unified` | slots 0–3 do app (contrato C1) e o 4 para clientes sem `id_slot`; o KV unificado divide os 262144 tokens entre eles |
+| `-cram 0` | sem prompt cache no servidor: era ele que disparava o livelock #28280; também libera ~7 GB de RAM |
+| `--ctx-checkpoints 8` | o padrão é 32 checkpoints de ~63 MiB por slot |
+| `-ub 1024` | prompt 1290 tok/s contra 913 com 512; o 2048 (1596 tok/s) estoura o pico de VRAM com SDXL até a G6 |
+| `--metrics` | `/metrics` para a G10 |
+
+Medições e decisões em `docs/vm_runbooks/phase5_slots_record.md`. Backups da
+unit: `llama-server.service.v090.bak` (original) e `.g2-np2.bak` (`-np 2`).
+Rollback: copiar o backup por cima, `sudo systemctl daemon-reload` e
+`sudo systemctl restart llama-server` (~30 s para carregar o modelo). Reinicie
+só com os slots ociosos (`GET /slots`), fora do horário de jogo.
+
+## Embeddings fora da GPU
+
+`llama-embeddings.service` roda em CPU, mas o CUDA ainda reservava 646 MiB
+(186 MiB só com `--device none`). Com as duas linhas abaixo, 0 MiB (backup
+`llama-embeddings.service.g7.bak`):
+
+```ini
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=... --n-gpu-layers 0 --device none ...
+```
+
+## Watchdog de slots
+
+Reinicia o llama-server quando um slot fica preso (#28280). Instalação:
+
+```bash
+# na máquina local
+scp tools/slot_watchdog.py deploy/vm/slot-watchdog.service deploy/vm/slot-watchdog.timer \
+    caio@vm.groupabz.com:/tmp/
+# na VM
+sudo install -o root -g root -m 755 /tmp/slot_watchdog.py /usr/local/sbin/slot_watchdog.py
+sudo install -o root -g root -m 644 /tmp/slot-watchdog.service /tmp/slot-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo /usr/bin/python3 /usr/local/sbin/slot_watchdog.py --env-file /home/caio/aidungeon/.env \
+    --state-dir /tmp/wd-dry --dry-run && sudo cat /tmp/wd-dry/status.json   # lê os 5 slots?
+sudo systemctl enable --now slot-watchdog.timer
+```
+
+Estado em `/var/lib/slot-watchdog/status.json`. O journal da unit só mostra
+reinícios (`warning`) e esperas (`notice`):
+`journalctl -u slot-watchdog -p notice`. Desligar:
+`sudo systemctl disable --now slot-watchdog.timer`.
 
 ## Segredos (`.env`)
 
