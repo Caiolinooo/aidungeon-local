@@ -92,7 +92,25 @@ ROLLING_SUMMARY_PROMPT = (
 )
 
 
-_DEFERRED = (llm_client.LlmCancelled, llm_client.LlmDegraded, llm_client.LlmQueueTimeout)
+class _NeverDeferred(Exception):
+    """Sósia para `except` quando o llm_client da VM não tem a classe."""
+
+
+def _deferred_types() -> tuple[type[BaseException], ...]:
+    """Cancelamento, breaker e fila estourada não são falha do resumo.
+
+    O llm_client da VM ainda não tem LlmQueueTimeout. O import não pode
+    quebrar por causa disso — senão os dois serviços caem no restart.
+    """
+    found: list[type[BaseException]] = []
+    for name in ("LlmCancelled", "LlmDegraded", "LlmQueueTimeout"):
+        exc = getattr(llm_client, name, None)
+        if isinstance(exc, type) and issubclass(exc, BaseException):
+            found.append(exc)
+    return tuple(found) or (_NeverDeferred,)
+
+
+_DEFERRED = _deferred_types()
 
 
 def _default_estimator(text: str) -> int:

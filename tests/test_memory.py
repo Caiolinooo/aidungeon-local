@@ -515,6 +515,15 @@ def test_long_story_inside_106k_window_gets_summary_and_keeps_prefix(tmp_db):
     assert built_next.messages[len(shared)]["role"] == "user"
 
 
+def test_deferred_types_tolerate_vm_without_queue_timeout(monkeypatch):
+    """A VM não tem LlmQueueTimeout. O import do summarizer não pode cair."""
+    monkeypatch.delattr(summarizer.llm_client, "LlmQueueTimeout", raising=False)
+    types = summarizer._deferred_types()
+    assert summarizer.llm_client.LlmCancelled in types
+    assert summarizer.llm_client.LlmDegraded in types
+    assert all(issubclass(exc, BaseException) for exc in types)
+
+
 def test_summarizer_does_not_archive_see_prompts(tmp_db):
     adv = make_adventure()
     add_action(adv["id"], 0, "continue", "Action 0. " + "x" * 580)
