@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
-from app import db, game_engine, image_client, llm_client, npc_assets, scene, settings_store
+from app import db, game_engine, image_client, llm_client, npc_assets, scene, settings_store, world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import ImageSettingsUpdate, SeeRequest
@@ -34,6 +34,7 @@ Write a single English sentence whose subject is the action happening right now:
 Name every person in the moment, including the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not add people who are not in the moment. Do not change the place.
+If the moment says a person refuses, paint the refusal. If it says a destination does not exist, do not invent that place.
 Do not turn the moment into a portrait or a close-up of one face.
 No dialogue, no quotes, no meta text. Output ONLY that sentence."""
 
@@ -42,6 +43,7 @@ Write a single English sentence whose subject is the nudity or the sex act happe
 Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
 Do not add people who are not in the moment. Do not change the place.
+If the moment says a person refuses, paint the refusal. Do not invent a room or a bed.
 Do not sexualize a child. Output ONLY that sentence."""
 
 # Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
@@ -232,9 +234,22 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     não entra como img2img — um busto reimprime a foto e apaga a ação.
     """
     pb = img_cfg["prompt_builder"]
-    moment = current_moment(actions, body.action_seq)
-    explicit = scene.is_explicit(moment)
+    visible = [
+        action for action in actions
+        if action.get("type") != "see" and int(action.get("seq") or 0) <= int(body.action_seq)
+    ]
+    with db.session() as conn:
+        memories = db.list_memories(conn, adv["id"])
+    assessment = world_facts.assess(adv, visible, cards, memories)
+    raw_moment = current_moment(actions, body.action_seq)
+    moment = assessment.image_moment(raw_moment)
+    explicit = scene.is_explicit(assessment.safe_excerpt if assessment.image_directive else moment)
     frame = _cards_in_frame(cards, moment, adv.get("plot_essentials") or "")
+    if assessment.absent:
+        frame = [
+            card for card in frame
+            if not world_facts.name_is_absent(card.get("title") or "", assessment.absent)
+        ]
     clause = _look_clause(frame, explicit=explicit) or (
         "" if explicit else npc_assets.image_canon_clause(cards, moment)
     )
@@ -258,8 +273,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             + clause
             + ". Same hair, face, age, build and clothing. Do not invent a different person."
         )
-    location, entry = scene._location(cards, moment)
-    atmosphere = scene.atmosphere_of(moment)
+    location, entry = scene._location(cards, assessment.safe_excerpt or moment)
+    if assessment.image_directive and assessment.where != "unestablished":
+        location = assessment.where
+        for card in cards:
+            if (card.get("type") or "") == "location" and (card.get("title") or "").casefold() == location.casefold():
+                entry = card.get("entry") or entry
+                break
+    atmosphere = scene.atmosphere_of(assessment.safe_excerpt or moment)
     place = ""
     if location and location != "the current scene":
         place = f"Place: {location}. {(entry or '')[:200]}\n"
@@ -278,6 +299,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     summarized = llm_client.chat_completion(
         llm_cfg, messages, temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
+    summarized = world_facts.scrub_image_text(summarized, assessment)
     summarized, neg_summary = contradicting_looks(summarized, clause)
     beat, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
     # O começo do trecho é a ação. O fim é o que o CLIP jogava fora.
@@ -313,7 +335,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         prompt = f"{lead} BREAK {tail}"
     else:
         prompt = lead or tail
-    negative = _dedupe_negative(neg_summary, neg_moment)
+    negative = _dedupe_negative(neg_summary, neg_moment, assessment.image_negative)
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     return prompt, negative

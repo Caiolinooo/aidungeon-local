@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app import context_builder, db, game_engine
+from app.world_facts import ATTEMPT_RULE
 from app.errors import GameError
 
 from conftest import add_action, make_adventure, make_llm_transport
@@ -86,7 +87,9 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     # última mensagem = pistas de estilo e cânone + última ação do jogador
     assert payload["messages"][-1]["role"] == "user"
     assert payload["messages"][-1]["content"] == (
-        f"{context_builder.STYLE_CUE}\n{context_builder.CANON_CUE}\n\n> You wait\n"
+        f"{context_builder.STYLE_CUE}\n{context_builder.CANON_CUE}\n"
+        f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
+        "\n> You wait\n"
     )
 
 
