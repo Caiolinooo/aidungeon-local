@@ -34,7 +34,9 @@ CODE_REAL = "real_person_explicit"
 CODE_MINOR = "minor"
 MSG_REAL = "Não gero nudez nem sexo com pessoa real."
 MSG_MINOR = "Não gero nudez nem sexo com menor."
-REFERENCE_DENOISE = 0.45
+# Primeiro retrato da pessoa real, a partir da foto. Abaixo da âncora (0.35):
+# 0.45 já é denoise alto demais para o rosto da foto sobreviver a outro enquadramento.
+REFERENCE_DENOISE = 0.25
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from datetime import date
@@ -14,6 +15,7 @@ from app.routes.images import _plan_see
 from app.schemas import SeeRequest
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
+from test_v3 import use_tmp_storage
 
 _SUMMARY = {
     "type": "standard",
@@ -362,6 +364,44 @@ def test_explicit_backdrop_refuses_a_real_person_and_paints_the_room(client, tmp
     assert "zendaya" not in prompt
     assert "nude" not in prompt
     assert "no people" in prompt
+
+
+def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, monkeypatch):
+    """Sem âncora, o img2img do retrato leva a foto da pessoa real e um denoise baixo."""
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    photo = refs / "zendaya.png"
+    photo.write_bytes(PNG_BYTES)
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card = _character(
+        adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
+        likeness={"reference_image_path": str(photo)},
+    )
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], card["id"], {
+            "portrait_prompt": "dark curly hair, olive skin, brown eyes, bust portrait",
+        })
+        queued = jobs.enqueue_portrait(conn, adv["id"], card["id"])
+    assert queued is not None
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/sdapi/v1/img2img"):
+            seen.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={
+                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
+                "parameters": {},
+            })
+        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
+
+    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
+    assert len(seen) == 1
+    payload = seen[0]
+    assert base64.b64decode(payload["init_images"][0]) == PNG_BYTES
+    assert payload["denoising_strength"] == likeness.REFERENCE_DENOISE
+    assert likeness.REFERENCE_DENOISE <= 0.30
 
 
 def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, monkeypatch):
