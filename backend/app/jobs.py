@@ -34,7 +34,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from app import db, events, game_engine, image_client, llm_client, npc_assets, settings_store
+from app import (db, events, game_engine, image_client, likeness, llm_client,
+                    npc_assets, settings_store)
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -293,14 +294,22 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     final = " ".join(p for p in (adv.get("image_style") or "",
                                  prompt,
                                  img_cfg["style_suffix"] or "") if p).strip()
+    prefix = likeness.real_person_prefix(card)
+    if prefix:
+        final = f"{prefix}, {final}" if final else prefix
     look = npc_assets.sheet_context(card.get("sheet") or "")
     if look:
         final = f"{final}. Mandatory appearance, do not contradict: {look}"
-    init_bytes = None
     init_width = init_height = None
+    anchor_bytes = None
     if anchor:
-        init_bytes = _portrait_bytes(anchor)
+        anchor_bytes = _portrait_bytes(anchor)
         init_width, init_height = anchor.get("width"), anchor.get("height")
+        final = f"{final}, same person, keep the same face".strip()
+    init_bytes, denoise = likeness.portrait_init(
+        card, anchor_bytes, anchor_denoise=PORTRAIT_DENOISE,
+    )
+    if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
     image_id = db.new_id()
     meta = image_client.generate_image(
@@ -308,7 +317,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         image_id=image_id, transport=transport,
         width=init_width, height=init_height,
         init_image=init_bytes,
-        denoising_strength=PORTRAIT_DENOISE if init_bytes else None,
+        denoising_strength=denoise,
     )
     try:
         with db.session() as conn:

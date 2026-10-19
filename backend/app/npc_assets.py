@@ -108,6 +108,10 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
         # o que o turno gravou continua na ficha.
         if isinstance(previous.get("bonds"), dict):
             sheet["bonds"] = previous["bonds"]
+        # Pessoa real, referência e menor não saem quando a ficha é reescrita.
+        for key in ("real_person", "real_name", "wiki_title", "likeness", "minor", "age"):
+            if key in previous:
+                sheet[key] = previous[key]
     return sheet
 
 

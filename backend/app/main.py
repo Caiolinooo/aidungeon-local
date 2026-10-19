@@ -33,6 +33,7 @@ from app.routes import (actions, adventures, assistant, cards, choices,
                         voice)
 from app.routes import auth as auth_routes
 from app.routes import events as events_routes
+from app.routes import likeness as likeness_routes
 from app.routes import users as users_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -134,6 +135,8 @@ app.include_router(assistant.router, prefix="/api", tags=["assistant"],
 app.include_router(actions.router, prefix="/api/actions", tags=["actions"],
                    dependencies=_protected)
 app.include_router(cards.router, prefix="/api/adventures", tags=["cards"],
+                   dependencies=_protected)
+app.include_router(likeness_routes.router, prefix="/api", tags=["likeness"],
                    dependencies=_protected)
 app.include_router(jobs_routes.router, prefix="/api/adventures", tags=["assets"],
                    dependencies=_protected)

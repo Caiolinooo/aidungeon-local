@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import db, image_client, jobs, llm_client, npc_assets, scene, settings_store
+from app import db, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import ImageSettingsUpdate, SeeRequest
@@ -300,7 +300,7 @@ def _look_clause(frame: list[dict], *, explicit: bool = False) -> str:
 
     Cena nua ou sexual guarda o rosto e solta a roupa do card.
     """
-    return npc_assets.likeness_clause(frame, explicit=explicit)
+    return likeness.opening_clause(frame, explicit=explicit)
 
 
 def _is_interaction(text: str, names: list[str]) -> bool:
@@ -323,10 +323,19 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     """
     pb = img_cfg["prompt_builder"]
     moment = current_moment(actions, body.action_seq)
-    explicit = scene.is_explicit(moment)
-    frame = _cards_in_frame(cards, moment, adv.get("plot_essentials") or "")
+    order = body.extra_prompt.strip()
+    guard_text = "\n".join(part for part in (moment, order) if part)
+    frame = _cards_in_frame(cards, guard_text, adv.get("plot_essentials") or "")
+    decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
+    if decision.refusal:
+        raise GameError(422, decision.refusal, decision.message)
+    frame = decision.cast
+    explicit = decision.allow_explicit
+    order = likeness.omit_names(order, decision.dropped)
+    if not explicit:
+        order = likeness.strip_explicit(order)
     clause = _look_clause(frame, explicit=explicit) or (
-        "" if explicit else npc_assets.image_canon_clause(cards, moment)
+        "" if explicit else npc_assets.image_canon_clause(frame, moment)
     )
     names = [card.get("title") for card in frame if card.get("title")]
     if not names:
@@ -335,6 +344,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     you = re.search(r"(?<!\w)you(?!\w)", moment or "", re.IGNORECASE)
     if you and not any(name.casefold() == player_name.casefold() for name in names):
         names.insert(0, player_name)
+    hidden = ", ".join(likeness.display_name(card) for card in decision.dropped)
     canon = ""
     if clause and explicit:
         canon = (
@@ -354,14 +364,18 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if location and location != "the current scene":
         place = f"Place: {location}. {clip_words(entry or '', 200)}\n"
     who = ", ".join(names) if names else "only the people named in the moment"
-    order = body.extra_prompt.strip()
+    painted = likeness.omit_names(
+        moment_for_painter(actions, body.action_seq) or "(an empty scene)",
+        decision.dropped,
+    )
     user = (
         (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
+        + (f"Do not depict and do not name: {hidden}.\n" if hidden else "")
         + place
         + ("Player instruction for the picture (obey it): " + order + "\n" if order else "")
         + "Moment to paint:\n"
-        + (moment_for_painter(actions, body.action_seq) or "(an empty scene)")
+        + painted
     )
     messages = [
         {"role": "system", "content": _EXPLICIT_BUILDER_SYSTEM if explicit else _PROMPT_BUILDER_SYSTEM},
@@ -370,8 +384,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     summarized = llm_client.chat_completion(
         llm_cfg, messages, role="image_prompt", temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
+    summarized = likeness.omit_names(summarized, decision.dropped)
+    if not explicit:
+        summarized = likeness.strip_explicit(summarized)
     summarized, neg_summary = contradicting_looks(summarized, clause)
-    _, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
+    scrubbed_moment = likeness.omit_names(moment, decision.dropped)
+    _, neg_moment = contradicting_looks(scrubbed_moment.replace("\n", " "), clause)
     # Uma frase em inglês na frente. A prosa crua não entra: ela vinha
     # cortada no meio da palavra e o narrador copiava o prompt.
     sentence = one_image_sentence(summarized)
@@ -387,8 +405,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(clip_words(clause, 420))
     if sentence:
         lead_bits.append(sentence)
-    if body.extra_prompt.strip():
-        lead_bits.append(body.extra_prompt.strip())
+    if order:
+        lead_bits.append(order)
     lead_bits.append("the action just described, same continuous scene, coherent bodies")
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")

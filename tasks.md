@@ -66,7 +66,7 @@ Ficou para outras tarefas:
 | K3 | Chronicle confiável, retrato automático, `scene_state` (migration 010) | G3 | pendente |
 | K4 | Summarizer em `role=summary` + `tools/backfill_chronicle.py` | K3 | pendente |
 | K5 | See com elenco presente e prompt em inglês (planejador C4) | K3, G5 | pendente |
-| K6 | Likeness de pessoa real + guardrail SFW (C8) | G6 | pendente |
+| K6 | Likeness de pessoa real + guardrail SFW (C8) | G6 | feito no código: pessoa real força SFW, cena explícita tira a pessoa ou recusa, menor nunca; Wikipedia e upload em `data/references`. ArcFace/FaceID esperam a G6 |
 | K7 | Sampler pt-BR (A/B) | — | pendente |
 | K8 | Frontend via SSE, input livre após `done`, drawer de likeness | G4 | pendente |
 | K9 | e2e Playwright no staging | K5, K6, K8 | pendente |

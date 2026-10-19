@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, npc_assets, settings_store
+from app import db, jobs, likeness, npc_assets, settings_store
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -153,7 +153,7 @@ def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     """
     if not cast:
         return ""
-    return npc_assets.likeness_clause(cast, explicit=explicit)
+    return likeness.opening_clause(cast, explicit=explicit)
 
 
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
@@ -164,7 +164,15 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     e o modelo pintava outra mulher. Nudez e sexo entram no prompt, e a roupa
     do card não volta. Sem visual travado, o fundo continua vazio de gente.
     """
-    explicit = is_explicit(moment)
+    decision = likeness.decide_frame(cast, explicit=is_explicit(moment))
+    if decision.refusal:
+        cast = []
+        moment = ""
+        explicit = False
+    else:
+        moment = likeness.omit_names(moment, decision.dropped)
+        cast = decision.cast
+        explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
     if clause:
         # images.py importa scene no topo; o scrub fica aqui por isso.
@@ -262,8 +270,11 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     cast_cards = []
     for card in _cast(cards, text):
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
-    explicit = is_explicit(text)
-    clause = _visual_clause(cast_cards, explicit=explicit)
+    decision = likeness.decide_frame(cast_cards, explicit=is_explicit(text))
+    paint_cast = [] if decision.refusal else decision.cast
+    paint_text = "" if decision.refusal else likeness.omit_names(text, decision.dropped)
+    explicit = False if decision.refusal else decision.allow_explicit
+    clause = _visual_clause(paint_cast, explicit=explicit)
     signature = f"{_slug(title)}|{atmosphere}"
     if clause:
         # O fundo antigo (pessoa errada) não serve quando o rosto do card entra.
@@ -273,8 +284,8 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     ref = f"{adventure_id}:{signature}"
     img_cfg = settings_store.effective_image_settings(conn)
     prompt, include_people = _prompt(
-        title, entry, img_cfg.get("style_suffix") or "", atmosphere, cast_cards,
-        text,
+        title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
+        paint_text,
     )
     backdrop = _backdrop_state(
         conn, adventure_id, ref,
