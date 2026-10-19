@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -11,10 +12,45 @@ from fastapi import APIRouter, Depends, Response
 import exporter
 from app import auth, db, game_engine, jobs
 from app.errors import GameError
-from app.schemas import AdventureCreate, AdventureUpdate
-from app.users import is_admin
+from app.schemas import AdventureCreate, AdventureShareCreate, AdventureUpdate
+from app.users import get_user, is_admin
 
 router = APIRouter()
+
+
+def _may_manage(adv: dict, username: str) -> bool:
+    """Dono ou admin. Aventura legada sem dono continua editável por quem a vê."""
+    if is_admin(username):
+        return True
+    owner = adv.get("owner") or ""
+    if owner == "":
+        return True
+    return owner == username
+
+
+def _visible_adventure(conn, adventure_id: str, username: str) -> dict:
+    adv = db.get_adventure(conn, adventure_id)
+    if not adv or not db.can_access_adventure(conn, adv, username):
+        raise GameError.not_found(f"adventure {adventure_id} not found")
+    return adv
+
+
+def _managed_adventure(conn, adventure_id: str, username: str) -> dict:
+    adv = _visible_adventure(conn, adventure_id, username)
+    if not _may_manage(adv, username):
+        raise GameError(403, "forbidden", "only the owner can change this adventure")
+    return adv
+
+
+def _sharing_view(conn, adventure_id: str) -> dict:
+    adv = db.get_adventure(conn, adventure_id)
+    return {
+        "owner": (adv or {}).get("owner") or "",
+        "participants": db.adventure_participants(conn, adv),
+        "shares": db.list_shares(conn, adventure_id),
+        "turn_mode": bool((adv or {}).get("turn_mode")),
+        "turn_user": (adv or {}).get("turn_user") or "",
+    }
 
 
 @router.post("", status_code=201)
@@ -76,9 +112,16 @@ def create_adventure(body: AdventureCreate,
 def list_adventures(info: auth.AuthInfo = Depends(auth.require_auth)) -> list[dict]:
     with db.session() as conn:
         rows = db.list_adventure_summaries(conn)
-    if is_admin(info.user):
-        return rows
-    return [row for row in rows if (row.get("owner") or "") in ("", info.user)]
+        visible = []
+        for row in rows:
+            owner = row.get("owner") or ""
+            mine = owner in ("", info.user)
+            shared = (not mine) and info.user in db.list_shares(conn, row["id"])
+            if not is_admin(info.user) and not mine and not shared:
+                continue
+            row["shared_by"] = owner if owner and owner != info.user else ""
+            visible.append(row)
+        return visible
 
 
 @router.get("/export")
@@ -101,8 +144,10 @@ def export_all_adventures(info: auth.AuthInfo = Depends(auth.require_auth)) -> R
 
 
 @router.get("/{adventure_id}")
-def get_adventure(adventure_id: str) -> dict:
+def get_adventure(adventure_id: str,
+                  info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
         state = db.adventure_state(conn, adventure_id)
     if not state:
         raise GameError.not_found(f"adventure {adventure_id} not found")
@@ -110,24 +155,67 @@ def get_adventure(adventure_id: str) -> dict:
 
 
 @router.patch("/{adventure_id}")
-def patch_adventure(adventure_id: str, body: AdventureUpdate) -> dict:
+def patch_adventure(adventure_id: str, body: AdventureUpdate,
+                    info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Edita metadados (título/descrição/tags). Campos ausentes não mudam."""
+    fields = body.model_dump(exclude_unset=True)
+    turn_mode = fields.pop("turn_mode", None)
     with db.session() as conn:
-        updated = db.update_adventure(conn, adventure_id,
-                                      **body.model_dump(exclude_unset=True))
+        adv = _managed_adventure(conn, adventure_id, info.user)
+        updated = db.update_adventure(conn, adventure_id, **fields)
         if not updated:
             raise GameError.not_found(f"adventure {adventure_id} not found")
+        if turn_mode is not None:
+            db.set_turn_mode(conn, adventure_id, bool(turn_mode), adv.get("owner") or "")
         return db.adventure_state(conn, adventure_id)
 
 
 @router.delete("/{adventure_id}")
-def delete_adventure(adventure_id: str) -> dict:
+def delete_adventure(adventure_id: str,
+                     info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Remove a aventura e todos os dependentes (ações, cards, memórias...)."""
     with db.session() as conn:
+        _managed_adventure(conn, adventure_id, info.user)
         if not db.delete_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
     game_engine.forget_adventure(adventure_id)
     return {"deleted": True, "id": adventure_id}
+
+
+@router.get("/{adventure_id}/sharing")
+def get_sharing(adventure_id: str,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+        return _sharing_view(conn, adventure_id)
+
+
+@router.post("/{adventure_id}/sharing", status_code=201)
+def post_sharing(adventure_id: str, body: AdventureShareCreate,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        adv = _managed_adventure(conn, adventure_id, info.user)
+        username = body.username.strip()
+        if username == (adv.get("owner") or ""):
+            raise GameError.bad_request("cannot_share_owner",
+                                        "cannot share the adventure with its owner")
+        if get_user(conn, username) is None:
+            raise GameError(404, "user_not_found", f"user {username} not found")
+        try:
+            db.share_adventure(conn, adventure_id, username)
+        except sqlite3.IntegrityError:
+            raise GameError.conflict("already_shared",
+                                     f"{username} already has access") from None
+        return _sharing_view(conn, adventure_id)
+
+
+@router.delete("/{adventure_id}/sharing/{username}")
+def delete_sharing(adventure_id: str, username: str,
+                   info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        _managed_adventure(conn, adventure_id, info.user)
+        db.unshare_adventure(conn, adventure_id, username)
+        return _sharing_view(conn, adventure_id)
 
 
 @router.post("/{adventure_id}/undo")

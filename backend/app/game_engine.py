@@ -251,18 +251,31 @@ def get_retry_count(adventure_id: str, seq: int) -> int:
 
 
 # -------------------------------------------------------------- geração
+def _advance_committed_turn(conn: sqlite3.Connection, adventure_id: str,
+                            player_action: dict | None, user: str) -> str | None:
+    """do/say/story do dono da vez passam a vez. continue/retry/see não entram."""
+    if not user or not player_action or player_action.get("type") not in db.PLAYER_TYPES:
+        return None
+    adv = db.get_adventure(conn, adventure_id)
+    if not adv or not adv.get("turn_mode") or (adv.get("turn_user") or "") != user:
+        return None
+    return db.advance_turn(conn, adv)
+
+
 def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        retry_of: dict | None,
                        retry_count: int = 0,
                        web_search: bool = False,
                        raw_query_text: str = "",
-                       transport: Any) -> Iterator[dict]:
+                       transport: Any,
+                       user: str = "") -> Iterator[dict]:
     """Gerador de eventos. Contexto = ações atuais (retry: sem a antiga)."""
 
     def events() -> Iterator[dict]:
         full: list[str] = []
         lock_released = False
         web_sources: list[dict] = []
+        new_turn: str | None = None
         try:
             with db.session() as conn:
                 adventure = db.get_adventure(conn, adventure_id)
@@ -339,6 +352,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     npc_bonds.apply_turn(conn, adventure_id, player_text, text)
                 except Exception:
                     log.warning("npc_bonds: pesos não atualizados", exc_info=True)
+                new_turn = _advance_committed_turn(conn, adventure_id, player_action, user)
 
             data: dict[str, Any] = {"action": action}
             if player_action is not None:
@@ -350,6 +364,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
             release_generation_lock(adventure_id)
             lock_released = True
+            if new_turn is not None:
+                events_bus.publish(adventure_id, "turn_changed", {"turn_user": new_turn})
             events_bus.publish(adventure_id, "turn_done",
                                {"action_id": action["id"], "seq": action["seq"]})
             _spawn_post_turn(adventure_id, transport)
@@ -367,7 +383,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
 
 def handle_action(adventure_id: str, type_: str, text: str,
                   transport: Any = None, *,
-                  web_search: bool = False) -> Iterator[dict]:
+                  web_search: bool = False,
+                  user: str = "") -> Iterator[dict]:
     """POST /action: persiste a ação do jogador e streama a resposta da IA."""
     _adventure_or_404(adventure_id)
     if type_ not in db.PLAYER_TYPES:
@@ -398,7 +415,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
     return _stream_generation(adventure_id, player_action=player_action,
                               retry_of=None, retry_count=0,
                               web_search=web_search, raw_query_text=text,
-                              transport=transport)
+                              transport=transport, user=user)
 
 
 def _meta_command_events(adventure_id: str, cmd: meta_commands.MetaCommand,

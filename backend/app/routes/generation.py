@@ -14,11 +14,22 @@ from typing import Any, AsyncIterator, Iterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app import game_engine
+from app import auth, db, game_engine
 from app.deps import get_http_transport
+from app.errors import GameError
 from app.schemas import ActionRequest
 
 router = APIRouter()
+
+
+def _require_turn(adventure_id: str, info: auth.AuthInfo) -> None:
+    """Quem não vê a aventura toma 404. Com turno ligado, só quem tem a vez age."""
+    with db.session() as conn:
+        adv = db.get_adventure(conn, adventure_id)
+        if not adv or not db.can_access_adventure(conn, adv, info.user):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        if adv.get("turn_mode") and (adv.get("turn_user") or "") != info.user:
+            raise GameError(403, "not_your_turn", f"vez de {adv.get('turn_user') or ''}")
 
 _SENTINEL = object()
 
@@ -57,22 +68,29 @@ async def _sse(events: Iterator[dict]) -> AsyncIterator[str]:
 
 @router.post("/{adventure_id}/action")
 async def post_action(adventure_id: str, body: ActionRequest,
-                      transport: Any = Depends(get_http_transport)) -> StreamingResponse:
+                      transport: Any = Depends(get_http_transport),
+                      info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
+    _require_turn(adventure_id, info)
     events = game_engine.handle_action(adventure_id, body.type, body.text,
                                        transport=transport,
-                                       web_search=bool(body.web_search))
+                                       web_search=bool(body.web_search),
+                                       user=info.user)
     return StreamingResponse(_sse(events), media_type="text/event-stream")
 
 
 @router.post("/{adventure_id}/continue")
 async def post_continue(adventure_id: str,
-                        transport: Any = Depends(get_http_transport)) -> StreamingResponse:
+                        transport: Any = Depends(get_http_transport),
+                        info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
+    _require_turn(adventure_id, info)
     events = game_engine.handle_continue(adventure_id, transport=transport)
     return StreamingResponse(_sse(events), media_type="text/event-stream")
 
 
 @router.post("/{adventure_id}/retry")
 async def post_retry(adventure_id: str,
-                     transport: Any = Depends(get_http_transport)) -> StreamingResponse:
+                     transport: Any = Depends(get_http_transport),
+                     info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
+    _require_turn(adventure_id, info)
     events = game_engine.handle_retry(adventure_id, transport=transport)
     return StreamingResponse(_sse(events), media_type="text/event-stream")

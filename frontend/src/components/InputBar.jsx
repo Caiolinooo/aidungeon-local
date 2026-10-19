@@ -32,7 +32,7 @@ function preferredMicMime() {
 const DEFAULT_TABS = TABS
 
 export default function InputBar({
-  disabled, onSend, onTextChange,
+  disabled, disabledTurn = false, onSend, onTextChange,
   tabs = DEFAULT_TABS, inject = null,
   panelAvailable = false, panelOpen = false, onTogglePanel,
 }) {
@@ -74,9 +74,11 @@ export default function InputBar({
     areaRef.current?.focus()
   }, [inject, onTextChange])
 
+  const inputLocked = disabled || disabledTurn
+
   const submit = () => {
     const t = text.trim()
-    if (!t || disabled) return
+    if (!t || inputLocked) return
     onSend(tab, t, { webSearch: webOn })
     setText('')
     onTextChange?.('')
@@ -216,7 +218,7 @@ export default function InputBar({
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              disabled={disabled}
+              disabled={inputLocked}
               title={t.placeholder || t.label}
               className={`min-h-11 shrink-0 flex-1 whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-semibold uppercase tracking-wider transition-colors sm:flex-none sm:px-4 ${
                 tab === t.id
@@ -242,7 +244,7 @@ export default function InputBar({
                 submit()
               }
             }}
-            disabled={disabled}
+            disabled={inputLocked}
             rows={2}
             placeholder={disabled ? 'AI is writing…' : active.placeholder}
             aria-label={active.label || 'Story action input'}
@@ -252,7 +254,7 @@ export default function InputBar({
           {panelAvailable && (
             <button
               onClick={onTogglePanel}
-              disabled={disabled}
+              disabled={inputLocked}
               title={panelOpen ? 'Hide game controls' : 'Show game controls (dice, stats, inventory…)'}
               aria-label="Toggle dynamic game controls"
               aria-pressed={panelOpen}
@@ -267,7 +269,7 @@ export default function InputBar({
           )}
           <button
             onClick={recording ? stopRecording : startRecording}
-            disabled={disabled || transcribing}
+            disabled={inputLocked || transcribing}
             title={
               transcribing
                 ? 'Transcribing…'
@@ -287,7 +289,7 @@ export default function InputBar({
           <button
             type="button"
             onClick={() => setWebOn((v) => !v)}
-            disabled={disabled}
+            disabled={inputLocked}
             title="Search the web for grounding (Wikipedia/DuckDuckGo)"
             aria-label="Search the web for grounding"
             aria-pressed={webOn}
@@ -301,7 +303,8 @@ export default function InputBar({
           </button>
           <button
             onClick={submit}
-            disabled={disabled || !text.trim()}
+            disabled={inputLocked || !text.trim()}
+            title={disabledTurn ? 'Aguarde a sua vez' : undefined}
             className="min-h-11 shrink-0 rounded-xl bg-accent-pri px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
           >
             Send

@@ -102,6 +102,12 @@ class AdventureUpdate(BaseModel):
     story_summary: str | None = None
     image_style: str | None = None
     third_person: bool | None = None
+    turn_mode: bool | None = None
+
+
+class AdventureShareCreate(BaseModel):
+    """POST /adventures/{id}/sharing — inclui um jogador na aventura."""
+    username: str = Field(min_length=1, max_length=32)
 
 
 class ActionRequest(BaseModel):

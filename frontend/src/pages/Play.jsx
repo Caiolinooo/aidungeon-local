@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api } from '../api.js'
+import { api, API_BASE } from '../api.js'
+import { getToken } from '../auth.js'
 import { streamGeneration } from '../sse.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
+import ShareModal from '../components/ShareModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
@@ -65,6 +67,8 @@ export default function Play() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [regeneratingProfile, setRegeneratingProfile] = useState(false)
   const [inject, setInject] = useState(null)
+  const [session, setSession] = useState(null)
+  const [shareOpen, setShareOpen] = useState(false)
 
   const abortRef = useRef(null)
   const seeTokenRef = useRef(0)
@@ -73,6 +77,10 @@ export default function Play() {
   const newBlockIdRef = useRef(null)
   const initialScrollDone = useRef(false)
   const generating = gen !== null
+  const currentUser = session?.user || ''
+  const turnBlocked = !!(
+    adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
+  )
 
   // Handle screen resize for responsive desktop docking
   useEffect(() => {
@@ -106,6 +114,54 @@ export default function Play() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    let cancelled = false
+    api.checkAuth()
+      .then((s) => { if (!cancelled) setSession(s) })
+      .catch(() => { if (!cancelled) setSession(null) })
+    return () => { cancelled = true }
+  }, [])
+
+  // turn_changed no barramento SSE. Fecha no erro: o EventSource reconecta sozinho.
+  useEffect(() => {
+    const token = getToken()
+    if (!id || !token) return undefined
+    const es = new EventSource(
+      `${API_BASE}/api/adventures/${id}/events?token=${encodeURIComponent(token)}`,
+    )
+    const onTurn = (ev) => {
+      let data
+      try {
+        data = JSON.parse(ev.data || '{}')
+      } catch {
+        return
+      }
+      if (typeof data?.turn_user !== 'string') return
+      const turnUser = data.turn_user
+      setAdventure((prev) => (prev ? { ...prev, turn_user: turnUser } : prev))
+    }
+    es.addEventListener('turn_changed', onTurn)
+    es.onerror = () => { es.close() }
+    return () => {
+      es.removeEventListener('turn_changed', onTurn)
+      es.close()
+    }
+  }, [id])
+
+  const applySharing = (dict) => {
+    if (!dict || typeof dict !== 'object') return
+    setAdventure((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        ...(dict.owner != null ? { owner: dict.owner } : {}),
+        ...('turn_mode' in dict ? { turn_mode: !!dict.turn_mode } : {}),
+        ...(dict.turn_user != null ? { turn_user: dict.turn_user } : {}),
+        ...(Array.isArray(dict.shares) ? { shares: dict.shares } : {}),
+      }
+    })
+  }
 
   // AI-generated UI controls
   const profileRequestedRef = useRef(false)
@@ -216,6 +272,15 @@ export default function Play() {
             setWebSources(data.web_sources)
           }
           fetchChoices()
+          api.getAdventure(id).then((st) => {
+            setAdventure((prev) => (prev ? {
+              ...prev,
+              owner: st.owner ?? prev.owner,
+              turn_mode: !!st.turn_mode,
+              turn_user: st.turn_user ?? '',
+              shares: Array.isArray(st.shares) ? st.shares : prev.shares,
+            } : prev))
+          }).catch(() => {})
         },
         onError: (msg) => {
           toast(msg)
@@ -223,11 +288,12 @@ export default function Play() {
         },
       })
     },
-    [generating, toast, fetchChoices],
+    [generating, toast, fetchChoices, id],
   )
 
-  const sendAction = (type, text, opts) =>
-    runStream('action', `/adventures/${id}/action`, {
+  const sendAction = (type, text, opts) => {
+    if (turnBlocked) return
+    return runStream('action', `/adventures/${id}/action`, {
       type,
       text,
       ...(opts?.webSearch ? { web_search: true } : {}),
@@ -237,17 +303,22 @@ export default function Play() {
       if (data.action) out.push(data.action)
       return out
     })
+  }
 
-  const doContinue = () =>
-    runStream('continue', `/adventures/${id}/continue`, null, (prev, data) =>
+  const doContinue = () => {
+    if (turnBlocked) return
+    return runStream('continue', `/adventures/${id}/continue`, null, (prev, data) =>
       data.action ? [...prev, data.action] : prev,
     )
+  }
 
-  const doRetry = () =>
-    runStream('retry', `/adventures/${id}/retry`, null, (prev, data) => {
+  const doRetry = () => {
+    if (turnBlocked) return
+    return runStream('retry', `/adventures/${id}/retry`, null, (prev, data) => {
       if (!data.action) return prev
       return prev.map((a) => (a.seq === data.action.seq ? data.action : a))
     })
+  }
 
   const stop = () => {
     abortRef.current?.abort()
@@ -328,7 +399,7 @@ export default function Play() {
   }
 
   const pickChoice = (choice) => {
-    if (generating) return
+    if (generating || turnBlocked) return
     if (!['do', 'say', 'story'].includes(choice.type) || !choice.text?.trim()) return
     sendAction(choice.type, choice.text.trim())
   }
@@ -377,7 +448,9 @@ export default function Play() {
   }
 
   const lastAction = actions[actions.length - 1]
-  const canRetry = !generating && lastAction?.type === 'continue'
+  const canShare = !!(session?.admin || (adventure.owner && currentUser === adventure.owner))
+  const myTurn = !!(adventure.turn_mode && currentUser && currentUser === (adventure.turn_user || ''))
+  const canRetry = !generating && !turnBlocked && lastAction?.type === 'continue'
   const canUndo = !generating && actions.some((a) => a.type !== 'start')
   const canSee = !generating && !seeing && actions.some((a) => a.type === 'continue')
   const lastAiTextId = [...actions].reverse().find((a) => a.type === 'continue')?.id
@@ -411,11 +484,23 @@ export default function Play() {
 
   const fontSizeValue = readerPrefs?.fontSize || 17
 
+  const shareButton = canShare ? (
+    <button
+      type="button"
+      onClick={() => setShareOpen(true)}
+      aria-label="Compartilhar aventura"
+      title="Compartilhar aventura"
+      className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface px-3 py-2 text-sm text-secondary hover:text-primary hover:bg-elevated transition"
+    >
+      👥
+    </button>
+  ) : null
+
   const controlsContent = uiProfile ? (
     <GamePanel
       profile={uiProfile}
       state={uiState}
-      disabled={generating}
+      disabled={generating || turnBlocked}
       regenerating={regeneratingProfile}
       onStateChange={handleUiStateChange}
       onSend={sendAction}
@@ -461,14 +546,17 @@ export default function Play() {
           {/* Action Toolbar */}
           <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap justify-end">
             {generating ? (
-              <button
-                onClick={stop}
-                className="min-h-11 flex items-center gap-1.5 rounded-xl bg-red-800 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 shadow transition"
-                title="Stop generation"
-              >
-                <Square className="w-3.5 h-3.5 fill-current" />
-                <span>Stop</span>
-              </button>
+              <>
+                {shareButton}
+                <button
+                  onClick={stop}
+                  className="min-h-11 flex items-center gap-1.5 rounded-xl bg-red-800 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 shadow transition"
+                  title="Stop generation"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </button>
+              </>
             ) : (
               <>
                 <div className="flex items-center gap-1">
@@ -476,7 +564,7 @@ export default function Play() {
                     onClick={doRetry}
                     disabled={!canRetry}
                     aria-label="Retry last response"
-                    title={canRetry ? 'Regenerate the last AI response' : 'Retry is available after an AI response'}
+                    title={turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Regenerate the last AI response' : 'Retry is available after an AI response')}
                     className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -496,15 +584,17 @@ export default function Play() {
 
                   <button
                     onClick={doContinue}
-                    disabled={generating}
+                    disabled={generating || turnBlocked}
                     aria-label="Continue writing"
-                    title="Let the AI write the next paragraph"
+                    title={turnBlocked ? 'Aguarde a sua vez' : 'Let the AI write the next paragraph'}
                     className="min-h-11 flex items-center gap-1 rounded-xl bg-accent-pri px-3.5 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
                     <span className="hidden sm:inline">Continue</span>
                   </button>
                 </div>
+
+                {shareButton}
 
                 {/* See Image Button & Popover */}
                 <div className="relative">
@@ -593,6 +683,19 @@ export default function Play() {
           playerAction={lastPlayer}
         />
 
+        {adventure.turn_mode && (
+          <div
+            className={`shrink-0 border-b px-4 py-2 text-center text-sm font-semibold ${
+              myTurn
+                ? 'border-emerald-600/40 bg-emerald-600/15 text-emerald-400'
+                : 'border-accent-pri/40 bg-accent-pri/15 text-accent-pri'
+            }`}
+            role="status"
+          >
+            {myTurn ? '🎲 Sua vez' : `🎲 Vez de ${adventure.turn_user || '…'}`}
+          </div>
+        )}
+
         {/* Story Prose Feed */}
         <div className="relative min-h-0 flex-1 bg-canvas">
           <main
@@ -679,8 +782,9 @@ export default function Play() {
                 <button
                   key={i}
                   onClick={() => pickChoice(c)}
-                  title={`Send action as "${c.type}"`}
-                  className="min-h-8 shrink-0 flex items-center gap-1.5 rounded-full border border-subtle bg-elevated px-3 py-1 text-xs text-secondary hover:border-accent-pri hover:text-primary transition"
+                  disabled={turnBlocked}
+                  title={turnBlocked ? 'Aguarde a sua vez' : `Send action as "${c.type}"`}
+                  className="min-h-8 shrink-0 flex items-center gap-1.5 rounded-full border border-subtle bg-elevated px-3 py-1 text-xs text-secondary hover:border-accent-pri hover:text-primary transition disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="text-[10px] font-bold uppercase text-accent-pri">{c.type}</span>
                   <span className="truncate max-w-[14rem]">{c.text}</span>
@@ -733,7 +837,7 @@ export default function Play() {
           <GamePanel
             profile={uiProfile}
             state={uiState}
-            disabled={generating}
+            disabled={generating || turnBlocked}
             regenerating={regeneratingProfile}
             onStateChange={handleUiStateChange}
             onSend={sendAction}
@@ -746,6 +850,7 @@ export default function Play() {
         {/* Fixed Bottom Input Bar */}
         <InputBar
           disabled={generating}
+          disabledTurn={turnBlocked}
           onSend={sendAction}
           onTextChange={(t) => setInputDirty(t.trim().length > 0)}
           tabs={uiProfile?.tabs}
@@ -807,6 +912,15 @@ export default function Play() {
         isOpen={showReaderModal}
         onClose={() => setShowReaderModal(false)}
       />
+
+      {shareOpen && (
+        <ShareModal
+          adventureId={id}
+          owner={adventure.owner || ''}
+          onClose={() => setShareOpen(false)}
+          onChanged={applySharing}
+        />
+      )}
     </div>
   )
 }

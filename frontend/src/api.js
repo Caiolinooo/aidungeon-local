@@ -119,6 +119,12 @@ export const api = {
   getAdventure: (id) => request(`/adventures/${id}`),
   createAdventure: (payload) => request('/adventures', { method: 'POST', body: payload }),
   updateAdventure: (id, payload) => request(`/adventures/${id}`, { method: 'PATCH', body: payload }),
+  // Compartilhamento + jogo por turno. POST/DELETE devolvem o mesmo dict de getSharing.
+  getSharing: (id) => request(`/adventures/${id}/sharing`),
+  shareAdventure: (id, username) =>
+    request(`/adventures/${id}/sharing`, { method: 'POST', body: { username } }),
+  unshareAdventure: (id, username) =>
+    request(`/adventures/${id}/sharing/${encodeURIComponent(username)}`, { method: 'DELETE' }),
   deleteAdventure: (id) => request(`/adventures/${id}`, { method: 'DELETE' }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
   // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).

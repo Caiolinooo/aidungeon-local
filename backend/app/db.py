@@ -206,6 +206,8 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "third_person": bool(row["third_person"]),
         "source": row["source"] or "new",
         "owner": (row["owner"] if "owner" in row.keys() else "") or "",
+        "turn_mode": bool(row["turn_mode"]) if "turn_mode" in row.keys() else False,
+        "turn_user": (row["turn_user"] if "turn_user" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -427,10 +429,110 @@ def update_adventure(conn: sqlite3.Connection, adventure_id: str, **fields: Any)
 
 def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
     """Remove a aventura e todos os dependentes (schema não tem ON DELETE CASCADE)."""
-    for table in ("jobs", "images", "memories", "story_cards", "actions"):
+    for table in ("jobs", "images", "memories", "story_cards", "actions",
+                  "adventure_shares"):
         conn.execute(f"DELETE FROM {table} WHERE adventure_id=?", (adventure_id,))
     cur = conn.execute("DELETE FROM adventures WHERE id=?", (adventure_id,))
     return cur.rowcount > 0
+
+
+def list_shares(conn: sqlite3.Connection, adventure_id: str) -> list[str]:
+    """Usernames com acesso compartilhado, na ordem de entrada."""
+    rows = conn.execute(
+        "SELECT username FROM adventure_shares WHERE adventure_id=?"
+        " ORDER BY created_at, username",
+        (adventure_id,),
+    ).fetchall()
+    return [row["username"] for row in rows]
+
+
+def adventure_participants(conn: sqlite3.Connection, adv: dict | None) -> list[str]:
+    """Dono primeiro, depois os shares. Dono vazio (legado) → só os shares."""
+    if not adv:
+        return []
+    owner = adv.get("owner") or ""
+    shares = [name for name in list_shares(conn, adv["id"]) if name != owner]
+    if not owner:
+        return shares
+    return [owner, *shares]
+
+
+def share_adventure(conn: sqlite3.Connection, adventure_id: str, username: str) -> list[str]:
+    """Inclui o jogador. Não é idempotente: username repetido levanta IntegrityError."""
+    conn.execute(
+        "INSERT INTO adventure_shares(adventure_id, username, created_at) VALUES(?,?,?)",
+        (adventure_id, username, utcnow()),
+    )
+    return adventure_participants(conn, get_adventure(conn, adventure_id))
+
+
+def unshare_adventure(conn: sqlite3.Connection, adventure_id: str, username: str) -> list[str]:
+    """Tira o jogador. Se a vez era dele, a vez volta para o dono."""
+    conn.execute(
+        "DELETE FROM adventure_shares WHERE adventure_id=? AND username=?",
+        (adventure_id, username),
+    )
+    adv = get_adventure(conn, adventure_id)
+    if adv and (adv.get("turn_user") or "") == username:
+        conn.execute(
+            "UPDATE adventures SET turn_user=? WHERE id=?",
+            (adv.get("owner") or "", adventure_id),
+        )
+        adv = get_adventure(conn, adventure_id)
+    return adventure_participants(conn, adv)
+
+
+def can_access_adventure(conn: sqlite3.Connection, adv: dict | None, username: str) -> bool:
+    """Admin, dono (ou legado sem dono), ou alguém na lista de shares."""
+    if not adv or not username:
+        return False
+    from app.users import is_admin
+    if is_admin(username):
+        return True
+    owner = adv.get("owner") or ""
+    if owner in ("", username):
+        return True
+    return username in list_shares(conn, adv["id"])
+
+
+def set_turn_mode(conn: sqlite3.Connection, adventure_id: str, enabled: bool,
+                  current_owner: str) -> None:
+    """Liga ou desliga o turno. Ao ligar, a vez é do dono (ou do primeiro share)."""
+    if not enabled:
+        conn.execute("UPDATE adventures SET turn_mode=0 WHERE id=?", (adventure_id,))
+        return
+    owner = current_owner or ""
+    if owner:
+        turn_user = owner
+    else:
+        shares = list_shares(conn, adventure_id)
+        turn_user = shares[0] if shares else ""
+    conn.execute(
+        "UPDATE adventures SET turn_mode=1, turn_user=? WHERE id=?",
+        (turn_user, adventure_id),
+    )
+
+
+def advance_turn(conn: sqlite3.Connection, adv: dict | None) -> str:
+    """Próximo da roda (dono, depois shares). Sem turno ou com menos de 2, fica."""
+    if not adv:
+        return ""
+    current = adv.get("turn_user") or ""
+    if not adv.get("turn_mode"):
+        return current
+    participants = adventure_participants(conn, adv)
+    if len(participants) < 2:
+        return current
+    try:
+        index = participants.index(current)
+    except ValueError:
+        index = -1
+    new_user = participants[(index + 1) % len(participants)]
+    conn.execute(
+        "UPDATE adventures SET turn_user=? WHERE id=?",
+        (new_user, adv["id"]),
+    )
+    return new_user
 
 
 def update_adventure_memory(conn: sqlite3.Connection, adventure_id: str, *,
@@ -496,6 +598,8 @@ def list_adventure_summaries(conn: sqlite3.Connection) -> list[dict]:
         out.append({
             "id": adv["id"], "title": adv["title"], "description": adv["description"],
             "tags": adv["tags"], "source": adv["source"], "owner": adv.get("owner") or "",
+            "turn_mode": bool(adv.get("turn_mode")),
+            "turn_user": adv.get("turn_user") or "",
             "action_count": count,
             "last_excerpt": excerpt, "updated_at": adv["updated_at"],
         })
@@ -506,6 +610,10 @@ def adventure_state(conn: sqlite3.Connection, adventure_id: str) -> dict | None:
     adv = get_adventure(conn, adventure_id)
     if not adv:
         return None
+    adv["owner"] = adv.get("owner") or ""
+    adv["turn_mode"] = bool(adv.get("turn_mode"))
+    adv["turn_user"] = adv.get("turn_user") or ""
+    adv["shares"] = list_shares(conn, adventure_id)
     adv["actions"] = list_actions(conn, adventure_id)
     adv["story_cards"] = list_cards(conn, adventure_id)
     adv["memories"] = list_memories(conn, adventure_id)

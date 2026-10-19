@@ -237,6 +237,21 @@ export default function Home() {
                     />
                   </div>
                 </div>
+                {(a.shared_by || (a.turn_mode && session?.user && a.turn_user === session.user)) && (
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                    {a.shared_by ? (
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                        👥 de {a.shared_by}
+                      </span>
+                    ) : null}
+                    {a.turn_mode && session?.user && a.turn_user === session.user ? (
+                      <span className="inline-flex items-center gap-1 rounded bg-accent-pri/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent-pri">
+                        <span className="h-1.5 w-1.5 rounded-full bg-accent-pri" aria-hidden="true" />
+                        🎲 sua vez
+                      </span>
+                    ) : null}
+                  </div>
+                )}
                 <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-secondary">
                   {a.last_excerpt || a.excerpt || a.description || '…'}
                 </p>

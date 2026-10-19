@@ -107,3 +107,14 @@ ALTER TABLE adventures ADD COLUMN owner TEXT DEFAULT '';
 ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 2;
 ALTER TABLE jobs ADD COLUMN supersede_key TEXT DEFAULT '';
 CREATE INDEX jobs_queue ON jobs(status, priority, created_at);
+
+-- Compartilhar aventura e turno (migration 022). Banco novo não roda o
+-- arquivo de migration: o init marca os números depois deste script.
+CREATE TABLE adventure_shares(
+  adventure_id TEXT NOT NULL REFERENCES adventures(id) ON DELETE CASCADE,
+  username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+  created_at TEXT,
+  PRIMARY KEY (adventure_id, username));
+ALTER TABLE adventures ADD COLUMN turn_mode INTEGER DEFAULT 0;
+ALTER TABLE adventures ADD COLUMN turn_user TEXT DEFAULT '';
+

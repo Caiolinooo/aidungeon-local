@@ -1,4 +1,5 @@
-"""Quem pode abrir uma história. O Caio vê todas; os outros, só as suas.
+"""Quem pode abrir uma história. O Caio vê todas; os outros, as suas e as
+compartilhadas com eles.
 
 Aventura sem dono (testes e bancos antigos antes da migração) continua
 visível para quem está logado. Na migração, as histórias existentes passam
@@ -40,11 +41,11 @@ def can_see(username: str, owner: str | None) -> bool:
 
 def adventure_visible(conn, username: str, adventure_id: str) -> bool:
     row = conn.execute(
-        "SELECT owner FROM adventures WHERE id=?", (adventure_id,)
+        "SELECT * FROM adventures WHERE id=?", (adventure_id,)
     ).fetchone()
     if row is None:
         return True  # a rota responde o 404 de aventura inexistente
-    return can_see(username, row["owner"])
+    return db.can_access_adventure(conn, db.adventure_to_dict(row), username)
 
 
 def hidden_path(path: str, username: str) -> bool:
