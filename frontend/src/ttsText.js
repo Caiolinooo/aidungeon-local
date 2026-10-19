@@ -5,6 +5,26 @@
 // sintetizado enquanto o atual ainda toca.
 export const TTS_CHUNK_CHARS = 240
 
+// Dica de emoção para o POST /api/tts. O servidor relê a linha e, se ela
+// não declarar nada, usa a ficha do NPC. Aqui só mandamos a pista.
+const LINE_EMOTIONS = [
+  ['fear', ['medo', 'fear', 'assust', 'terror', 'pavor', 'afraid', 'scared']],
+  ['anger', ['furios', 'angry', 'raiva', 'grita', 'rage', 'irritad', 'bravo', 'brava']],
+  ['sadness', ['triste', 'sad', 'chora', 'cry', 'lágrima', 'lagrima']],
+  ['disgust', ['nojo', 'disgust', 'repuls']],
+  ['surprise', ['surpres', 'surprise', 'ofeg', 'gasp']],
+  ['tenderness', ['amor', 'love', 'beij', 'carinho', 'abraç', 'abrac', 'tender']],
+  ['joy', ['feliz', 'happy', 'alegre', 'sorri', 'laugh', 'joy', 'contente', 'smile']],
+]
+
+export function emotionForLine(text) {
+  const lower = String(text || '').toLowerCase()
+  for (const [emotion, words] of LINE_EMOTIONS) {
+    if (words.some((word) => lower.includes(word))) return emotion
+  }
+  return 'neutral'
+}
+
 export function splitNarration(text, max = TTS_CHUNK_CHARS) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim()
   if (!clean) return []

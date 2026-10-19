@@ -221,22 +221,22 @@ monta o prompt nesta ordem lógica (budgets de `config/settings.json`):
 |---|---|---|---|
 | 1 | AI instructions + diretiva de narrador | system (posição 0) | ≤ 700 |
 | 2 | `[Plot]` (Plot Essentials) | system (posição 0) | ≤ 400 |
-| 3 | `[World info]` — cards pinned + keyword | topo da user final | ≤ 1200 |
-| 4 | `[Memories]` | topo da user final | ≤ 600 |
-| 5 | `[Summary]` | topo da user final | ≤ 400 |
-| 5b | `[Player state]` | topo da user final | — |
-| 6 | Janela recente verbatim (`> You ...`) | mensagens user anteriores | dinâmico |
-| 7 | `[Author's note: …]` | user final, depois dos voláteis | ≤ 300 |
-| 8 | Última ação formatada | user final | ≤ 200 |
+| 3 | `[World info]` — cards pinned + keyword | `<lore>` no topo da user final | ≤ 1200 |
+| 4 | `[Memories]` | `<lore>` no topo da user final | ≤ 600 |
+| 5 | `[Summary]` (resumo rolante) | `<lore>` no topo da user final | ≤ 400 |
+| 5b | `[Player state]` | `<lore>` no topo da user final | — |
+| 6 | Janela recente verbatim (`> You ...`) | uma mensagem user POR AÇÃO | dinâmico |
+| 7 | `[Author's note: …]` | user final, depois do `<lore>` | ≤ 300 |
+| 8 | STYLE/CANON/LORE cues + `[Facts]` + última ação | user final | ≤ 200 |
 | — | Reserva para a resposta | — | 512 |
 
 O template Qwen3 exige a system no início e rejeita system depois da posição 0.
-Por isso os blocos voláteis (3–5b) não ficam mais na system: abrem a user
-final, antes da author's note, Active Lore, Continuity Anchor e da última
-ação. Budgets não mudaram — só a posição, para o prefixo do slot pinado
-sobreviver a card, memória, resumo e estado. A janela (6), quando não cabe,
-descarta ações inteiras e sobe o corte para um múltiplo de 8. Ações `see`
-não entram em mensagem nenhuma.
+Os blocos voláteis (3–5b) abrem a user final dentro do `<lore>` — assim o prefixo
+cacheado do slot pinado sobrevive a card, memória, resumo e estado. A janela (6)
+vai uma mensagem user por ação: o checkpoint de KV do slot vale para o turno
+seguinte (modelo híbrido Gated DeltaNet só restaura checkpoints perto do fim do
+prompt). Quando a janela não cabe, descarta ações inteiras em múltiplos de 8
+(WINDOW_DROP_CHUNK). Ações `see` não entram em mensagem nenhuma.
 
 Regras inegociáveis:
 - Formatação do jogador **byte a byte como no backup**: `do` → `\n> You {texto}\n`;

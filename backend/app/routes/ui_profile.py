@@ -22,8 +22,8 @@ PUT ui-state. Uma história puramente narrativa recebe {"tabs": [...],
 "widgets": []} — só o InputBar, sem painel. Desabilitado
 (settings.ui_profile.enabled=false) → GET/POST devolvem profile null.
 
-Geração usa o mesmo lock por aventura do game_engine → 409
-generation_in_progress se um stream estiver ativo.
+A geração não usa o lock da aventura: roda como auxiliar (role assistant)
+em paralelo à narrativa.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import db, game_engine, llm_client, settings_store
+from app import db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -243,43 +243,37 @@ def post_ui_profile(adventure_id: str,
         actions = db.list_actions(conn, adventure_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
 
-    if not game_engine.acquire_generation_lock(adventure_id):
-        raise GameError.conflict("generation_in_progress",
-                                 "a generation is already running for this adventure")
+    setup_parts = [f"Title: {adv['title']}"]
+    if adv["description"]:
+        setup_parts.append(f"Description: {adv['description']}")
+    if adv["ai_instructions"]:
+        setup_parts.append(f"AI instructions: {adv['ai_instructions'][:600]}")
+    opening = next((a["text"] for a in actions if a["type"] == "start"), "")
+    if opening:
+        setup_parts.append(f"Opening: {opening[:800]}")
+    elif actions:
+        setup_parts.append(f"Recent scene: {actions[-1]['text'][:800]}")
+    messages = [
+        {"role": "system", "content": _SYSTEM},
+        {"role": "user", "content": "\n".join(setup_parts)},
+    ]
     try:
-        setup_parts = [f"Title: {adv['title']}"]
-        if adv["description"]:
-            setup_parts.append(f"Description: {adv['description']}")
-        if adv["ai_instructions"]:
-            setup_parts.append(f"AI instructions: {adv['ai_instructions'][:600]}")
-        opening = next((a["text"] for a in actions if a["type"] == "start"), "")
-        if opening:
-            setup_parts.append(f"Opening: {opening[:800]}")
-        elif actions:
-            setup_parts.append(f"Recent scene: {actions[-1]['text'][:800]}")
-        messages = [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": "\n".join(setup_parts)},
-        ]
-        try:
-            content = llm_client.chat_completion(
-                llm_cfg, messages, temperature=cfg["temperature"],
-                max_tokens=cfg["max_tokens"], transport=transport)
-        except llm_client.LlmError as exc:
-            raise GameError(503, exc.code, exc.message) from exc
-        try:
-            profile = _parse_profile(content)
-        except (ValueError, TypeError) as exc:
-            log.warning("ui_profile: resposta do LLM não parseável: %s", exc)
-            raise GameError(503, "generation_failed",
-                            "LLM returned an unparseable ui profile") from exc
-        with db.session() as conn:
-            adv = db.get_adventure(conn, adventure_id)
-            db.update_adventure_ui_profile(conn, adventure_id, profile)
-            # Semeia o estado só se o jogador ainda não mexeu no painel.
-            if adv and not adv["ui_state"]:
-                db.update_adventure_ui_state(conn, adventure_id, initial_state(profile))
-                return {"profile": profile, "state": initial_state(profile)}
-            return {"profile": profile, "state": adv["ui_state"] if adv else {}}
-    finally:
-        game_engine.release_generation_lock(adventure_id)
+        content = llm_client.chat_completion(
+            llm_cfg, messages, role="assistant", temperature=cfg["temperature"],
+            max_tokens=cfg["max_tokens"], transport=transport)
+    except llm_client.LlmError as exc:
+        raise GameError(503, exc.code, exc.message) from exc
+    try:
+        profile = _parse_profile(content)
+    except (ValueError, TypeError) as exc:
+        log.warning("ui_profile: resposta do LLM não parseável: %s", exc)
+        raise GameError(503, "generation_failed",
+                        "LLM returned an unparseable ui profile") from exc
+    with db.session() as conn:
+        adv = db.get_adventure(conn, adventure_id)
+        db.update_adventure_ui_profile(conn, adventure_id, profile)
+        # Semeia o estado só se o jogador ainda não mexeu no painel.
+        if adv and not adv["ui_state"]:
+            db.update_adventure_ui_state(conn, adventure_id, initial_state(profile))
+            return {"profile": profile, "state": initial_state(profile)}
+        return {"profile": profile, "state": adv["ui_state"] if adv else {}}

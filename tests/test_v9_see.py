@@ -23,6 +23,7 @@ def test_see_drops_the_portuguese_beat(client, tmp_path):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     head = data["prompt"].split("BREAK", 1)[0]
+    sentence = summary.rstrip(" ,.;")  # clip_words tira o ponto final no prompt
     assert "entra na chuva" not in data["prompt"]
-    assert summary in head
-    assert data["action"]["text"] == summary
+    assert sentence in head
+    assert data["action"]["text"].rstrip(" ,.;") == sentence

@@ -7,7 +7,8 @@ Os NPCs presentes são os cards type=character mencionados; quem não tem
 retrato entra na fila de portraits que já existe.
 
 A pintura em si é o job `scene_backdrop` (app/jobs.py) — esta função só
-decide e enfileira, para o POST /scene responder na hora.
+decide e enfileira, para o POST /scene responder na hora. Fundo novo cancela
+o pendente antigo da mesma aventura (`supersede_key`, contrato C5).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, npc_assets, settings_store, world_facts
+from app import db, jobs, likeness, npc_assets, settings_store, world_facts
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -139,24 +140,11 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
 def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda.
 
-    Cena nua não carrega a roupa do card.
+    Cena nua não carrega a roupa do card. O rosto sai em inglês, na frente.
     """
     if not cast:
         return ""
-    if explicit:
-        lines = []
-        for card in cast:
-            bits = npc_assets.identity_bits(card)
-            title = (card.get("title") or "").strip()
-            if bits:
-                lines.append(f"{title}: " + "; ".join(bits) if title else "; ".join(bits))
-            elif title:
-                lines.append(title)
-        if not lines:
-            return ""
-        return "exact likeness, " + ", ".join(lines)
-    text = " ".join((card.get("title") or "") for card in cast)
-    return npc_assets.image_canon_clause(cast, text)
+    return likeness.opening_clause(cast, explicit=explicit)
 
 
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
@@ -167,7 +155,15 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     e o modelo pintava outra mulher. Nudez e sexo entram no prompt, e a roupa
     do card não volta. Sem visual travado, o fundo continua vazio de gente.
     """
-    explicit = is_explicit(moment)
+    decision = likeness.decide_frame(cast, explicit=is_explicit(moment))
+    if decision.refusal:
+        cast = []
+        moment = ""
+        explicit = False
+    else:
+        moment = likeness.omit_names(moment, decision.dropped)
+        cast = decision.cast
+        explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
     sex_bits = []
     for card in cast:
@@ -181,12 +177,19 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             sex_bits.append(phrase)
     sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     sex_line = ". ".join(sex_bits)
+    if clause:
+        # images.py importa scene no topo; o scrub fica aqui por isso.
+        from app.routes.images import contradicting_looks
+        beat, _banned = contradicting_looks(moment, clause)
+        beat = " ".join(beat.split())
+    else:
+        beat = ""
     if clause and explicit:
         parts = [
             sex_line,
             clause,
             "clothes off, nude, do not restore outfits, uncensored",
-            (moment or "")[-400:],
+            beat[-400:],
             style,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face and hair",
@@ -197,14 +200,17 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         text = " ".join(part.strip() for part in parts if part and part.strip())
         return text[:1400], True
     if clause:
+        beat = beat[-280:]
         parts = [
             sex_line,
             clause,
             style,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face, hair, age and clothing",
+            beat,
             (entry or "")[:400],
             f"atmosphere: {atmosphere}",
+            "what is happening now, same continuous scene, coherent bodies, "
             "detailed scene painting, no text, no watermark, no logo",
         ]
         text = " ".join(part.strip() for part in parts if part and part.strip())
@@ -243,12 +249,11 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
     if previous and previous["status"] == "error" and not retry:
         return {"status": "error", "image": image, "error": previous.get("error")}
 
-    db.insert_job(conn, adventure_id=adventure_id, type="scene_backdrop",
-                  ref_id=ref, payload={
-                      "prompt": prompt,
-                      "include_people": include_people,
-                      "explicit": explicit,
-                  })
+    jobs.enqueue(conn, "scene_backdrop", adventure_id, ref, {
+        "prompt": prompt,
+        "include_people": include_people,
+        "explicit": explicit,
+    }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
     return {"status": "pending", "image": image, "error": None}
 
 
@@ -285,8 +290,11 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     cast_cards = []
     for card in _cast(cards, text):
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
-    explicit = is_explicit(text)
-    clause = _visual_clause(cast_cards, explicit=explicit)
+    decision = likeness.decide_frame(cast_cards, explicit=is_explicit(text))
+    paint_cast = [] if decision.refusal else decision.cast
+    paint_text = "" if decision.refusal else likeness.omit_names(text, decision.dropped)
+    explicit = False if decision.refusal else decision.allow_explicit
+    clause = _visual_clause(paint_cast, explicit=explicit)
     signature = f"{_slug(title)}|{atmosphere}"
     if clause:
         # O fundo antigo (pessoa errada) não serve quando o rosto do card entra.
@@ -296,8 +304,8 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     ref = f"{adventure_id}:{signature}"
     img_cfg = settings_store.effective_image_settings(conn)
     prompt, include_people = _prompt(
-        title, entry, img_cfg.get("style_suffix") or "", atmosphere, cast_cards,
-        text,
+        title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
+        paint_text,
     )
     backdrop = _backdrop_state(
         conn, adventure_id, ref,

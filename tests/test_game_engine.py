@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import context_builder, db, game_engine
+from app import context_builder, db, game_engine, output_sanitizer
 from app.world_facts import ATTEMPT_RULE
 from app.errors import GameError
 
@@ -73,7 +73,8 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     payload = captured[0]
     assert payload["model"] == "gguf-mock"                 # descoberto via /models
     assert payload["stream"] is True
-    assert payload["stop"] == ["\n> You", "\n> you", "\nPlayer:", "\nUser:"]
+    assert payload["stop"] == ["\n> You", "\n> you", "\nPlayer:", "\nUser:",
+                               *context_builder.CONTEXT_STOPS]
     assert payload["max_tokens"] == 300
     assert payload["temperature"] == 0.85
     assert payload["top_p"] == 1.0
@@ -88,6 +89,7 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     assert payload["messages"][-1]["role"] == "user"
     assert payload["messages"][-1]["content"] == (
         f"{context_builder.STYLE_CUE}\n{context_builder.CANON_CUE}\n"
+        f"{context_builder.LORE_CUE}\n"
         f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
         "\n> You wait\n"
     )
@@ -190,6 +192,18 @@ def test_undo_never_removes_start(adventure):
     assert exc.value.code == "nothing_to_undo"
 
 
+def test_undo_skips_see_recorded_mid_turn(adventure):
+    add_action(adventure["id"], 1, "do", "\n> You knock\n")
+    add_action(adventure["id"], 2, "see", "A heavy oak gate in the rain")
+    add_action(adventure["id"], 3, "continue", "The gate opens.")
+    result = game_engine.handle_undo(adventure["id"])
+    assert [a["type"] for a in result["removed"]] == ["do", "continue"]
+    assert result["last_action"]["type"] == "see"
+    with db.session() as conn:
+        actions = db.list_actions(conn, adventure["id"])
+    assert [(a["seq"], a["type"]) for a in actions] == [(0, "start"), (2, "see")]
+
+
 def test_undo_removes_orphan_player_action(adventure):
     add_action(adventure["id"], 1, "say", '\n> You say "hi"\n')  # sem resposta da IA
     result = game_engine.handle_undo(adventure["id"])
@@ -283,5 +297,57 @@ def test_a_finished_reply_keeps_a_trailing_fragment(adventure):
 
 
 def test_cut_without_punctuation_keeps_the_fragment():
-    assert game_engine.cut_incomplete_sentence("apesar") == "apesar"
-    assert game_engine.cut_incomplete_sentence("Done.") == "Done."
+    assert output_sanitizer.cut_incomplete_sentence("apesar") == "apesar"
+    assert output_sanitizer.cut_incomplete_sentence("Done.") == "Done."
+
+
+def test_leaked_context_after_prose_is_not_saved(adventure):
+    transport = make_llm_transport(tokens=(
+        "Clara smiles at you.", "\n\n[world info]\nClara: devoted.",))
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "story", "Clara enters.", transport=transport))
+    assert _done(events)["action"]["text"] == "Clara smiles at you."
+
+
+def test_reply_made_only_of_context_notes_saves_nothing(adventure):
+    transport = make_llm_transport(tokens=(
+        "[World info]\nAppearance: red dress.\n\n", "[Continuity Anchor: Clara]\nClara waits."))
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "story", "Clara enters the suite.", transport=transport))
+    assert events[-1] == {"event": "error", "data": {
+        "message": "the narrator returned no story text; nothing was saved, try again"}}
+    with db.session() as conn:
+        actions = db.list_actions(conn, adventure["id"])
+    assert [a["type"] for a in actions] == ["start", "story"]
+    assert game_engine.acquire_generation_lock(adventure["id"])
+    game_engine.release_generation_lock(adventure["id"])
+
+
+def test_failed_retry_keeps_the_old_reply(adventure):
+    add_action(adventure["id"], 1, "continue", "The gate creaks.")
+    transport = make_llm_transport(tokens=("<lore>\n[Summary]\nResumo.",))
+    events = _collect(game_engine.handle_retry(adventure["id"], transport=transport))
+    assert events[-1]["event"] == "error"
+    with db.session() as conn:
+        actions = db.list_actions(conn, adventure["id"])
+    assert actions[-1]["text"] == "The gate creaks."
+
+
+def test_web_research_goes_inside_the_lore(adventure, monkeypatch):
+    block = "[Web Research & Canon Facts]\n- Gate: old iron."
+    monkeypatch.setattr(game_engine.web_search_mod, "research_context",
+                        lambda *args, **kwargs: {"sources": [{"title": "Gate"}],
+                                                 "context_block": block})
+    captured: list[dict] = []
+    transport = make_llm_transport(tokens=("The gate is old.",), capture=captured)
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "inspect the gate", transport=transport, web_search=True))
+    assert _done(events)["web_sources"] == [{"title": "Gate"}]
+    final = captured[0]["messages"][-1]["content"]
+    assert final.startswith(f"<lore>\n{block}\n</lore>\n")
+    from app.world_facts import ATTEMPT_RULE
+    assert final.endswith(
+        f"{context_builder.LORE_CUE}\n"
+        f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
+        "\n> You inspect the gate\n"
+    )

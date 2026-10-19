@@ -101,12 +101,34 @@ def _apply_migration(conn: sqlite3.Connection, path: Path) -> None:
         conn.execute(stmt)
 
 
+def _mark_applied(conn: sqlite3.Connection, numbers: list[int]) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations("
+                 "number INTEGER PRIMARY KEY, applied_at TEXT)")
+    conn.executemany("INSERT OR IGNORE INTO schema_migrations(number, applied_at)"
+                     " VALUES(?, ?)", [(number, utcnow()) for number in numbers])
+
+
+def _applied_migrations(conn: sqlite3.Connection, migrations: list[tuple[int, Path]]) -> set[int]:
+    """Números já aplicados. Banco de antes da tabela ganha os números até o
+    user_version, menos a faixa 010–019: o runner antigo aplicava em sequência
+    e essa faixa (Kimi) só nasceu depois da 020, então nunca rodou."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
+    if not exists:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        _mark_applied(conn, [number for number, _ in migrations
+                             if number <= version and not 10 <= number <= 19])
+    return {row[0] for row in conn.execute("SELECT number FROM schema_migrations")}
+
+
 def init_db() -> None:
     """Aplica schema.sql na primeira execução (idempotente — schema é contrato,
     sem IF NOT EXISTS, então verificamos se já foi aplicado) e depois roda as
-    migrations versionadas (PRAGMA user_version): aplica 00X_*.sql quando
-    user_version < X e grava user_version=X após cada uma. Bancos frescos já
-    recebem os objetos v2 pelo schema.sql, então só marcam a versão mais alta."""
+    migrations: cada 0XX_*.sql roda uma vez, em ordem, registrada pelo número
+    em `schema_migrations` — uma 010 nova entra mesmo num banco que já passou
+    da 020. Bancos frescos já recebem tudo pelo schema.sql e só registram os
+    números. user_version fica com o maior número aplicado."""
     with connect() as conn:
         applied = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scenarios'"
@@ -115,14 +137,17 @@ def init_db() -> None:
         latest = migrations[-1][0] if migrations else 0
         if not applied:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            _mark_applied(conn, [number for number, _ in migrations])
             conn.execute(f"PRAGMA user_version = {latest}")
             return
-        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        done = _applied_migrations(conn, migrations)
         for number, path in migrations:
-            if version < number:
+            if number not in done:
                 _apply_migration(conn, path)
-                conn.execute(f"PRAGMA user_version = {number}")
-                version = number
+                _mark_applied(conn, [number])
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if latest > version:
+            conn.execute(f"PRAGMA user_version = {latest}")
 
 
 # ----------------------------------------------------------- serialização
@@ -180,6 +205,7 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "tags": _loads(row["tags"], []),
         "third_person": bool(row["third_person"]),
         "source": row["source"] or "new",
+        "owner": (row["owner"] if "owner" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -334,16 +360,17 @@ def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str |
                      story_summary: str = "", image_style: str = "",
                      tags: list | None = None,
                      third_person: bool = False, source: str = "new",
+                     owner: str = "",
                      created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     aid = new_id()
     conn.execute(
         "INSERT INTO adventures(id, scenario_id, title, description, ai_instructions,"
         " plot_essentials, authors_note, story_summary, image_style, tags, third_person,"
-        " source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " source, owner, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (aid, scenario_id, title, description, ai_instructions, plot_essentials,
          authors_note, story_summary, image_style, _dumps(tags, []), int(third_person),
-         source, created_at or now, updated_at or now),
+         source, owner or "", created_at or now, updated_at or now),
     )
     return adventure_to_dict(conn.execute("SELECT * FROM adventures WHERE id=?", (aid,)).fetchone())
 
@@ -468,7 +495,8 @@ def list_adventure_summaries(conn: sqlite3.Connection) -> list[dict]:
             excerpt = " ".join(last["text"].split())[:160]
         out.append({
             "id": adv["id"], "title": adv["title"], "description": adv["description"],
-            "tags": adv["tags"], "source": adv["source"], "action_count": count,
+            "tags": adv["tags"], "source": adv["source"], "owner": adv.get("owner") or "",
+            "action_count": count,
             "last_excerpt": excerpt, "updated_at": adv["updated_at"],
         })
     return out
@@ -901,8 +929,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 # -------------------------------------------------------------------- jobs
-JOB_TYPES = ("character_portrait", "scene_backdrop")
-JOB_ACTIVE = ("pending", "running")
+JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image")
+JOB_ACTIVE = ("preparing", "pending", "running")
 
 
 def job_to_dict(row: sqlite3.Row) -> dict:
@@ -915,6 +943,8 @@ def job_to_dict(row: sqlite3.Row) -> dict:
         "payload": _loads(row["payload"], {}),
         "result": _loads(row["result"], None),
         "error": row["error"],
+        "priority": row["priority"],
+        "supersede_key": row["supersede_key"] or "",
         "created_at": row["created_at"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
@@ -923,14 +953,18 @@ def job_to_dict(row: sqlite3.Row) -> dict:
 
 def insert_job(conn: sqlite3.Connection, *, adventure_id: str, type: str,
                ref_id: str = "", payload: dict | None = None,
-               job_id: str | None = None) -> dict:
+               job_id: str | None = None, priority: int = 2,
+               supersede_key: str = "", status: str = "pending") -> dict:
     if type not in JOB_TYPES:
         raise ValueError(f"invalid job type: {type}")
+    if status not in ("preparing", "pending"):
+        raise ValueError(f"invalid initial job status: {status}")
     jid = job_id or new_id()
     conn.execute(
-        "INSERT INTO jobs(id, adventure_id, type, status, ref_id, payload, created_at)"
-        " VALUES(?,?,?,'pending',?,?,?)",
-        (jid, adventure_id, type, ref_id, _dumps(payload, {}), utcnow()),
+        "INSERT INTO jobs(id, adventure_id, type, status, ref_id, payload, priority,"
+        " supersede_key, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (jid, adventure_id, type, status, ref_id, _dumps(payload, {}), int(priority),
+         supersede_key, utcnow()),
     )
     return job_to_dict(conn.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone())
 
@@ -979,20 +1013,26 @@ def latest_image(conn: sqlite3.Connection, adventure_id: str, kind: str,
 
 
 def find_active_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | None:
-    """Job pendente/rodando para o mesmo alvo (dedupe de enfileiramento)."""
+    """Job ativo (preparando, pendente ou rodando) para o mesmo alvo (dedupe)."""
     row = conn.execute(
         "SELECT * FROM jobs WHERE type=? AND ref_id=?"
-        " AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+        " AND status IN ('preparing','pending','running') ORDER BY created_at DESC LIMIT 1",
         (type, ref_id),
     ).fetchone()
     return job_to_dict(row) if row else None
 
 
-def claim_next_job(conn: sqlite3.Connection) -> dict | None:
-    """pending → running do job mais antigo (o worker é único por processo)."""
-    row = conn.execute(
-        "SELECT id FROM jobs WHERE status='pending' ORDER BY created_at ASC LIMIT 1"
-    ).fetchone()
+def claim_next_job(conn: sqlite3.Connection, *,
+                   max_priority: int | None = None) -> dict | None:
+    """pending → running do job de menor prioridade e, nela, do mais antigo (o
+    worker é único por processo). `max_priority` deixa de fora os menos urgentes."""
+    sql = "SELECT id FROM jobs WHERE status='pending'"
+    params: list = []
+    if max_priority is not None:
+        sql += " AND priority<=?"
+        params.append(int(max_priority))
+    row = conn.execute(sql + " ORDER BY priority ASC, created_at ASC, rowid ASC LIMIT 1",
+                       params).fetchone()
     if not row:
         return None
     cur = conn.execute(
@@ -1014,11 +1054,85 @@ def finish_job(conn: sqlite3.Connection, job_id: str, status: str,
 
 
 def cancel_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
-    """Cancela apenas jobs pendentes (running é cooperativo — v1 não interrompe)."""
+    """Cancela jobs que ainda não rodam (running é cooperativo — v1 não interrompe)."""
     cur = conn.execute(
-        "UPDATE jobs SET status='canceled', finished_at=? WHERE id=? AND status='pending'",
+        "UPDATE jobs SET status='canceled', finished_at=? WHERE id=?"
+        " AND status IN ('preparing','pending')",
         (utcnow(), job_id),
     )
     if cur.rowcount == 0:
         return None
     return get_job(conn, job_id)
+
+
+def supersede_jobs(conn: sqlite3.Connection, supersede_key: str,
+                   keep_id: str) -> list[dict]:
+    """Cancela os pendentes com a mesma chave, menos `keep_id`; devolve os cancelados."""
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE supersede_key=? AND id<>?"
+        " AND status IN ('preparing','pending')",
+        (supersede_key, keep_id),
+    ).fetchall()
+    canceled = []
+    for row in rows:
+        conn.execute(
+            "UPDATE jobs SET status='canceled', error='superseded', finished_at=?"
+            " WHERE id=? AND status IN ('preparing','pending')",
+            (utcnow(), row["id"]),
+        )
+        canceled.append(get_job(conn, row["id"]))
+    return canceled
+
+
+def raise_job_priority(conn: sqlite3.Connection, job_id: str, priority: int) -> dict | None:
+    """Job pendente passa à frente (nunca para trás)."""
+    conn.execute(
+        "UPDATE jobs SET priority=? WHERE id=? AND status IN ('preparing','pending')"
+        " AND priority>?",
+        (int(priority), job_id, int(priority)),
+    )
+    return get_job(conn, job_id)
+
+
+def promote_job(conn: sqlite3.Connection, job_id: str, payload: dict) -> dict | None:
+    """preparing → pending com o payload completo; None se foi cancelado antes."""
+    cur = conn.execute(
+        "UPDATE jobs SET status='pending', payload=? WHERE id=? AND status='preparing'",
+        (_dumps(payload, {}), job_id),
+    )
+    if cur.rowcount == 0:
+        return None
+    return get_job(conn, job_id)
+
+
+def requeue_interrupted_jobs(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Depois de um reinício: retrato e fundo que rodavam voltam para a fila; o
+    See interrompido vira erro (o jogador já seguiu). Devolve (refilados, falhos)."""
+    failed = conn.execute(
+        "UPDATE jobs SET status='error', error='interrupted by a restart', result=?,"
+        " finished_at=? WHERE type='see_image' AND status IN ('preparing','pending','running')",
+        (_dumps({"code": "interrupted"}, None), utcnow()),
+    ).rowcount
+    requeued = conn.execute(
+        "UPDATE jobs SET status='pending', started_at=NULL"
+        " WHERE type<>'see_image' AND status='running'"
+    ).rowcount
+    return requeued, failed
+
+
+def job_queue_summary(conn: sqlite3.Connection) -> dict:
+    """Jobs ativos por status e tipo, mais o created_at do pendente mais velho
+    (/api/health/llm)."""
+    summary: dict = {status: {} for status in JOB_ACTIVE}
+    oldest = None
+    rows = conn.execute(
+        "SELECT status, type, COUNT(*) AS n, MIN(created_at) AS oldest FROM jobs"
+        f" WHERE status IN ({','.join('?' * len(JOB_ACTIVE))}) GROUP BY status, type",
+        JOB_ACTIVE,
+    ).fetchall()
+    for row in rows:
+        summary[row["status"]][row["type"]] = row["n"]
+        if row["status"] == "pending" and (oldest is None or row["oldest"] < oldest):
+            oldest = row["oldest"]
+    summary["oldest_pending_at"] = oldest
+    return summary

@@ -43,7 +43,6 @@ def test_overlapping_post_turn_passes_serialize(monkeypatch):
     tracker = _TrackingLock()
     game_engine._post_turn_locks[adventure_id] = tracker
     monkeypatch.setenv("AIDUNGEON_CHRONICLE", "1")
-    monkeypatch.setattr(game_engine, "_POST_TURN_DELAY_S", 0)
     monkeypatch.setattr(
         game_engine.npc_chronicle, "update_from_turn", lambda *args, **kwargs: None,
     )
@@ -52,7 +51,7 @@ def test_overlapping_post_turn_passes_serialize(monkeypatch):
     mu = threading.Lock()
     finished = threading.Event()
 
-    def memory(_adventure_id: str) -> None:
+    def memory(_adventure_id: str, _cancel=None) -> None:
         with mu:
             state["inside"] += 1
             state["max"] = max(state["max"], state["inside"])

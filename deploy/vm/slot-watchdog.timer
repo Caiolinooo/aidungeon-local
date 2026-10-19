@@ -1,0 +1,10 @@
+[Unit]
+Description=Roda o watchdog de slots do llama-server a cada 10 s
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=10s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

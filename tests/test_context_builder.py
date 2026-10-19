@@ -37,6 +37,14 @@ def _build(adv, actions, cfg):
         return cb.build_context(adv, actions, cfg, conn)
 
 
+def _window(built) -> str:
+    """As users da janela (entre a system e a user final), coladas."""
+    return "".join(m["content"] for m in built.messages[1:-1])
+
+
+CUES = f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\n{cb.LORE_CUE}\n"
+
+
 # --------------------------------------------------------------- ordem
 def test_sandwich_order_exact(tmp_db):
     adv = _adventure_full()
@@ -51,9 +59,9 @@ def test_sandwich_order_exact(tmp_db):
         cfg = _cfg(conn)
     built = _build(adv, actions, cfg)
 
-    # wire: system estável (blocos 1–2) + user janela + user final
+    # wire format Qwen3: UMA system + uma user por ação da janela + user final
     roles = [m["role"] for m in built.messages]
-    assert roles == ["system", "user", "user"]
+    assert roles == ["system", "user", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
     # system estável: base, ai_instructions e plot (blocos 1–2)
@@ -69,27 +77,27 @@ def test_sandwich_order_exact(tmp_db):
     for header in ("[World info]", "[Memories]", "[Summary]", "[Player state]"):
         assert header not in sys_msg
 
-    # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
-    window = built.messages[1]["content"]
-    assert "You stand in Calimport." in window
-    assert "\n> You look around\n" in window
+    # 6 — uma user por ação da janela (0..1; a última vai p/ o bloco 8)
+    assert built.messages[1]["content"] == "You stand in Calimport."
+    assert built.messages[2]["content"] == "\n> You look around\n"
 
-    # 7+8 — user final: voláteis no topo, author's note e a última ação no fim
-    final = built.messages[2]["content"]
+    # 7+8 — user final: voláteis no <lore> do topo, author's note e a última ação no fim
+    final = built.messages[3]["content"]
     order = [
-        "[World info]",                 # 3 story cards
+        "<lore>\n[World info]",         # 3 story cards
         "Baldur's Gate",
         "[Memories]",                   # 4 memory bank
         "Zhentarim",
         "[Summary]",                    # 5 story_summary
         "Caio chegou a Calimport",
+        "</lore>",
         "[Author's note: Mundo vivo; NPCs agem por conta própria.]",
     ]
+    assert final.startswith("<lore>\n")
     positions = [final.index(fragment) for fragment in order]
     assert positions == sorted(positions)
-    assert final.endswith("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
-                          f"{cb.STYLE_CUE}\n"
-                          f"{cb.CANON_CUE}\n"
+    assert final.endswith("</lore>\n[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                          f"{CUES}"
                           f"[Facts: where=Calimport; places=Calimport; items=none. {ATTEMPT_RULE}]\n"
                           "The market is busy.")
 
@@ -106,9 +114,9 @@ def test_empty_blocks_are_skipped(tmp_db):
     assert roles == ["system", "user"]
     assert built.messages[0]["content"] == cb.BASE_SYSTEM_PROMPT
     assert built.messages[1]["content"] == (
-        f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\n"
-        f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
-        "Once upon a time."
+        f"{CUES}"
+        + f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
+        + "Once upon a time."
     )
 
 
@@ -123,16 +131,16 @@ def test_player_action_formatting(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    window = built.messages[1]["content"]  # user: janela (ações 0..3)
+    window = _window(built)  # users da janela (ações 0..3)
     assert "\n> You draw my sword\n" in window
     assert '\n> You say "Hello, guard."\n' in window
     assert "\n> You sheathe the blade\n" in window
     assert "> You \n> You" not in window  # nunca re-embrulha texto do backup
     # bloco 8 = última ação (story → prosa pura)
     assert built.messages[-1]["content"] == (
-        f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\n"
-        f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
-        "Pure narration."
+        f"{CUES}"
+        + f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
+        + "Pure narration."
     )
 
 
@@ -142,7 +150,8 @@ def test_stop_sequences_from_settings(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    assert built.stop_sequences == ["\n> You", "\n> you", "\nPlayer:", "\nUser:"]
+    assert built.stop_sequences == ["\n> You", "\n> you", "\nPlayer:", "\nUser:",
+                                    *cb.CONTEXT_STOPS]
 
 
 def test_dynamic_stop_sequences_with_protagonist_names(tmp_db):
@@ -169,7 +178,8 @@ def test_active_entity_recency_anchor_in_final_user_turn(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, _cfg(conn), conn)
     final_content = built.messages[-1]["content"]
-    assert "[Active Lore: Princess Alusair — Steel Regent of Cormyr]" in final_content
+    anchor = final_content.index("[Active Lore: Princess Alusair — Steel Regent of Cormyr]")
+    assert final_content.index(cb.LORE_OPEN) < anchor < final_content.index(cb.LORE_CLOSE)
 
 
 # ---------------------------------------------------------------- budgets
@@ -186,7 +196,7 @@ def test_block_budget_truncation(tmp_db):
     assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
     # author's note truncada a 300 tk dentro da user final, depois do resumo
     final = built.messages[-1]["content"]
-    assert final.startswith("[Summary]\n")
+    assert final.startswith("<lore>\n[Summary]\n")
     assert "[Author's note: " + "y" * 1200 + "]\n" in final
     assert "y" * 1201 not in final
     assert "[Summary]" not in sys_msg
@@ -273,7 +283,8 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     assert built.meta["budgets"]["recent_window"] == 250
     assert cb.WINDOW_DROP_CHUNK == 8
     assert built.meta["window_action_count"] == 3
-    window = built.messages[1]["content"]
+    assert len(built.messages) == 5
+    window = _window(built)
     assert window.startswith("M08") and "S000" not in window
     assert window.count("M") == 3 and len(window) == 3 * 100   # inteiras, sem corte
 
@@ -377,7 +388,8 @@ def test_window_drops_in_chunks_of_eight(tmp_db):
     assert built.meta["budgets"]["recent_window"] == 420
     assert built.meta["window_action_count"] == 9
     assert built.meta["window_tokens_est"] == 9 * 40
-    window = next(m["content"] for m in built.messages if "ACT24|" in m["content"])
+    # uma user por ação: a janela é o bloco entre a system e a user final
+    window = "\n".join(m["content"] for m in built.messages[1:-1])
     for i in range(16, 25):
         assert f"ACT{i:02d}|" in window
     blob = "\n".join(m["content"] for m in built.messages)
@@ -431,7 +443,7 @@ def test_summarizer_evicts_the_same_chunked_window(tmp_db):
     assert [a["text"] for a in kept] == [piece(i) for i in range(16, 25)]
     assert [a["text"] for a in evicted] == [piece(i) for i in range(16)]
     assert [a["text"] for a in archived] == [a["text"] for a in evicted]
-    window = next(m["content"] for m in built.messages if "ACT24|" in m["content"])
+    window = "\n".join(m["content"] for m in built.messages[1:-1])
     blob = "\n".join(m["content"] for m in built.messages)
     for action in kept:
         assert action["text"][:6] in window

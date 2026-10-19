@@ -93,7 +93,9 @@ def test_two_slots_pins_narrative_zero_and_aux_one():
     assert stream_payload["id_slot"] == 0
     assert stream_payload["cache_prompt"] is True
     assert aux_payload["id_slot"] == 1
-    assert aux_payload["cache_prompt"] is True
+    # auxiliares não pedem cache por padrão (scheduler C1): cache fixado num
+    # slot de apoio travaria o KV dele
+    assert aux_payload["cache_prompt"] is False
     assert aux_payload["stream"] is False
 
 
@@ -109,9 +111,11 @@ def test_single_slot_or_props_failure_omits_id_slot(kwargs):
     assert _stream(transport) == ["Hi"]
     assert _chat(transport) == "ok"
     assert len(capture) == 2
+    stream_payload, aux_payload = capture
     for payload in capture:
         assert "id_slot" not in payload
-        assert payload["cache_prompt"] is True
+    assert stream_payload["cache_prompt"] is True   # narrativa sempre cacheia
+    assert aux_payload["cache_prompt"] is False     # aux: aux_cache_prompt default off
 
 
 def test_slot_cache_probes_props_once():

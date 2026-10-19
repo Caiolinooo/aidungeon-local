@@ -8,10 +8,11 @@ import tempfile
 import urllib.parse
 from pathlib import Path
 
-from fastapi import APIRouter, File, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 
 import exporter
 import importer
+from app import auth
 from app.errors import GameError
 
 router = APIRouter()
@@ -19,7 +20,8 @@ router = APIRouter()
 
 @router.post("/import/aidungeon", status_code=201)
 def import_aidungeon(file: UploadFile = File(...),
-                     cards_file: UploadFile | None = File(default=None)) -> dict:
+                     cards_file: UploadFile | None = File(default=None),
+                     info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Importa o .zip do backup oficial (metadata.json + actions-*.json).
 
     Um JSON solto de story cards pode acompanhar o zip (`cards_file`,
@@ -42,7 +44,8 @@ def import_aidungeon(file: UploadFile = File(...),
                 raise GameError.bad_request("invalid_backup",
                                             "cards_file is not valid JSON") from exc
         try:
-            return importer.import_zip(zip_path, cards_payload=cards_payload)
+            return importer.import_zip(zip_path, cards_payload=cards_payload,
+                                        owner=info.user)
         except importer.BackupFormatError as exc:
             raise GameError.bad_request("invalid_backup", str(exc)) from exc
     finally:

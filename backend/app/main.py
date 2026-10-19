@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth as auth_core
-from app import db, jobs, settings_store
+from app import access, db, jobs, settings_store, users
 from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
@@ -32,6 +32,9 @@ from app.routes import (actions, adventures, assistant, cards, choices,
                         memory, scenarios, scene as scene_routes, settings, ui_profile,
                         voice)
 from app.routes import auth as auth_routes
+from app.routes import events as events_routes
+from app.routes import likeness as likeness_routes
+from app.routes import users as users_routes
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -41,6 +44,10 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    cfg = auth_core.auth_config()
+    if cfg is not None:
+        with db.session() as conn:
+            users.ensure_seed(conn, cfg)
     if auth_core.auth_config() is None:
         log.warning(
             "AUTH NÃO CONFIGURADA — defina AUTH_USER, AUTH_PASSWORD_HASH e AUTH_SECRET "
@@ -94,7 +101,21 @@ def validation_error_handler(request: Request, exc: RequestValidationError) -> J
 # cada rota individualmente.
 app.include_router(auth_routes.router, prefix="/api", tags=["auth"])
 
+
+@app.middleware("http")
+async def own_stories(request: Request, call_next):
+    """História de outra pessoa responde 404, o mesmo de um id que não existe."""
+    user = access.user_from_request(request)
+    if user and access.hidden_path(request.url.path, user):
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": "not found"}},
+        )
+    return await call_next(request)
+
 _protected = [Depends(require_auth)]
+app.include_router(users_routes.router, prefix="/api", tags=["users"],
+                   dependencies=_protected)
 app.include_router(scenarios.router, prefix="/api/scenarios", tags=["scenarios"],
                    dependencies=_protected)
 app.include_router(adventures.router, prefix="/api/adventures", tags=["adventures"],
@@ -115,6 +136,8 @@ app.include_router(actions.router, prefix="/api/actions", tags=["actions"],
                    dependencies=_protected)
 app.include_router(cards.router, prefix="/api/adventures", tags=["cards"],
                    dependencies=_protected)
+app.include_router(likeness_routes.router, prefix="/api", tags=["likeness"],
+                   dependencies=_protected)
 app.include_router(jobs_routes.router, prefix="/api/adventures", tags=["assets"],
                    dependencies=_protected)
 app.include_router(memory.router, prefix="/api/adventures", tags=["memory"],
@@ -126,6 +149,13 @@ app.include_router(settings.router, prefix="/api", tags=["settings"],
 app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)
 app.include_router(health.router, prefix="/api", tags=["health"],
+                   dependencies=_protected)
+
+# --- Grok (G4): eventos em SSE. Fora do _protected porque o EventSource do
+# navegador não manda header: a rota aceita Bearer ou ?token= e checa o dono.
+app.include_router(events_routes.router, prefix="/api/adventures", tags=["events"])
+# --- Grok (G5): GET /api/jobs/{id}, polling do See assíncrono (C6).
+app.include_router(jobs_routes.by_id, prefix="/api", tags=["assets"],
                    dependencies=_protected)
 
 

@@ -60,15 +60,16 @@ async function parseError(res) {
   return new ApiError(res.status, code, message)
 }
 
-async function request(path, { method = 'GET', body, signal } = {}) {
+async function request(path, { method = 'GET', body, signal, headers } = {}) {
+  const extra = headers || {}
   let res
   try {
     res = await fetch(`${API_BASE}/api${path}`, {
       method,
       // FormData (upload multipart) define o próprio Content-Type com boundary
       headers: body instanceof FormData
-        ? authHeaders()
-        : authHeaders({ 'Content-Type': 'application/json' }),
+        ? authHeaders(extra)
+        : authHeaders({ 'Content-Type': 'application/json', ...extra }),
       body: body instanceof FormData ? body : body != null ? JSON.stringify(body) : undefined,
       signal,
     })
@@ -97,6 +98,14 @@ export const api = {
   login: (username, password) =>
     request('/auth/login', { method: 'POST', body: { username, password } }),
   checkAuth: () => request('/auth/check'),
+  changePassword: (current_password, new_password) =>
+    request('/auth/password', { method: 'POST', body: { current_password, new_password } }),
+  listUsers: () => request('/users'),
+  createUser: (username, password) =>
+    request('/users', { method: 'POST', body: { username, password } }),
+  deleteUser: (username) => request(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  resetUserPassword: (username, password) =>
+    request(`/users/${encodeURIComponent(username)}/password`, { method: 'PUT', body: { password } }),
 
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),
@@ -262,12 +271,14 @@ export const api = {
     }),
 
   // ------------------------------------------------------------ images (v2)
-  // Ação "See": gera imagem da cena (JSON, não-SSE — pode levar minutos).
+  // Ação "See": 202 na hora. A pintura segue no job; a tela consulta o GET.
   see: (advId, { action_seq, extra_prompt } = {}) =>
     request(`/adventures/${advId}/see`, {
       method: 'POST',
       body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
+      headers: { Prefer: 'respond-async' },
     }),
+  getAdventureJob: (advId, jobId) => request(`/adventures/${advId}/jobs/${jobId}`),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
   getChoices: (advId) => request(`/adventures/${advId}/choices`, { method: 'POST' }),
 
@@ -302,14 +313,21 @@ export const api = {
     list: () => request('/voices'),
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
-    tts: async (text, voice) => {
+    // extra: { emotion, adventureId } — a emoção da linha e, se a linha
+    // não disser, a ficha do NPC citado nessa aventura.
+    tts: async (text, voice, extra) => {
+      const body = { text }
+      if (voice) body.voice = voice
+      if (extra && typeof extra === 'object') {
+        if (extra.emotion) body.emotion = extra.emotion
+        if (extra.adventureId) body.adventure_id = extra.adventureId
+      }
       let res
       try {
         res = await fetch(`${API_BASE}/api/tts`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          // voice omitida → backend usa narrator_voice (contrato)
-          body: JSON.stringify(voice ? { text, voice } : { text }),
+          body: JSON.stringify(body),
         })
       } catch {
         throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')

@@ -3,19 +3,21 @@
 - POST /adventures/{aid}/portraits              → um job por NPC (character cards)
 - POST /adventures/{aid}/cards/{cid}/portrait   → (re)gera retrato de um NPC → 202 Job
 - GET  /adventures/{aid}/jobs[?status=]         → fila (polling da UI)
-- DELETE /adventures/{aid}/jobs/{jid}           → cancela job pendente → Job
+- DELETE /adventures/{aid}/jobs/{jid}           → cancela job que ainda não roda → Job
+- GET  /jobs/{jid}                              → polling do See assíncrono (C6), `by_id`
 
 A geração em si roda no worker (app/jobs.py); estes endpoints só enfileiram.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app import db, jobs
+from app import access, auth, db, jobs
 from app.errors import GameError
 
 router = APIRouter()
+by_id = APIRouter()
 
 
 def _job_or_404(conn, adventure_id: str, job_id: str) -> dict:
@@ -61,10 +63,21 @@ def get_job(adventure_id: str, job_id: str) -> dict:
 def cancel_job(adventure_id: str, job_id: str) -> dict:
     with db.session() as conn:
         job = _job_or_404(conn, adventure_id, job_id)
-        if job["status"] == "pending":
-            job = db.cancel_job(conn, job_id)
+        if job["status"] in ("preparing", "pending"):
+            job = jobs.cancel(conn, job_id) or db.get_job(conn, job_id)
         elif job["status"] in ("done", "error", "canceled"):
             raise GameError(409, "job_not_cancelable",
                             f"job already finished with status '{job['status']}'")
         # running: devolve como está (cancelamento cooperativo — v1)
+        return job
+
+
+@by_id.get("/jobs/{job_id}")
+def get_job_by_id(job_id: str,
+                  info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    """Job de história de outra pessoa responde 404, como um id que não existe."""
+    with db.session() as conn:
+        job = db.get_job(conn, job_id)
+        if not job or not access.adventure_visible(conn, info.user, job["adventure_id"]):
+            raise GameError.not_found(f"job {job_id} not found")
         return job

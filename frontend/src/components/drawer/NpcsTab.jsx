@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
+import { emotionForLine } from '../../ttsText.js'
 import { useToast } from '../Toast.jsx'
 
 const VOICES = ['', 'M1', 'M2', 'M3', 'F1', 'F2', 'F3']
@@ -78,6 +79,9 @@ function PortraitThumb({ card, activeJob }) {
 
 const SHEET_FIELDS = ['appearance', 'body', 'clothing', 'personality', 'notes']
 const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+// Mesmos nomes e ponto de partida de backend/app/npc_bonds.py.
+const BOND_KEYS = ['relationship', 'trust', 'fear', 'desire', 'boldness']
+const BOND_DEFAULTS = { relationship: 40, trust: 40, fear: 15, desire: 15, boldness: 40 }
 
 // sheet armazenada (JSON string) → dict editável (''/inválido → {}).
 function parseSheet(raw) {
@@ -93,7 +97,8 @@ function parseSheet(raw) {
 // true se a ficha tem algum conteúdo visível (ignora stats default).
 function sheetHasContent(sheet) {
   return SHEET_FIELDS.some((k) => (sheet[k] || '').trim()) ||
-    Object.keys(sheet.stats || {}).length > 0
+    Object.keys(sheet.stats || {}).length > 0 ||
+    Object.keys(sheet.bonds || {}).length > 0
 }
 
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
@@ -104,6 +109,13 @@ function SheetPanel({ sheet, onChange }) {
   const setStat = (key, value) => {
     const n = Math.max(1, Math.min(20, Number.parseInt(value, 10) || 0))
     onChange({ ...sheet, stats: { ...(sheet.stats || {}), [key]: n } })
+  }
+  const setBond = (key, value) => {
+    const n = Math.max(0, Math.min(100, Number.parseInt(value, 10) || 0))
+    onChange({
+      ...sheet,
+      bonds: { ...BOND_DEFAULTS, ...(sheet.bonds || {}), [key]: n },
+    })
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
@@ -148,12 +160,32 @@ function SheetPanel({ sheet, onChange }) {
           ))}
         </div>
       </div>
+      <div>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          Bonds
+        </span>
+        <p className="text-[10px] text-zinc-600">Updated each turn from what you do.</p>
+        <div className="mt-1 grid grid-cols-5 gap-1">
+          {BOND_KEYS.map((key) => (
+            <label key={key} className="flex flex-col items-center gap-0.5">
+              <span className="text-center text-[9px] uppercase leading-tight text-zinc-500">{key}</span>
+              <input
+                type="number" min={0} max={100}
+                title={key}
+                value={sheet.bonds?.[key] ?? BOND_DEFAULTS[key]}
+                onChange={(e) => setBond(key, e.target.value)}
+                className={`${inputCls} text-center`}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
 
 // Linha de um NPC: retrato + campos editáveis inline + ações.
-function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onDelete, saving, enriching }) {
+function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDelete, saving, enriching }) {
   const toast = useToast()
   const [form, setForm] = useState({
     title: card.title ?? '',
@@ -182,7 +214,11 @@ function NpcRow({ card, job, onSave, onRegenerate, onEnrich, onDelete, saving, e
     if (previewing || form.voice === '') return
     setPreviewing(true)
     try {
-      const blob = await api.voice.tts(previewText(form), form.voice)
+      const line = previewText(form)
+      const blob = await api.voice.tts(line, form.voice, {
+        emotion: emotionForLine(line),
+        adventureId,
+      })
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       previewAudioRef.current = audio
@@ -526,6 +562,7 @@ export default function NpcsTab({ adventure }) {
               <NpcRow
                 card={c}
                 job={job}
+                adventureId={adventure.id}
                 saving={savingId === c.id}
                 enriching={enrichingId === c.id}
                 onSave={save}

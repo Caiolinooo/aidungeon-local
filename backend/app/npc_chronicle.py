@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any
 
-from app import db, jobs, llm_client, npc_assets, settings_store, world_facts
+from app import db, jobs, likeness, llm_client, npc_assets, settings_store, world_facts
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -39,6 +39,7 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
       "clothing": "what they wear now, empty if unknown",
       "personality": "traits actually shown, empty if unknown",
       "look_changed": false,
+      "real": false,
       "stat_delta": {"str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0}
     }
   ],
@@ -61,6 +62,7 @@ Rules:
 - A death, a relative's death, a wound, a new title, allegiance, or a decision that changes their life is a fact and must be recorded.
 - stat_delta is an integer from -2 to 2 and only for a clear consequence in the passage (a wound, training, a hard choice). Otherwise every value is 0.
 - facts are short and new. Do not repeat a fact already on the card.
+- real is true only when the passage treats them as a living public figure who is themselves, never for a fictional character.
 - If nobody qualifies, return empty arrays.
 Output ONLY the JSON object."""
 
@@ -178,6 +180,49 @@ def _apply_stats(existing: dict, delta: dict[str, int]) -> dict | None:
     return stats
 
 
+def _stamp_identity(sheet: dict, item: dict) -> None:
+    """Copia pessoa real ou menor já confirmados. Não apaga uma marca antiga."""
+    if item.get("minor") is True:
+        sheet["minor"] = True
+        return
+    if item.get("real_person") is not True:
+        return
+    sheet["real_person"] = True
+    name = " ".join(str(item.get("real_name") or item.get("name") or "").split())
+    wiki = " ".join(str(item.get("wiki_title") or "").split())
+    if name:
+        sheet["real_name"] = name[:120]
+    if wiki:
+        sheet["wiki_title"] = wiki[:160]
+
+
+def _confirm_real_people(payload: dict, transport: Any) -> None:
+    """Wikipedia confirma `real` antes de gravar. Falha de rede não marca."""
+    items = payload.get("characters")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict) or item.get("real") is not True:
+            continue
+        name = " ".join(str(item.get("name") or "").split())
+        if len(name) < 2:
+            continue
+        try:
+            page = likeness.lookup_person(name, transport=transport)
+        except Exception:
+            log.warning("likeness: wikipedia falhou para %s", name, exc_info=True)
+            continue
+        if page is None or page.fictional or page.disambiguation:
+            continue
+        if page.minor:
+            item["minor"] = True
+            continue
+        if page.is_real_adult:
+            item["real_person"] = True
+            item["real_name"] = page.title
+            item["wiki_title"] = page.title
+
+
 def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
                     protagonists: set[str]) -> str | None:
     """Grava um item do passe. Devolve 'created', 'updated' ou None."""
@@ -219,6 +264,7 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
         stats = _apply_stats({}, delta)
         if stats:
             sheet["stats"] = stats
+        _stamp_identity(sheet, item)
         triggers = []
         for raw in (name, *(item.get("aliases") or [])):
             trigger = " ".join(str(raw).split()).strip()
@@ -259,6 +305,7 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     stats = _apply_stats(sheet.get("stats") or {}, delta)
     if stats:
         sheet["stats"] = stats
+    _stamp_identity(sheet, item)
     entry = card.get("entry") or ""
     if not entry and summary:
         entry = summary
@@ -436,7 +483,7 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     content = llm_client.chat_completion(
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        temperature=0.2, max_tokens=550, transport=transport,
+        role="chronicle", temperature=0.2, max_tokens=550, transport=transport,
     )
     try:
         payload = npc_assets._extract_json(content)
@@ -444,6 +491,7 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         log.warning("npc_chronicle: JSON ilegível (%s)", exc)
         return {"created": 0, "updated": 0}
     payload = world_facts.filter_chronicle_payload(payload, assessment)
+    _confirm_real_people(payload, transport)
     with db.session() as conn:
         result = apply_chronicle(conn, adventure_id, payload, plot)
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)

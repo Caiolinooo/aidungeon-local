@@ -94,3 +94,16 @@ CREATE TABLE jobs(
   result TEXT,                       -- JSON de saída (ex.: {"image": {...}})
   error TEXT,
   created_at TEXT, started_at TEXT, finished_at TEXT);
+
+-- Donos: Caio é o admin. Cada aventura pertence a um usuário.
+CREATE TABLE users(
+  username TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT);
+ALTER TABLE adventures ADD COLUMN owner TEXT DEFAULT '';
+
+-- --- Grok (G5): jobs com prioridade e chave de substituição (C5, migration 021)
+ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 2;
+ALTER TABLE jobs ADD COLUMN supersede_key TEXT DEFAULT '';
+CREATE INDEX jobs_queue ON jobs(status, priority, created_at);

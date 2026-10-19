@@ -112,7 +112,7 @@ def test_see_prompt_includes_the_character_canon(client, tmp_path):
     assert "white gown" not in prompt.lower()
     assert "dark hair" not in prompt.lower()
     assert "reclines" not in prompt.lower()
-    assert prompt.lower().index("dark tower") < prompt.lower().index("long red hair")
+    assert prompt.lower().index("long red hair") < prompt.lower().index("dark tower")
     assert " BREAK " in prompt
     sent = json.dumps(capture)
     assert "long red hair" in sent
@@ -224,7 +224,8 @@ def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path)
     assert "a dark tower under a blood-red sky" in head
     assert "ink sketch" in tail
     assert "ancient dragon" not in prompt.lower()
-    assert head.lower().index("dark tower") < head.lower().index("plate armor")
+    assert head.lower().index("plate armor") < head.lower().index("dark tower")
+    assert head.lower().index("short black hair") < head.lower().index("dark tower")
     img2img = [item for item in capture if isinstance(item, dict) and item.get("init_images")]
     assert img2img == []
 
@@ -244,6 +245,21 @@ def test_look_words_from_the_prose_do_not_override_the_card():
     assert "long red hair" in kept
     assert "plate armor" in kept
     assert banned == ""
+    skin_canon = "exact likeness, Selene: pale marble skin, long straight black hair"
+    kept_skin, banned_skin = contradicting_looks(
+        "her pale skin glowing under the moonlight, lifts her dress",
+        skin_canon,
+    )
+    assert "pale skin" in kept_skin.lower()
+    assert "pale" not in banned_skin.lower()
+    assert "dress" in banned_skin.lower()
+    curly, curly_ban = contradicting_looks(
+        "A curly-haired woman kisses a shirtless man on the sofa.",
+        skin_canon,
+    )
+    assert "curly" not in curly.lower()
+    assert "kiss" in curly.lower()
+    assert "curly" in curly_ban.lower()
     untouched, still = contradicting_looks("a white gown", "")
     assert untouched == "a white gown"
     assert still == ""
@@ -438,6 +454,109 @@ def test_see_does_not_paint_an_undress_she_did_not_accept(client, tmp_path):
     assert "naked" in negative or "nude" in negative
     sent = json.dumps(capture)
     assert "Do not censor adult nudity" not in sent
+
+
+def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path):
+    """O card da vampira pálida de cabelo preto liso vem antes do beijo.
+
+    A frase hostil descreve outra mulher. Ela não pode liderar o prompt,
+    nem mandar a pele pálida para o negative.
+    """
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        db.insert_card(
+            conn, adv["id"], type="character", title="Selene",
+            triggers=["Selene", "vampira"], entry="Vampira gótica.",
+            portrait_prompt=(
+                "Selene is a pale, elegant gothic vampiress with long black hair "
+                "and deep, enigmatic eyes, wearing a black velvet dress, velvet choker, "
+                "and platform boots, captured in a bust portrait against a neutral background."
+            ),
+            sheet=json.dumps({
+                "appearance": (
+                    "Pele pálida como mármore, lábios vermelhos vibrantes, "
+                    "cabelos pretos longos e lisos, olhos escuros profundos"
+                ),
+                "body": "Estrutura fina mas atlética, postura elegante e fluida",
+                "clothing": "Vestido de veludo preto, colar de veludo no pescoço, botas de plataforma",
+            }),
+        )
+    add_action(adv["id"], 0, "say", '\n> You say "por que n tira suas roupas amor?"\n')
+    add_action(
+        adv["id"], 1, "continue",
+        "Selene hesita e ri. Ela desliza o vestido preto e fica nua, "
+        "lábios vermelhos, e se aproxima do sofá.",
+    )
+    capture: list = []
+    override_transport(client, make_v2_transport(
+        capture=capture,
+        chat_content=(
+            "A curly-haired woman kisses a shirtless man on the sofa, "
+            "her pale skin glowing under the moonlight."
+        ),
+    ))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"]
+    head, tail = prompt.split("BREAK", 1)
+    folded = head.lower()
+    assert folded.index("black hair") < folded.index("kiss")
+    assert folded.index("pale") < folded.index("kiss")
+    assert "straight" in folded
+    assert "selene" in folded
+    assert "curly" not in folded
+    assert "velvet" not in folded
+    assert "bust" not in folded
+    assert "dress" not in folded
+    assert "desliza" not in prompt.lower()
+    assert "pele pálida" not in prompt.lower()
+    assert "vestido" not in head.lower()
+    assert "athletic" in folded or "slim" in folded
+    assert not any(isinstance(item, dict) and item.get("init_images") for item in capture)
+    with db.session() as conn:
+        saved = db.get_image(conn, resp.json()["id"])
+    negative = saved["negative_prompt"].lower()
+    assert "curly" in negative
+    assert "pale" not in negative
+    assert "different person" in negative
+    assert "wrong skin tone" in negative
+    assert "wrong hair color" in negative
+    assert "extra unnamed person" in negative
+    assert "nude" not in negative
+    assert "naked" not in negative
+    assert tail
+
+
+def test_identity_bits_use_the_vampire_face_not_the_dress():
+    card = {
+        "title": "Selene",
+        "portrait_prompt": (
+            "Selene is a pale, elegant gothic vampiress with long black hair "
+            "and deep, enigmatic eyes, wearing a black velvet dress, velvet choker, "
+            "and platform boots, captured in a bust portrait against a neutral background."
+        ),
+        "sheet": json.dumps({
+            "appearance": (
+                "Pele pálida como mármore, lábios vermelhos vibrantes, "
+                "cabelos pretos longos e lisos, olhos escuros profundos"
+            ),
+            "body": "Estrutura fina mas atlética, postura elegante e fluida",
+            "clothing": "Vestido de veludo preto",
+        }),
+    }
+    bits = " ".join(npc_assets.identity_bits(card)).lower()
+    assert "pale" in bits and "marble" in bits
+    assert "long straight black hair" in bits
+    assert "slim athletic build" in bits
+    assert "dress" not in bits
+    assert "bust" not in bits
+    assert "choker" not in bits
+    assert "pele" not in bits
+    assert "cabelos" not in bits
 
 
 def test_image_sentence_drops_the_rest_of_the_dump():
