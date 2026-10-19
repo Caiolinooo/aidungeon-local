@@ -15,7 +15,9 @@ Hook best-effort chamado pelo game_engine após cada geração:
     Com context_size enorme a janela não despeja nada. Aí o gatilho é a
     cena viva: no máximo archive_horizon_tokens (4096) E
     archive_horizon_turns (8). O que ficou antes disso vira memória assim
-    que soma trigger_tokens, sem tirar ações do prefixo cacheado.
+    que soma trigger_tokens, sem tirar ações do prefixo cacheado. Na
+    geração seguinte, a sobra menor que um pedaço inteiro ainda vira
+    memória quando é um parágrafo. Poucas palavras esperam mais história.
 
 (b) STORY SUMMARY rolante — quando cresce esse mesmo conjunto de ações
     antigas, reescreve adventures.story_summary incorporando os fatos novos,
@@ -60,6 +62,9 @@ def _embeddings_module() -> Any:
     return None
 
 DEFAULT_TRIGGER_TOKENS = 800
+# Sobra abaixo de um pedaço cheio. Menos que isto são poucas palavras,
+# não um parágrafo, e o memory bank espera a história crescer.
+REMAINDER_PARAGRAPH_WORDS = 40
 DEFAULT_ARCHIVE_HORIZON_TOKENS = 4096
 # A Costazul cabe inteira em 4096 tokens e na janela de 106496: o teto em
 # tokens sozinho nunca arquiva. O teto em turnos corta a cena viva mesmo
@@ -253,6 +258,24 @@ def _candidate_old_actions(
     return []
 
 
+def _excerpt_text(actions: list[dict]) -> str:
+    return "".join(_fmt(action) for action in actions).strip()
+
+
+def _is_real_paragraph(actions: list[dict]) -> bool:
+    """Parágrafo de verdade. Um punhado de palavras não vira memória."""
+    text = _excerpt_text(actions)
+    if len(text.split()) < REMAINDER_PARAGRAPH_WORDS:
+        return False
+    return any(mark in text for mark in (".", "!", "?", "…"))
+
+
+def _span_already_archived(actions: list[dict], covered: int | None) -> bool:
+    if covered is None:
+        return False
+    return any(action["seq"] <= covered for action in actions)
+
+
 def _pending_archivable_actions(
     actions: list[dict],
     window_budget: int,
@@ -265,8 +288,9 @@ def _pending_archivable_actions(
     """Ações do memory bank ainda não cobertas por memories.seq_end.
 
     O que saiu da janela entra mesmo curto. O que só saiu da cena viva
-    espera juntar `chunk_tokens` novos — o pedaço seguinte não nasce
-    com um resto pequeno.
+    espera juntar `chunk_tokens` novos. A sobra de um pedaço já gravado,
+    menor que isso, ainda entra quando é um parágrafo — não quando são
+    poucas palavras.
     """
     outside = _evicted_actions(actions, window_budget, estimator)
     pending = [a for a in outside if covered is None or a["seq"] > covered]
@@ -277,6 +301,8 @@ def _pending_archivable_actions(
             actions, horizon_tokens, horizon_turns, estimator)
         proactive = [a for a in beyond if covered is None or a["seq"] > covered]
         if sum(estimator(_fmt(a)) for a in proactive) >= chunk_tokens:
+            return proactive
+        if _span_already_archived(beyond, covered) and _is_real_paragraph(proactive):
             return proactive
     return []
 

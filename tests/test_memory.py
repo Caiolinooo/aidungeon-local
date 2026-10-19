@@ -515,6 +515,103 @@ def test_long_story_inside_106k_window_gets_summary_and_keeps_prefix(tmp_db):
     assert built_next.messages[len(shared)]["role"] == "user"
 
 
+def _archive_cfg(conn):
+    """Janela de 106k, pedaço de 800, cena viva de 4 turnos. Igual à Costazul."""
+    return _cfg(conn, context_size=106496, embeddings={"enabled": False}, memory_bank={
+        "trigger_tokens": 800,
+        "archive_horizon_tokens": 4096,
+        "archive_horizon_turns": 4,
+    })
+
+
+def _passage_of_tokens(tokens: int) -> str:
+    sentence = "O cais guardou este fato para a Clara."
+    text = sentence
+    while (len(text) + 3) // 4 < tokens:
+        text += " " + sentence
+    return text
+
+
+def _prose_words(n: int) -> str:
+    """Exatamente `n` palavras. A última fecha uma frase."""
+    if n <= 1:
+        return "fim."
+    return " ".join(f"palavra{i}" for i in range(n - 1)) + " fim."
+
+
+def _live_scene(adv_id: str, start_seq: int, turns: int = 5) -> None:
+    for offset in range(turns):
+        add_action(adv_id, start_seq + offset, "continue", "Você espera.")
+
+
+def _memory_prompts(fake: FakeLLM) -> list[str]:
+    return [
+        call["messages"][0]["content"] for call in fake.calls
+        if call["messages"][0]["content"].startswith("Extract the facts")
+    ]
+
+
+def test_paragraph_shorter_than_one_chunk_does_not_start_a_memory(tmp_db):
+    """Um parágrafo sozinho, abaixo de 800 tokens, ainda não abre o memory bank."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue",
+               _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS))
+    _live_scene(adv["id"], 1)
+    fake = FakeLLM(reply="Não devia gravar.")
+    with db.session() as conn:
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
+                                settings=_archive_cfg(conn))
+        mems = db.list_memories(conn, adv["id"])
+    assert fake.calls == []
+    assert mems == []
+
+
+def test_paragraph_remainder_below_one_chunk_becomes_second_memory(tmp_db):
+    """Costazul: ~1282 tokens arquivados e pedaço de 800 deixam um parágrafo
+    de fora. A passada seguinte grava essa sobra."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue", _passage_of_tokens(800))
+    remainder = _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS)
+    add_action(adv["id"], 1, "continue", remainder)
+    _live_scene(adv["id"], 2)
+    fake = FakeLLM(reply="O cais ficou sem peixe.")
+    with db.session() as conn:
+        cfg = _archive_cfg(conn)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 1
+    assert mems[0]["seq_start"] == 0
+    assert mems[0]["seq_end"] == 0
+    assert remainder not in _memory_prompts(fake)[0]
+    with db.session() as conn:
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
+                                settings=_archive_cfg(conn))
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 2
+    assert mems[1]["seq_start"] == 1
+    assert mems[1]["seq_end"] == 1
+    assert mems[1]["text"] == "O cais ficou sem peixe."
+    assert remainder in _memory_prompts(fake)[1]
+
+
+def test_few_words_remainder_does_not_become_a_memory(tmp_db):
+    """A sobra de poucas palavras, abaixo de um pedaço, não vira memória."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue", _passage_of_tokens(800))
+    add_action(adv["id"], 1, "continue", _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS - 1))
+    _live_scene(adv["id"], 2)
+    fake = FakeLLM(reply="Primeiro pedaço.")
+    with db.session() as conn:
+        cfg = _archive_cfg(conn)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        before = len(fake.calls)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 1
+    assert mems[0]["seq_end"] == 0
+    assert len(fake.calls) == before
+
+
 def test_deferred_types_tolerate_vm_without_queue_timeout(monkeypatch):
     """A VM não tem LlmQueueTimeout. O import do summarizer não pode cair."""
     monkeypatch.delattr(summarizer.llm_client, "LlmQueueTimeout", raising=False)
