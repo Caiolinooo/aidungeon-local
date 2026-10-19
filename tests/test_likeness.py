@@ -415,9 +415,24 @@ def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, mon
     data, denoise = likeness.portrait_init(card, None, anchor_denoise=0.35)
     assert data == PNG_BYTES
     assert denoise == likeness.REFERENCE_DENOISE
+    # Pessoa real com foto não herda a âncora gerada, mesmo se ela existir.
     kept, denoise = likeness.portrait_init(card, b"anchor", anchor_denoise=0.35)
-    assert kept == b"anchor"
-    assert denoise == 0.35
+    assert kept == PNG_BYTES
+    assert denoise == likeness.REFERENCE_DENOISE
+    fictional = {"type": "character", "title": "Clara", "sheet": "{}"}
+    fiction_bytes, fiction_denoise = likeness.portrait_init(
+        fictional, b"anchor", anchor_denoise=0.35,
+    )
+    assert fiction_bytes == b"anchor"
+    assert fiction_denoise == 0.35
+    no_photo = {"type": "character", "title": "Alok", "sheet": json.dumps({
+        "real_person": True,
+    })}
+    fallback, fallback_denoise = likeness.portrait_init(
+        no_photo, b"anchor", anchor_denoise=0.35,
+    )
+    assert fallback == b"anchor"
+    assert fallback_denoise == 0.35
     minor = {"type": "character", "title": "Ada", "sheet": json.dumps({
         "real_person": True, "minor": True,
     })}
@@ -427,6 +442,56 @@ def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, mon
         assert getattr(exc, "code", "") == "minor"
     else:
         raise AssertionError("retrato de menor deveria recusar")
+
+
+def test_real_person_with_anchor_still_sends_the_reference(client, tmp_path, monkeypatch):
+    """Regenerar pessoa real manda a foto, não o PNG da âncora, no denoise da referência."""
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    photo = refs / "zendaya.png"
+    photo.write_bytes(PNG_BYTES)
+    anchor_bytes = b"generated-anchor-not-the-photo"
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card = _character(
+        adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
+        likeness={"reference_image_path": str(photo)},
+    )
+    anchor_path = tmp_path / "bad-anchor.png"
+    anchor_path.write_bytes(anchor_bytes)
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], card["id"], {
+            "portrait_prompt": "dark curly hair, olive skin, brown eyes, bust portrait",
+        })
+        image = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path=str(anchor_path), prompt="txt2img anchor",
+            kind="portrait", ref_id=card["id"], width=512, height=768,
+        )
+        db.set_card_portrait(conn, card["id"], image["id"], anchor_id=image["id"])
+        queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
+    assert queued is not None
+    assert queued["payload"]["init_image_id"] == image["id"]
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/sdapi/v1/img2img"):
+            seen.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={
+                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
+                "parameters": {},
+            })
+        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
+
+    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
+    assert len(seen) == 1
+    payload = seen[0]
+    sent = base64.b64decode(payload["init_images"][0])
+    assert sent == PNG_BYTES
+    assert sent != anchor_bytes
+    assert payload["denoising_strength"] == likeness.REFERENCE_DENOISE
+    assert payload["denoising_strength"] != jobs.PORTRAIT_DENOISE
 
 
 def test_enrich_keeps_the_real_person_flag():

@@ -12,7 +12,9 @@ Tipos:
   efetivo (mesmo do "See") e vincula ao card (images kind='portrait').
   A primeira foto vira a âncora (`portrait_anchor_id`). Geração automática
   não substitui um retrato que já existe. Pedido explícito de regenerar
-  usa img2img a partir dessa âncora, para o rosto continuar o mesmo.
+  usa img2img a partir dessa âncora, para o rosto fictício continuar o mesmo.
+  Pessoa real com arquivo de referência ignora essa âncora e parte da foto
+  (`likeness.portrait_init`, denoise `REFERENCE_DENOISE`).
 - `scene_backdrop` — pinta o fundo do lugar atual (payload.prompt já pronto,
   sem LLM) em images kind='backdrop'. Wide 1344×768 (bucket SDXL).
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,

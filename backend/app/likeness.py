@@ -34,8 +34,9 @@ CODE_REAL = "real_person_explicit"
 CODE_MINOR = "minor"
 MSG_REAL = "Não gero nudez nem sexo com pessoa real."
 MSG_MINOR = "Não gero nudez nem sexo com menor."
-# Primeiro retrato da pessoa real, a partir da foto. Abaixo da âncora (0.35):
-# 0.45 já é denoise alto demais para o rosto da foto sobreviver a outro enquadramento.
+# Retrato de pessoa real, sempre a partir da foto quando ela existe.
+# Abaixo da âncora fictícia (0.35): 0.45 já é denoise alto demais para o rosto
+# da foto sobreviver a outro enquadramento.
 REFERENCE_DENOISE = 0.25
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
@@ -279,17 +280,21 @@ def reference_bytes(card: dict) -> bytes | None:
 
 def portrait_init(card: dict, anchor: bytes | None, *,
                   anchor_denoise: float) -> tuple[bytes | None, float | None]:
-    """Âncora do retrato, ou a referência da pessoa real quando ainda não há foto.
+    """Foto de referência da pessoa real, mesmo quando já existe âncora gerada.
 
-    Menor real não ganha retrato. O See não usa este caminho.
+    A âncora de um txt2img antigo não parece a pessoa; regenerar a partir dela
+    nunca chega na foto. Sem arquivo de referência, cai na âncora. Personagem
+    fictício continua na âncora. Menor real não ganha retrato. O See não usa
+    este caminho.
     """
     if is_real_person(card) and is_minor(card):
         raise GameError(422, CODE_MINOR, "Não gero retrato de menor.")
+    if is_real_person(card):
+        ref = reference_bytes(card)
+        if ref:
+            return ref, REFERENCE_DENOISE
     if anchor:
         return anchor, anchor_denoise
-    ref = reference_bytes(card)
-    if ref:
-        return ref, REFERENCE_DENOISE
     return None, None
 
 
