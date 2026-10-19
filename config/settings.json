@@ -123,7 +123,7 @@
     "timeout_seconds": 300,
     "providers": {
       "sdwebui": {
-        "base_url": "http://127.0.0.1:7860",
+        "base_url": "http://127.0.0.1:7861",
         "txt2img_path": "/sdapi/v1/txt2img",
         "img2img_path": "/sdapi/v1/img2img",
         "width": 1024,
@@ -131,7 +131,7 @@
         "steps": 20,
         "negative_prompt": "text, watermark, signature, low quality, deformed, blurry, cartoon, anime, illustration, cgi",
         "sd_model_checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
-        "note": "A1111 na VM, --medvram --no-half-vae, VAE sdxl-vae-fp16-fix. Checkpoint epiCRealism XL CrystalClear (SDXL fotorealista, sem filtro de conteúdo; Juggernaut XL fica de backup no disco). 1024 é o tamanho nativo; a faixa da cena usa 1344x768. Flux não cabe: o llama-server ocupa ~14 GB dos 23 GB da L4."
+        "note": "Forge Neo (sd-webui-forge-classic, branch neo) em 127.0.0.1:7861, mesma API txt2img/img2img. Checkpoint epiCRealism XL CrystalClear e VAE sdxl-vae-fp16-fix, os dois já no disco do A1111 (/home/caio/sd-webui, porta 7860, rollback). DPM++ 2M Karras, CFG 5, 20 passos. O Neo não tem --medvram: ele usa a VRAM livre ao lado do llama-server. Z-Image-Turbo, FLUX e Wan não entram neste slot. 1024 é o tamanho nativo do arquivo; no ar o retrato usa o override 800x720 e a faixa 1344x768."
       },
       "openai_compatible": {
         "base_url": "",

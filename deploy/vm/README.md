@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
-| Imagem | `sd-webui.service` (A1111) na porta 7860, com o drop-in de memória abaixo |
+| Imagem | `sd-webui-forge.service` (Forge Neo) na porta 7861, epiCRealism XL. O A1111 continua em `/home/caio/sd-webui` (unit parada) |
 | Voz | `abz-voice-audio.service`, Supertonic 3 em `https://vm.groupabz.com/voice/v1`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -108,7 +108,7 @@ testados com um uvicorn local (`tools/README.md`, seção 2.4).
 ## Staging
 
 Mesmo venv e mesmo `.env` do app, código e banco próprios, só em `127.0.0.1`.
-Usa o mesmo llama-server e o mesmo A1111 do app principal: teste fora do horário
+Usa o mesmo llama-server e o mesmo Forge do app principal: teste fora do horário
 de jogo. Unit em [`aidungeon-staging.service`](aidungeon-staging.service).
 
 ```bash
@@ -132,6 +132,37 @@ python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
 
 No app principal (2122), só chamadas que não gravam (estado, `/choices`,
 `/api/health/llm`): o replay escreve turnos na história.
+
+## Imagem: Forge Neo
+
+Desde 19 out 2026 o app principal e o staging falam com o Forge Neo
+(`Haoming02/sd-webui-forge-classic`, branch `neo`) em
+`http://127.0.0.1:7861`. Código em `/home/caio/sd-webui-forge-neo`. Unit
+[`sd-webui-forge.service`](sd-webui-forge.service). Checkpoint
+`epicrealismXL_vxviiCrystalclear.safetensors` e VAE `sdxl-vae-fp16-fix.safetensors`,
+apontados para a pasta do A1111 (`--forge-ref-a1111-home /home/caio/sd-webui`).
+O corpo segue DPM++ 2M, scheduler Karras, CFG 5, 20 passos.
+
+O Neo tirou o `--medvram`. No lugar: `--cuda-malloc --expandable-segments
+--cuda-stream --tiled-conv2d 128` e `setting_allocated_vram` 1.0. Com 0,25 o
+Neo reservava ~17 GB e via 0 MB úteis (o modelo inteiro ia para a RAM). Com
+1.0 ele ocupa o buraco livre: pico medido ~4,5 GB no 512 e o 800×720 em 20
+passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
+`GET /health` 200.
+
+Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
+do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB),
+FLUX 3 Klein INT8 (~8 GB, outro cliente) e Wan 2.1.
+
+Rollback: parar o Forge, subir o A1111 e devolver a URL.
+
+```bash
+sudo systemctl disable --now sd-webui-forge.service
+sudo systemctl enable --now sd-webui.service
+# image.sdwebui_base_url nos dois bancos: "http://127.0.0.1:7860"
+```
+
+Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
 
 ## A1111: memória
 
