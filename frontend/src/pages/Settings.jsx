@@ -104,6 +104,14 @@ export default function Settings() {
     context_modifier: '',
     output_modifier: '',
   })
+  const contextSizeMax = llmForm.context_size_max ?? 106496
+  const contextPresets = [
+    { label: '32k', val: 32768 },
+    { label: '64k', val: 65536 },
+    { label: '128k', val: 131072 },
+  ]
+    .filter((preset) => preset.val <= contextSizeMax)
+    .concat([{ label: `${Math.round(contextSizeMax / 1024)}k Max`, val: contextSizeMax }])
 
   useEffect(() => {
     async function loadAllSettings() {
@@ -122,7 +130,7 @@ export default function Settings() {
           setLlmForm((prev) => ({
             ...prev,
             ...llm,
-            context_size: Math.min(262144, llm.context_size || 65536),
+            context_size: Math.min(llm.context_size_max ?? 106496, llm.context_size || 65536),
           }))
         }
         if (img && Object.keys(img).length) setImageForm((prev) => ({ ...prev, ...img }))
@@ -146,7 +154,7 @@ export default function Settings() {
       if (activeTab === 'llm') {
         const payload = {
           ...llmForm,
-          context_size: Math.min(262144, Number(llmForm.context_size) || 65536),
+          context_size: Math.min(contextSizeMax, Number(llmForm.context_size) || 65536),
           max_tokens: Number(llmForm.max_tokens),
           temperature: Number(llmForm.temperature),
           top_p: Number(llmForm.top_p),
@@ -163,7 +171,11 @@ export default function Settings() {
           timeout_seconds: Number(llmForm.timeout_seconds),
         }
         const updated = await api.putLlmSettings(payload)
-        setLlmForm((prev) => ({ ...prev, ...updated, context_size: Math.min(262144, updated.context_size) }))
+        setLlmForm((prev) => ({
+          ...prev,
+          ...updated,
+          context_size: Math.min(updated.context_size_max ?? contextSizeMax, updated.context_size),
+        }))
         toast('LLM & Sampler settings saved.', 'ok')
       } else if (activeTab === 'image') {
         const payload = {
@@ -367,19 +379,14 @@ export default function Settings() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-                          Long-Horizon Context Window & Turn Length (Up to 262,144 Tokens)
+                          Long-Horizon Context Window & Turn Length (Up to {contextSizeMax.toLocaleString()} Tokens)
                         </h3>
                         <p className="text-[11px] text-secondary mt-0.5">
-                          Dynamic canon scaling & anti-hallucination continuity anchors keep 64k–256k campaigns coherent.
+                          Dynamic canon scaling & anti-hallucination continuity anchors keep 64k–104k campaigns coherent.
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        {[
-                          { label: '32k', val: 32768 },
-                          { label: '64k', val: 65536 },
-                          { label: '128k', val: 131072 },
-                          { label: '256k Max', val: 262144 },
-                        ].map((preset) => (
+                        {contextPresets.map((preset) => (
                           <button
                             key={preset.val}
                             type="button"
@@ -403,19 +410,18 @@ export default function Settings() {
                       <input
                         type="range"
                         min="4096"
-                        max="262144"
+                        max={contextSizeMax}
                         step="4096"
                         value={llmForm.context_size}
                         onChange={(e) =>
-                          setLlmForm({ ...llmForm, context_size: Math.min(262144, Number(e.target.value)) })
+                          setLlmForm({ ...llmForm, context_size: Math.min(contextSizeMax, Number(e.target.value)) })
                         }
                         className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                       />
                       <div className="flex justify-between text-[10px] text-muted font-mono mt-1">
                         <span>4,096 min</span>
                         <span>65,536 (64k default)</span>
-                        <span>131,072 (128k)</span>
-                        <span className="font-semibold text-accent-pri">262,144 max (256k)</span>
+                        <span className="font-semibold text-accent-pri">{contextSizeMax.toLocaleString()} max (per slot)</span>
                       </div>
                     </div>
 

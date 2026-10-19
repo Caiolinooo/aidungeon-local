@@ -48,6 +48,7 @@ export default function Play() {
   const [seeOpen, setSeeOpen] = useState(false)
   const [seePrompt, setSeePrompt] = useState('')
   const [choices, setChoices] = useState([])
+  const [webSources, setWebSources] = useState([])
   const [inputDirty, setInputDirty] = useState(false)
   const [dockRefresh, setDockRefresh] = useState(0)
 
@@ -201,6 +202,7 @@ export default function Play() {
       abortRef.current = ctrl
       setGen({ kind, text: '' })
       setChoices([])
+      setWebSources([])
       streamGeneration(path, {
         body,
         signal: ctrl.signal,
@@ -209,6 +211,9 @@ export default function Play() {
           newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
           setActions((prev) => applyDone(prev ?? [], data).sort(bySeq))
           setGen(null)
+          if (Array.isArray(data.web_sources) && data.web_sources.length) {
+            setWebSources(data.web_sources)
+          }
           fetchChoices()
         },
         onError: (msg) => {
@@ -220,8 +225,12 @@ export default function Play() {
     [generating, toast, fetchChoices],
   )
 
-  const sendAction = (type, text) =>
-    runStream('action', `/adventures/${id}/action`, { type, text }, (prev, data) => {
+  const sendAction = (type, text, opts) =>
+    runStream('action', `/adventures/${id}/action`, {
+      type,
+      text,
+      ...(opts?.webSearch ? { web_search: true } : {}),
+    }, (prev, data) => {
       const out = [...prev]
       if (data.player_action) out.push(data.player_action)
       if (data.action) out.push(data.action)
@@ -250,6 +259,7 @@ export default function Play() {
       const removedIds = new Set((res.removed ?? []).map((a) => a.id))
       setActions((prev) => (prev ?? []).filter((a) => !removedIds.has(a.id)))
       setChoices([])
+      setWebSources([])
       toast('Last turn undone.', 'ok')
     } catch (e) {
       toast(e.message)
@@ -632,6 +642,44 @@ export default function Play() {
                   <span className="truncate max-w-[14rem]">{c.text}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {webSources.length > 0 && (
+          <div className="border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur z-10">
+            <div className={`mx-auto flex items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                🌐 Sources:
+              </span>
+              {webSources.map((s, i) => {
+                const safe = typeof s.url === 'string' && /^https?:\/\//i.test(s.url)
+                const chip = 'min-h-8 shrink-0 truncate max-w-[14rem] rounded-full border border-subtle bg-elevated px-3 py-1 text-xs'
+                return safe ? (
+                  <a
+                    key={s.url || i}
+                    href={s.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`${chip} text-secondary hover:border-accent-pri hover:text-primary transition`}
+                  >
+                    {s.title}
+                  </a>
+                ) : (
+                  <span key={s.url || i} className={`${chip} text-muted`}>
+                    {s.title}
+                  </span>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setWebSources([])}
+                title="Dismiss sources"
+                aria-label="Dismiss sources"
+                className="min-h-8 shrink-0 rounded-full border border-subtle bg-elevated px-2.5 py-1 text-xs text-muted hover:text-primary transition"
+              >
+                ✕
+              </button>
             </div>
           </div>
         )}

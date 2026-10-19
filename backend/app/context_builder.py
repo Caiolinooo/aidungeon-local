@@ -7,27 +7,31 @@ Ordem lógica EXATA dos blocos (budgets de config/settings.json):
     3. story cards (pinned + disparados)                          (≤ 1200)
     4. memory bank (top-k)                                        (≤ 600)
     5. story_summary                                              (≤ 400)
-    6. user:   janela recente verbatim (dinâmica, trunca POR AÇÃO INTEIRA)
+    6. user:   janela recente verbatim (dinâmica, trunca POR AÇÃO INTEIRA,
+              e só em múltiplos de WINDOW_DROP_CHUNK)
     7. authors_note                                               (≤ 300)
     8. user:   última ação formatada                              (≤ 200)
     reserva de resposta                                           (512)
 
-FORMATO NO WIRE (chat template Qwen3 do llama.cpp — validado contra a VM):
-o template exige a mensagem system NO INÍCIO e rejeita (HTTP 500 "System
-message must be at the beginning") qualquer system após a primeira posição.
-Por isso os blocos 1–5 viram UMA ÚNICA mensagem system na posição 0,
-concatenados com "\\n\\n" e cabeçalhos sóbrios que preservam a semântica:
+FORMATO NO WIRE (chat template Qwen3 do llama.cpp — prefixo estável p/ slot
+pinado): o template exige a mensagem system NO INÍCIO e rejeita (HTTP 500
+"System message must be at the beginning") qualquer system após a primeira
+posição. A system da posição 0 leva SÓ os blocos estáveis, concatenados com
+"\\n\\n":
     bloco 1  sem cabeçalho (é a diretiva central do narrador)
     bloco 2  "[Plot]"        — quem é você, mundo, regras (Plot Essentials)
+Os blocos voláteis vão no TOPO da mensagem user final (antes da author's
+note, Active Lore, Continuity Anchor, STYLE_CUE, CANON_CUE e da última
+ação), para cards/memórias/resumo/estado não invalidarem o prefixo cacheado:
     bloco 3  "[World info]"  — story cards disparados/pinned (lorebook)
     bloco 4  "[Memories]"    — memory bank (resumos de eventos antigos)
     bloco 5  "[Summary]"     — story summary rolante
-A author's note (bloco 7) vai DENTRO da mensagem user final, como linha
-própria imediatamente ANTES da última ação, no formato clássico
-"[Author's note: {texto}]" — preserva a influência por recência sem
-system fora da 1ª posição. A ordem lógica, os budgets e a regra dinâmica
-da janela recente (context_size − soma(demais budgets) − response_reserve;
-budgets fixos são pisos) NÃO mudam.
+    bloco 5b "[Player state]"
+A author's note (bloco 7) continua na user final, no formato clássico
+"[Author's note: {texto}]". Budgets, escala dinâmica e a contabilidade de
+extra_canon_tokens não mudam — só a posição. A janela recente descarta
+ações inteiras e, quando descarta, sobe o corte para um múltiplo de
+WINDOW_DROP_CHUNK. Ações "see" (prompt SDXL) não entram na narração.
 
 Formatação das ações do jogador (byte a byte como no backup):
     do   → "\\n> You {text}\\n"
@@ -51,7 +55,7 @@ from __future__ import annotations
 import importlib
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 BASE_SYSTEM_PROMPT = (
     "You are the narrator and environment in an interactive text adventure. You control NPCs,\n"
@@ -103,6 +107,55 @@ CANON_CUE = (
     "clothing, status and recorded facts. Do not resurrect the dead, invent a "
     "relative's fate, or redesign a face the card already describes.]"
 )
+
+# A borda esquerda da janela só anda em múltiplos disto, para o prefixo
+# cacheado (slot pinado) não ser reprocessado a cada turno.
+WINDOW_DROP_CHUNK = 8
+
+
+def narrative_actions(actions: list[dict]) -> list[dict]:
+    """Tira ações `see` (prompt SDXL). Não são prosa e não entram na janela."""
+    return [a for a in actions if a.get("type") != "see"]
+
+
+def narrative_window(
+    actions: list[dict],
+    window_budget: int,
+    estimator: Callable[[str], int] | None = None,
+) -> tuple[list[dict], list[dict], list[dict], int]:
+    """Lista narrativa e a janela recente com descarte em blocos.
+
+    Devolve `(narrative, kept, evicted, tokens)`. `narrative` é `actions`
+    sem `see`. A última ação narrativa é o turno atual: não está em `kept`
+    nem em `evicted`. `kept` é o sufixo de `narrative[:-1]` que cabe no
+    budget, depois de subir o descarte para múltiplo de WINDOW_DROP_CHUNK.
+    `evicted` é o prefixo que saiu — o que o summarizer arquiva. O mesmo
+    par (kept, evicted) vale para o prompt e para a memória.
+    """
+    estimate = estimator or estimate_tokens
+    narrative = narrative_actions(actions)
+    pool = narrative[:-1] if narrative else []
+    chosen: list[dict] = []
+    used = 0
+    for action in reversed(pool):
+        cost = estimate(format_action_text(action["type"], action["text"]))
+        if used + cost > window_budget:
+            break
+        chosen.append(action)
+        used += cost
+    chosen.reverse()
+    dropped = len(pool) - len(chosen)
+    if dropped:
+        snapped = ((dropped + WINDOW_DROP_CHUNK - 1) // WINDOW_DROP_CHUNK) * WINDOW_DROP_CHUNK
+        keep = len(pool) - snapped
+        chosen = chosen[-keep:] if keep > 0 else []
+        used = sum(
+            estimate(format_action_text(a["type"], a["text"]))
+            for a in chosen
+        )
+    evicted = pool[: len(pool) - len(chosen)]
+    return narrative, chosen, evicted, used
+
 
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
 FIXED_BUDGET_KEYS = (
@@ -318,13 +371,19 @@ def _card_snippet(card: dict) -> str:
 def build_context(adventure: dict, actions: list[dict], cfg: dict,
                   conn: sqlite3.Connection) -> BuiltContext:
     """Monta as mensagens na ordem do sanduíche (PLANO.md §4.2), no formato
-    do template Qwen3: UMA system na posição 0 (blocos 1–5) + users."""
+    do template Qwen3: UMA system na posição 0 (blocos estáveis 1–2) + users.
+    Blocos voláteis (cards, memórias, resumo, player state) ficam no topo da
+    user final."""
+    # Prompt de imagem, não prosa: fora da janela, da varredura de
+    # cards/memórias e da escolha da última ação. O summarizer usa o mesmo filtro.
+    actions = narrative_actions(actions)
     budgets = cfg["budgets"]
     scale = context_scale_factor(cfg)
     meta: dict[str, Any] = {"budgets": {}, "context_scale_factor": scale}
 
-    # ---- system único (posição 0): blocos 1–5 concatenados ----------------
+    # ---- system único (posição 0): só blocos estáveis 1–2 -----------------
     system_parts: list[str] = []
+    volatile_parts: list[str] = []
 
     # 1 — narrador em 2ª pessoa + ai_instructions (sem cabeçalho)
     block1 = BASE_SYSTEM_PROMPT
@@ -381,28 +440,28 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if cards:
         per_card = int(cards_cfg.get("budget_por_card", 150))
         cards_block = "\n\n".join(_render_card(c, per_card) for c in cards)
-        system_parts.append("[World info]\n" + cards_block)
+        volatile_parts.append("[World info]\n" + cards_block)
         meta["cards_included"] = [c.get("id") for c in cards]
         extra_canon_tokens += max(0, estimate_tokens(cards_block) - base_cards_budget)
 
     # 4 — memory bank (top-k, ordem cronológica)
     if mems:
         mems_block = "\n\n".join(m["text"] for m in mems)
-        system_parts.append("[Memories]\n" + mems_block)
+        volatile_parts.append("[Memories]\n" + mems_block)
         meta["memories_included"] = [m.get("id") for m in mems]
         extra_canon_tokens += max(0, estimate_tokens(mems_block) - base_mem_budget)
 
     # 5 — story_summary
     if summary:
         sum_block = _fit_budget(summary, sum_budget)
-        system_parts.append("[Summary]\n" + sum_block)
+        volatile_parts.append("[Summary]\n" + sum_block)
         extra_canon_tokens += max(0, estimate_tokens(sum_block) - base_sum_budget)
 
     # 5b — estado do painel dinâmico (v0.7.0): HP/inventário/ficha que o
     # jogador edita nos widgets. Sem ele a IA narra dano/tesouro no escuro.
     player_state = render_player_state(adventure.get("ui_state") or {})
     if player_state:
-        system_parts.append("[Player state]\n" + _fit_budget(
+        volatile_parts.append("[Player state]\n" + _fit_budget(
             player_state, int(budgets.get("player_state", 200))))
 
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
@@ -411,17 +470,9 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     base_window_budget = recent_window_budget(cfg)
     window_budget = max(0, base_window_budget - extra_canon_tokens)
     meta["budgets"]["recent_window"] = base_window_budget
-    window_actions = actions[:-1] if actions else []
-    chosen: list[str] = []
-    used = 0
-    for action in reversed(window_actions):
-        piece = format_action_text(action["type"], action["text"])
-        cost = estimate_tokens(piece)
-        if used + cost > window_budget:
-            break  # nunca corta no meio de uma ação; descarta esta e as anteriores
-        chosen.append(piece)
-        used += cost
-    chosen.reverse()
+    # Mesma seleção do summarizer: see já saiu, descarte em WINDOW_DROP_CHUNK.
+    _narrative, window_kept, _evicted, used = narrative_window(actions, window_budget)
+    chosen = [format_action_text(a["type"], a["text"]) for a in window_kept]
     if chosen:
         messages.append({"role": "user", "content": "".join(chosen)})
     meta["window_action_count"] = len(chosen)
@@ -437,7 +488,8 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
                                int(budgets.get("last_action", 200)))
     else:
         last_txt = "Begin the story."
-    final_parts = []
+    final_parts: list[str] = []
+    final_parts.extend(volatile_parts)
     if note:
         final_parts.append(f"[Author's note: {note}]")
 

@@ -156,7 +156,7 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
     if not api_key:
         api_key = resolve_env_api_key() or llm.get("api_key") or None
 
-    return {
+    effective = {
         "provider": llm.get("provider", "llamacpp"),
         "base_url": ov("llm.base_url", llm.get("base_url", "")),
         "api_key": api_key or None,
@@ -181,6 +181,11 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
         "retry_temperature_step": float(ov("sampler.retry_temperature_step", sampler.get("retry_temperature_step", 0.05))),
         "max_retry_temperature": float(ov("sampler.max_retry_temperature", sampler.get("max_retry_temperature", 1.15))),
     }
+    # Clamp on read: VM DB may store 262144, which exceeds per-slot n_ctx.
+    # Never write the stored override back down.
+    cap = int(llm.get("context_size_limits", {}).get("max", 106496))
+    effective["context_size"] = min(effective["context_size"], cap)
+    return effective
 
 
 def mask_api_key(key: str | None) -> str | None:

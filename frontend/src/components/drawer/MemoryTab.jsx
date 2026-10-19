@@ -22,6 +22,7 @@ export default function MemoryTab({ adventure }) {
   const [plot, setPlot] = useState('')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [showBank, setShowBank] = useState(true)
 
   // Memory items state
@@ -62,6 +63,22 @@ export default function MemoryTab({ adventure }) {
       toast(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Fills the textareas only — the user reviews and clicks Save.
+  const syncPlot = async () => {
+    setSyncing(true)
+    try {
+      const language = (navigator.language || 'pt').slice(0, 2)
+      const r = await api.assistantSyncPlot({ adventure_id: adventure.id, language })
+      if (typeof r?.plot_essentials === 'string') setPlot(r.plot_essentials)
+      if (typeof r?.authors_note === 'string') setNote(r.authors_note)
+      if (r?.summary_delta) toast(r.summary_delta, 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -142,13 +159,24 @@ export default function MemoryTab({ adventure }) {
     <div className="space-y-6 text-primary">
       {/* Plot Essentials (Memory) */}
       <div className="rounded-xl border border-subtle bg-surface p-4 space-y-3">
-        <div>
-          <span className="block text-xs font-semibold uppercase tracking-wider text-muted">
-            Plot Essentials (Memory)
-          </span>
-          <span className="block text-xs text-secondary mt-0.5">
-            Fixed context block near top of AI prompt: who you are, world lore, main objective.
-          </span>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-wider text-muted">
+              Plot Essentials (Memory)
+            </span>
+            <span className="block text-xs text-secondary mt-0.5">
+              Fixed context block near top of AI prompt: who you are, world lore, main objective.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={syncPlot}
+            disabled={syncing}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent-pri/20 border border-accent-pri/40 px-3 py-1 text-xs font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : 'hidden'}`} />
+            <span>{syncing ? 'Syncing…' : '✨ Sync Plot with AI'}</span>
+          </button>
         </div>
         <textarea
           value={plot}

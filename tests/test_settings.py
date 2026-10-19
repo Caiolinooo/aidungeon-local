@@ -1,7 +1,8 @@
 """Testes de /api/settings/llm e /api/health/llm.
 
 - api_key mascarada no GET (nunca em claro);
-- PUT de base_url/model_alias invalida o cache de descoberta de modelo;
+- PUT de /api/settings/llm sempre invalida descoberta e sonda de slots;
+- PUT de base_url/model_alias ainda refaz a descoberta de modelo;
 - health sonda /models em tempo real (ok / unreachable / auth_error).
 """
 
@@ -9,7 +10,9 @@ from __future__ import annotations
 
 import json
 
-from app import deps
+import httpx
+
+from app import db, deps, llm_client, settings_store
 
 from conftest import make_llm_transport
 
@@ -55,7 +58,7 @@ def test_put_partial_update_keeps_other_fields(client):
     client.put("/api/settings/llm", json={"max_tokens": 1200, "context_size": 262144, "streaming": False})
     data = client.get("/api/settings/llm").json()
     assert data["max_tokens"] == 1200
-    assert data["context_size"] == 262144
+    assert data["context_size"] == 106496  # clamp de leitura (context_size_limits.max)
     assert data["streaming"] is False
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"  # intacto
     assert data["disable_thinking"] is True                      # intacto
@@ -96,6 +99,50 @@ def test_base_url_change_invalidates_discovery_cache(client):
         lambda: make_llm_transport(model_id="model-c")
     assert client.get("/api/settings/llm").json()["model_discovered"] == "model-b"
     client.app.dependency_overrides.clear()
+
+
+def test_api_key_only_put_reprobes_slot_count(client):
+    """PUT só de api_key limpa o cache de slots: o próximo chat sonda /props de novo."""
+    props_hits: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/props":
+            props_hits.append(request)
+            return httpx.Response(200, json={"total_slots": 2})
+        if path.endswith("/models"):
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [{"id": "mock-model", "object": "model"}],
+            })
+        if path.endswith("/chat/completions"):
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "ok"}}],
+            })
+        return httpx.Response(404, json={"error": path})
+
+    transport = httpx.MockTransport(handler)
+    with db.session() as conn:
+        cfg = settings_store.effective_llm_settings(conn)
+    assert llm_client.chat_completion(
+        cfg, [{"role": "user", "content": "hi"}], transport=transport) == "ok"
+    assert len(props_hits) == 1
+
+    client.app.dependency_overrides[deps.get_http_transport] = lambda: transport
+    try:
+        resp = client.put("/api/settings/llm", json={"api_key": "sk-rotated-9999"})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert "sk-rotated-9999" not in resp.text
+    assert len(props_hits) == 1  # o PUT não sonda slots; só invalida o cache
+
+    with db.session() as conn:
+        cfg = settings_store.effective_llm_settings(conn)
+    assert cfg["api_key"] == "sk-rotated-9999"
+    assert llm_client.chat_completion(
+        cfg, [{"role": "user", "content": "hi"}], transport=transport) == "ok"
+    assert len(props_hits) == 2
 
 
 def test_explicit_model_alias_skips_discovery(client):

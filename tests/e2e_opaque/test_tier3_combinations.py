@@ -72,7 +72,8 @@ class TestTier3Combinations:
 
         # Verify that Dragon Horn was triggered into context
         assert len(captured_prompts) >= 1
-        system_content = captured_prompts[0]["messages"][0]["content"]
+        # Layout cache-friendly: [World info] (cards) vive na última mensagem.
+        system_content = captured_prompts[0]["messages"][-1]["content"]
         assert "Dragon Horn" in system_content or "elder wyrm" in system_content
 
         # Subsequent choice generation takes new scene into account
@@ -166,7 +167,8 @@ class TestTier3Combinations:
         parse_sse_events(turn_resp.text)
 
         assert len(captured_payloads) >= 1
-        prompt = captured_payloads[0]["messages"][0]["content"]
+        # Layout cache-friendly: [Player state] vive na última mensagem.
+        prompt = captured_payloads[0]["messages"][-1]["content"]
         assert "HP" in prompt
         assert "12" in prompt
 

@@ -108,11 +108,12 @@ def test_see_flow_creates_image_and_action(client, tmp_path):
     # o momento vem antes do estilo: o CLIP corta o fim do bloco
     assert "a dark tower under a blood-red sky" in data["prompt"]
     assert data["prompt"].index("a dark tower under a blood-red sky") < data["prompt"].index("ink sketch")
-    assert "Thunder cracks overhead" in data["prompt"]
+    assert "Thunder cracks overhead" not in data["prompt"]
     assert "dramatic angle" in data["prompt"]
-    # action type=see persistida com imagem inline
+    # action type=see persistida com imagem inline; o texto é a caption
     action = data["action"]
     assert action["type"] == "see"
+    assert action["text"] == "a dark tower under a blood-red sky"
     assert action["image"]["id"] == data["id"]
     assert action["image"]["url"] == data["url"]
 

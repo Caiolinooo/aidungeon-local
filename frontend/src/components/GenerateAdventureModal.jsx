@@ -1,19 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
 import Modal from './Modal.jsx'
 import TagInput from './TagInput.jsx'
+import StoryCardsEditor from './StoryCardsEditor.jsx'
 
-// Modal "Generate with AI" (v2): cria uma aventura a partir de uma ideia.
-//  Passo 1 — textarea com a ideia (qualquer idioma) → POST /api/assistant/scenario
-//  Passo 2 — revisão do ScenarioDraft: TODOS os campos editáveis, cada um com
-//            botão "Regenerate" (POST /api/assistant/field com o rascunho atual
-//            p/ coerência cruzada; story_cards regenera a lista inteira).
-//  "Create Adventure" persiste: POST /api/scenarios (com story_cards) e depois
-//  POST /api/adventures {scenario_id} → navega p/ /play/:id.
-// A geração via LLM pode levar ~30s — todos os estados de loading são visíveis.
-// language segue o browser (pt → textos em português).
+// Modal "Generate with AI": ideia → rascunho revisável → cenário + aventura.
+// Passo 1 manda gênero, tom, POV, protagonista, estilo visual, cards e web search.
+// Passo 2 edita cada campo (↻ pede uma instrução opcional) e refina cards com IA.
 
 function draftLanguage() {
   const lang = (typeof navigator !== 'undefined' && navigator.language) || 'pt'
@@ -21,16 +16,48 @@ function draftLanguage() {
   return /^[a-z]{2}$/.test(sub) ? sub : 'pt'
 }
 
+function stageFor(elapsedSec, webMode) {
+  if (elapsedSec < 4 && webMode !== 'off') return '🌐 Searching the web…'
+  if (elapsedSec < 25) return '✍️ Writing scenario…'
+  return '🃏 Building story cards…'
+}
+
+const miniBtnCls =
+  'shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40'
+
 export default function GenerateAdventureModal({ onClose }) {
   const toast = useToast()
   const navigate = useNavigate()
   const [brief, setBrief] = useState('')
-  const [draft, setDraft] = useState(null) // ScenarioDraft (passo 2)
+  const [draft, setDraft] = useState(null)
   const [generating, setGenerating] = useState(false)
-  const [regen, setRegen] = useState(null) // campo em regeneração
+  const [stage, setStage] = useState('')
+  const [regen, setRegen] = useState(null)
   const [creating, setCreating] = useState(false)
 
+  const [genre, setGenre] = useState('')
+  const [tone, setTone] = useState('')
+  const [pov, setPov] = useState('second')
+  const [cardCount, setCardCount] = useState('5')
+  const [langChoice, setLangChoice] = useState('')
+  const [imageStyle, setImageStyle] = useState('')
+  const [protagonistName, setProtagonistName] = useState('')
+  const [protagonistRole, setProtagonistRole] = useState('')
+  const [protagonistAppearance, setProtagonistAppearance] = useState('')
+  const [webSearchMode, setWebSearchMode] = useState('auto')
+  const [webOnRefine, setWebOnRefine] = useState(false)
+
+  const opRef = useRef(false)
+  const timerRef = useRef(null)
+  const language = langChoice || draftLanguage()
+
+  useEffect(() => () => clearInterval(timerRef.current), [])
+
   const busy = generating || creating || regen !== null
+
+  const noteWeb = (sources) => {
+    if (sources?.length) toast(`Enriched with ${sources.length} web sources.`, 'ok')
+  }
 
   // ---------------------------------------------------- passo 1: gerar draft
   const generate = async () => {
@@ -39,19 +66,47 @@ export default function GenerateAdventureModal({ onClose }) {
       toast('Describe your idea first (min. 3 characters).')
       return
     }
+    if (opRef.current) return
+    opRef.current = true
     setGenerating(true)
+    const started = Date.now()
+    const webMode = webSearchMode
+    const tick = () => setStage(stageFor((Date.now() - started) / 1000, webMode))
+    tick()
+    const timer = setInterval(tick, 1000)
+    timerRef.current = timer
     try {
-      setDraft(await api.assistantScenario({ brief: b, language: draftLanguage() }))
+      setDraft(await api.assistantScenario({
+        brief: b,
+        language,
+        genre: genre.trim() || undefined,
+        tone: tone.trim() || undefined,
+        pov,
+        protagonist_name: protagonistName.trim() || undefined,
+        protagonist_role: protagonistRole.trim() || undefined,
+        protagonist_appearance: protagonistAppearance.trim() || undefined,
+        image_style: imageStyle.trim() || undefined,
+        card_count: Number(cardCount) || 5,
+        web_search_mode: webMode,
+      }))
     } catch (e) {
       toast(e.message)
     } finally {
+      clearInterval(timer)
+      timerRef.current = null
+      opRef.current = false
       setGenerating(false)
+      setStage('')
     }
   }
 
   // --------------------------------------------- passo 2: regenerar 1 campo
   const regenerate = async (field) => {
-    if (!draft || regen) return
+    if (!draft || opRef.current) return
+    const typed = window.prompt('Refinement instruction (optional):')
+    if (typed === null || opRef.current) return
+    const instruction = typed.trim()
+    opRef.current = true
     setRegen(field)
     try {
       const current =
@@ -59,21 +114,109 @@ export default function GenerateAdventureModal({ onClose }) {
         : field === 'story_cards' ? undefined
         : draft[field]
       const r = await api.assistantField({
-        field, brief: brief.trim(), current, draft, language: draftLanguage(),
+        field,
+        brief: brief.trim(),
+        current,
+        draft,
+        language,
+        instruction: instruction || undefined,
+        web_search: webOnRefine,
       })
-      if (field === 'story_cards') {
-        // regenerar cards SUBSTITUI a lista inteira (decisão do frontend)
-        if (Array.isArray(r.story_cards)) setDraft((d) => ({ ...d, story_cards: r.story_cards }))
-      } else if (field === 'tags') {
-        // contrato: tags voltam como string separada por vírgula
-        const tags = String(r.value ?? '').split(',').map((t) => t.trim()).filter(Boolean)
-        setDraft((d) => ({ ...d, tags }))
-      } else {
-        setDraft((d) => ({ ...d, [field]: r.value ?? '' }))
-      }
+      setDraft((d) => {
+        const next = { ...d }
+        if (field === 'story_cards') {
+          if (Array.isArray(r.story_cards)) next.story_cards = r.story_cards
+        } else if (field === 'tags') {
+          next.tags = String(r.value ?? '').split(',').map((t) => t.trim()).filter(Boolean)
+        } else {
+          next[field] = r.value ?? ''
+        }
+        if (r?.web_sources?.length) next.web_sources = r.web_sources
+        return next
+      })
+      noteWeb(r?.web_sources)
     } catch (e) {
       toast(e.message)
     } finally {
+      opRef.current = false
+      setRegen(null)
+    }
+  }
+
+  const enrichCard = async (index) => {
+    if (!draft || opRef.current) return
+    const card = (draft.story_cards ?? [])[index]
+    if (!card) return
+    const typed = window.prompt('Instruction for this card (optional)')
+    if (typed === null || opRef.current) return
+    const concept = String(card.title ?? '').trim()
+    if (concept.length < 2) {
+      toast('Card title must be at least 2 characters before AI enrich.')
+      return
+    }
+    opRef.current = true
+    setRegen(`card-${index}`)
+    try {
+      const r = await api.assistantCard({
+        concept,
+        card_type: card.type || 'character',
+        draft,
+        current_card: card,
+        instruction: typed.trim() || undefined,
+        web_search: webOnRefine,
+        language,
+      })
+      if (!r?.card) {
+        toast('The assistant returned no card.')
+        return
+      }
+      setDraft((d) => ({
+        ...d,
+        story_cards: (d.story_cards ?? []).map((c, j) => (j === index ? { ...c, ...r.card } : c)),
+        ...(r.web_sources?.length ? { web_sources: r.web_sources } : {}),
+      }))
+      noteWeb(r.web_sources)
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      opRef.current = false
+      setRegen(null)
+    }
+  }
+
+  const addCardWithAi = async () => {
+    if (!draft || opRef.current) return
+    const typed = window.prompt('Card name or concept')
+    if (typed === null || opRef.current) return
+    const concept = typed.trim()
+    if (concept.length < 2) {
+      toast('Enter a card name or concept (min. 2 characters).')
+      return
+    }
+    opRef.current = true
+    setRegen('card-new')
+    try {
+      const r = await api.assistantCard({
+        concept,
+        card_type: 'character',
+        draft,
+        web_search: webOnRefine,
+        language,
+      })
+      if (!r?.card) {
+        toast('The assistant returned no card.')
+        return
+      }
+      setDraft((d) => ({
+        ...d,
+        story_cards: [...(d.story_cards ?? []), r.card],
+        ...(r.web_sources?.length ? { web_sources: r.web_sources } : {}),
+      }))
+      noteWeb(r.web_sources)
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      opRef.current = false
       setRegen(null)
     }
   }
@@ -84,6 +227,8 @@ export default function GenerateAdventureModal({ onClose }) {
       toast('Title is required.')
       return
     }
+    if (opRef.current) return
+    opRef.current = true
     setCreating(true)
     try {
       const scenario = await api.createScenario({
@@ -93,13 +238,16 @@ export default function GenerateAdventureModal({ onClose }) {
         plot_essentials: draft.plot_essentials ?? '',
         authors_note: draft.authors_note ?? '',
         opening_text: draft.opening_text ?? '',
+        image_style: draft.image_style ?? '',
         tags: draft.tags ?? [],
         story_cards: draft.story_cards ?? [],
+        third_person: !!draft.third_person,
       })
       const adv = await api.createAdventure({ scenario_id: scenario.id })
       navigate(`/play/${adv.id}`)
     } catch (e) {
       toast(e.message)
+      opRef.current = false
       setCreating(false)
     }
   }
@@ -109,14 +257,13 @@ export default function GenerateAdventureModal({ onClose }) {
   const labelCls = 'text-xs font-semibold uppercase tracking-wide text-zinc-500'
   const hintCls = 'block text-xs text-zinc-600'
 
-  // Botãozinho "↻ Regenerate" ao lado do label de cada campo.
   const regenBtn = (field) => (
     <button
       type="button"
       onClick={() => regenerate(field)}
       disabled={busy}
       title="Regenerate this field keeping coherence with the rest of the draft"
-      className="shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+      className={miniBtnCls}
     >
       {regen === field ? '… generating' : '↻ Regenerate'}
     </button>
@@ -132,27 +279,121 @@ export default function GenerateAdventureModal({ onClose }) {
     </span>
   )
 
+  const paramLabel = (text) => <span className={`${labelCls} mb-1 block`}>{text}</span>
+
   return (
     <Modal title="Generate with AI" onClose={busy ? undefined : onClose} wide>
       {!draft ? (
-        // -------------------------------------------------- passo 1: a ideia
         <div className="flex flex-col gap-4">
           <p className="text-sm text-zinc-400">
             Describe the adventure you want — in any language. The AI drafts a full scenario
             (title, plot, opening, story cards) in that language for you to review before creating.
           </p>
-          <textarea
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            rows={4}
-            autoFocus
-            disabled={generating}
-            placeholder='e.g. "A steampunk pirate hunting a sky leviathan across floating islands"'
-            className={`${inputCls} resize-y`}
-          />
+          <fieldset disabled={generating} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
+            <textarea
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              rows={4}
+              autoFocus
+              placeholder='e.g. "A steampunk pirate hunting a sky leviathan across floating islands"'
+              className={`${inputCls} resize-y`}
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                {paramLabel('Genre / Setting')}
+                <input
+                  value={genre}
+                  onChange={(e) => setGenre(e.target.value)}
+                  placeholder="e.g. dark fantasy, floating islands"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                {paramLabel('Tone & Pacing')}
+                <input
+                  value={tone}
+                  onChange={(e) => setTone(e.target.value)}
+                  placeholder="e.g. tense, fast, grim"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                {paramLabel('Narrative POV')}
+                <select value={pov} onChange={(e) => setPov(e.target.value)} className={inputCls}>
+                  <option value="second">Second person</option>
+                  <option value="third">Third person</option>
+                  <option value="first">First person</option>
+                </select>
+              </label>
+              <label className="block">
+                {paramLabel('Story cards')}
+                <select value={cardCount} onChange={(e) => setCardCount(e.target.value)} className={inputCls}>
+                  {[3, 4, 5, 6, 7, 8].map((n) => (
+                    <option key={n} value={String(n)}>{n}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                {paramLabel('Language')}
+                <select value={langChoice} onChange={(e) => setLangChoice(e.target.value)} className={inputCls}>
+                  <option value="">Auto (browser default)</option>
+                  <option value="pt">Português</option>
+                  <option value="en">English</option>
+                  <option value="es">Español</option>
+                </select>
+              </label>
+              <label className="block">
+                {paramLabel('Visual style for images')}
+                <input
+                  value={imageStyle}
+                  onChange={(e) => setImageStyle(e.target.value)}
+                  placeholder="e.g. ink sketch, dramatic lighting"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block sm:col-span-2">
+                {paramLabel('Protagonist name')}
+                <input
+                  value={protagonistName}
+                  onChange={(e) => setProtagonistName(e.target.value)}
+                  placeholder="e.g. Alusair"
+                  autoComplete="off"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                {paramLabel('Role')}
+                <input
+                  value={protagonistRole}
+                  onChange={(e) => setProtagonistRole(e.target.value)}
+                  placeholder="e.g. exiled knight"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                {paramLabel('Appearance')}
+                <input
+                  value={protagonistAppearance}
+                  onChange={(e) => setProtagonistAppearance(e.target.value)}
+                  placeholder="e.g. short black hair, plate armor"
+                  className={inputCls}
+                />
+              </label>
+              <label className="block">
+                {paramLabel('Web search')}
+                <select value={webSearchMode} onChange={(e) => setWebSearchMode(e.target.value)} className={inputCls}>
+                  <option value="auto">Auto</option>
+                  <option value="always">Always</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600">
-              {generating ? 'Generating… this often takes about a minute.' : 'Nothing is saved until you click "Create Adventure".'}
+              {generating
+                ? `${stage || 'Generating…'} This often takes about a minute.`
+                : 'Nothing is saved until you click "Create Adventure".'}
             </span>
             <div className="flex gap-2">
               <button
@@ -173,8 +414,36 @@ export default function GenerateAdventureModal({ onClose }) {
           </div>
         </div>
       ) : (
-        // --------------------------------------------- passo 2: revisar draft
-        <fieldset disabled={busy} className="flex flex-col gap-4">
+        <fieldset disabled={busy} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
+          {!!draft.web_sources?.length && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                🌐 Sources consulted
+              </div>
+              <ul className="flex flex-col gap-1 text-sm">
+                {draft.web_sources.map((s, i) => {
+                  const safe = typeof s.url === 'string' && /^https?:\/\//i.test(s.url)
+                  return (
+                    <li key={`${s.url || ''}-${i}`}>
+                      {safe ? (
+                        <a
+                          href={s.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="break-words text-emerald-400 hover:underline"
+                        >
+                          {s.title || s.url}
+                        </a>
+                      ) : (
+                        <span className="break-words text-zinc-300">{s.title}</span>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+
           <label className="block">
             {fieldHeader('title', 'Title *')}
             <input
@@ -234,6 +503,16 @@ export default function GenerateAdventureModal({ onClose }) {
             />
           </label>
 
+          <label className="block">
+            {fieldHeader('image_style', 'Visual Style (image generation)')}
+            <input
+              value={draft.image_style ?? ''}
+              onChange={(e) => setDraft({ ...draft, image_style: e.target.value })}
+              placeholder="e.g. dark cinematic photography, neon rain"
+              className={inputCls}
+            />
+          </label>
+
           <div className="block">
             {fieldHeader('tags', 'Tags')}
             <TagInput
@@ -245,57 +524,23 @@ export default function GenerateAdventureModal({ onClose }) {
           </div>
 
           <div className="block">
-            {fieldHeader('story_cards', `Story Cards (${(draft.story_cards ?? []).length})`, 'NPCs, places, factions — injected when a trigger word appears.')}
-            <div className="flex flex-col gap-2">
-              {(draft.story_cards ?? []).map((card, i) => (
-                <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-800/40 p-3">
-                  <div className="flex gap-2">
-                    <input
-                      value={card.title ?? ''}
-                      onChange={(e) => updateCard(setDraft, i, { title: e.target.value })}
-                      placeholder="Title"
-                      className={`${inputCls} flex-1`}
-                    />
-                    <input
-                      value={card.type ?? ''}
-                      onChange={(e) => updateCard(setDraft, i, { type: e.target.value })}
-                      placeholder="Type (character, location…)"
-                      className={`${inputCls} w-44`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setDraft((d) => ({ ...d, story_cards: d.story_cards.filter((_, j) => j !== i) }))}
-                      title="Remove card"
-                      className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <div className="mt-2">
-                    <TagInput
-                      value={card.triggers ?? []}
-                      onChange={(triggers) => updateCard(setDraft, i, { triggers })}
-                      disabled={busy}
-                      placeholder="Trigger words (Enter to add)"
-                    />
-                  </div>
-                  <textarea
-                    value={card.entry ?? ''}
-                    onChange={(e) => updateCard(setDraft, i, { entry: e.target.value })}
-                    rows={3}
-                    placeholder="Card text injected into the AI context"
-                    className={`${inputCls} mt-2 resize-y`}
-                  />
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setDraft((d) => ({ ...d, story_cards: [...(d.story_cards ?? []), { title: '', type: '', triggers: [], entry: '' }] }))}
-                className="rounded-lg border border-dashed border-zinc-700 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
-              >
-                + Add story card
-              </button>
+            <div className="mb-1">
+              <div className={labelCls}>Story Cards ({(draft.story_cards ?? []).length})</div>
+              <div className={hintCls}>NPCs, places, factions — injected when a trigger word appears.</div>
             </div>
+            <StoryCardsEditor
+              cards={draft.story_cards ?? []}
+              onChange={(story_cards) => setDraft((d) => ({ ...d, story_cards }))}
+              busy={busy}
+              onAiCard={enrichCard}
+              webOn={webOnRefine}
+              onToggleWeb={setWebOnRefine}
+            >
+              <button type="button" onClick={addCardWithAi} disabled={busy} className={miniBtnCls}>
+                + Add story card with AI
+              </button>
+              {regenBtn('story_cards')}
+            </StoryCardsEditor>
           </div>
 
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -319,12 +564,4 @@ export default function GenerateAdventureModal({ onClose }) {
       )}
     </Modal>
   )
-}
-
-// Atualiza campos de um story card do draft (imutável, por índice).
-function updateCard(setDraft, index, patch) {
-  setDraft((d) => ({
-    ...d,
-    story_cards: d.story_cards.map((c, j) => (j === index ? { ...c, ...patch } : c)),
-  }))
 }

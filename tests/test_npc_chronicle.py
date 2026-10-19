@@ -111,8 +111,9 @@ def test_see_prompt_includes_the_character_canon(client, tmp_path):
     assert "plate armor" in prompt
     assert "white gown" not in prompt.lower()
     assert "dark hair" not in prompt.lower()
-    assert "reclines" in prompt.lower()
-    assert prompt.lower().index("long red hair") < prompt.lower().index("dark tower")
+    assert "reclines" not in prompt.lower()
+    assert "a dark tower under a blood-red sky" in prompt
+    assert prompt.lower().index("dark tower") < prompt.lower().index("long red hair")
     assert " BREAK " in prompt
     sent = json.dumps(capture)
     assert "long red hair" in sent
@@ -138,11 +139,12 @@ def test_rendered_card_carries_the_sheet_into_the_prompt(tmp_db):
         )
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, settings_store.runtime_config(conn), conn)
-    system = built.messages[0]["content"]
-    assert "long red hair" in system
-    assert "Status: alive" in system
-    assert "str 14" in system
-    assert cb.CANON_CUE in built.messages[-1]["content"]
+    # World info saiu do system e foi para a mensagem final (layout cache-friendly).
+    rendered = built.messages[-1]["content"]
+    assert "long red hair" in rendered
+    assert "Status: alive" in rendered
+    assert "str 14" in rendered
+    assert cb.CANON_CUE in rendered
 
 
 def test_status_and_face_survive_a_long_entry():
@@ -170,11 +172,12 @@ def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
-    assert "steps into the rain" in prompt
-    assert "open the gate" in prompt
+    head = prompt.split("BREAK", 1)[0]
+    assert "a dark tower under a blood-red sky" in head
     assert "ancient dragon" not in prompt.lower()
     sent = json.dumps(capture)
     assert "steps into the rain" in sent
+    assert "open the gate" in sent
     assert "ancient dragon" not in sent.lower()
 
 
@@ -217,11 +220,10 @@ def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path)
     head, tail = prompt.split("BREAK", 1)
     assert "plate armor" in head
     assert "short black hair" in head
-    assert "steps into the rain" in head
-    assert "open the gate" in head
+    assert "a dark tower under a blood-red sky" in head
+    assert head.index("a dark tower under a blood-red sky") < head.index("plate armor")
     assert "ink sketch" in tail
     assert "ancient dragon" not in prompt.lower()
-    assert head.lower().index("steps into the rain") < head.lower().index("plate armor")
     img2img = [item for item in capture if isinstance(item, dict) and item.get("init_images")]
     assert img2img == []
 
@@ -380,7 +382,10 @@ def test_see_paints_the_kiss_not_a_portrait(client, tmp_path):
         db.set_card_portrait(conn, alusair["id"], image["id"], anchor_id=image["id"])
     add_action(adv["id"], 0, "do", "\n> You kiss Princess Alusair\n")
     capture: list = []
-    override_transport(client, make_v2_transport(capture=capture))
+    override_transport(
+        client,
+        make_v2_transport("Caio kisses Princess Alusair in the hall.", capture=capture),
+    )
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     finally:
@@ -417,7 +422,7 @@ def test_see_keeps_nudity_and_drops_the_outfit(client, tmp_path):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"].lower()
-    assert "naked" in prompt
+    assert "nude" in prompt
     assert "clothes off" in prompt
     assert "plate armor" not in prompt
     assert "long red hair" in prompt

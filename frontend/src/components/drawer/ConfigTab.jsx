@@ -89,6 +89,7 @@ export default function ConfigTab() {
 
   if (settings === null || form === null) return <p className="text-sm text-zinc-500">Loading…</p>
 
+  const contextSizeMax = settings.context_size_max ?? 106496
   const inputCls =
     'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-emerald-600'
   const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500'
@@ -148,14 +149,14 @@ export default function ConfigTab() {
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className={labelCls}>Context size (max 262144)</span>
+          <span className={labelCls}>Context size (max {contextSizeMax.toLocaleString()})</span>
           <input
             type="number"
             min={4096}
-            max={262144}
+            max={contextSizeMax}
             step={1024}
             value={form.context_size}
-            onChange={(e) => setForm({ ...form, context_size: Math.min(262144, Number(e.target.value) || 0) })}
+            onChange={(e) => setForm({ ...form, context_size: Math.min(contextSizeMax, Number(e.target.value) || 0) })}
             className={inputCls}
           />
 

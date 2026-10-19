@@ -1,55 +1,46 @@
-// Só na tela. O texto gravado e a narração ficam como a IA escreveu.
+// Formatação visual de prosa para leitura fluida na tela.
 //
-// Respostas neste modelo saem numa frase só, sem ponto, emendadas com
-// ponto-e-vírgula e reticências. Quebrar nessas pausas deixa o parágrafo
-// legível sem reescrever as palavras.
+// Regra de ouro (v0.9.0): NUNCA quebrar frases no meio, em vírgulas ou por
+// contagem arbitrária de caracteres (o antigo wrapLongChunk de 240 chars
+// cortava orações pela metade). Quebras extras só ocorrem em limites reais
+// de fim de período (. ! ?) quando um único bloco ultrapassa ~700 caracteres
+// ou antes de um turno de diálogo com travessão após ponto final.
 
-const LONG = 240
+const WALL_THRESHOLD = 700
 
-function endings(text) {
-  return text.match(/[.!?](?!\.)(?:\s|$)/g) || []
-}
-
-function wrapLongChunk(chunk) {
-  if (chunk.length <= LONG) return chunk
-  const parts = []
-  let rest = chunk
-  while (rest.length > LONG) {
-    const window = rest.slice(0, 200)
-    const atPunct = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '))
-    const atWord = window.lastIndexOf(' ')
-    const cut = atPunct >= 80 ? atPunct : atWord
-    if (cut < 40) break
-    const keepPunct = cut === atPunct
-    parts.push(rest.slice(0, cut + (keepPunct ? 1 : 0)).trim())
-    rest = rest.slice(cut + 1).trim()
-  }
-  if (rest) parts.push(rest)
-  return parts.join('\n\n')
-}
-
-function loosenParagraph(paragraph) {
+function formatParagraph(paragraph) {
   const trimmed = paragraph.trim()
-  if (trimmed.length < LONG) return trimmed
-  const telegraphic = endings(trimmed).length < Math.floor(trimmed.length / 220)
+  if (!trimmed) return ''
+
+  // Separa diálogo com travessão colado logo após fim de frase em parágrafos longos
   let body = trimmed
-  if (telegraphic) {
-    body = body.replace(/;\s+/g, '.\n\n').replace(/\.{3,}\s+/g, '.\n\n')
-  } else if (trimmed.length > 500) {
-    let n = 0
-    body = trimmed.replace(/([.!?])(\s+)(?=\S)/g, (match, punct, space) => {
-      n += 1
-      return n % 3 === 0 ? `${punct}\n\n` : `${punct}${space}`
+  if (body.length > 360) {
+    body = body.replace(/([.!?…]["”»]?)\s+(?=—\s*[A-ZÀ-Ý])/g, '$1\n\n')
+  }
+
+  // Se um único parágrafo ainda for um bloco maciço (> 700 chars), divide a cada
+  // 3 frases completas (somente após . ! ? seguidos de espaço e letra maiúscula).
+  if (body.length > WALL_THRESHOLD && !body.includes('\n\n')) {
+    let sentenceCount = 0
+    body = body.replace(/([.!?…]["”»]?)(\s+)(?=[A-ZÀ-Ý“"—])/g, (match, punct, space) => {
+      sentenceCount += 1
+      return sentenceCount % 3 === 0 ? `${punct}\n\n` : `${punct}${space}`
     })
   }
+
   return body
-    .split(/\n{2,}/)
-    .map((chunk) => wrapLongChunk(chunk.trim()))
-    .filter(Boolean)
-    .join('\n\n')
 }
 
 export function loosenProse(text) {
-  if (!text || text.length < LONG) return text
-  return text.split(/\n{2,}/).map(loosenParagraph).join('\n\n')
+  if (!text) return text
+  // Remove vazamento eventual de marcador de prompt no final e normaliza quebras
+  const cleaned = String(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+
+  return cleaned
+    .split(/\n{2,}/)
+    .map(formatParagraph)
+    .filter(Boolean)
+    .join('\n\n')
 }

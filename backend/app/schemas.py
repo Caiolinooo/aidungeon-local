@@ -45,16 +45,36 @@ class ScenarioCreate(BaseModel):
     plot_essentials: str = ""
     authors_note: str = ""
     opening_text: str = ""
+    image_style: str = ""
     tags: list[str] = Field(default_factory=list)
     # cards iniciais do rascunho do assistente (v2) — herdados pela aventura
     story_cards: list[StoryCardUpsert] = Field(default_factory=list)
     third_person: bool = False
 
 
+class ScenarioUpdate(BaseModel):
+    """PATCH/PUT /api/scenarios/{id} — todos os campos opcionais."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    ai_instructions: str | None = None
+    plot_essentials: str | None = None
+    authors_note: str | None = None
+    opening_text: str | None = None
+    image_style: str | None = None
+    tags: list[str] | None = None
+    story_cards: list[StoryCardUpsert] | None = None
+    third_person: bool | None = None
+
+
 class AdventureCreate(BaseModel):
     scenario_id: str | None = None
     title: str | None = None
     tags: list[str] | None = None
+    image_style: str | None = None
+    ai_instructions: str | None = None
+    plot_essentials: str | None = None
+    authors_note: str | None = None
+    third_person: bool | None = None
 
 
 class AdventureUpdate(BaseModel):
@@ -62,11 +82,18 @@ class AdventureUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     tags: list[str] | None = None
+    ai_instructions: str | None = None
+    plot_essentials: str | None = None
+    authors_note: str | None = None
+    story_summary: str | None = None
+    image_style: str | None = None
+    third_person: bool | None = None
 
 
 class ActionRequest(BaseModel):
     type: Literal["do", "say", "story"]
     text: str = Field(min_length=1)
+    web_search: bool = False
 
 
 class ActionPatch(BaseModel):
@@ -76,6 +103,10 @@ class ActionPatch(BaseModel):
 class MemoryUpdate(BaseModel):
     plot_essentials: str | None = None
     authors_note: str | None = None
+    story_summary: str | None = None
+    ai_instructions: str | None = None
+    image_style: str | None = None
+    third_person: bool | None = None
 
 
 class MemoryCreate(BaseModel):
@@ -169,19 +200,53 @@ class VoiceSettingsUpdate(BaseModel):
     api_key: str | None = None
 
 
-# ------------------------------------------------------------ v2: assistant
+# ------------------------------------------------------------ v2/v9: assistant
 class AssistantScenarioRequest(BaseModel):
     brief: str = Field(min_length=3)
     language: str = "en"
+    genre: str | None = None
+    tone: str | None = None
+    pov: Literal["second", "third", "first"] | None = None
+    protagonist_name: str | None = None
+    protagonist_role: str | None = None
+    protagonist_appearance: str | None = None
+    image_style: str | None = None
+    card_count: int | None = Field(default=None, ge=3, le=8)
+    web_search_mode: Literal["auto", "always", "off"] = "auto"
 
 
 class AssistantFieldRequest(BaseModel):
     field: Literal["title", "description", "ai_instructions", "plot_essentials",
-                   "authors_note", "opening_text", "tags", "story_cards"]
+                   "authors_note", "opening_text", "image_style", "tags", "story_cards"]
     brief: str | None = None
     current: str | None = None
     draft: dict | None = None
+    instruction: str | None = None
+    web_search: bool = False
     language: str = "en"
+
+
+class AssistantCardRequest(BaseModel):
+    concept: str = Field(min_length=2)
+    card_type: str = "character"
+    adventure_id: str | None = None
+    draft: dict | None = None
+    current_card: dict | None = None
+    instruction: str | None = None
+    web_search: bool = False
+    language: str = "pt"
+
+
+class AssistantSyncPlotRequest(BaseModel):
+    adventure_id: str
+    instruction: str | None = None
+    language: str = "pt"
+
+
+class WebSearchRequest(BaseModel):
+    query: str = Field(min_length=2)
+    language: str = "pt"
+    max_results: int = Field(default=5, ge=1, le=10)
 
 
 class EmbeddingsSettingsUpdate(BaseModel):
@@ -195,4 +260,5 @@ class ScriptingSettingsUpdate(BaseModel):
     input_modifier: str | None = None
     context_modifier: str | None = None
     output_modifier: str | None = None
+
 

@@ -46,6 +46,7 @@ export default function InputBar({
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [micHint, setMicHint] = useState('')
+  const [webOn, setWebOn] = useState(false)
   const areaRef = useRef(null)
   const recorderRef = useRef(null)
   const chunksRef = useRef([])
@@ -76,7 +77,7 @@ export default function InputBar({
   const submit = () => {
     const t = text.trim()
     if (!t || disabled) return
-    onSend(tab, t)
+    onSend(tab, t, { webSearch: webOn })
     setText('')
     onTextChange?.('')
   }
@@ -282,6 +283,21 @@ export default function InputBar({
             }`}
           >
             {transcribing ? '⏳' : recording ? '⏹' : '🎙'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setWebOn((v) => !v)}
+            disabled={disabled}
+            title="Search the web for grounding (Wikipedia/DuckDuckGo)"
+            aria-label="Search the web for grounding"
+            aria-pressed={webOn}
+            className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              webOn
+                ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
+                : 'border-subtle bg-elevated text-secondary hover:text-primary'
+            }`}
+          >
+            🌐
           </button>
           <button
             onClick={submit}

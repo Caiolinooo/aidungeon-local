@@ -16,9 +16,23 @@ import {
   Check,
   ChevronDown,
   X,
+  RefreshCw,
 } from 'lucide-react'
 
-const EMPTY_FORM = { title: '', type: 'other', triggers: [], entry: '', pinned: false, use_for_character_creation: false }
+const EMPTY_FORM = {
+  title: '',
+  type: 'other',
+  triggers: [],
+  entry: '',
+  pinned: false,
+  use_for_character_creation: false,
+  portrait_prompt: '',
+  sheet: null,
+}
+
+function draftLanguage() {
+  return (navigator.language || 'pt').slice(0, 2)
+}
 const TYPE_HINTS = ['all', 'character', 'location', 'item', 'faction', 'concept', 'other']
 const CARD_TYPES = ['character', 'location', 'item', 'faction', 'concept', 'other']
 const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
@@ -47,6 +61,9 @@ export default function CardsTab({ adventure }) {
   const [editing, setEditing] = useState(null) // null | 'new' | card
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [enriching, setEnriching] = useState(false)
+  const [webOn, setWebOn] = useState(false)
+  const [aiCreating, setAiCreating] = useState(false)
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('')
@@ -182,6 +199,8 @@ export default function CardsTab({ adventure }) {
         entry: card.entry ?? '',
         pinned: !!card.pinned,
         use_for_character_creation: !!card.use_for_character_creation,
+        portrait_prompt: card.portrait_prompt ?? '',
+        sheet: readSheet(card),
       })
     } else {
       setEditing('new')
@@ -189,11 +208,28 @@ export default function CardsTab({ adventure }) {
     }
   }
 
+  const cardPayload = (source) => {
+    const payload = {
+      title: source.title,
+      type: source.type,
+      triggers: source.triggers,
+      entry: source.entry,
+      pinned: source.pinned,
+      use_for_character_creation: source.use_for_character_creation,
+      portrait_prompt: source.portrait_prompt ?? '',
+    }
+    // StoryCardUpsert.sheet is a dict. The list endpoint stores it as a JSON string.
+    const sheet = readSheet({ sheet: source.sheet })
+    if (sheet) payload.sheet = sheet
+    return payload
+  }
+
   const save = async () => {
     setSaving(true)
     try {
-      if (editing === 'new') await api.createCard(adventure.id, form)
-      else await api.updateCard(adventure.id, editing.id, form)
+      const payload = cardPayload(form)
+      if (editing === 'new') await api.createCard(adventure.id, payload)
+      else await api.updateCard(adventure.id, editing.id, payload)
       setEditing(null)
       toast('Story card saved.', 'ok')
       reload()
@@ -201,6 +237,77 @@ export default function CardsTab({ adventure }) {
       toast(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const enrichWithAi = async () => {
+    const instruction = window.prompt('Instruction (optional)')
+    if (instruction === null) return
+    setEnriching(true)
+    try {
+      const r = await api.assistantCard({
+        concept: form.title || 'card',
+        card_type: form.type,
+        adventure_id: adventure.id,
+        current_card: form,
+        instruction: instruction.trim() || undefined,
+        web_search: webOn,
+        language: draftLanguage(),
+      })
+      const card = r?.card
+      if (!card) {
+        toast('AI returned no card.')
+        return
+      }
+      setForm((prev) => ({
+        ...prev,
+        title: card.title ?? prev.title,
+        triggers: Array.isArray(card.triggers) ? card.triggers : prev.triggers,
+        entry: card.entry ?? prev.entry,
+        ...(CARD_TYPES.includes(card.type) ? { type: card.type } : {}),
+        ...(card.sheet && typeof card.sheet === 'object' ? { sheet: card.sheet } : {}),
+        ...(card.portrait_prompt ? { portrait_prompt: card.portrait_prompt } : {}),
+      }))
+      if (r.web_sources?.length) toast(`Enriched with ${r.web_sources.length} web sources.`, 'ok')
+      else toast('Card enriched. Review and save.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setEnriching(false)
+    }
+  }
+
+  const createWithAi = async () => {
+    const concept = window.prompt('Card name or concept')
+    if (concept === null) return
+    const name = concept.trim()
+    if (!name) {
+      toast('Card name or concept is required.')
+      return
+    }
+    setAiCreating(true)
+    try {
+      const r = await api.assistantCard({
+        concept: name,
+        card_type: 'character',
+        adventure_id: adventure.id,
+        web_search: true,
+        language: draftLanguage(),
+      })
+      if (!r?.card) {
+        toast('AI returned no card.')
+        return
+      }
+      const card = { ...r.card }
+      delete card.web_sources
+      await api.createCard(adventure.id, card)
+      if (r.web_sources?.length) toast(`Enriched with ${r.web_sources.length} web sources.`, 'ok')
+      else toast('Story card created.', 'ok')
+      reload()
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setAiCreating(false)
     }
   }
 
@@ -226,13 +333,24 @@ export default function CardsTab({ adventure }) {
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
           Story Cards ({cards.length})
         </h3>
-        <button
-          onClick={() => openEditor(null)}
-          className="flex items-center gap-1.5 rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Card</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={createWithAi}
+            disabled={aiCreating}
+            className="flex items-center gap-1.5 rounded-lg border border-subtle bg-surface px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${aiCreating ? 'animate-spin' : 'hidden'}`} />
+            <span>{aiCreating ? 'Creating…' : '🌐 AI Card'}</span>
+          </button>
+          <button
+            onClick={() => openEditor(null)}
+            className="flex items-center gap-1.5 rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Card</span>
+          </button>
+        </div>
       </div>
 
       {/* Search Input */}
@@ -556,22 +674,45 @@ export default function CardsTab({ adventure }) {
               />
             </label>
 
-            <div className="mt-2 flex justify-end gap-2 border-t border-subtle pt-3">
-              <button
-                type="button"
-                onClick={() => setEditing(null)}
-                className="rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={save}
-                disabled={saving}
-                className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
-              >
-                {saving ? 'Saving…' : 'Save Card'}
-              </button>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-subtle pt-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={enrichWithAi}
+                  disabled={enriching || saving}
+                  className="flex items-center gap-1.5 rounded-xl border border-accent-pri/40 bg-accent-pri/20 px-3 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${enriching ? 'animate-spin' : 'hidden'}`} />
+                  <span>{enriching ? 'Enriching…' : '✨ Enrich with AI'}</span>
+                </button>
+                <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={webOn}
+                    onChange={(e) => setWebOn(e.target.checked)}
+                    disabled={enriching}
+                    className="accent-emerald-600 rounded"
+                  />
+                  <span>🌐 web</span>
+                </label>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditing(null)}
+                  className="rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={saving || enriching}
+                  className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Card'}
+                </button>
+              </div>
             </div>
           </div>
         </Modal>

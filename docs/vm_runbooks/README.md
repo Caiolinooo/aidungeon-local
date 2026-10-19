@@ -1,5 +1,7 @@
 # GPU VM Runbooks & Tuning Guides
 
+> **v0.9.0 (atual):** o narrador na VM roda `-np 2 -c 262144` (131072 por slot). O app corta `context_size` em 106496 e liga `id_slot` só quando `GET /props` devolve `total_slots >= 2`. Backup online, restart do llama-server e só então `pkill -f 'uvicorn app.main:app'` estão em [`deploy/vm/README.md`](../../deploy/vm/README.md) §8. As fases 0–4 abaixo são o histórico de tuning, não o alvo atual de slots ou de contexto.
+
 ## 1. Executive Summary & Access Status
 
 - **VM Host**: `vm.groupabz.com`

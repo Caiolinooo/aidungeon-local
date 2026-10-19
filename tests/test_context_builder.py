@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app import context_builder as cb
 from app import db, settings_store
+from memory import summarizer
 
 from conftest import add_action, make_adventure
 
@@ -49,39 +50,45 @@ def test_sandwich_order_exact(tmp_db):
         cfg = _cfg(conn)
     built = _build(adv, actions, cfg)
 
-    # wire format Qwen3: UMA system (blocos 1–5) + user janela + user final
+    # wire: system estável (blocos 1–2) + user janela + user final
     roles = [m["role"] for m in built.messages]
     assert roles == ["system", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
-    # ordem dos blocos 1–5 preservada DENTRO da system única
+    # system: só a base, ai_instructions e [Plot]
     sys_msg = built.messages[0]["content"]
-    order = [
-        cb.BASE_SYSTEM_PROMPT,          # 1a base
-        "Sandbox em Faerûn",            # 1b ai_instructions
-        "[Plot]",                       # 2 plot_essentials
+    sys_order = [
+        cb.BASE_SYSTEM_PROMPT,
+        "Sandbox em Faerûn",
+        "[Plot]",
         "Name: Caio",
-        "[World info]",                 # 3 story cards
-        "Baldur's Gate",
-        "[Memories]",                   # 4 memory bank
-        "Zhentarim",
-        "[Summary]",                    # 5 story_summary
-        "Caio chegou a Calimport",
     ]
-    positions = [sys_msg.index(fragment) for fragment in order]
+    positions = [sys_msg.index(fragment) for fragment in sys_order]
     assert positions == sorted(positions)
+    for header in ("[World info]", "[Memories]", "[Summary]", "[Player state]"):
+        assert header not in sys_msg
 
     # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
     window = built.messages[1]["content"]
     assert "You stand in Calimport." in window
     assert "\n> You look around\n" in window
 
-    # 7+8 — user final: author's note em linha própria ANTES da última ação
-    final = built.messages[2]["content"]
-    assert final == ("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
-                     f"{cb.STYLE_CUE}\n"
-                     f"{cb.CANON_CUE}\n"
-                     "The market is busy.")
+    # voláteis no topo da user final, antes da author's note e da última ação
+    final = built.messages[-1]["content"]
+    final_order = [
+        "[World info]",
+        "Baldur's Gate",
+        "[Memories]",
+        "Zhentarim",
+        "[Summary]",
+        "Caio chegou a Calimport",
+        "[Author's note:",
+        cb.STYLE_CUE,
+        cb.CANON_CUE,
+        "The market is busy.",
+    ]
+    positions = [final.index(fragment) for fragment in final_order]
+    assert positions == sorted(positions)
 
 
 def test_empty_blocks_are_skipped(tmp_db):
@@ -166,10 +173,12 @@ def test_block_budget_truncation(tmp_db):
     sys_msg = built.messages[0]["content"]
     assert "z" * 2800 in sys_msg and "z" * 2801 not in sys_msg  # instr ≤ 700 tk
     assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
-    # author's note truncada a 300 tk dentro da user final
+    # author's note truncada a 300 tk dentro da user final, depois do resumo
     final = built.messages[-1]["content"]
-    assert final.startswith("[Author's note: " + "y" * 1200 + "]\n")
+    assert "[Author's note: " + "y" * 1200 + "]" in final
     assert "y" * 1201 not in final
+    assert "[Summary]" not in sys_msg
+    assert final.index("[Summary]") < final.index("[Author's note:")
     assert final.endswith("Intro.")
 
 
@@ -234,24 +243,29 @@ def test_window_truncates_by_whole_action(tmp_db):
 
 
 def test_window_keeps_newest_whole_actions_first(tmp_db):
+    """Ação que não cabe sai inteira (nunca no meio). Descarte de 1 numa
+    janela de 2 sobe para WINDOW_DROP_CHUNK e esvazia a janela."""
     adv = make_adventure(title="Trunc2")
     add_action(adv["id"], 0, "start", "S" + "0" * 800)     # ~201 tk
     add_action(adv["id"], 1, "continue", "M" + "1" * 400)  # ~101 tk
     add_action(adv["id"], 2, "continue", "CURRENT.")
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
-        # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0
-        # (6200 = budgets fixos, incl. player_state=200 do v0.7.0)
+        # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0.
+        # dropped=1 → snap 8 → keep<=0. (6200 = budgets fixos)
         cfg = _cfg(conn, context_size=6200 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
-    assert built.meta["window_action_count"] == 1
-    window = built.messages[1]["content"]
-    assert window.startswith("M") and len(window) == 401   # inteira, sem corte
+    assert built.meta["window_action_count"] == 0
+    assert built.meta["window_tokens_est"] == 0
+    full = "\n".join(m["content"] for m in built.messages)
+    assert "S" + "0" * 40 not in full
+    assert "M" + "1" * 40 not in full
+    assert built.messages[-1]["content"].endswith("CURRENT.")
 
 
 def test_card_triggers_from_memory_outside_the_window(tmp_db):
-    adv = make_adventure(story_summary="")
+    adv = make_adventure(story_summary="", authors_note="Keep the rain.")
     add_action(adv["id"], 0, "start", "You walk the road.")
     add_action(adv["id"], 1, "continue", "The rain keeps falling.")
     with db.session() as conn:
@@ -263,6 +277,138 @@ def test_card_triggers_from_memory_outside_the_window(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, _cfg(conn), conn)
     system = built.messages[0]["content"]
+    final = built.messages[-1]["content"]
     assert "Alusair" not in "You walk the road. The rain keeps falling."
-    assert "Steel Regent of Cormyr." in system
-    assert "swore an oath" in system
+    assert "Steel Regent of Cormyr." not in system
+    assert "swore an oath" not in system
+    order = [
+        "[World info]",
+        "Steel Regent of Cormyr.",
+        "[Memories]",
+        "swore an oath",
+        "[Author's note:",
+    ]
+    positions = [final.index(fragment) for fragment in order]
+    assert positions == sorted(positions)
+
+
+def test_see_actions_never_enter_narration(tmp_db):
+    """see (prompt SDXL) some da janela, da varredura de cards e da última ação."""
+    adv = make_adventure(authors_note="Keep the rain.")
+    add_action(adv["id"], 0, "start", "You stand in the rain.")
+    add_action(adv["id"], 1, "see",
+               "SDXLPROMPT ink sketch of Princess Alusair dramatic angle")
+    add_action(adv["id"], 2, "do", "look up at the clouds")
+    add_action(adv["id"], 3, "see", "TRAILINGSEE blood-red sky full english prompt")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Princess Alusair",
+                       triggers=["Alusair"], entry="Steel Regent of Cormyr.")
+        actions = db.list_actions(conn, adv["id"])
+        built = cb.build_context(adv, actions, _cfg(conn), conn)
+    blob = "\n".join(m["content"] for m in built.messages)
+    assert "SDXLPROMPT" not in blob
+    assert "TRAILINGSEE" not in blob
+    assert "Princess Alusair" not in blob
+    assert "Steel Regent" not in blob
+    assert "You stand in the rain." in blob
+    assert built.messages[-1]["content"].endswith("\n> You look up at the clouds\n")
+
+
+def test_window_drops_in_chunks_of_eight(tmp_db):
+    """25 ações na janela (a 26ª é o turno atual), cada uma com 40 tokens.
+    Budget 420 cabe 10 e não 11. Descarte 15 sobe para 16: ficam as últimas
+    9, e a 10ª a partir do fim não aparece em mensagem nenhuma."""
+    text_len = 157
+
+    def piece(i: int) -> str:
+        tag = f"ACT{i:02d}|"
+        return tag + ("x" * (text_len - len(tag)))
+
+    assert cb.estimate_tokens(piece(0)) == 40
+    adv = make_adventure(title="Chunk")
+    for i in range(25):
+        add_action(adv["id"], i, "story", piece(i))
+    add_action(adv["id"], 25, "story", "CURRENT")
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        # last_action fora da janela: soma no budget fixo, context_size compensa.
+        cfg = _cfg(conn, context_size=440)
+        for key in cfg["budgets"]:
+            cfg["budgets"][key] = 0
+        cfg["budgets"]["last_action"] = 20
+        cfg["sampler"]["max_tokens"] = 0
+        built = cb.build_context(adv, actions, cfg, conn)
+    assert built.meta["budgets"]["recent_window"] == 420
+    assert built.meta["window_action_count"] == 9
+    assert built.meta["window_tokens_est"] == 9 * 40
+    window = next(m["content"] for m in built.messages if "ACT24|" in m["content"])
+    for i in range(16, 25):
+        assert f"ACT{i:02d}|" in window
+    blob = "\n".join(m["content"] for m in built.messages)
+    assert "ACT15|" not in blob
+    assert "ACT00|" not in blob
+    assert built.messages[-1]["content"].endswith("CURRENT")
+
+
+class _CaptureLLM:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def chat_completion(self, cfg, messages, *, temperature, max_tokens,
+                        transport=None, **_kwargs):
+        self.prompts.append(messages[0]["content"])
+        return "Fatos arquivados."
+
+
+def test_summarizer_evicts_the_same_chunked_window(tmp_db):
+    """Prompt e summarizer descartam as mesmas ações. see não vai ao LLM."""
+    text_len = 157
+
+    def piece(i: int) -> str:
+        tag = f"ACT{i:02d}|"
+        return tag + ("x" * (text_len - len(tag)))
+
+    adv = make_adventure(title="Same window")
+    add_action(adv["id"], 0, "see", "SDXLPROMPT early ink sketch blood-red sky")
+    for i in range(25):
+        add_action(adv["id"], i + 1, "story", piece(i))
+    add_action(adv["id"], 26, "see", "SDXLPROMPT trailing dramatic angle")
+    add_action(adv["id"], 27, "story", "CURRENT")
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        cfg = _cfg(conn, context_size=440)
+        for key in cfg["budgets"]:
+            cfg["budgets"][key] = 0
+        cfg["budgets"]["last_action"] = 20
+        cfg["sampler"]["max_tokens"] = 0
+        built = cb.build_context(adv, actions, cfg, conn)
+        budget = built.meta["budgets"]["recent_window"]
+        _narrative, kept, evicted, tokens = cb.narrative_window(
+            actions, budget, cb.estimate_tokens)
+        archived = summarizer._evicted_actions(actions, budget, cb.estimate_tokens)
+        fake = _CaptureLLM()
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+
+    assert budget == 420
+    assert built.meta["window_action_count"] == 9
+    assert built.meta["window_tokens_est"] == tokens == 9 * 40
+    assert [a["text"] for a in kept] == [piece(i) for i in range(16, 25)]
+    assert [a["text"] for a in evicted] == [piece(i) for i in range(16)]
+    assert [a["text"] for a in archived] == [a["text"] for a in evicted]
+    window = next(m["content"] for m in built.messages if "ACT24|" in m["content"])
+    blob = "\n".join(m["content"] for m in built.messages)
+    for action in kept:
+        assert action["text"][:6] in window
+    for action in evicted:
+        assert action["text"][:6] not in blob
+    assert "SDXLPROMPT" not in blob
+    assert built.messages[-1]["content"].endswith("CURRENT")
+
+    joined = "\n".join(fake.prompts)
+    assert fake.prompts, "o trecho expulso tem de ser arquivado"
+    assert "SDXLPROMPT" not in joined
+    assert "CURRENT" not in joined
+    for i in range(16):
+        assert f"ACT{i:02d}|" in joined
+    for i in range(16, 25):
+        assert f"ACT{i:02d}|" not in joined

@@ -107,3 +107,49 @@ Ajuste `User`/caminhos se instalar em outro diretório.
 2. Aponte `VITE_API_BASE_URL` do frontend para este backend (idem §3).
 3. Backup: copiar `/opt/aidungeon/data/aidungeon.db` (com o serviço parado ou via
    `.backup` do sqlite3).
+
+## 8. v0.9.0 — Modo Turbo
+
+A VM já em uso não segue o layout `/opt` das seções 2–6: app em
+`/home/caio/aidungeon`, venv em `backend/venv`, unit `aidungeon.service`
+(`User=caio`, `Restart=always`). O llama-server é outro unit, do root:
+`/etc/systemd/system/llama-server.service`.
+
+Alvo do llama-server: `-np 2 -c 262144`. Com `-np` explícito o contexto por
+slot é 131072 (`-c / 2`). O app corta `context_size` na leitura em
+`llm.context_size_limits.max` (**106496**); valor maior no banco (ex.: 262144)
+não é reescrito. Não há chave de slot em `settings.json`.
+
+Pinning é automático. `llm_client` faz `GET {base}/props` (`base` = `llm.base_url`
+sem o sufixo `/v1`, com a mesma `Authorization` do chat) e lê `total_slots`.
+`cache_prompt: true` vai sempre. `id_slot` só entra se `total_slots >= 2`:
+narrativa (stream) → 0, auxiliar (`chat_completion`) → 1. Menos de 2 slots,
+HTTP ≠ 200, JSON inválido ou exceção → a chave é omitida (um `id_slot`
+inexistente trava o llama.cpp até o timeout).
+
+Ordem do deploy: **backup do SQLite, restart do llama-server, depois o
+backend**. A migration `009_scenario_image_style.sql` (`scenarios.image_style`)
+aplica no boot do backend; o backup tem de vir antes desse restart. O backend
+só sobe depois do llama-server, para o primeiro `GET /props` já ver 2 slots.
+
+Backup online (o serviço pode continuar no ar; API `sqlite3.backup`):
+
+```bash
+cd /home/caio/aidungeon && backend/venv/bin/python -c "import sqlite3; s=sqlite3.connect('data/aidungeon.db'); d=sqlite3.connect('data/aidungeon.db.bak-v090'); s.backup(d); d.close()"
+```
+
+llama-server (sudo — o unit é do root). O `sed` só troca `-np 1` /
+`--parallel 1`. Confira que a linha já tem `-c 262144` e não apague
+`--mmproj`, `-ctk q8_0` nem `-ctv q8_0`:
+
+```bash
+sudo cp /etc/systemd/system/llama-server.service /etc/systemd/system/llama-server.service.v090.bak
+sudo sed -i -E 's/(^|\s)-np 1(\s|$)/\1-np 2\2/; s/--parallel 1\b/--parallel 2/' /etc/systemd/system/llama-server.service
+sudo systemctl daemon-reload && sudo systemctl restart llama-server
+```
+
+Backend, sem sudo (`Restart=always` sobe de novo sozinho):
+
+```bash
+pkill -f 'uvicorn app.main:app'
+```

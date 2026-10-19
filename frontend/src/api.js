@@ -102,6 +102,8 @@ export const api = {
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),
   getScenario: (id) => request(`/scenarios/${id}`),
   createScenario: (payload) => request('/scenarios', { method: 'POST', body: payload }),
+  updateScenario: (id, payload) => request(`/scenarios/${id}`, { method: 'PATCH', body: payload }),
+  deleteScenario: (id) => request(`/scenarios/${id}`, { method: 'DELETE' }),
 
   // ------------------------------------------------------------ adventures
   listAdventures: () => request('/adventures'),
@@ -203,16 +205,60 @@ export const api = {
 
   // --------------------------------------------------------- assistant (v2)
   // Gera rascunho estruturado de cenário a partir de uma ideia (não persiste).
-  assistantScenario: ({ brief, language } = {}) =>
+  assistantScenario: ({
+    brief,
+    language,
+    genre,
+    tone,
+    pov,
+    protagonist_name,
+    protagonist_role,
+    protagonist_appearance,
+    image_style,
+    card_count,
+    web_search_mode,
+  } = {}) =>
     request('/assistant/scenario', {
       method: 'POST',
-      body: language ? { brief, language } : { brief },
+      // JSON.stringify omite chaves undefined.
+      body: {
+        brief,
+        language,
+        genre,
+        tone,
+        pov,
+        protagonist_name,
+        protagonist_role,
+        protagonist_appearance,
+        image_style,
+        card_count,
+        web_search_mode,
+      },
     }),
   // Regenera um campo do rascunho (resposta: {field, value} ou {field, story_cards}).
-  assistantField: ({ field, brief, current, draft, language } = {}) =>
+  assistantField: ({ field, brief, current, draft, language, instruction, web_search } = {}) =>
     request('/assistant/field', {
       method: 'POST',
-      body: language ? { field, brief, current, draft, language } : { field, brief, current, draft },
+      body: { field, brief, current, draft, language, instruction, web_search },
+    }),
+  assistantCard: ({
+    concept,
+    card_type = 'character',
+    adventure_id,
+    draft,
+    current_card,
+    instruction,
+    web_search,
+    language,
+  } = {}) =>
+    request('/assistant/card', {
+      method: 'POST',
+      body: { concept, card_type, adventure_id, draft, current_card, instruction, web_search, language },
+    }),
+  assistantSyncPlot: ({ adventure_id, instruction, language } = {}) =>
+    request('/assistant/sync-plot', {
+      method: 'POST',
+      body: { adventure_id, instruction, language },
     }),
 
   // ------------------------------------------------------------ images (v2)

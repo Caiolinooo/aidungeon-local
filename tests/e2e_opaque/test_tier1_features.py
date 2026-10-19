@@ -548,8 +548,9 @@ class TestTier1UIProfile:
             cfg = settings_store.runtime_config(conn)
             built = context_builder.build_context(adv_fresh, actions, cfg, conn)
 
-        assert "HP" in built.messages[0]["content"]
-        assert "Mana" in built.messages[0]["content"]
+        # Layout cache-friendly: [Player state] vive na última mensagem (usuário).
+        assert "HP" in built.messages[-1]["content"]
+        assert "Mana" in built.messages[-1]["content"]
 
 
 # ==============================================================================

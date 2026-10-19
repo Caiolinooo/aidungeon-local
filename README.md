@@ -11,7 +11,48 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.9.0)
+
+- **Modo Turbo**: toda chamada manda `cache_prompt: true`. `id_slot` só entra
+  se `GET /props` reportar `total_slots >= 2` (narrativa no slot 0, auxiliar
+  no 1). Servidor de um slot, ou falha nessa sonda: a chave não vai — não há
+  flag no `settings.json`. No fio, a system da posição 0 guarda só a diretiva
+  do narrador e `[Plot]`. `[World info]`, `[Memories]`, `[Summary]` e
+  `[Player state]` abrem a mensagem user final, para não invalidar o prefixo
+  cacheado. A janela recente corta por ação inteira e, quando corta, sobe o
+  descarte para um múltiplo de 8. Ações `see` ficam fora da narração.
+- **Teto de contexto**: `llm.context_size_limits.max` = 106496. Um valor
+  gravado acima disso (o banco da VM tinha 262144) é cortado na leitura;
+  `GET /api/settings/llm` também devolve `context_size_max`. Na VM o
+  llama-server fica `-np 2 -c 262144` (131072 por slot) — ver
+  [`deploy/vm/README.md`](deploy/vm/README.md) §8. O restart do llama-server
+  vem antes do backend.
+- **See**: o texto da action `see` é a legenda limpa (frase em inglês do
+  modelo; o beat cru só se essa frase vier vazia). O prompt SDXL completo
+  continua na linha da imagem (`images.prompt`). A tela ainda limpa captions
+  antigas que guardavam o prompt inteiro.
+- **AI Story Studio**: o rascunho aceita gênero, tom, POV (`second` / `third`
+  / `first`), nome/papel/aparência do protagonista, `image_style`,
+  `card_count` (3–8) e `web_search_mode` (`auto` / `always` / `off`). O POV
+  vira uma diretiva fixa em `ai_instructions` — o montador de contexto não lê
+  `third_person`. Dá para refinar um campo ou um card com uma instrução, e
+  criar/enriquecer card pela API. Cenário existente: PATCH/PUT, duplicar e
+  DELETE (aventuras ligadas ficam com `scenario_id` nulo). Migration
+  `009_scenario_image_style.sql`.
+- **Pesquisa web (opt-in)**: Wikipedia e DuckDuckGo, sem chave paga. Entra na
+  criação de cenário (modo acima), no enriquecimento de cards e no turno
+  (`web_search: true` no `POST /action`, toggle na barra). O bloco no prompt
+  é `[Web Research & Canon Facts]`. Falha de rede não derruba a geração.
+- **Service worker v3** (`aidungeon-local-v3`): JS/CSS da mesma origem são
+  network-first (cache só se a rede falhar). `skipWaiting` + `clients.claim`
+  e um `controllerchange` recarregam a aba aberta. O backend manda
+  `Cache-Control: no-cache` em `index.html`, `sw.js` e `manifest.webmanifest`,
+  e `public, max-age=31536000, immutable` em `assets/` (nome com hash do Vite).
+
 ## Funcionalidades (v0.8.0)
+
+O que a v0.8.0 já incluía. Teto de contexto, See, Generate with AI e o
+service worker descritos aqui foram substituídos pela v0.9.0 acima.
 
 - **Memória vetorial híbrida na CPU + CRUD do Memory Bank (Fase 4)**: memórias do
   `memory_bank` são vetorizadas via `Qwen3-Embedding-0.6B` (GGUF em `llama-server`
@@ -174,19 +215,28 @@ toda chamada (sem isso `content` volta vazio) — o `llm_client` já envia sempr
 ### Ordem do "sanduíche" de contexto
 
 O coração do produto: nunca enviamos a história inteira ao modelo. O `context_builder`
-monta o prompt nesta ordem exata (PLANO.md §4.2, contexto 8192 tokens):
+monta o prompt nesta ordem lógica (budgets de `config/settings.json`):
 
-| # | Bloco | Budget (tokens) |
-|---|---|---|
-| 1 | System: AI instructions + "narrador em 2ª pessoa" | ≤ 700 |
-| 2 | System: Plot Essentials ("Memory") | ≤ 400 |
-| 3 | System: Story Cards (pinned + disparados por keyword) | ≤ 1200 |
-| 4 | System: Memory Bank (top-k relevantes) | ≤ 600 |
-| 5 | System: Story Summary (resumo rolante) | ≤ 400 |
-| 6 | User: janela recente verbatim (`> You ...` nas ações do jogador) | ~3800 |
-| 7 | System(final): Author's Note — perto do fim, alta influência por recência | ≤ 300 |
-| 8 | User(final): última ação do jogador formatada | ≤ 200 |
-| — | Reserva para a resposta | 512 |
+| # | Bloco | Onde vai no fio | Budget (tokens) |
+|---|---|---|---|
+| 1 | AI instructions + diretiva de narrador | system (posição 0) | ≤ 700 |
+| 2 | `[Plot]` (Plot Essentials) | system (posição 0) | ≤ 400 |
+| 3 | `[World info]` — cards pinned + keyword | topo da user final | ≤ 1200 |
+| 4 | `[Memories]` | topo da user final | ≤ 600 |
+| 5 | `[Summary]` | topo da user final | ≤ 400 |
+| 5b | `[Player state]` | topo da user final | — |
+| 6 | Janela recente verbatim (`> You ...`) | mensagens user anteriores | dinâmico |
+| 7 | `[Author's note: …]` | user final, depois dos voláteis | ≤ 300 |
+| 8 | Última ação formatada | user final | ≤ 200 |
+| — | Reserva para a resposta | — | 512 |
+
+O template Qwen3 exige a system no início e rejeita system depois da posição 0.
+Por isso os blocos voláteis (3–5b) não ficam mais na system: abrem a user
+final, antes da author's note, Active Lore, Continuity Anchor e da última
+ação. Budgets não mudaram — só a posição, para o prefixo do slot pinado
+sobreviver a card, memória, resumo e estado. A janela (6), quando não cabe,
+descarta ações inteiras e sobe o corte para um múltiplo de 8. Ações `see`
+não entram em mensagem nenhuma.
 
 Regras inegociáveis:
 - Formatação do jogador **byte a byte como no backup**: `do` → `\n> You {texto}\n`;
@@ -195,6 +245,7 @@ Regras inegociáveis:
 - Stop sequences `\n> You` / `\n> you` — a IA nunca joga pelo jogador.
 - Geração sempre com **streaming SSE**; ao final, a resposta é gravada como action
   `continue`.
+- POV (1ª / 2ª / 3ª pessoa) só chega ao narrador pelo texto de `ai_instructions`.
 
 ### Contratos antes de código
 
@@ -264,9 +315,10 @@ AIDungeon_Local\
 │  │                         002 imagens · 003 story_cards · 004 jobs/assets
 │  │                         · 005 npc_sheet · 006 portrait_anchor · 007 ui_profile
 │  │                         · 008 memory_embeddings (modelo + dimensão do vetor)
+│  │                         · 009 scenario image_style
 │  ├─ app\                   FastAPI: main, db, game_engine, context_builder,
 │  │  │                      llm_client, image_client, embeddings_client, scripting,
-│  │  │                      assistant, settings_store, auth, jobs
+│  │  │                      assistant, web_search, settings_store, auth, jobs
 │  │  └─ routes\             routers da API (contratos em docs/openapi.yaml):
 │  │                         generation (SSE), images (See), assistant, choices,
 │  │                         settings (llm/image/voice/embeddings/scripting),
@@ -282,7 +334,7 @@ AIDungeon_Local\
 │                            OfflineBanner, drawer (Cards/NPCs/Memory/Controls/Avatars/Config/Details)
 ├─ config\
 │  ├─ settings.json          sampler (incl. Min-P, DRY, retry stepping), budgets de contexto,
-│  │                         LLM (teto 40.960), imagens, voz, embeddings, scripting
+│  │                         LLM (teto 106496), imagens, voz, embeddings, scripting
 │  └─ models.json            modelos GGUF de referência + qual está ativo
 ├─ tools\                    check_llm.py, bench_llm.py, backfill_embeddings.py,
 │                            eval_conversation.py, setup_llm_local.ps1 / .sh

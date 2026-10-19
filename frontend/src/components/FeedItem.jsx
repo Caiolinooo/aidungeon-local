@@ -305,12 +305,20 @@ function SeeImageCard({ action }) {
     }
   }, [image?.id])
 
-  const caption = image?.prompt || action.text
+  const captionSource = action.text || image?.prompt || ''
+  const rawPrompt = image?.prompt || action.text || ''
+  const displayCaption = captionSource
+    .split(/\s+BREAK\s+/i)[0]
+    .replace(/^\s*>\s*(?:You(?:\s+say)?\s+)?/i, '')
+    .replace(/\s*,\s*people present:.*$/i, '')
+    .replace(/\s*,\s*exact likeness.*$/i, '')
+    .replace(/\s*,\s*wide shot of that action.*$/i, '')
+    .trim() || captionSource
 
   const copyPrompt = async () => {
-    if (!caption) return
+    if (!rawPrompt) return
     try {
-      await navigator.clipboard.writeText(caption)
+      await navigator.clipboard.writeText(rawPrompt)
       setCopied(true)
       toast('Image prompt copied to clipboard.', 'ok')
       setTimeout(() => setCopied(false), 2000)
@@ -328,7 +336,7 @@ function SeeImageCard({ action }) {
         className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
       >
         {objUrl ? (
-          <img src={objUrl} alt={caption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
+          <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
         ) : (
           <div className="flex h-48 items-center justify-center text-sm text-muted">
             {failed || !image?.id ? 'Could not load the image.' : 'Loading scene illustration…'}
@@ -336,11 +344,11 @@ function SeeImageCard({ action }) {
         )}
       </button>
       <div className="mt-2 flex items-center justify-between gap-2 px-1">
-        {caption ? (
-          <figcaption className="line-clamp-2 flex-1 text-xs italic text-secondary">{caption}</figcaption>
+        {displayCaption ? (
+          <figcaption className="line-clamp-2 flex-1 text-xs italic text-secondary">{displayCaption}</figcaption>
         ) : <span />}
         <div className="flex shrink-0 items-center gap-1.5">
-          {caption && (
+          {rawPrompt && (
             <button
               type="button"
               onClick={copyPrompt}
@@ -363,10 +371,10 @@ function SeeImageCard({ action }) {
 
       {fullOpen && objUrl && (
         <Modal title="See — Scene Illustration" onClose={() => setFullOpen(false)} wide>
-          <img src={objUrl} alt={caption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
-          {caption && (
+          <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+          {rawPrompt && (
             <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-subtle bg-elevated/50 p-3">
-              <p className="text-xs italic text-secondary">{caption}</p>
+              <p className="text-xs italic text-secondary">{displayCaption}</p>
               <button
                 type="button"
                 onClick={copyPrompt}

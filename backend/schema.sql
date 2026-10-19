@@ -5,6 +5,7 @@ CREATE TABLE scenarios(
   id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT DEFAULT '',
   ai_instructions TEXT DEFAULT '', plot_essentials TEXT DEFAULT '',
   authors_note TEXT DEFAULT '', opening_text TEXT DEFAULT '',
+  image_style TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', third_person INTEGER DEFAULT 0,
   story_cards TEXT DEFAULT '[]',       -- v2: cards do rascunho do assistente (JSON)
   created_at TEXT, updated_at TEXT);

@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import threading
 from typing import Any
 
 from app import db, jobs, llm_client, npc_assets, settings_store
@@ -370,6 +368,28 @@ def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str) -> dict:
     return {"created": created, "updated": updated}
 
 
+def _turn_has_entity_signal(recent_text: str, cards: list[dict], plot: str) -> bool:
+    """Evita gastar chamada LLM quando o trecho recente não cita nenhum card
+    existente, não tem diálogo nem nomes próprios novos, e o plot já existe."""
+    if not (plot or "").strip():
+        return True
+    folded = recent_text.casefold()
+    for card in cards:
+        title = (card.get("title") or "").strip().casefold()
+        if title and len(title) >= 3 and title in folded:
+            return True
+        for trig in card.get("triggers") or []:
+            t = str(trig or "").strip().casefold()
+            if len(t) >= 3 and t in folded:
+                return True
+    # Diálogo (travessão ou aspas) ou nome próprio capitalizado no meio de frase
+    if any(ch in recent_text for ch in ("—", "–", '"', "“", "«")):
+        return True
+    if re.search(r"(?<!^)(?<![.!?]\s)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}\b", recent_text):
+        return True
+    return False
+
+
 def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     """Lê o trecho recente, pede o JSON e grava. Falha de JSON não propaga."""
     with db.session() as conn:
@@ -381,31 +401,33 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
                  if card.get("type") == "character"]
         llm_cfg = settings_store.effective_llm_settings(conn)
         plot = adventure.get("plot_essentials") or ""
-    text = "\n".join(
-        action["text"] for action in actions if action["type"] != "see" and action.get("text")
-    )[-3500:].strip()
-    if not text:
+    non_see = [action["text"] for action in actions if action["type"] != "see" and action.get("text")]
+    if not non_see:
         return {"created": 0, "updated": 0}
+    latest_turn = "\n".join(non_see[-2:]).strip()
+    if not _turn_has_entity_signal(latest_turn, cards, plot):
+        return {"created": 0, "updated": 0}
+    text = "\n".join(non_see)[-1800:].strip()
     roster = []
     for card in cards:
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
         roster.append({
             "title": card.get("title") or "",
-            "entry": (card.get("entry") or "")[:400],
+            "entry": (card.get("entry") or "")[:300],
             "status": sheet.get("status") or "",
-            "appearance": (sheet.get("appearance") or "")[:240],
-            "notes": (sheet.get("notes") or "")[:300],
+            "appearance": (sheet.get("appearance") or "")[:200],
+            "notes": (sheet.get("notes") or "")[:240],
             "stats": sheet.get("stats") or {},
         })
     user = (
         f"Protagonist (do not create a card): {plot[:500]}\n\n"
-        f"Existing characters:\n{json.dumps(roster, ensure_ascii=False)[:4000]}\n\n"
+        f"Existing characters:\n{json.dumps(roster, ensure_ascii=False)[:3000]}\n\n"
         f"Recent passage:\n{text}"
     )
     content = llm_client.chat_completion(
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        temperature=0.2, max_tokens=900, transport=transport,
+        temperature=0.2, max_tokens=550, transport=transport,
     )
     try:
         payload = npc_assets._extract_json(content)
@@ -416,18 +438,4 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         result = apply_chronicle(conn, adventure_id, payload, plot)
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)
     return result
-
-
-def spawn_after_turn(adventure_id: str, transport: Any = None) -> None:
-    """Dispara o passe sem segurar o stream. Testes desligam com AIDUNGEON_CHRONICLE=0."""
-    if os.environ.get("AIDUNGEON_CHRONICLE", "1") == "0":
-        return
-
-    def run() -> None:
-        try:
-            update_from_turn(adventure_id, transport)
-        except Exception:
-            log.exception("npc_chronicle: falhou para %s", adventure_id)
-
-    threading.Thread(target=run, name="npc-chronicle", daemon=True).start()
 

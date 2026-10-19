@@ -51,7 +51,7 @@
       "note": "auto = GET {base_url}/models em runtime usa o modelo que o servidor tem carregado; model_alias explicito sobrescreve"
     },
     "context_size": 65536,
-    "context_size_limits": { "min": 4096, "max": 262144 },
+    "context_size_limits": { "min": 4096, "max": 106496 },
     "disable_thinking": true,
     "disable_thinking_note": "OBRIGATORIO p/ Qwen3.x hibrido: llm_client DEVE enviar chat_template_kwargs={\"enable_thinking\": false} em toda chamada; sem isso content volta vazio (tokens viram reasoning_content). Validado contra a VM em 2026-10-07.",
     "streaming": true,
@@ -100,7 +100,7 @@
         "img2img_path": "/sdapi/v1/img2img",
         "width": 1024,
         "height": 1024,
-        "steps": 30,
+        "steps": 20,
         "negative_prompt": "text, watermark, signature, low quality, deformed, blurry, cartoon, anime, illustration, cgi",
         "sd_model_checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
         "note": "A1111 na VM, --medvram --no-half-vae, VAE sdxl-vae-fp16-fix. Checkpoint epiCRealism XL CrystalClear (SDXL fotorealista, sem filtro de conteúdo; Juggernaut XL fica de backup no disco). 1024 é o tamanho nativo; a faixa da cena usa 1344x768. Flux não cabe: o llama-server ocupa ~14 GB dos 23 GB da L4."

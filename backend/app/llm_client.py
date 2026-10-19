@@ -6,6 +6,11 @@
   via `PUT /api/settings/llm`.
 - Geração: `POST {base_url}/chat/completions` com `stream=true`, repassando
   tokens SSE um a um. Header `Authorization: Bearer <api_key>` quando houver.
+- Modo Turbo: `cache_prompt=true` sempre. `id_slot` só entra no payload
+  quando `GET {base}/props` (`base` = base_url sem o sufixo `/v1`) reporta
+  `total_slots >= 2`: narrativa → 0, auxiliar (`chat_completion`) → 1.
+  Menos de 2 slots, HTTP ≠ 200, JSON inválido ou exceção → chave omitida
+  (um `id_slot` inexistente trava o llama.cpp até o timeout).
 - `disable_thinking=true` (default; OBRIGATÓRIO p/ Qwen3.x híbrido) → toda
   chamada inclui `chat_template_kwargs={"enable_thinking": false}`. Sem isso o
   servidor consome os tokens como `reasoning_content` e devolve content VAZIO.
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Iterator
 
 import httpx
@@ -29,6 +35,12 @@ PROBE_TIMEOUT = 15.0
 
 # Cache de descoberta: (base_url, model_alias) -> id do modelo (ou None)
 _discovery_cache: dict[tuple[str, str], str | None] = {}
+# Cache de slots: base_url sem sufixo /v1 -> (total_slots, monotonic).
+# 0 = um slot ou falha. TTL curto: o llama-server é compartilhado e pode
+# mudar de -np fora do nosso controle — um cache eterno ressuscitaria o bug
+# do id_slot travado (request deferida para sempre num slot inexistente).
+_SLOT_CACHE_TTL_S = 300.0
+_slot_cache: dict[str, tuple[int, float]] = {}
 
 
 class LlmError(Exception):
@@ -49,6 +61,7 @@ class LlmAuthError(LlmError):
 
 def invalidate_discovery_cache() -> None:
     _discovery_cache.clear()
+    _slot_cache.clear()
 
 
 def cached_discovery(base_url: str, model_alias: str) -> str | None:
@@ -147,8 +160,50 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- geração
+def _props_base(cfg: dict) -> str:
+    """base_url sem barra final e sem o sufixo `/v1` (só esse sufixo)."""
+    return cfg["base_url"].rstrip("/").removesuffix("/v1")
+
+
+def server_slot_count(cfg: dict, transport: httpx.BaseTransport | None = None) -> int:
+    """GET {base}/props → `total_slots`.
+
+    Qualquer falha (exceção, HTTP ≠ 200, corpo não-JSON, valor ilegível)
+    cacheia e devolve 0. A chave do cache é o base_url já normalizado.
+    """
+    base = _props_base(cfg)
+    cached = _slot_cache.get(base)
+    if cached is not None and (time.monotonic() - cached[1]) < _SLOT_CACHE_TTL_S:
+        return cached[0]
+    timeout = min(float(cfg.get("timeout_seconds", 180)), PROBE_TIMEOUT)
+    count = 0
+    try:
+        with _make_client(cfg, transport, timeout) as client:
+            resp = client.get(f"{base}/props", headers=_headers(cfg))
+        if resp.status_code == 200:
+            data = resp.json()
+            count = int(data.get("total_slots") or 0)
+    except Exception:
+        count = 0
+    _slot_cache[base] = (count, time.monotonic())
+    return count
+
+
+def slot_for(cfg: dict, role: str,
+             transport: httpx.BaseTransport | None = None) -> int | None:
+    """0 narrativa, 1 auxiliar; None se o servidor tem menos de 2 slots."""
+    if server_slot_count(cfg, transport) < 2:
+        return None
+    if role == "narrative":
+        return 0
+    if role == "aux":
+        return 1
+    return None
+
+
 def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
-                       stop: list[str], model: str) -> dict:
+                       stop: list[str], model: str,
+                       transport: httpx.BaseTransport | None = None) -> dict:
     """Payload de /chat/completions (inclui o flag anti-thinking do Qwen3.x)."""
     payload: dict[str, Any] = {
         "model": model,
@@ -168,7 +223,11 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
         "dry_sequence_breakers": list(sampler.get("dry_sequence_breakers", ["\n", ":", "\"", "*"])),
         "max_tokens": int(sampler.get("max_tokens", 300)),
         "stop": list(stop),
+        "cache_prompt": True,
     }
+    slot = slot_for(cfg, "narrative", transport)
+    if slot is not None:
+        payload["id_slot"] = slot
     if cfg.get("disable_thinking", True):
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
@@ -181,7 +240,8 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
     model = resolve_model(cfg, transport)
     if not model:
         raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
-    payload = build_chat_payload(cfg, messages, sampler=sampler, stop=stop, model=model)
+    payload = build_chat_payload(cfg, messages, sampler=sampler, stop=stop, model=model,
+                                 transport=transport)
     base = cfg["base_url"].rstrip("/")
     timeout = float(cfg.get("timeout_seconds", 180))
 
@@ -231,7 +291,7 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
 def chat_completion(cfg: dict, messages: list[dict], *, temperature: float = 0.3,
                     max_tokens: int = 200, stop: list[str] | None = None,
                     transport: httpx.BaseTransport | None = None) -> str:
-    """Chamada única SEM stream (usada pelo summarizer do memory bank).
+    """Chamada única SEM stream (tarefas auxiliares; slot 1 se há ≥2 slots).
 
     Mesmas regras de erro/descoberta do stream; devolve
     `choices[0].message.content` (stripped). Levanta LlmError subclasses.
@@ -246,7 +306,11 @@ def chat_completion(cfg: dict, messages: list[dict], *, temperature: float = 0.3
         "temperature": temperature,
         "max_tokens": int(max_tokens),
         "stop": list(stop or []),
+        "cache_prompt": True,
     }
+    slot = slot_for(cfg, "aux", transport)
+    if slot is not None:
+        payload["id_slot"] = slot
     if cfg.get("disable_thinking", True):
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     base = cfg["base_url"].rstrip("/")

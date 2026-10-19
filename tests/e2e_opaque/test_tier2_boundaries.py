@@ -365,8 +365,9 @@ class TestTier2ContextAssemblyBoundaries:
             cfg = settings_store.runtime_config(conn)
             built = context_builder.build_context(adv, actions, cfg, conn)
 
-        assert "Cosmic Law" in built.messages[0]["content"]
-        assert "Magic is dead here." in built.messages[0]["content"]
+        # Layout cache-friendly: [World info] vive na última mensagem (usuário).
+        assert "Cosmic Law" in built.messages[-1]["content"]
+        assert "Magic is dead here." in built.messages[-1]["content"]
 
 
 # ==============================================================================

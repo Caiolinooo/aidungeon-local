@@ -258,10 +258,17 @@ def _run_job(job: dict, transport: Any) -> None:
             db.finish_job(conn, job["id"], "done", result=result)
 
 
-def process_pending(transport: Any = None) -> int:
-    """Drena a fila em ordem (chamado pelo worker e, diretamente, nos testes)."""
+def process_pending(transport: Any = None, *, should_pause=None) -> int:
+    """Drena a fila em ordem (chamado pelo worker e, diretamente, nos testes).
+
+    should_pause, quando passado, é consultado antes de cada claim: se retornar
+    verdade, a drenagem para e os jobs continuam pending (a geração interativa
+    fica com a GPU).
+    """
     processed = 0
     while True:
+        if should_pause is not None and should_pause():
+            return processed
         with db.session() as conn:
             job = db.claim_next_job(conn)
         if not job:
@@ -272,11 +279,17 @@ def process_pending(transport: Any = None) -> int:
 
 # ----------------------------------------------------------------- worker
 async def worker_loop(interval: float = 1.5) -> None:
-    """Loop infinito: claim+execução em thread para não bloquear o event loop."""
+    """Loop infinito: claim+execução em thread para não bloquear o event loop.
+    Aguarda caso haja stream de texto ativo para não disputar a GPU com o LLM."""
+    from app import game_engine
+
     log.info("jobs worker iniciado (intervalo %.1fs)", interval)
     while True:
         try:
-            await asyncio.to_thread(process_pending)
+            await asyncio.to_thread(
+                process_pending,
+                should_pause=game_engine.is_any_generation_active,
+            )
         except Exception:
             log.exception("jobs worker: erro no ciclo")
         await asyncio.sleep(interval)

@@ -21,6 +21,10 @@ document.addEventListener('focusin', (event) => {
 
 // Register PWA service worker
 if ('serviceWorker' in navigator && !window.location.hostname.includes('localhost.disabled')) {
+  let refreshing = false
+  // Primeira visita: o controllerchange do claim inicial é ignorado, mas o
+  // flag vira true para que updates FUTUROS recarreguem a aba (PWA fica dias aberta).
+  let hadController = !!navigator.serviceWorker.controller
   window.addEventListener('load', () => {
     navigator.serviceWorker
       .register('/sw.js')
@@ -30,6 +34,15 @@ if ('serviceWorker' in navigator && !window.location.hostname.includes('localhos
       .catch((err) => {
         console.warn('SW registration skipped:', err)
       })
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) {
+        hadController = true
+        return
+      }
+      if (refreshing) return
+      refreshing = true
+      window.location.reload()
+    })
   })
 }
 

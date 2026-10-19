@@ -2,16 +2,17 @@
 
 SPA React 18 + Vite 5 + Tailwind CSS 3 (tema escuro padrão), réplica funcional da
 experiência do AI Dungeon (PLANO.md §4.5). Consome a API do contrato
-`docs/openapi.yaml` (fonte da verdade).
+`docs/openapi.yaml`. PATCH/DELETE de cenário, Story Studio e `web_search` da
+v0.9.0 estão no backend e na UI; o YAML ainda não lista esses contratos.
 
 ## Telas
 
 | Rota | Tela |
 |---|---|
-| `/` | Home — grid "Your Adventures", "New Adventure" (scenario ou em branco), "Import AI Dungeon backup" (.zip → ImportReport) |
-| `/play/:id` | Jogo — feed com scroll automático, tabs Do/Say/Story, toolbar Retry/Undo/Continue/Stop, Edit por bloco (hover), drawer Story Cards / Memory / Config / Details, streaming SSE token a token |
-| `/scenarios/new` | Editor de Scenario (criação, POST /api/scenarios) |
-| `/scenarios/:id/edit` | Editor somente leitura — a v1 do contrato não tem PUT de scenario |
+| `/` | Home — grid "Your Adventures", "New Adventure" (scenario ou em branco; cada scenario tem editar e apagar), "Import AI Dungeon backup" (.zip → ImportReport) |
+| `/play/:id` | Jogo — feed com scroll automático, tabs Do/Say/Story/See, toolbar Retry/Undo/Continue/Stop, Edit por bloco (hover), drawer Story Cards / Memory / Config / Details, streaming SSE token a token. Toggle de pesquisa web na barra; fontes do turno numa faixa dispensável. Caption do See é o texto da action; o prompt técnico fica na imagem |
+| `/scenarios/new` | Editor de Scenario (criação, POST /api/scenarios), inclusive `image_style` e story cards |
+| `/scenarios/:id/edit` | Editor completo — PATCH/PUT `/api/scenarios/{id}`, duplicar (POST com título "(copy)") e DELETE (aventuras já criadas perdem o vínculo) |
 
 ## Rodar em desenvolvimento
 

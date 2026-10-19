@@ -92,7 +92,8 @@ class TestTier4RealWorldScenarios:
         ev2 = parse_sse_events(t2.text)
         assert any(ev["event"] == "done" for ev in ev2)
         # Sarcophagus card must have been injected into prompt
-        assert "protective warding runes" in captured_turns[1]["messages"][0]["content"]
+        # (layout cache-friendly: [World info] na última mensagem do usuário).
+        assert "protective warding runes" in captured_turns[1]["messages"][-1]["content"]
 
         # Turn 3 (Story): Monster awakens
         t3 = e2e_client.post(

@@ -284,6 +284,29 @@ function NewAdventureModal({ onClose }) {
     }
   }
 
+  // A linha inteira é um <label> selecionável — os ícones precisam impedir
+  // o clique de marcar o radio.
+  const editScenario = (e, s) => {
+    e.preventDefault()
+    e.stopPropagation()
+    navigate(`/scenarios/${s.id}/edit`)
+    onClose()
+  }
+
+  const deleteScenario = async (e, s) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm(`Delete scenario "${s.title}"? Adventures that started from it keep running.`)) return
+    try {
+      await api.deleteScenario(s.id)
+      setScenarios((list) => list.filter((x) => x.id !== s.id))
+      setSelected((cur) => (cur === s.id ? 'blank' : cur))
+      toast('Scenario deleted.', 'success')
+    } catch (err) {
+      toast(err.message)
+    }
+  }
+
   return (
     <Modal title="New Adventure" onClose={onClose} wide>
       {scenarios === null ? (
@@ -310,7 +333,7 @@ function NewAdventureModal({ onClose }) {
               }`}
             >
               <input type="radio" name="scenario" checked={selected === s.id} onChange={() => setSelected(s.id)} className="mt-1 accent-emerald-600" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="font-semibold text-zinc-100">{s.title}</div>
                 {s.description && <div className="line-clamp-2 text-sm text-zinc-500">{s.description}</div>}
                 {s.tags?.length > 0 && (
@@ -322,6 +345,26 @@ function NewAdventureModal({ onClose }) {
                     ))}
                   </div>
                 )}
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <button
+                  type="button"
+                  title="Edit scenario"
+                  aria-label={`Edit “${s.title}”`}
+                  onClick={(e) => editScenario(e, s)}
+                  className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  title="Delete scenario"
+                  aria-label={`Delete “${s.title}”`}
+                  onClick={(e) => deleteScenario(e, s)}
+                  className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
+                >
+                  🗑
+                </button>
               </div>
             </label>
           ))}
