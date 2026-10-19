@@ -64,7 +64,7 @@ Ficou para outras tarefas:
 | K1 | `output_sanitizer.clean_narration` + blocos voláteis delimitados | F0 | feito no código (`<lore>`, stops, sanitizer, `test_prompt_prefix_stability`); falta o replay no staging |
 | K2 | Meta-comandos `/card`, `/foto`, `/cena` + linguagem natural | K1 | pendente |
 | K3 | Chronicle confiável, retrato automático, `scene_state` (migration 010) | G3 | pendente |
-| K4 | Summarizer em `role=summary` + `tools/backfill_chronicle.py` | K3 | pendente |
+| K4 | Summarizer em `role=summary` + `tools/backfill_chronicle.py` | K3 | parcial: história que cabe na janela de 106k e no horizonte de 4096 tk agora arquiva pela cena viva de 8 turnos (`archive_horizon_turns`); falta `tools/backfill_chronicle.py` e o aceite de ≥3 memórias nas outras aventuras |
 | K5 | See com elenco presente e prompt em inglês (planejador C4) | K3, G5 | pendente |
 | K6 | Likeness de pessoa real + guardrail SFW (C8) | G6 | feito no código: pessoa real força SFW, cena explícita tira a pessoa ou recusa, menor nunca; Wikipedia e upload em `data/references`. ArcFace/FaceID esperam a G6 |
 | K7 | Sampler pt-BR (A/B) | — | pendente |

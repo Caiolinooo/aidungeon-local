@@ -12,7 +12,7 @@ import json
 
 import httpx
 
-from app import db, embeddings_client, llm_client, settings_store
+from app import context_builder, db, embeddings_client, llm_client, settings_store
 from memory import retrieval, summarizer, triggers
 
 from conftest import add_action, make_adventure
@@ -452,6 +452,67 @@ def test_proactive_horizon_checkpoints_inside_large_64k_window(tmp_db):
     assert mems[0]["text"] == "Fact checkpoint from early scene."
     assert mems[0]["seq_start"] == 0
     assert adv2["story_summary"] == "Fact checkpoint from early scene."
+
+
+def test_story_under_4096_tokens_stays_unarchived_without_turn_cap(tmp_db):
+    """Costazul cabe na janela de 106496 e no horizonte de 4096 tk. Sem o
+    teto de turnos, o gatilho antigo não dispara."""
+    adv = make_adventure()
+    _actions(adv["id"], 21, chars=400)  # ~100 tk × 20 no pool ≈ 2100 tk
+    fake = FakeLLM(reply="Não devia ser chamado.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=106496, memory_bank={
+            "trigger_tokens": 800,
+            "archive_horizon_tokens": 4096,
+            "archive_horizon_turns": 0,
+        })
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+        adv2 = db.get_adventure(conn, adv["id"])
+    assert fake.calls == []
+    assert mems == []
+    assert adv2["story_summary"] == ""
+
+
+def test_long_story_inside_106k_window_gets_summary_and_keeps_prefix(tmp_db):
+    """A cena viva de 8 turnos arquiva o começo sem tirar ações do prompt.
+    Uma user por ação passada permanece; voláteis só na user final."""
+    adv = make_adventure()
+    _actions(adv["id"], 21, chars=400)
+    fake = FakeLLM(reply="O porto ficou sem peixe e a Clara prometeu voltar.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=106496, memory_bank={
+            "trigger_tokens": 800,
+            "archive_horizon_tokens": 4096,
+            "archive_horizon_turns": 8,
+        })
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+        adv2 = db.get_adventure(conn, adv["id"])
+        actions = db.list_actions(conn, adv["id"])
+        built = context_builder.build_context(adv2, actions, cfg, conn)
+    assert len(mems) == 1
+    assert mems[0]["seq_start"] == 0
+    assert "Action 0." in fake.calls[0]["messages"][0]["content"]
+    assert adv2["story_summary"] == "O porto ficou sem peixe e a Clara prometeu voltar."
+    narrative = [a for a in actions if a["type"] != "see"]
+    assert len(built.messages) == 1 + (len(narrative) - 1) + 1
+    assert built.messages[0]["role"] == "system"
+    assert all(m["role"] == "user" for m in built.messages[1:])
+    for message in built.messages[1:-1]:
+        assert context_builder.LORE_OPEN not in message["content"]
+        assert "[Summary]" not in message["content"]
+        assert "[Memories]" not in message["content"]
+    assert "[Summary]" in built.messages[-1]["content"]
+    assert "[Memories]" in built.messages[-1]["content"]
+    add_action(adv["id"], 21, "continue", "Clara espera no cais.")
+    with db.session() as conn:
+        actions_next = db.list_actions(conn, adv["id"])
+        current = db.get_adventure(conn, adv["id"])
+        built_next = context_builder.build_context(current, actions_next, cfg, conn)
+    shared = built.messages[:-1]
+    assert built_next.messages[:len(shared)] == shared
+    assert built_next.messages[len(shared)]["role"] == "user"
 
 
 def test_summarizer_does_not_archive_see_prompts(tmp_db):

@@ -99,6 +99,7 @@
   "memory_bank": {
     "trigger_tokens": 800,
     "archive_horizon_tokens": 4096,
+    "archive_horizon_turns": 8,
     "summary_max_words": 120,
     "summary_temperature": 0.3,
     "top_k": 12,
