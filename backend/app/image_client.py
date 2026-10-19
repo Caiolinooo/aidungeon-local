@@ -115,12 +115,35 @@ def _save_png(cfg: dict, adventure_id: str, image_id: str, content: bytes) -> st
 
 
 # ---------------------------------------------------------------- providers
+# Anatomia e enquadramento, em todo txt2img e img2img. O negative do
+# settings cobre estilo; isto cobre a mão a mais e a segunda cabeça.
+_STANDARD_NEGATIVE = (
+    "bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, "
+    "extra limbs, extra arms, extra legs, malformed hands, deformed face, "
+    "duplicate person, two heads, extra head, cropped, out of frame, "
+    "jpeg artifacts, blurry, lowres, plastic skin, doll"
+)
+
+
+def _merged_negative(cfg: dict) -> str:
+    seen: list[str] = []
+    folded = set()
+    for part in ((cfg.get("negative_prompt") or ""), _STANDARD_NEGATIVE):
+        for bit in part.split(","):
+            bit = " ".join(bit.split())
+            key = bit.casefold()
+            if bit and key not in folded:
+                folded.add(key)
+                seen.append(bit)
+    return ", ".join(seen)
+
+
 def _sd_payload(cfg: dict, prompt: str, width: int, height: int) -> dict:
     # DPM++ 2M Karras e CFG 5 servem o epiCRealism XL (pede CFG 3-6).
     # O checkpoint é travado por _apply_checkpoint em volta deste payload.
     return {
         "prompt": prompt,
-        "negative_prompt": cfg["negative_prompt"],
+        "negative_prompt": _merged_negative(cfg),
         "steps": cfg["sdwebui_steps"],
         "width": width,
         "height": height,

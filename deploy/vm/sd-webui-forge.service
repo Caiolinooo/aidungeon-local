@@ -1,0 +1,25 @@
+# /etc/systemd/system/sd-webui-forge.service
+# Forge Neo ao lado do A1111 (/home/caio/sd-webui fica de rollback).
+# Loopback 7861. O teto de VRAM é o que o driver deixa livre: o llama-server
+# continua dono dos ~14,5 GB. Não usar setting_allocated_vram abaixo de 1:
+# 0,25 reserva ~17 GB e o Neo enxerga 0 MB úteis.
+[Unit]
+Description=Forge Neo (API de imagem, epiCRealism XL)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+WorkingDirectory=/home/caio/sd-webui-forge-neo
+Environment=PATH=/home/caio/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=LD_PRELOAD=/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ExecStart=/bin/bash /home/caio/sd-webui-forge-neo/webui-user.sh
+Restart=on-failure
+RestartSec=15
+MemoryHigh=14G
+MemoryMax=18G
+MemorySwapMax=2G
+
+[Install]
+WantedBy=multi-user.target

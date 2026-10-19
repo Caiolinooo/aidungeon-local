@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from app import assistant, db, llm_client, settings_store, web_search
+from app import access, assistant, db, llm_client, settings_store, web_search
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import (
@@ -76,13 +76,15 @@ def post_assistant_field(body: AssistantFieldRequest,
 
 
 @router.post("/assistant/card")
-def post_assistant_card(body: AssistantCardRequest,
+def post_assistant_card(body: AssistantCardRequest, request: Request,
                         transport: Any = Depends(get_http_transport)) -> dict:
     """Gera ou enriquece 1 Story Card individual (com suporte a Web Search)."""
     story_ctx = ""
     if body.adventure_id:
         with db.session() as conn:
-            adv = db.get_adventure(conn, body.adventure_id)
+            viewer = access.user_from_request(request) or ""
+            adv = (db.get_adventure(conn, body.adventure_id)
+                   if access.adventure_visible(conn, viewer, body.adventure_id) else None)
             if adv:
                 actions = db.list_actions(conn, body.adventure_id)
                 recent = "\n".join(a["text"] for a in actions[-4:] if a.get("text"))
@@ -114,12 +116,13 @@ def post_assistant_card(body: AssistantCardRequest,
 
 
 @router.post("/assistant/sync-plot")
-def post_assistant_sync_plot(body: AssistantSyncPlotRequest,
+def post_assistant_sync_plot(body: AssistantSyncPlotRequest, request: Request,
                              transport: Any = Depends(get_http_transport)) -> dict:
     """Analisa a história recente da aventura e sugere atualização de Plot Essentials / Author's Note."""
     with db.session() as conn:
+        viewer = access.user_from_request(request) or ""
         adv = db.get_adventure(conn, body.adventure_id)
-        if not adv:
+        if not adv or not access.adventure_visible(conn, viewer, body.adventure_id):
             raise GameError.not_found(f"adventure {body.adventure_id} not found")
         actions = db.list_actions(conn, body.adventure_id)
         llm_cfg = settings_store.effective_llm_settings(conn)

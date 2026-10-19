@@ -6,18 +6,20 @@ import json
 import urllib.parse
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 
 import exporter
-from app import db, game_engine, jobs
+from app import auth, db, game_engine, jobs
 from app.errors import GameError
 from app.schemas import AdventureCreate, AdventureUpdate
+from app.users import is_admin
 
 router = APIRouter()
 
 
 @router.post("", status_code=201)
-def create_adventure(body: AdventureCreate) -> dict:
+def create_adventure(body: AdventureCreate,
+                     info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Nova aventura a partir de scenario (herda campos + action start) ou vazia."""
     with db.session() as conn:
         if body.scenario_id:
@@ -25,7 +27,7 @@ def create_adventure(body: AdventureCreate) -> dict:
             if not sc:
                 raise GameError.not_found(f"scenario {body.scenario_id} not found")
             adv = db.insert_adventure(
-                conn, scenario_id=sc["id"],
+                conn, scenario_id=sc["id"], owner=info.user,
                 title=body.title or sc["title"],
                 description=sc["description"],
                 ai_instructions=body.ai_instructions if body.ai_instructions is not None else sc["ai_instructions"],
@@ -57,7 +59,7 @@ def create_adventure(body: AdventureCreate) -> dict:
             jobs.enqueue_all_portraits(conn, adv["id"])
         else:
             adv = db.insert_adventure(
-                conn,
+                conn, owner=info.user,
                 title=body.title or "Untitled Adventure",
                 ai_instructions=body.ai_instructions or "",
                 plot_essentials=body.plot_essentials or "",
@@ -71,19 +73,22 @@ def create_adventure(body: AdventureCreate) -> dict:
 
 
 @router.get("")
-def list_adventures() -> list[dict]:
+def list_adventures(info: auth.AuthInfo = Depends(auth.require_auth)) -> list[dict]:
     with db.session() as conn:
-        return db.list_adventure_summaries(conn)
+        rows = db.list_adventure_summaries(conn)
+    if is_admin(info.user):
+        return rows
+    return [row for row in rows if (row.get("owner") or "") in ("", info.user)]
 
 
 @router.get("/export")
-def export_all_adventures() -> Response:
+def export_all_adventures(info: auth.AuthInfo = Depends(auth.require_auth)) -> Response:
     """Backup completo: um .zip com uma pasta por aventura (formato do backup
     individual) — restaurável via POST /api/import/aidungeon.
 
     Registrada ANTES de /{adventure_id} para não ser capturada por ele.
     """
-    data, count = exporter.export_all_zip()
+    data, count = exporter.export_all_zip(None if is_admin(info.user) else info.user)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     quoted = urllib.parse.quote(f"aidungeon-backup-{stamp}.zip")
     headers = {
@@ -121,6 +126,7 @@ def delete_adventure(adventure_id: str) -> dict:
     with db.session() as conn:
         if not db.delete_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
+    game_engine.forget_adventure(adventure_id)
     return {"deleted": True, "id": adventure_id}
 
 

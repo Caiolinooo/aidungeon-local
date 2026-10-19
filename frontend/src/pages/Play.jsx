@@ -66,6 +66,7 @@ export default function Play() {
   const [inject, setInject] = useState(null)
 
   const abortRef = useRef(null)
+  const seeTokenRef = useRef(0)
   const feedRef = useRef(null)
   const nearBottomRef = useRef(true)
   const newBlockIdRef = useRef(null)
@@ -256,6 +257,36 @@ export default function Play() {
     }
   }
 
+  const watchSee = (jobId, token) => {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    ;(async () => {
+      const deadline = Date.now() + 180000
+      try {
+        while (Date.now() < deadline) {
+          if (seeTokenRef.current !== token) return
+          const job = await api.getAdventureJob(id, jobId)
+          if (seeTokenRef.current !== token) return
+          if (job.status === 'done') {
+            const action = job.result?.image?.action
+            if (action) setActions((prev) => [...(prev ?? []), action].sort(bySeq))
+            toast('Image generated.', 'ok')
+            return
+          }
+          if (job.status === 'error' || job.status === 'canceled') {
+            toast(job.error || 'Could not paint the scene.')
+            return
+          }
+          await wait(800)
+        }
+        toast('The painting is still running.')
+      } catch (e) {
+        if (seeTokenRef.current === token) toast(e.message)
+      } finally {
+        if (seeTokenRef.current === token) setSeeing(false)
+      }
+    })()
+  }
+
   const doSee = async () => {
     const last = actions?.[actions.length - 1]
     if (!last || seeing || generating) return
@@ -264,18 +295,30 @@ export default function Play() {
     try {
       const extra = seePrompt.trim()
       const r = await api.see(id, { action_seq: last.seq, extra_prompt: extra || undefined })
-      if (r.action) setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
+      if (r?.action) {
+        setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
+        setSeePrompt('')
+        toast('Image generated.', 'ok')
+        setSeeing(false)
+        return
+      }
+      if (!r?.job_id) {
+        setSeeing(false)
+        toast('Could not start the painting.')
+        return
+      }
       setSeePrompt('')
-      toast('Image generated.', 'ok')
+      const token = seeTokenRef.current + 1
+      seeTokenRef.current = token
+      watchSee(r.job_id, token)
     } catch (e) {
-      toast(e.message)
-    } finally {
       setSeeing(false)
+      toast(e.message)
     }
   }
 
   const pickChoice = (choice) => {
-    if (generating || seeing) return
+    if (generating) return
     if (!['do', 'say', 'story'].includes(choice.type) || !choice.text?.trim()) return
     sendAction(choice.type, choice.text.trim())
   }
@@ -331,7 +374,7 @@ export default function Play() {
   const latestStoryText = [...actions].reverse().find(
     (a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see',
   )?.text
-  const showChoices = !generating && !seeing && !inputDirty && choices.length > 0
+  const showChoices = !generating && !inputDirty && choices.length > 0
   const lastPlayer = [...actions].reverse().find(
     (a) => a.type === 'do' || a.type === 'say' || a.type === 'story',
   )
@@ -362,7 +405,7 @@ export default function Play() {
     <GamePanel
       profile={uiProfile}
       state={uiState}
-      disabled={generating || seeing}
+      disabled={generating}
       regenerating={regeneratingProfile}
       onStateChange={handleUiStateChange}
       onSend={sendAction}
@@ -568,6 +611,7 @@ export default function Play() {
                   onEdit={setEditing}
                   disabled={generating}
                   isLatest={a.id === lastAiTextId}
+                  adventureId={id}
                 />
               ))}
 
@@ -641,7 +685,7 @@ export default function Play() {
           <GamePanel
             profile={uiProfile}
             state={uiState}
-            disabled={generating || seeing}
+            disabled={generating}
             regenerating={regeneratingProfile}
             onStateChange={handleUiStateChange}
             onSend={sendAction}

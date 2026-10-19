@@ -7,6 +7,12 @@ Todos rodam com Python padrão (sem dependências externas).
 |---|---|
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
+| `replay_turn.py` | Replay de turnos pela API do backend (staging) com as metas de fluidez |
+| `bench_slots.py` | Benchmark do llama-server nos papéis do app (C1) contra as metas da seção 2 do plano |
+| `repro_slot_hang.py` | Tenta reproduzir o slot preso do llama.cpp #28280 contra o llama-server |
+| `slot_watchdog.py` | Oneshot do `slot-watchdog.timer`: reinicia o llama-server com slot preso |
+| `deploy.sh` | Na VM: deploy do checkout git no staging ou no app principal, com backup, smoke e rollback |
+| `smoke_check.py` | Smoke test de uma instância do backend (usado pelo `deploy.sh`) e checagem de jogador parado |
 | `setup_llm_local.ps1` | **Windows.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.bat` |
 | `setup_llm_local.sh` | **Linux.** Fallback local: baixa KoboldCpp + GGUF e gera `start_llm_local.sh` |
 
@@ -54,6 +60,116 @@ python tools\bench_llm.py --help
 ```
 
 Se retornar `HTTP 401`, a chave está errada/ausente — configure por uma das vias abaixo.
+
+## 2.1 replay_turn.py — replay no staging
+
+Joga turnos reais pela API, como o front: `POST /action` (SSE) e, no `done`,
+`/choices` e `/scene` em paralelo, com o turno seguinte saindo na hora.
+`--see-during-turn` dispara um See no primeiro token. No fim lista os jobs
+criados (espera na fila e duração) e, com `--expect-card`, quanto cada card
+levou para existir depois do último `done`.
+
+Metas (exit 1 se alguma falhar): nenhum 409; choices em até 16 s ou 503 limpo;
+See no meio do turno sem 409; backdrop até 60 s na fila; cards esperados em
+até `--card-wait`. O token é mintado com `AUTH_USER`/`AUTH_SECRET` do `.env` e
+nunca é impresso.
+
+```bash
+# na VM, contra o staging (127.0.0.1:2123). Grava turnos: nunca rode contra o app principal.
+python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
+    --adventure dd5a6fa4c0394dd3832a1261778ef5a2 \
+    --turn "do:saiam todos, quero apenas a clara aqui" --turn "say:clara? tudo bem?" \
+    --see-during-turn --expect-card Clara
+```
+
+Soak: `--repeat N` repete a lista de `--turn`, `--see-every K` dispara o See a
+cada K turnos e turno acima de `--slow-turn` (120 s) conta como falha. No fim
+saem p50/p95 de TTFT, turno e choices, mais quantos choices deram 503.
+Staging e app principal dividem o llama-server e o A1111: com `--yield-to`, o
+replay só manda o próximo turno depois de nenhuma aventura do app principal
+mudar por `--idle-s` (300 s).
+
+```bash
+python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
+    --adventure <id de uma aventura de teste no staging> \
+    --turn "do:olho em volta" --turn "say:e agora?" --repeat 100 --see-every 5 \
+    --yield-to http://127.0.0.1:2122
+```
+
+## 2.2 repro_slot_hang.py e slot_watchdog.py — slot preso (#28280)
+
+No #28280 um slot de modelo híbrido (GDN, caso do Qwen3.6-35B-A3B) fica
+`is_processing` para sempre, com o log repetindo "erasing old context
+checkpoint" na mesma posição. Os relatos pedem 2+ slots, prompt cache e um
+slot fixado trocando de conversa.
+
+`repro_slot_hang.py` fala direto com o llama-server (não grava nada no app).
+`--mode bug` repete o cenário dos relatos: o slot fixado alterna uma conversa
+longa de prefixo crescente e duas curtas, todas com cache, enquanto outro slot
+trabalha. `--mode app` repete o tráfego do app (narrativa no slot 0 com cache,
+auxiliares sem cache nos slots do contrato C1); `--external` soma um cliente
+sem `id_slot`. Slot ocupado sem passar do próprio máximo de progresso por
+`--stall-s` conta como travado: o script fecha a conexão e mede se o slot
+solta. Exit 0 sem travamento, 3 com. Precisa de `slot_watchdog.py` na mesma
+pasta.
+
+```bash
+python3 tools/repro_slot_hang.py --env-file /home/caio/aidungeon/.env --mode bug --rounds 15 --stall-s 90
+python3 tools/repro_slot_hang.py --env-file /home/caio/aidungeon/.env --mode app --external --rounds 20
+```
+
+`slot_watchdog.py` roda como root pelo `slot-watchdog.timer` (a cada 10 s) e
+reinicia o `llama-server` quando um slot passa de `--stall-s` (45 s) sem
+progresso e nenhum outro slot andou nesse tempo, ou quando `/slots` fica esse
+tempo sem responder, com `--cooldown` de 180 s entre reinícios. Slot parado
+atrás do prompt longo de outro slot (o lote é montado na ordem dos slots) só
+espera, até `--hard-stall-s` (300 s): no #28280 os outros slots seguem
+servindo, e tráfego contínuo adiaria o reinício para sempre. O estado legível pelo app fica em
+`/var/lib/slot-watchdog/status.json`. Instalação em `deploy/vm/README.md`.
+
+Com `--hint-file` (um por instância do app: `data/llm_stall_hint.json`) o
+watchdog lê a dica que o app grava quando a narrativa fica sem token e sem
+`prompt_progress` e é repetida em outro slot. Dica de até `--hint-max-age`
+(120 s) com o slot dela ainda ocupado sem progresso por `--hint-stall-s`
+(20 s) reinicia sem a espera dos 300 s; só aguarda o fallback terminar
+(`--hint-quiet-s`, 10 s sem nenhum slot andando) até `--hint-defer-s` (60 s)
+depois da dica.
+
+## 2.3 bench_slots.py — llama-server nos papéis do app
+
+Fala direto com o llama-server, nos slots do contrato C1. Cenários (cada um
+`--repeat` vezes, com p50/p95):
+
+| Cenário | O que mede |
+|---|---|
+| `pp` | prompt longo sem cache num slot auxiliar: prompt tok/s do servidor |
+| `frio` | narrativa inteira reprocessada no slot 0 (topo do prompt mudou): TTFT |
+| `solo` | narrativa só acrescentando turnos no slot 0: TTFT e tok/s de geração |
+| `carga` | a narrativa do `solo` com `--aux` chamadas sem cache ao mesmo tempo: TTFT, tok/s e latência das auxiliares |
+
+Com `nvidia-smi` no PATH registra o pico de VRAM de cada cenário. Exit 0 com
+as metas ok, 4 com alguma meta falhando. Não grava nada no app, mas ocupa os
+slots: rode com o jogador parado.
+
+```bash
+python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --json /tmp/bench.json
+python3 tools/bench_slots.py --env-file /home/caio/aidungeon/.env --scenarios carga --aux 2
+```
+
+## 2.4 deploy.sh e smoke_check.py — deploy na VM
+
+Fluxo e rollback em [`deploy/vm/README.md`](../deploy/vm/README.md#atualizar-o-código-g9).
+O `smoke_check.py` também roda sozinho:
+
+```bash
+python3 tools/smoke_check.py --base http://127.0.0.1:2123 --db /home/caio/aidungeon-staging/data/aidungeon.db
+python3 tools/smoke_check.py --player-idle-min 10 --idle-db /home/caio/aidungeon/data/aidungeon.db   # exit 0 = parado
+```
+
+Fora da VM, as variáveis `DEPLOY_APP`, `DEPLOY_PORT`, `DEPLOY_BACKUPS`,
+`DEPLOY_ENV_FILE`, `DEPLOY_VENV`, `DEPLOY_MAIN_DB`, `DEPLOY_RESTART` e
+`DEPLOY_STOP` trocam caminhos e comandos (foi assim que deploy, rollback e o
+rollback automático foram testados com um uvicorn local).
 
 ## 3. Onde configurar a API key
 

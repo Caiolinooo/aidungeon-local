@@ -40,6 +40,7 @@ OVERRIDE_KEYS = (
     "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
     "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
     "voice.max_text_chars", "voice.stt_max_bytes",
+    "voice.drama3_model", "voice.drama3_enabled",
     # embeddings (v0.8.0 / M2)
     "embeddings.enabled", "embeddings.base_url", "embeddings.model",
     "embeddings.timeout_seconds",
@@ -105,6 +106,21 @@ def _set_override(conn: sqlite3.Connection, key: str, value: Any) -> None:
     db.set_setting(conn, key, json.dumps(value, ensure_ascii=False))
 
 
+def _apply_key(conn: sqlite3.Connection, key: str, value: str | None) -> bool:
+    """Grava a chave ("" apaga). A chave vira header HTTP: a mascarada que o
+    front reenvia ("sk-…1234") e qualquer valor fora de ASCII imprimível são
+    ignorados. Devolve se mudou algo."""
+    if value is None:
+        return False
+    if value == "":
+        db.delete_setting(conn, key)
+        return True
+    if not (value.isascii() and value.isprintable()):
+        return False
+    _set_override(conn, key, value)
+    return True
+
+
 def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
     """Persiste overrides (campos omitidos permanecem). Devolve chaves mudadas.
 
@@ -132,11 +148,7 @@ def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "api_key" in update and update["api_key"] is not None:
-        if update["api_key"] == "":
-            db.delete_setting(conn, "llm.api_key")
-        else:
-            _set_override(conn, "llm.api_key", update["api_key"])
+    if _apply_key(conn, "llm.api_key", update.get("api_key")):
         changed.add("api_key")
     return changed
 
@@ -185,7 +197,23 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
     # Never write the stored override back down.
     cap = int(llm.get("context_size_limits", {}).get("max", 106496))
     effective["context_size"] = min(effective["context_size"], cap)
+    scheduler = cfg.get("scheduler", {}) or {}
+    effective["role_timeouts"] = dict(scheduler.get("timeouts", {}) or {})
+    effective["aux_cache_prompt"] = bool(scheduler.get("aux_cache_prompt", False))
+    effective["scheduler"] = _scheduler_settings(scheduler)
     return effective
+
+
+def _scheduler_settings(raw: dict) -> dict:
+    """Bloco `scheduler` para o llm_client, com os caminhos absolutos
+    (relativos à raiz do repo)."""
+    out = {key: value for key, value in raw.items() if key not in ("timeouts", "note")}
+    for key in ("stall_hint_path", "watchdog_status_path"):
+        raw_path = str(raw.get(key) or "").strip()
+        if raw_path:
+            path = Path(raw_path)
+            out[key] = str(path if path.is_absolute() else db.REPO_ROOT / path)
+    return out
 
 
 def mask_api_key(key: str | None) -> str | None:
@@ -266,11 +294,7 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "openai_api_key" in update and update["openai_api_key"] is not None:
-        if update["openai_api_key"] == "":
-            db.delete_setting(conn, "image.openai_api_key")
-        else:
-            _set_override(conn, "image.openai_api_key", update["openai_api_key"])
+    if _apply_key(conn, "image.openai_api_key", update.get("openai_api_key")):
         changed.add("openai_api_key")
     return changed
 
@@ -311,6 +335,9 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
                                  voice.get("max_text_chars", 2000))),
         "stt_max_bytes": int(ov("voice.stt_max_bytes",
                                 voice.get("stt_max_bytes", 10485760))),
+        "drama3_model": ov("voice.drama3_model", voice.get("drama3_model", "drama-3")),
+        "drama3_enabled": bool(ov("voice.drama3_enabled",
+                                  voice.get("drama3_enabled", False))),
     }
 
 
@@ -327,11 +354,7 @@ def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
-    if "api_key" in update and update["api_key"] is not None:
-        if update["api_key"] == "":
-            db.delete_setting(conn, "voice.api_key")
-        else:
-            _set_override(conn, "voice.api_key", update["api_key"])
+    if _apply_key(conn, "voice.api_key", update.get("api_key")):
         changed.add("api_key")
     return changed
 

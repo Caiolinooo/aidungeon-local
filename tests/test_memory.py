@@ -12,7 +12,7 @@ import json
 
 import httpx
 
-from app import db, embeddings_client, llm_client, settings_store
+from app import context_builder, db, embeddings_client, llm_client, settings_store
 from memory import retrieval, summarizer, triggers
 
 from conftest import add_action, make_adventure
@@ -44,9 +44,9 @@ class FakeLLM:
         self.fail = fail
         self.calls: list[dict] = []
 
-    def chat_completion(self, cfg, messages, *, temperature, max_tokens,
+    def chat_completion(self, cfg, messages, *, role, temperature, max_tokens,
                         transport=None):
-        self.calls.append({"cfg": cfg, "messages": messages,
+        self.calls.append({"cfg": cfg, "messages": messages, "role": role,
                            "temperature": temperature, "max_tokens": max_tokens})
         if self.fail:
             raise RuntimeError("llm fora do ar")
@@ -382,17 +382,20 @@ def test_maybe_update_opens_own_session(tmp_db):
 
 
 # ------------------------------------------- llm_client real (transport fake)
-def test_chat_completion_non_streaming_payload():
+def test_chat_completion_aux_payload():
+    """Auxiliar: JSON (stream=false), sem prompt cache e sem slot com 1 slot só."""
     captured: list[dict] = []
     transport = _json_llm_transport(reply="Resumo.", capture=captured)
     cfg = {"base_url": "http://fake/v1", "model_alias": "auto",
            "disable_thinking": True, "timeout_seconds": 30}
     text = llm_client.chat_completion(cfg, [{"role": "user", "content": "hi"}],
-                                      temperature=0.3, max_tokens=50,
+                                      role="summary", temperature=0.3, max_tokens=50,
                                       transport=transport)
     assert text == "Resumo."
     payload = captured[0]
     assert payload["stream"] is False
+    assert payload["cache_prompt"] is False
+    assert "id_slot" not in payload
     assert payload["model"] == "mock-model"
     assert payload["temperature"] == 0.3
     assert payload["max_tokens"] == 50
@@ -449,6 +452,173 @@ def test_proactive_horizon_checkpoints_inside_large_64k_window(tmp_db):
     assert mems[0]["text"] == "Fact checkpoint from early scene."
     assert mems[0]["seq_start"] == 0
     assert adv2["story_summary"] == "Fact checkpoint from early scene."
+
+
+def test_story_under_4096_tokens_stays_unarchived_without_turn_cap(tmp_db):
+    """Costazul cabe na janela de 106496 e no horizonte de 4096 tk. Sem o
+    teto de turnos, o gatilho antigo não dispara."""
+    adv = make_adventure()
+    _actions(adv["id"], 21, chars=400)  # ~100 tk × 20 no pool ≈ 2100 tk
+    fake = FakeLLM(reply="Não devia ser chamado.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=106496, memory_bank={
+            "trigger_tokens": 800,
+            "archive_horizon_tokens": 4096,
+            "archive_horizon_turns": 0,
+        })
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+        adv2 = db.get_adventure(conn, adv["id"])
+    assert fake.calls == []
+    assert mems == []
+    assert adv2["story_summary"] == ""
+
+
+def test_long_story_inside_106k_window_gets_summary_and_keeps_prefix(tmp_db):
+    """A cena viva de 8 turnos arquiva o começo sem tirar ações do prompt.
+    Uma user por ação passada permanece; voláteis só na user final."""
+    adv = make_adventure()
+    _actions(adv["id"], 21, chars=400)
+    fake = FakeLLM(reply="O porto ficou sem peixe e a Clara prometeu voltar.")
+    with db.session() as conn:
+        cfg = _cfg(conn, context_size=106496, memory_bank={
+            "trigger_tokens": 800,
+            "archive_horizon_tokens": 4096,
+            "archive_horizon_turns": 8,
+        })
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+        adv2 = db.get_adventure(conn, adv["id"])
+        actions = db.list_actions(conn, adv["id"])
+        built = context_builder.build_context(adv2, actions, cfg, conn)
+    assert len(mems) == 1
+    assert mems[0]["seq_start"] == 0
+    assert "Action 0." in fake.calls[0]["messages"][0]["content"]
+    assert adv2["story_summary"] == "O porto ficou sem peixe e a Clara prometeu voltar."
+    narrative = [a for a in actions if a["type"] != "see"]
+    assert len(built.messages) == 1 + (len(narrative) - 1) + 1
+    assert built.messages[0]["role"] == "system"
+    assert all(m["role"] == "user" for m in built.messages[1:])
+    for message in built.messages[1:-1]:
+        assert context_builder.LORE_OPEN not in message["content"]
+        assert "[Summary]" not in message["content"]
+        assert "[Memories]" not in message["content"]
+    assert "[Summary]" in built.messages[-1]["content"]
+    assert "[Memories]" in built.messages[-1]["content"]
+    add_action(adv["id"], 21, "continue", "Clara espera no cais.")
+    with db.session() as conn:
+        actions_next = db.list_actions(conn, adv["id"])
+        current = db.get_adventure(conn, adv["id"])
+        built_next = context_builder.build_context(current, actions_next, cfg, conn)
+    shared = built.messages[:-1]
+    assert built_next.messages[:len(shared)] == shared
+    assert built_next.messages[len(shared)]["role"] == "user"
+
+
+def _archive_cfg(conn):
+    """Janela de 106k, pedaço de 800, cena viva de 4 turnos. Igual à Costazul."""
+    return _cfg(conn, context_size=106496, embeddings={"enabled": False}, memory_bank={
+        "trigger_tokens": 800,
+        "archive_horizon_tokens": 4096,
+        "archive_horizon_turns": 4,
+    })
+
+
+def _passage_of_tokens(tokens: int) -> str:
+    sentence = "O cais guardou este fato para a Clara."
+    text = sentence
+    while (len(text) + 3) // 4 < tokens:
+        text += " " + sentence
+    return text
+
+
+def _prose_words(n: int) -> str:
+    """Exatamente `n` palavras. A última fecha uma frase."""
+    if n <= 1:
+        return "fim."
+    return " ".join(f"palavra{i}" for i in range(n - 1)) + " fim."
+
+
+def _live_scene(adv_id: str, start_seq: int, turns: int = 5) -> None:
+    for offset in range(turns):
+        add_action(adv_id, start_seq + offset, "continue", "Você espera.")
+
+
+def _memory_prompts(fake: FakeLLM) -> list[str]:
+    return [
+        call["messages"][0]["content"] for call in fake.calls
+        if call["messages"][0]["content"].startswith("Extract the facts")
+    ]
+
+
+def test_paragraph_shorter_than_one_chunk_does_not_start_a_memory(tmp_db):
+    """Um parágrafo sozinho, abaixo de 800 tokens, ainda não abre o memory bank."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue",
+               _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS))
+    _live_scene(adv["id"], 1)
+    fake = FakeLLM(reply="Não devia gravar.")
+    with db.session() as conn:
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
+                                settings=_archive_cfg(conn))
+        mems = db.list_memories(conn, adv["id"])
+    assert fake.calls == []
+    assert mems == []
+
+
+def test_paragraph_remainder_below_one_chunk_becomes_second_memory(tmp_db):
+    """Costazul: ~1282 tokens arquivados e pedaço de 800 deixam um parágrafo
+    de fora. A passada seguinte grava essa sobra."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue", _passage_of_tokens(800))
+    remainder = _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS)
+    add_action(adv["id"], 1, "continue", remainder)
+    _live_scene(adv["id"], 2)
+    fake = FakeLLM(reply="O cais ficou sem peixe.")
+    with db.session() as conn:
+        cfg = _archive_cfg(conn)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 1
+    assert mems[0]["seq_start"] == 0
+    assert mems[0]["seq_end"] == 0
+    assert remainder not in _memory_prompts(fake)[0]
+    with db.session() as conn:
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake,
+                                settings=_archive_cfg(conn))
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 2
+    assert mems[1]["seq_start"] == 1
+    assert mems[1]["seq_end"] == 1
+    assert mems[1]["text"] == "O cais ficou sem peixe."
+    assert remainder in _memory_prompts(fake)[1]
+
+
+def test_few_words_remainder_does_not_become_a_memory(tmp_db):
+    """A sobra de poucas palavras, abaixo de um pedaço, não vira memória."""
+    adv = make_adventure()
+    add_action(adv["id"], 0, "continue", _passage_of_tokens(800))
+    add_action(adv["id"], 1, "continue", _prose_words(summarizer.REMAINDER_PARAGRAPH_WORDS - 1))
+    _live_scene(adv["id"], 2)
+    fake = FakeLLM(reply="Primeiro pedaço.")
+    with db.session() as conn:
+        cfg = _archive_cfg(conn)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        before = len(fake.calls)
+        summarizer.maybe_update(adv["id"], conn=conn, llm_client=fake, settings=cfg)
+        mems = db.list_memories(conn, adv["id"])
+    assert len(mems) == 1
+    assert mems[0]["seq_end"] == 0
+    assert len(fake.calls) == before
+
+
+def test_deferred_types_tolerate_vm_without_queue_timeout(monkeypatch):
+    """A VM não tem LlmQueueTimeout. O import do summarizer não pode cair."""
+    monkeypatch.delattr(summarizer.llm_client, "LlmQueueTimeout", raising=False)
+    types = summarizer._deferred_types()
+    assert summarizer.llm_client.LlmCancelled in types
+    assert summarizer.llm_client.LlmDegraded in types
+    assert all(issubclass(exc, BaseException) for exc in types)
 
 
 def test_summarizer_does_not_archive_see_prompts(tmp_db):

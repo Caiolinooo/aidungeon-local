@@ -25,10 +25,10 @@ The services co-located on the GPU VM are:
 
 | Service | Port | Endpoint / Mode | VRAM Footprint (Nominal) | Notes |
 |---|---|---|---|---|
-| **Narrator LLM** (`llama-server`) | 1234 | `http://vm.groupabz.com:1234/v1` | ~14.5 GB | `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf`, MoE 35B (3B active), `enable_thinking=false` required |
-| **Image Generation** (A1111 SDWebUI) | 7860 | `http://127.0.0.1:7860` (local only) | ~0.2 GB idle, surges to ~4.0 GB mid-portrait | SDXL with `epiCRealism XL CrystalClear` / `Juggernaut XL`, `--medvram`, `--no-half-vae`, `sdxl-vae-fp16-fix` |
+| **Narrator LLM** (`llama-server`) | 1234 | `http://vm.groupabz.com:1234/v1` | ~10.6 GB | `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf`, MoE 35B (3B active), `enable_thinking=false` required; 5 slots, `-cram 0`, watchdog (Phase 5) |
+| **Image Generation** (Forge Neo) | 7861 | `http://127.0.0.1:7861` (local only) | ~4.5 GB beside the narrator | SDXL `epiCRealism XL CrystalClear` + `sdxl-vae-fp16-fix`. A1111 remains installed at `/home/caio/sd-webui` on port 7860 as rollback. Z-Image-Turbo, FLUX and Wan were not installed |
 | **Voice Stack** (Supertonic + Whisper) | 8000 / 8443 | `https://vm.groupabz.com/voice/v1` | ~1.4 GB | TTS (`supertonic-3`), STT (`whisper-1`) behind Nginx reverse proxy |
-| **CPU Embeddings** (`llama-server`) | 8081 | `http://127.0.0.1:8081` (Phase 4) | 0.0 GB (0 MB VRAM) | `Qwen3-Embedding-0.6B.gguf` with `--embeddings --n-gpu-layers 0` running strictly on CPU |
+| **CPU Embeddings** (`llama-server`) | 8091 | `http://127.0.0.1:8091` (Phase 4) | 0.0 GB (0 MB VRAM) | `Qwen3-Embedding-0.6B-Q8_0.gguf` with `--embeddings --n-gpu-layers 0 --device none` and `CUDA_VISIBLE_DEVICES=` (without them CUDA still reserved 646 MiB) |
 
 ---
 
@@ -84,6 +84,7 @@ The services co-located on the GPU VM are:
 4. [Phase 3 — SDXL Checkpoint Comparison Runbook](phase3_sdxl_comparison.md)
 5. [Phase 4 — CPU Embeddings Deployment Runbook](phase4_cpu_embeddings.md)
 6. [Mock Baseline Dataset](mock_baseline.json)
+7. [Phase 5 — Slots, livelock #28280 e watchdog (G2): registro](phase5_slots_record.md)
 
 ---
 

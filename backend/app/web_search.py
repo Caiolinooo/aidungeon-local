@@ -24,7 +24,7 @@ from app import llm_client
 
 log = logging.getLogger("aidungeon.web_search")
 
-SEARCH_TIMEOUT = 6.0
+SEARCH_TIMEOUT = 5.0
 CACHE_TTL_SECONDS = 900.0
 
 _USER_AGENT = (
@@ -336,8 +336,10 @@ def extract_search_queries(llm_cfg: dict | None, text: str, *,
                 {"role": "system", "content": _QUERY_EXTRACTOR_SYSTEM},
                 {"role": "user", "content": f"Mode: {mode}\nInput: {clean[:800]}"},
             ]
+            # Roda antes do narrador: prazo curto para não atrasar o turno.
             raw = llm_client.chat_completion(
-                llm_cfg, messages, temperature=0.1, max_tokens=100, transport=transport
+                llm_cfg, messages, role="assistant", timeout_s=20.0,
+                temperature=0.1, max_tokens=100, transport=transport
             )
             start, end = raw.find("{"), raw.rfind("}")
             if start >= 0 and end > start:

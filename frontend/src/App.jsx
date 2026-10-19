@@ -8,6 +8,7 @@ import Login from './pages/Login.jsx'
 import Play from './pages/Play.jsx'
 import ScenarioEditor from './pages/ScenarioEditor.jsx'
 import Settings from './pages/Settings.jsx'
+import Users from './pages/Users.jsx'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="/" element={<AuthGate><Home /></AuthGate>} />
             <Route path="/play/:id" element={<AuthGate><Play /></AuthGate>} />
             <Route path="/settings" element={<AuthGate><Settings /></AuthGate>} />
+            <Route path="/users" element={<AuthGate><Users /></AuthGate>} />
             <Route path="/scenarios/new" element={<AuthGate><ScenarioEditor /></AuthGate>} />
             <Route path="/scenarios/:id/edit" element={<AuthGate><ScenarioEditor /></AuthGate>} />
             <Route path="*" element={<AuthGate><Home /></AuthGate>} />

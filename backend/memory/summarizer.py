@@ -12,19 +12,28 @@ Hook best-effort chamado pelo game_engine após cada geração:
     mortes, itens, lugares, relações), na língua do trecho. Se o LLM falhar
     ou voltar vazio, grava o extrato verbatim: nada sai da janela sem
     registro. Um pedaço por chamada; o resto fica para a geração seguinte.
+    Com context_size enorme a janela não despeja nada. Aí o gatilho é a
+    cena viva: no máximo archive_horizon_tokens (4096) E
+    archive_horizon_turns (8). O que ficou antes disso vira memória assim
+    que soma trigger_tokens, sem tirar ações do prefixo cacheado. Na
+    geração seguinte, a sobra menor que um pedaço inteiro ainda vira
+    memória quando é um parágrafo. Poucas palavras esperam mais história.
 
-(b) STORY SUMMARY rolante — quando cresce o conjunto de ações antigas FORA da
-    janela recente (mesma regra do context_builder, bloco 6), reescreve
-    adventures.story_summary incorporando os fatos novos, sempre <= budget
-    (400 tokens). Posição coberta é persistida na tabela settings
-    (chave memory.summary_covered_seq.<adventure_id> — dado, não schema).
-    Aventura importada que JÁ tem story_summary (backup): na 1ª passada só
-    marca a posição — o resumo existente já cobre o passado.
+(b) STORY SUMMARY rolante — quando cresce esse mesmo conjunto de ações
+    antigas, reescreve adventures.story_summary incorporando os fatos novos,
+    sempre <= budget (400 tokens). Posição coberta é persistida na tabela
+    settings (chave memory.summary_covered_seq.<adventure_id> — dado, não
+    schema). Aventura importada que JÁ tem story_summary (backup): na 1ª
+    passada só marca a posição — o resumo existente já cobre o passado.
 
 (c) NUNCA lança exceção para o caller (try/except + log por passo e global) e
     NUNCA bloqueia a resposta ao jogador. Falha do LLM no memory bank grava o
     extrato verbatim e avança o seq coberto. Falha no story summary não
     reescreve o resumo nem avança a posição (tenta de novo na próxima geração).
+
+(d) `cancel` (ação nova do jogador, G3): chamada cancelada, breaker aberto ou
+    fila estourada não é falha do resumo. Nada é gravado, nem o extrato, e a
+    passada seguinte tenta de novo.
 """
 
 from __future__ import annotations
@@ -32,12 +41,14 @@ from __future__ import annotations
 import importlib
 import logging
 import sqlite3
+import threading
 from typing import Any, Callable
 
 try:
-    from app import context_builder, db, embeddings_client, settings_store
+    from app import context_builder, db, embeddings_client, llm_client, settings_store
 except ImportError:  # pragma: no cover
-    from backend.app import context_builder, db, embeddings_client, settings_store  # type: ignore
+    from backend.app import (  # type: ignore
+        context_builder, db, embeddings_client, llm_client, settings_store)
 
 log = logging.getLogger("aidungeon.memory")
 
@@ -51,6 +62,14 @@ def _embeddings_module() -> Any:
     return None
 
 DEFAULT_TRIGGER_TOKENS = 800
+# Sobra abaixo de um pedaço cheio. Menos que isto são poucas palavras,
+# não um parágrafo, e o memory bank espera a história crescer.
+REMAINDER_PARAGRAPH_WORDS = 40
+DEFAULT_ARCHIVE_HORIZON_TOKENS = 4096
+# A Costazul cabe inteira em 4096 tokens e na janela de 106496: o teto em
+# tokens sozinho nunca arquiva. O teto em turnos corta a cena viva mesmo
+# assim. 0 desliga o corte por turnos.
+DEFAULT_ARCHIVE_HORIZON_TURNS = 8
 DEFAULT_SUMMARY_MAX_WORDS = 120
 DEFAULT_SUMMARY_TEMPERATURE = 0.3
 DEFAULT_SUMMARY_BUDGET = 400
@@ -78,8 +97,38 @@ ROLLING_SUMMARY_PROMPT = (
 )
 
 
+class _NeverDeferred(Exception):
+    """Sósia para `except` quando o llm_client da VM não tem a classe."""
+
+
+def _deferred_types() -> tuple[type[BaseException], ...]:
+    """Cancelamento, breaker e fila estourada não são falha do resumo.
+
+    O llm_client da VM ainda não tem LlmQueueTimeout. O import não pode
+    quebrar por causa disso — senão os dois serviços caem no restart.
+    """
+    found: list[type[BaseException]] = []
+    for name in ("LlmCancelled", "LlmDegraded", "LlmQueueTimeout"):
+        exc = getattr(llm_client, name, None)
+        if isinstance(exc, type) and issubclass(exc, BaseException):
+            found.append(exc)
+    return tuple(found) or (_NeverDeferred,)
+
+
+_DEFERRED = _deferred_types()
+
+
 def _default_estimator(text: str) -> int:
     return (len(text) + 3) // 4
+
+
+def _summarize(llm: Any, llm_cfg: dict, prompt: str, *, temperature: float,
+               max_tokens: int, transport: Any, cancel: threading.Event | None) -> str:
+    kwargs: dict[str, Any] = {"role": "summary", "temperature": temperature,
+                              "max_tokens": max_tokens, "transport": transport}
+    if cancel is not None:
+        kwargs["cancel"] = cancel
+    return llm.chat_completion(llm_cfg, [{"role": "user", "content": prompt}], **kwargs)
 
 
 def _llm_module() -> Any:
@@ -145,6 +194,88 @@ def _verbatim_excerpt(excerpt: str) -> str:
 
 
 # ------------------------------------------------------------- memory bank
+def _horizon_turns(mem: dict) -> int:
+    raw = mem.get("archive_horizon_turns", DEFAULT_ARCHIVE_HORIZON_TURNS)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_ARCHIVE_HORIZON_TURNS
+
+
+def _beyond_live_scene(actions: list[dict], horizon_tokens: int,
+                       horizon_turns: int, estimator: Estimator) -> list[dict]:
+    """Ações anteriores à cena viva. Não usa o snap do prefixo cacheado.
+
+    A janela do prompt descarta em WINDOW_DROP_CHUNK para o slot pinado não
+    reprocessar. Aqui o corte é outro: a cena viva é o sufixo que cabe em
+    `horizon_tokens` e, se `horizon_turns` > 0, nas últimas N ações. O
+    restante pode virar memória e resumo enquanto o prompt ainda repete
+    uma user por ação passada.
+    """
+    narrative = context_builder.narrative_actions(actions)
+    pool = narrative[:-1] if narrative else []
+    if not pool or horizon_tokens <= 0:
+        return []
+    kept = 0
+    used = 0
+    for action in reversed(pool):
+        if horizon_turns > 0 and kept >= horizon_turns:
+            break
+        cost = estimator(_fmt(action))
+        if kept > 0 and used + cost > horizon_tokens:
+            break
+        kept += 1
+        used += cost
+    if kept >= len(pool):
+        return []
+    return pool[: len(pool) - kept]
+
+
+def _candidate_old_actions(
+    actions: list[dict],
+    window_budget: int,
+    horizon_tokens: int,
+    horizon_turns: int,
+    chunk_tokens: int,
+    estimator: Estimator,
+) -> list[dict]:
+    """Ações prontas para memória e story summary.
+
+    1) O que já saiu da janela do prompt entra na hora, mesmo curto.
+    2) Se a janela é maior que o horizonte e não despejou nada, entra o que
+       ficou antes da cena viva — desde que some pelo menos `chunk_tokens`.
+       Uma história que cabe em 106k tokens e também em 4096 deixa de
+       esperar o despejo da janela.
+    """
+    outside = _evicted_actions(actions, window_budget, estimator)
+    if outside:
+        return outside
+    if horizon_tokens > 0 and window_budget > horizon_tokens:
+        beyond = _beyond_live_scene(
+            actions, horizon_tokens, horizon_turns, estimator)
+        if sum(estimator(_fmt(a)) for a in beyond) >= chunk_tokens:
+            return beyond
+    return []
+
+
+def _excerpt_text(actions: list[dict]) -> str:
+    return "".join(_fmt(action) for action in actions).strip()
+
+
+def _is_real_paragraph(actions: list[dict]) -> bool:
+    """Parágrafo de verdade. Um punhado de palavras não vira memória."""
+    text = _excerpt_text(actions)
+    if len(text.split()) < REMAINDER_PARAGRAPH_WORDS:
+        return False
+    return any(mark in text for mark in (".", "!", "?", "…"))
+
+
+def _span_already_archived(actions: list[dict], covered: int | None) -> bool:
+    if covered is None:
+        return False
+    return any(action["seq"] <= covered for action in actions)
+
+
 def _pending_archivable_actions(
     actions: list[dict],
     window_budget: int,
@@ -152,26 +283,26 @@ def _pending_archivable_actions(
     chunk_tokens: int,
     covered: int | None,
     estimator: Estimator,
+    horizon_turns: int = DEFAULT_ARCHIVE_HORIZON_TURNS,
 ) -> list[dict]:
-    """Retorna ações pendentes de arquivamento no Memory Bank / Story Summary.
+    """Ações do memory bank ainda não cobertas por memories.seq_end.
 
-    1) Tudo que já saiu fisicamente da `window_budget` entra imediatamente.
-    2) Quando `window_budget` é grande (ex.: 64k–256k) e nada saiu ainda da
-       janela total, ações mais antigas que `horizon_tokens` (cena ativa,
-       default 4096 tk) são arquivadas proativamente assim que acumulam pelo
-       menos `chunk_tokens` (800 tk). Isso garante memórias vetoriais e
-       story_summary sempre atualizados em campanhas longas sem esperar
-       estourar 64k–256k tokens.
+    O que saiu da janela entra mesmo curto. O que só saiu da cena viva
+    espera juntar `chunk_tokens` novos. A sobra de um pedaço já gravado,
+    menor que isso, ainda entra quando é um parágrafo — não quando são
+    poucas palavras.
     """
     outside = _evicted_actions(actions, window_budget, estimator)
     pending = [a for a in outside if covered is None or a["seq"] > covered]
     if pending:
         return pending
     if horizon_tokens > 0 and window_budget > horizon_tokens:
-        beyond_horizon = _evicted_actions(actions, horizon_tokens, estimator)
-        proactive = [a for a in beyond_horizon if covered is None or a["seq"] > covered]
-        proactive_tokens = sum(estimator(_fmt(a)) for a in proactive)
-        if proactive_tokens >= chunk_tokens:
+        beyond = _beyond_live_scene(
+            actions, horizon_tokens, horizon_turns, estimator)
+        proactive = [a for a in beyond if covered is None or a["seq"] > covered]
+        if sum(estimator(_fmt(a)) for a in proactive) >= chunk_tokens:
+            return proactive
+        if _span_already_archived(beyond, covered) and _is_real_paragraph(proactive):
             return proactive
     return []
 
@@ -179,12 +310,14 @@ def _pending_archivable_actions(
 def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
                         llm: Any, cfg: dict, estimator: Estimator,
                         transport: Any,
-                        embeddings_client: Any = None) -> None:
+                        embeddings_client: Any = None,
+                        cancel: threading.Event | None = None) -> None:
     mem = _mem_cfg(cfg)
     chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
     if chunk_tokens <= 0:
         chunk_tokens = DEFAULT_TRIGGER_TOKENS
-    horizon_tokens = int(mem.get("archive_horizon_tokens", 4096))
+    horizon_tokens = int(mem.get("archive_horizon_tokens", DEFAULT_ARCHIVE_HORIZON_TOKENS))
+    horizon_turns = _horizon_turns(mem)
     max_words = int(mem.get("summary_max_words", DEFAULT_SUMMARY_MAX_WORDS))
     temperature = float(mem.get("summary_temperature", DEFAULT_SUMMARY_TEMPERATURE))
 
@@ -197,7 +330,8 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
     actions = db.list_actions(conn, adventure_id)
     window_budget = _recent_window_budget(cfg)
     pending = _pending_archivable_actions(
-        actions, window_budget, horizon_tokens, chunk_tokens, covered, estimator
+        actions, window_budget, horizon_tokens, chunk_tokens, covered, estimator,
+        horizon_turns=horizon_turns,
     )
     if not pending:
         return
@@ -219,12 +353,12 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
 
     prompt = MEMORY_BANK_PROMPT.format(max_words=max_words, text=excerpt)
     try:
-        text = llm.chat_completion(
-            _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-            temperature=temperature, max_tokens=MEMORY_MAX_TOKENS,
-            transport=transport,
-        )
+        text = _summarize(llm, _llm_cfg(conn, cfg), prompt, temperature=temperature,
+                          max_tokens=MEMORY_MAX_TOKENS, transport=transport, cancel=cancel)
         text = (text or "").strip()
+    except _DEFERRED as exc:
+        log.info("memory bank: adiado (%s) (adventure=%s)", exc.code, adventure_id)
+        return
     except Exception:
         log.warning("memory bank: LLM falhou; gravando extrato (adventure=%s)",
                     adventure_id, exc_info=True)
@@ -279,20 +413,20 @@ def _update_memory_bank(conn: sqlite3.Connection, adventure_id: str, *,
 # ----------------------------------------------------------- story summary
 def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
                           llm: Any, cfg: dict, estimator: Estimator,
-                          transport: Any) -> None:
+                          transport: Any, cancel: threading.Event | None = None) -> None:
     budgets = cfg.get("budgets", {}) if isinstance(cfg, dict) else {}
     summary_budget = int(budgets.get("story_summary", DEFAULT_SUMMARY_BUDGET))
     window_budget = _recent_window_budget(cfg)
     mem = _mem_cfg(cfg)
-    horizon_tokens = int(mem.get("archive_horizon_tokens", 4096))
+    horizon_tokens = int(mem.get("archive_horizon_tokens", DEFAULT_ARCHIVE_HORIZON_TOKENS))
+    horizon_turns = _horizon_turns(mem)
     chunk_tokens = int(mem.get("trigger_tokens", DEFAULT_TRIGGER_TOKENS))
+    if chunk_tokens <= 0:
+        chunk_tokens = DEFAULT_TRIGGER_TOKENS
 
     actions = db.list_actions(conn, adventure_id)
-    old_actions = _evicted_actions(actions, window_budget, estimator)
-    if not old_actions and horizon_tokens > 0 and window_budget > horizon_tokens:
-        beyond_horizon = _evicted_actions(actions, horizon_tokens, estimator)
-        if sum(estimator(_fmt(a)) for a in beyond_horizon) >= chunk_tokens:
-            old_actions = beyond_horizon
+    old_actions = _candidate_old_actions(
+        actions, window_budget, horizon_tokens, horizon_turns, chunk_tokens, estimator)
     if not old_actions:
         return
 
@@ -319,11 +453,8 @@ def _update_story_summary(conn: sqlite3.Connection, adventure_id: str, *,
     temperature = float(_mem_cfg(cfg).get("summary_temperature",
                                           DEFAULT_SUMMARY_TEMPERATURE))
     prompt = ROLLING_SUMMARY_PROMPT.format(summary=current, text=excerpt)
-    text = llm.chat_completion(
-        _llm_cfg(conn, cfg), [{"role": "user", "content": prompt}],
-        temperature=temperature, max_tokens=ROLLING_MAX_TOKENS,
-        transport=transport,
-    )
+    text = _summarize(llm, _llm_cfg(conn, cfg), prompt, temperature=temperature,
+                      max_tokens=ROLLING_MAX_TOKENS, transport=transport, cancel=cancel)
     text = (text or "").strip()
     if not text:
         return
@@ -396,7 +527,8 @@ def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
                  llm_client: Any = None, embeddings_client: Any = None,
                  settings: dict | None = None,
                  estimator: Estimator | None = None,
-                 transport: Any = None) -> None:
+                 transport: Any = None,
+                 cancel: threading.Event | None = None) -> None:
     """Hook best-effort pós-geração. NUNCA levanta exceção nem quebra o jogo."""
     try:
         estimator = estimator or _default_estimator
@@ -407,13 +539,18 @@ def maybe_update(adventure_id: str, *, conn: sqlite3.Connection | None = None,
             try:
                 _update_memory_bank(c, adventure_id, llm=llm, cfg=cfg,
                                     estimator=estimator, transport=transport,
-                                    embeddings_client=embeddings_client)
+                                    embeddings_client=embeddings_client, cancel=cancel)
             except Exception:
                 log.warning("maybe_update: _update_memory_bank falhou (adventure=%s)",
                             adventure_id, exc_info=True)
+            if cancel is not None and cancel.is_set():
+                return
             try:
                 _update_story_summary(c, adventure_id, llm=llm, cfg=cfg,
-                                      estimator=estimator, transport=transport)
+                                      estimator=estimator, transport=transport,
+                                      cancel=cancel)
+            except _DEFERRED as exc:
+                log.info("story summary: adiado (%s) (adventure=%s)", exc.code, adventure_id)
             except Exception:
                 log.warning("maybe_update: _update_story_summary falhou (adventure=%s)",
                             adventure_id, exc_info=True)

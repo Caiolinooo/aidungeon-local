@@ -35,6 +35,14 @@ def _build(adv, actions, cfg):
         return cb.build_context(adv, actions, cfg, conn)
 
 
+def _window(built) -> str:
+    """As users da janela (entre a system e a user final), coladas."""
+    return "".join(m["content"] for m in built.messages[1:-1])
+
+
+CUES = f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\n{cb.LORE_CUE}\n"
+
+
 # --------------------------------------------------------------- ordem
 def test_sandwich_order_exact(tmp_db):
     adv = _adventure_full()
@@ -49,9 +57,9 @@ def test_sandwich_order_exact(tmp_db):
         cfg = _cfg(conn)
     built = _build(adv, actions, cfg)
 
-    # wire format Qwen3: UMA system (blocos 1–5) + user janela + user final
+    # wire format Qwen3: UMA system + uma user por ação da janela + user final
     roles = [m["role"] for m in built.messages]
-    assert roles == ["system", "user", "user"]
+    assert roles == ["system", "user", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
     # system estável: base, ai_instructions e plot (blocos 1–2)
@@ -67,28 +75,27 @@ def test_sandwich_order_exact(tmp_db):
     for volatile in ("[World info]", "[Memories]", "[Summary]"):
         assert volatile not in sys_msg
 
-    # 6 — user: janela recente verbatim (ações 0..1; última vai p/ o bloco 8)
-    window = built.messages[1]["content"]
-    assert "You stand in Calimport." in window
-    assert "\n> You look around\n" in window
+    # 6 — uma user por ação da janela (0..1; a última vai p/ o bloco 8)
+    assert built.messages[1]["content"] == "You stand in Calimport."
+    assert built.messages[2]["content"] == "\n> You look around\n"
 
-    # 7+8 — user final: voláteis no topo, author's note e a última ação no fim
-    final = built.messages[2]["content"]
+    # 7+8 — user final: voláteis no <lore> do topo, author's note e a última ação no fim
+    final = built.messages[3]["content"]
     order = [
-        "[World info]",                 # 3 story cards
+        "<lore>\n[World info]",         # 3 story cards
         "Baldur's Gate",
         "[Memories]",                   # 4 memory bank
         "Zhentarim",
         "[Summary]",                    # 5 story_summary
         "Caio chegou a Calimport",
+        "</lore>",
         "[Author's note: Mundo vivo; NPCs agem por conta própria.]",
     ]
+    assert final.startswith("<lore>\n")
     positions = [final.index(fragment) for fragment in order]
     assert positions == sorted(positions)
-    assert final.endswith("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
-                          f"{cb.STYLE_CUE}\n"
-                          f"{cb.CANON_CUE}\n"
-                          "The market is busy.")
+    assert final.endswith("</lore>\n[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                          f"{CUES}The market is busy.")
 
 
 def test_empty_blocks_are_skipped(tmp_db):
@@ -102,7 +109,7 @@ def test_empty_blocks_are_skipped(tmp_db):
     roles = [m["role"] for m in built.messages]
     assert roles == ["system", "user"]
     assert built.messages[0]["content"] == cb.BASE_SYSTEM_PROMPT
-    assert built.messages[1]["content"] == f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\nOnce upon a time."
+    assert built.messages[1]["content"] == f"{CUES}Once upon a time."
 
 
 # ------------------------------------------------------------- formatação
@@ -116,13 +123,13 @@ def test_player_action_formatting(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    window = built.messages[1]["content"]  # user: janela (ações 0..3)
+    window = _window(built)  # users da janela (ações 0..3)
     assert "\n> You draw my sword\n" in window
     assert '\n> You say "Hello, guard."\n' in window
     assert "\n> You sheathe the blade\n" in window
     assert "> You \n> You" not in window  # nunca re-embrulha texto do backup
     # bloco 8 = última ação (story → prosa pura)
-    assert built.messages[-1]["content"] == f"{cb.STYLE_CUE}\n{cb.CANON_CUE}\nPure narration."
+    assert built.messages[-1]["content"] == f"{CUES}Pure narration."
 
 
 def test_stop_sequences_from_settings(tmp_db):
@@ -131,7 +138,8 @@ def test_stop_sequences_from_settings(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    assert built.stop_sequences == ["\n> You", "\n> you", "\nPlayer:", "\nUser:"]
+    assert built.stop_sequences == ["\n> You", "\n> you", "\nPlayer:", "\nUser:",
+                                    *cb.CONTEXT_STOPS]
 
 
 def test_dynamic_stop_sequences_with_protagonist_names(tmp_db):
@@ -158,7 +166,8 @@ def test_active_entity_recency_anchor_in_final_user_turn(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         built = cb.build_context(adv, actions, _cfg(conn), conn)
     final_content = built.messages[-1]["content"]
-    assert "[Active Lore: Princess Alusair — Steel Regent of Cormyr]" in final_content
+    anchor = final_content.index("[Active Lore: Princess Alusair — Steel Regent of Cormyr]")
+    assert final_content.index(cb.LORE_OPEN) < anchor < final_content.index(cb.LORE_CLOSE)
 
 
 # ---------------------------------------------------------------- budgets
@@ -175,7 +184,7 @@ def test_block_budget_truncation(tmp_db):
     assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
     # author's note truncada a 300 tk dentro da user final
     final = built.messages[-1]["content"]
-    assert final.startswith("[Summary]\n")
+    assert final.startswith("<lore>\n[Summary]\n")
     assert "[Author's note: " + "y" * 1200 + "]\n" in final
     assert "y" * 1201 not in final
     assert final.endswith("Intro.")
@@ -258,9 +267,120 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     assert built.meta["budgets"]["recent_window"] == 250
     assert cb.WINDOW_DROP_CHUNK == 8
     assert built.meta["window_action_count"] == 3
-    window = built.messages[1]["content"]
+    assert len(built.messages) == 5
+    window = _window(built)
     assert window.startswith("M08") and "S000" not in window
     assert window.count("M") == 3 and len(window) == 3 * 100   # inteiras, sem corte
+
+
+def test_next_turn_repeats_every_message_before_the_final_user(tmp_db):
+    """O checkpoint do llama-server fica no início da última user. O turno
+    seguinte só reaproveita o cache se repetir tudo o que vinha antes dela."""
+    adv = _adventure_full()
+    turns = [
+        ("start", "You stand in Calimport."),
+        ("do", "look for Thuldan"),
+        ("continue", "Thuldan waves from the docks."),
+        ("say", "Any news?"),
+        ("continue", "He shakes his head."),
+        ("see", "people present: Thuldan, docks at dusk"),
+        ("do", "walk to the market"),
+        ("continue", "The market is loud."),
+    ]
+    for seq, (type_, text) in enumerate(turns):
+        add_action(adv["id"], seq, type_, text)
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Thuldan", triggers=["Thuldan"],
+                       entry="Contrabandista halfling.")
+        db.insert_memory(conn, adv["id"], "Caio deve um favor a Thuldan.")
+        actions = db.list_actions(conn, adv["id"])
+        cfg = _cfg(conn)
+        built = [cb.build_context(adv, actions[:n], cfg, conn)
+                 for n in range(2, len(actions) + 1)]
+    for before, now in zip(built, built[1:]):
+        shared = before.messages[:-1]
+        assert now.messages[:len(shared)] == shared
+        assert now.messages[len(shared)]["role"] == "user"
+
+
+def test_prompt_prefix_stability(tmp_db):
+    """Invariante do cache do slot 0: a system não muda, a janela só cresce e
+    o que é volátil (cards, memórias, resumo, player state, author's note,
+    âncoras) muda só dentro do <lore> da user final."""
+    adv = _adventure_full()
+    turns = [
+        ("start", "You stand in Calimport."),
+        ("do", "look for Thuldan"),
+        ("continue", "Thuldan waves from the docks."),
+        ("say", "Any news?"),
+        ("continue", "He shakes his head."),
+        ("do", "walk to the market"),
+        ("continue", "The market is loud."),
+        ("do", "ask Thuldan about the guild"),
+        ("continue", "Thuldan lowers his voice."),
+        ("do", "follow Thuldan into the alley"),
+        ("continue", "The alley smells of fish."),
+    ]
+    volatile_changes = {
+        3: lambda conn: db.insert_card(conn, adv["id"], title="Thuldan",
+                                       triggers=["Thuldan"], entry="Contrabandista halfling."),
+        5: lambda conn: db.insert_memory(conn, adv["id"], "Caio deve um favor a Thuldan."),
+        7: lambda conn: db.update_adventure_summary(conn, adv["id"], "Caio encontrou Thuldan."),
+        8: lambda conn: db.update_adventure_ui_state(conn, adv["id"], {"Stats": {"HP": 9}}),
+        9: lambda conn: db.update_adventure_memory(conn, adv["id"], authors_note="Chuva forte."),
+    }
+    built = []
+    for seq, (type_, text) in enumerate(turns):
+        add_action(adv["id"], seq, type_, text)
+        with db.session() as conn:
+            if seq in volatile_changes:
+                volatile_changes[seq](conn)
+            current = db.get_adventure(conn, adv["id"])
+            built.append(cb.build_context(current, db.list_actions(conn, adv["id"]),
+                                          _cfg(conn), conn))
+
+    system = built[0].messages[0]
+    for before, now in zip(built, built[1:]):
+        assert now.messages[0] == system
+        shared = before.messages[:-1]
+        assert now.messages[:len(shared)] == shared
+        assert len(now.messages) == len(before.messages) + 1
+        for message in now.messages[:-1]:
+            for marker in (cb.LORE_CLOSE, "[World info]", "[Memories]", "[Summary]",
+                           "[Player state]", "[Author's note"):
+                assert marker not in message["content"]
+
+    final = built[-1].messages[-1]["content"]
+    lore = final[final.index(cb.LORE_OPEN):final.index(cb.LORE_CLOSE)]
+    for fragment in ("[World info]", "Contrabandista halfling", "[Memories]",
+                     "favor a Thuldan", "[Summary]", "[Player state]", "HP 9",
+                     "[Active Lore: Thuldan", "[Continuity Anchor:"):
+        assert fragment in lore
+    assert built[-1].meta.get("continuity_anchor_active") is True
+    assert final.endswith(f"</lore>\n[Author's note: Chuva forte.]\n{CUES}"
+                          "The alley smells of fish.")
+
+
+def test_context_markers_stop_the_narrator(tmp_db):
+    adv = _adventure_full()
+    add_action(adv["id"], 0, "start", "You stand in Calimport.")
+    with db.session() as conn:
+        built = _build(adv, db.list_actions(conn, adv["id"]), _cfg(conn))
+    for marker in ("<lore>", "</lore>", "[World info]", "[Memories]", "[Summary]",
+                   "[Player state]", "[Plot]", "[Author's note", "[Active Lore",
+                   "[Continuity Anchor", "[Style:", "[Canon:", "[Private:", "[Web Research"):
+        assert marker in built.stop_sequences
+    for cue in (cb.STYLE_CUE, cb.CANON_CUE, cb.LORE_CUE):
+        assert any(cue.startswith(marker) for marker in cb.CONTEXT_STOPS)
+
+
+def test_reference_block_goes_inside_the_lore():
+    block = "[Web Research & Canon Facts]\n- Calimport: cidade portuária."
+    with_lore = f"<lore>\n[Summary]\nResumo.\n</lore>\n{CUES}Ação."
+    assert cb.with_reference(with_lore, block) == (
+        f"<lore>\n{block}\n[Summary]\nResumo.\n</lore>\n{CUES}Ação.")
+    without = f"{CUES}Ação."
+    assert cb.with_reference(without, block) == f"<lore>\n{block}\n</lore>\n{CUES}Ação."
 
 
 def test_card_triggers_from_memory_outside_the_window(tmp_db):

@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
-from app import db, llm_client  # noqa: E402
+from app import choices_service, db, events, llm_client, llm_scheduler  # noqa: E402
 
 # Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
 # `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
@@ -41,6 +41,24 @@ def _clean_llm_state(monkeypatch):
     monkeypatch.setenv("AIDUNGEON_ENV_PATH", str(Path("/nonexistent/.env")))
     yield
     llm_client.invalidate_discovery_cache()
+
+
+@pytest.fixture(autouse=True)
+def _scheduler_reset():
+    """Fila, slots ocupados e breaker do llm_scheduler não vazam entre testes."""
+    llm_scheduler.reset()
+    yield
+    llm_scheduler.reset()
+
+
+@pytest.fixture(autouse=True)
+def _events_reset():
+    """Canais de eventos e cache de choices não vazam entre testes."""
+    events.reset()
+    choices_service.reset()
+    yield
+    choices_service.reset()
+    events.reset()
 
 
 @pytest.fixture(autouse=True)

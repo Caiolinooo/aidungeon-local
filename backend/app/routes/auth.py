@@ -13,15 +13,14 @@ Contrato: docs/openapi.yaml (/api/auth/login, /api/auth/check).
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import time
 
 from fastapi import APIRouter, Depends
 
-from app import auth
+from app import auth, db, users
 from app.errors import GameError
-from app.schemas import LoginRequest
+from app.schemas import LoginRequest, PasswordChange
 
 router = APIRouter()
 
@@ -52,10 +51,16 @@ def login(body: LoginRequest) -> dict:
         raise GameError(503, "auth_not_configured",
                         "authentication is not configured on this server")
 
-    # comparação em tempo constante; sem early-exit entre usuário e senha
-    user_ok = hmac.compare_digest(body.username, cfg["user"])
-    pw_hash = hashlib.sha256(body.password.encode("utf-8")).hexdigest()
-    pw_ok = hmac.compare_digest(pw_hash, cfg["password_hash"])
+    with db.session() as conn:
+        users.ensure_seed(conn, cfg)
+        account = users.get_user(conn, body.username)
+    if account is not None:
+        user_ok = hmac.compare_digest(body.username, account["username"])
+        pw_ok = users.password_matches(body.password, account["password_hash"])
+    else:
+        # Conta que ainda não entrou na tabela: o par do ambiente.
+        user_ok = hmac.compare_digest(body.username, cfg["user"])
+        pw_ok = users.password_matches(body.password, cfg["password_hash"])
     if not (user_ok and pw_ok):
         _fail_count += 1
         if _fail_count >= MAX_FAILURES:
@@ -64,7 +69,7 @@ def login(body: LoginRequest) -> dict:
         raise GameError(401, "invalid_credentials", "invalid username or password")
 
     _fail_count = 0
-    token = auth.make_token(cfg["user"], cfg["secret"], cfg["ttl_hours"])
+    token = auth.make_token(body.username, cfg["secret"], cfg["ttl_hours"])
     _, _, exp = auth.verify_token(token, cfg["secret"])
     return {"token": token, "expires_at": auth.iso_utc(exp)}
 
@@ -72,4 +77,30 @@ def login(body: LoginRequest) -> dict:
 @router.get("/auth/check")
 def check(info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Confirma que o Bearer token atual é válido (usado pelo AuthGate da SPA)."""
-    return {"ok": True, "user": info.user, "expires_at": auth.iso_utc(info.exp)}
+    return {
+        "ok": True,
+        "user": info.user,
+        "admin": users.is_admin(info.user),
+        "expires_at": auth.iso_utc(info.exp),
+    }
+
+
+@router.post("/auth/password")
+def change_password(body: PasswordChange,
+                    info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    """Troca a senha de quem está logado. Pede a senha atual."""
+    cfg = auth.auth_config()
+    if cfg is None:
+        raise GameError(503, "auth_not_configured",
+                        "authentication is not configured on this server")
+    with db.session() as conn:
+        users.ensure_seed(conn, cfg)
+        account = users.get_user(conn, info.user)
+        if account is None or not users.password_matches(body.current_password,
+                                                         account["password_hash"]):
+            raise GameError(401, "invalid_credentials", "invalid username or password")
+        try:
+            users.set_password(conn, info.user, body.new_password)
+        except ValueError as exc:
+            raise GameError.bad_request("invalid_password", str(exc)) from exc
+    return {"ok": True}

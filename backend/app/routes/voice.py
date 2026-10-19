@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
-from app import db, settings_store, voice_client
+from app import db, npc_bonds, settings_store, voice_client, voice_emotion
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import TtsRequest, VoiceSettingsUpdate
@@ -45,6 +45,8 @@ def _voice_settings_response(conn) -> dict:
         "stt_max_bytes": cfg["stt_max_bytes"],
         "api_key": settings_store.mask_api_key(cfg["api_key"]),
         "api_key_set": bool(cfg["api_key"]),
+        "drama3_model": cfg["drama3_model"],
+        "drama3_enabled": cfg["drama3_enabled"],
     }
 
 
@@ -98,11 +100,22 @@ def post_tts(body: TtsRequest,
     if not voice or voice not in cfg["voices"]:
         raise GameError.bad_request(
             "invalid_voice", f"unknown voice {body.voice!r}; expected one of {cfg['voices']}")
+    npc_emotion = None
+    adventure_id = (body.adventure_id or "").strip()
+    if adventure_id:
+        with db.session() as conn:
+            if db.get_adventure(conn, adventure_id):
+                cards = db.list_cards(conn, adventure_id)
+                npc_emotion = npc_bonds.npc_emotion_for_line(cards, text)
+    emotion = voice_emotion.choose_emotion(
+        text, npc_emotion=npc_emotion, hint=body.emotion)
     try:
-        audio = voice_client.synthesize(cfg, text, voice, transport=transport)
+        audio = voice_client.synthesize(
+            cfg, text, voice, emotion=emotion, transport=transport)
     except voice_client.VoiceError as exc:
         raise GameError(502, exc.code, exc.message) from exc
-    return Response(content=audio, media_type="audio/mpeg")
+    return Response(content=audio, media_type="audio/mpeg",
+                    headers={"X-Voice-Emotion": emotion})
 
 
 # ----------------------------------------------------------------------- /stt

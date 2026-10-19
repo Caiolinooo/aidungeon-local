@@ -70,10 +70,11 @@ class TestTier3Combinations:
         events = parse_sse_events(resp.text)
         assert any(ev["event"] == "done" for ev in events)
 
-        # Verify that Dragon Horn was triggered into context
+        # Verify that Dragon Horn was triggered into context (world info rides in the
+        # final message so the system prefix stays cacheable)
         assert len(captured_prompts) >= 1
-        system_content = captured_prompts[0]["messages"][0]["content"]
-        assert "Dragon Horn" in system_content or "elder wyrm" in system_content
+        final_content = captured_prompts[0]["messages"][-1]["content"]
+        assert "Dragon Horn" in final_content or "elder wyrm" in final_content
 
         # Subsequent choice generation takes new scene into account
         choices_json = json.dumps([{"type": "do", "text": "brace for the wyrm"}])
@@ -166,7 +167,7 @@ class TestTier3Combinations:
         parse_sse_events(turn_resp.text)
 
         assert len(captured_payloads) >= 1
-        prompt = captured_payloads[0]["messages"][0]["content"]
+        prompt = captured_payloads[0]["messages"][-1]["content"]
         assert "HP" in prompt
         assert "12" in prompt
 
@@ -220,7 +221,8 @@ class TestTier3Combinations:
         assert len(state_after["actions"]) >= 9
 
     def test_t3_combo_05_concurrency_lock_across_action_see_choices_ui(self, e2e_client):
-        """Lock acquired during generation blocks all concurrent generation endpoints with 409."""
+        """The narration lock blocks action/continue/retry with 409; See, choices and
+        UI profile run alongside the narrator instead of failing."""
         adv = make_adventure(title="Concurrency Guard")
         add_action(adv["id"], 0, "start", "The chamber is silent.")
 
@@ -242,15 +244,15 @@ class TestTier3Combinations:
 
             # 4. See
             r4 = e2e_client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
-            assert r4.status_code == 409
+            assert r4.status_code == 200
 
             # 5. Choices
             r5 = e2e_client.post(f"/api/adventures/{adv['id']}/choices")
-            assert r5.status_code == 409
+            assert r5.status_code == 200
 
             # 6. UI Profile
             r6 = e2e_client.post(f"/api/adventures/{adv['id']}/ui-profile")
-            assert r6.status_code == 409
+            assert r6.status_code != 409
         finally:
             game_engine.release_generation_lock(adv["id"])
 

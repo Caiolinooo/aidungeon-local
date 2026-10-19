@@ -46,7 +46,8 @@ def _safe_extract(zf: zipfile.ZipFile, dest: str) -> None:
     zf.extractall(dest)
 
 
-def import_zip(zip_path: str | Path, cards_payload: Any | None = None) -> dict:
+def import_zip(zip_path: str | Path, cards_payload: Any | None = None,
+                owner: str = "") -> dict:
     """Importa um .zip de backup. `cards_payload` = JSON solto de cards (merge/validação).
 
     Aceita dois formatos: backup individual (metadata.json na raiz) e backup
@@ -63,7 +64,7 @@ def import_zip(zip_path: str | Path, cards_payload: Any | None = None) -> dict:
 
         root = Path(tmp)
         if (root / "metadata.json").exists():
-            return import_dir(root, cards_payload=cards_payload)
+            return import_dir(root, cards_payload=cards_payload, owner=owner)
 
         folders = sorted(p for p in root.iterdir()
                          if p.is_dir() and (p / "metadata.json").exists())
@@ -72,7 +73,7 @@ def import_zip(zip_path: str | Path, cards_payload: Any | None = None) -> dict:
         results = []
         for folder in folders:
             try:
-                results.append(import_dir(folder))
+                results.append(import_dir(folder, owner=owner))
             except BackupFormatError as exc:
                 results.append({"title": folder.name, "error": str(exc)})
         imported = sum(1 for r in results if "error" not in r)
@@ -116,7 +117,8 @@ def _load_action_parts(root: Path) -> list[dict]:
 
 
 # --------------------------------------------------------------- importação
-def import_dir(root: str | Path, cards_payload: Any | None = None) -> dict:
+def import_dir(root: str | Path, cards_payload: Any | None = None,
+                owner: str = "") -> dict:
     root = Path(root)
     metadata = _load_json(root / "metadata.json", "metadata.json")
     if not isinstance(metadata, dict) or not isinstance(metadata.get("adventure"), dict):
@@ -159,7 +161,8 @@ def import_dir(root: str | Path, cards_payload: Any | None = None) -> dict:
             created_at=src_adv.get("createdAt"), updated_at=src_adv.get("updatedAt"),
         )
         adv = db.insert_adventure(
-            conn, scenario_id=scenario["id"], title=title, description=description,
+            conn, scenario_id=scenario["id"], owner=owner, title=title,
+            description=description,
             ai_instructions=ai_instructions, plot_essentials=plot_essentials,
             authors_note=authors_note, story_summary=story_summary,
             image_style=image_style,

@@ -17,6 +17,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class UserPassword(BaseModel):
+    password: str
+
+
 class StoryCardUpsert(BaseModel):
     title: str | None = None
     type: str | None = None
@@ -184,9 +198,16 @@ class SceneSyncRequest(BaseModel):
 
 
 class TtsRequest(BaseModel):
-    """POST /api/tts — voice omitida (null) usa narrator_voice da config."""
+    """POST /api/tts — voice omitida (null) usa narrator_voice da config.
+
+    `emotion` é uma dica (joy, anger, fear, sadness, tenderness, surprise,
+    disgust, neutral). A linha vence; sem palavra de emoção, vale a ficha
+    do NPC citado quando `adventure_id` vem junto.
+    """
     text: str
     voice: str | None = None
+    emotion: str | None = None
+    adventure_id: str | None = None
 
 
 class VoiceSettingsUpdate(BaseModel):

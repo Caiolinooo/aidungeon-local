@@ -16,6 +16,14 @@ Seleção: até top_k que caibam no budget, por ranking de score. A memória mai
 recente entra sempre que top_k > 1 e ela cabe (troca o pior slot se preciso).
 O retorno é CRONOLÓGICO (a história na ordem), não o fim primeiro.
 
+Vetor da consulta: o embedding roda antes do narrador, então conta no TTFT.
+Na CPU, com o narrador ocupado, 100 tokens levam ~2 s e os 7500 caracteres
+da varredura passam de 30 s. Por isso:
+    - o pós-turno grava o vetor da cena (`prime_scene_vector`) e o turno
+      seguinte usa esse vetor; a ação nova entra pelas palavras-chave;
+    - sem vetor gravado, o turno embute só o fim do texto
+      (`memory_bank.query_chars`) com prazo curto (`memory_bank.query_timeout_s`).
+
 Assinatura consumida por app.context_builder (import tardio):
     select_memories(conn, adventure_id, recent_text, budget_tokens=...) -> list[dict]
 """
@@ -26,6 +34,7 @@ import logging
 import math
 import re
 import sqlite3
+import threading
 from typing import Any, Callable
 
 try:
@@ -37,6 +46,11 @@ log = logging.getLogger("aidungeon.memory.retrieval")
 
 DEFAULT_TOP_K = 12
 DEFAULT_BUDGET = 800
+DEFAULT_QUERY_CHARS = 1500
+DEFAULT_QUERY_TIMEOUT_S = 1.5
+# Ações gravadas entre o vetor da cena e o turno que o usa: a do jogador e
+# alguns See. Desfazer (seq menor) ou mais que isso pede vetor novo.
+SCENE_VECTOR_MAX_LAG = 3
 # Uma palavra em comum vale mais que centenas de ações de distância.
 OVERLAP_WEIGHT = 1000
 
@@ -85,6 +99,104 @@ def _memory_settings(conn: sqlite3.Connection, settings: dict | None) -> dict:
         return settings_store.runtime_config(conn).get("memory_bank", {})
     except Exception:
         return {}
+
+
+def _embeddings_settings(conn: sqlite3.Connection, settings: dict | None) -> dict:
+    """Bloco embeddings do settings injetado ou, sem ele, do banco."""
+    if isinstance(settings, dict):
+        if "embeddings" in settings:
+            return settings["embeddings"]
+        bank = settings.get("memory_bank")
+        if isinstance(bank, dict) and "embeddings" in bank:
+            return bank["embeddings"]
+    try:
+        from app import settings_store
+        return settings_store.effective_embeddings_settings(conn)
+    except Exception:
+        return {}
+
+
+# --------------------------------------------------------- vetor da cena
+_scene_guard = threading.Lock()
+_scene_vectors: dict[str, tuple[int, str, list[float]]] = {}
+
+
+def query_tail(text: str | None, max_chars: int = DEFAULT_QUERY_CHARS) -> str:
+    """Fim do texto para o embedding da consulta, começando numa palavra inteira."""
+    clean = (text or "").strip()
+    if max_chars <= 0 or len(clean) <= max_chars:
+        return clean
+    tail = clean[-max_chars:]
+    space = tail.find(" ")
+    return tail[space + 1:] if 0 <= space < 40 else tail
+
+
+def remember_scene_vector(adventure_id: str, seq: int, model: str,
+                          vec: list[float]) -> None:
+    with _scene_guard:
+        _scene_vectors[adventure_id] = (seq, model, vec)
+
+
+def scene_vector(adventure_id: str, model: str, last_seq: int) -> list[float] | None:
+    """Vetor gravado para a aventura, se ainda vale para o turno em `last_seq`."""
+    with _scene_guard:
+        hit = _scene_vectors.get(adventure_id)
+    if hit is None:
+        return None
+    seq, hit_model, vec = hit
+    if hit_model != model or not 0 <= last_seq - seq <= SCENE_VECTOR_MAX_LAG:
+        return None
+    return vec
+
+
+def forget_scene_vectors() -> None:
+    with _scene_guard:
+        _scene_vectors.clear()
+
+
+def prime_scene_vector(adventure_id: str, story_text: str, seq: int | None,
+                       emb_cfg: dict, *, query_chars: int = DEFAULT_QUERY_CHARS,
+                       transport: Any = None,
+                       embeddings_client_mod: Any = None) -> bool:
+    """Embedding do fim da história no pós-turno, com o prazo normal do serviço.
+
+    Chamar fora de conexão com o banco: na CPU leva de segundos a dezenas de
+    segundos. True quando o vetor foi gravado."""
+    if not emb_cfg.get("enabled", True):
+        return False
+    query = query_tail(story_text, query_chars)
+    if not query:
+        return False
+    emb_mod = embeddings_client_mod or embeddings_client
+    vec = emb_mod.get_embedding(query, cfg=emb_cfg, transport=transport)
+    if vec is None:
+        return False
+    model = emb_cfg.get("model", embeddings_client.DEFAULT_MODEL)
+    remember_scene_vector(adventure_id, -1 if seq is None else seq, model, vec)
+    return True
+
+
+def _query_vector(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
+                  mem_cfg: dict, emb_cfg: dict, model: str, emb_mod: Any,
+                  transport: Any) -> list[float] | None:
+    """Vetor da cena do pós-turno; sem ele, o fim do texto com prazo curto."""
+    last = db.max_seq(conn, adventure_id)
+    last_seq = -1 if last is None else last
+    vec = scene_vector(adventure_id, model, last_seq)
+    if vec is not None:
+        return vec
+    timeout_s = float(mem_cfg.get("query_timeout_s", DEFAULT_QUERY_TIMEOUT_S))
+    query = query_tail(recent_text, int(mem_cfg.get("query_chars", DEFAULT_QUERY_CHARS)))
+    if timeout_s <= 0 or not query:
+        return None
+    cfg = dict(emb_cfg)
+    cfg["timeout_seconds"] = min(float(emb_cfg.get("timeout_seconds", timeout_s)), timeout_s)
+    vec = emb_mod.get_embedding(query, cfg=cfg, transport=transport)
+    if vec is None:
+        log.info("memória: sem embedding da consulta em %.1f s; só palavras-chave", timeout_s)
+        return None
+    remember_scene_vector(adventure_id, last_seq, model, vec)
+    return vec
 
 
 def _recency(memory: dict) -> float:
@@ -192,26 +304,16 @@ def select_memories(
         return []
 
     emb_mod = embeddings_client_mod or embeddings_client
-    emb_cfg = None
-    if isinstance(settings, dict):
-        if "embeddings" in settings:
-            emb_cfg = settings["embeddings"]
-        elif isinstance(settings.get("memory_bank"), dict) and "embeddings" in settings["memory_bank"]:
-            emb_cfg = settings["memory_bank"]["embeddings"]
-    if emb_cfg is None:
-        try:
-            from app import settings_store
-            emb_cfg = settings_store.effective_embeddings_settings(conn)
-        except Exception:
-            emb_cfg = {}
+    emb_cfg = _embeddings_settings(conn, settings)
+    target_model = (emb_cfg.get("model", embeddings_client.DEFAULT_MODEL)
+                    if emb_cfg.get("enabled", True) else None)
 
-    target_model = emb_cfg.get("model", "Qwen3-Embedding-0.6B") if emb_cfg.get("enabled", True) else None
-
-    # Obter vetor de consulta
     query_vec = query_vector
-    clean_query = (recent_text or "").strip()
-    if query_vec is None and target_model and clean_query:
-        query_vec = emb_mod.get_embedding(clean_query, cfg=emb_cfg, transport=transport)
+    has_vectors = any(m.get("embedding") and m.get("embedding_model") == target_model
+                      for m in memories)
+    if query_vec is None and target_model and has_vectors:
+        query_vec = _query_vector(conn, adventure_id, recent_text or "", cfg, emb_cfg,
+                                  target_model, emb_mod, transport)
 
     target_dim = len(query_vec) if query_vec is not None else None
     reference = significant_words(recent_text)
