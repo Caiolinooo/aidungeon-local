@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import date
@@ -167,12 +168,23 @@ def strip_explicit(text: str) -> str:
 
 
 def english_bits(text: str, limit: int = 220) -> str:
-    """Primeira frase sem acento. Português no CLIP vira outro rosto."""
+    """Primeira frase em inglês. Um nome acentuado (Júnior) não apaga o resto.
+
+    Frase em português, com acento espalhado, não entra no CLIP.
+    """
     flat = " ".join((text or "").split())
     if not flat:
         return ""
     sentence = re.split(r"(?<=[.!?])\s+", flat)[0]
-    if _PT_MARK.search(sentence):
+    words = sentence.split()
+    if not words:
+        return ""
+    accented = sum(1 for word in words if _PT_MARK.search(word))
+    if accented / len(words) > 0.25:
+        return ""
+    kept = [word for word in words if not _PT_MARK.search(word)]
+    sentence = " ".join(kept)
+    if not sentence or _PT_MARK.search(sentence):
         return ""
     return sentence[:limit].rstrip(" ,;:")
 
@@ -421,21 +433,46 @@ def _sniff_ext(content: bytes, content_type: str, url: str) -> str:
     return ""
 
 
+def _image_url(url: str) -> str:
+    """Tira o utm da Wikipedia. O arquivo em si não muda."""
+    return (url or "").split("?", 1)[0]
+
+
 def _download(client: httpx.Client, url: str) -> tuple[bytes, str]:
-    response = client.get(url, headers={"Accept": "image/*,*/*"})
-    if response.status_code != 200:
+    target = _image_url(url)
+    response = None
+    for attempt in range(2):
+        response = client.get(target, headers={"Accept": "image/*,*/*"})
+        if response.status_code != 429 or attempt == 1:
+            break
+        time.sleep(2.5)
+    if response is None or response.status_code != 200:
         raise GameError(502, "likeness_unavailable", "Não consegui baixar a foto de referência.")
     content = response.content
     if not content or len(content) > MAX_IMAGE_BYTES:
         raise GameError(502, "likeness_unavailable", "A foto de referência veio vazia ou grande demais.")
-    ext = _sniff_ext(content, response.headers.get("content-type", ""), url)
+    ext = _sniff_ext(content, response.headers.get("content-type", ""), target)
     if not ext:
         raise GameError(502, "likeness_unavailable", "A referência não é uma imagem.")
     return content, ext
 
 
+def _commons_filename(image_url: str) -> str:
+    """Nome do File: no Commons, inclusive quando a URL é um thumbnail."""
+    path = urllib.parse.unquote(_image_url(image_url))
+    parts = [part for part in path.split("/") if part]
+    if "thumb" in parts:
+        index = parts.index("thumb")
+        # .../thumb/a/ab/Nome.jpg/320px-Nome.jpg
+        if index + 3 < len(parts):
+            return parts[index + 3]
+    if parts:
+        return parts[-1]
+    return ""
+
+
 def _commons_license(client: httpx.Client, image_url: str) -> str:
-    name = urllib.parse.unquote(image_url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1])
+    name = _commons_filename(image_url)
     if not name:
         return ""
     try:
@@ -568,7 +605,7 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
     sheet["likeness"] = {
         "descriptor": descriptor,
         "reference_image_path": rel,
-        "source_url": page.image_url,
+        "source_url": _image_url(page.image_url),
         "license": license_name,
         "page_url": page.page_url,
         "verified_by_user": False,

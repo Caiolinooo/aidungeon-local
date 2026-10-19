@@ -140,6 +140,20 @@ def test_opening_clause_puts_the_real_descriptor_before_the_fictional_face():
     assert likeness.opening_clause([clara]) == npc_assets.likeness_clause([clara])
 
 
+def test_english_bits_keeps_one_accented_name():
+    text = "Neymar da Silva Santos Júnior is a Brazilian footballer."
+    assert likeness.english_bits(text) == "Neymar da Silva Santos is a Brazilian footballer."
+    assert likeness.english_bits("Ela é uma cantora, também é atriz e é famosa.") == ""
+
+
+def test_commons_filename_ignores_the_thumbnail_size():
+    url = (
+        "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5a/"
+        "Zendaya-byPhilipRomano.jpg/3840px-Zendaya-byPhilipRomano.jpg?utm_source=en"
+    )
+    assert likeness._commons_filename(url) == "Zendaya-byPhilipRomano.jpg"
+
+
 def test_age_class_flags_a_child_and_not_a_historical_adult():
     assert likeness.age_class("She was born in 2015.", today=date(2026, 10, 18)) == "minor"
     assert likeness.age_class("Born 1840, died 1910.", today=date(2026, 10, 18)) == "adult"
