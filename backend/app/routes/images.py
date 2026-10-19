@@ -32,6 +32,7 @@ router = APIRouter()
 _PROMPT_BUILDER_SYSTEM = """You describe one moment of an interactive story for a text-to-image model.
 Write a single English sentence whose subject is the action happening right now: who does what to whom, in the place.
 Name every person in the moment, including the player character when the text says "you".
+Call each woman a woman and each man a man. Do not turn a woman into a man.
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not add people who are not in the moment. Do not change the place.
 If the moment says a person refuses, paint the refusal. If it says a destination does not exist, do not invent that place.
@@ -41,6 +42,7 @@ No dialogue, no quotes, no meta text. Output ONLY that sentence."""
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
 Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
+Call each woman a woman and each man a man. A woman has a female body. Do not give her a male body.
 Do not describe hair, face, eyes or age.
 Do not add people who are not in the moment. Do not change the place.
 If the moment says a person refuses, paint the refusal. Do not invent a room or a bed.
@@ -260,6 +262,30 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     you = re.search(r"(?<!\w)you(?!\w)", moment or "", re.IGNORECASE)
     if you and not any(name.casefold() == player_name.casefold() for name in names):
         names.insert(0, player_name)
+    story_blob = "\n".join(
+        (action.get("text") or "")
+        for action in visible
+        if (action.get("text") or "").strip()
+    )
+    by_name = {card.get("title"): card for card in frame if card.get("title")}
+    for card in cards:
+        title = (card.get("title") or "").strip()
+        if title and npc_assets._mentioned(moment, title) and title not in by_name:
+            if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
+                by_name[title] = card
+                names.append(title)
+    sex_bits = []
+    seen_sex: set[str] = set()
+    for name in names:
+        key = name.casefold()
+        if key in seen_sex:
+            continue
+        seen_sex.add(key)
+        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
+        phrase = npc_assets.sex_phrase(name, label, explicit=explicit)
+        if phrase:
+            sex_bits.append(phrase)
+    sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     canon = ""
     if clause and explicit:
         canon = (
@@ -284,7 +310,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     place = ""
     if location and location != "the current scene":
         place = f"Place: {location}. {(entry or '')[:200]}\n"
-    who = ", ".join(names) if names else "only the people named in the moment"
+    who_bits = []
+    for name in names:
+        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
+        who_bits.append(f"{name} ({label})" if label else name)
+    who = ", ".join(who_bits) if who_bits else "only the people named in the moment"
     user = (
         (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
@@ -310,14 +340,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
     lead_bits = []
+    if sex_bits:
+        lead_bits.append(". ".join(sex_bits))
     if beat:
         lead_bits.append(beat)
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
         lead_bits.append(", ".join(where))
-    if names:
-        lead_bits.append("people present: " + ", ".join(names))
+    if who_bits:
+        lead_bits.append("people present: " + ", ".join(who_bits))
     if clause:
         lead_bits.append(clause[:260].rstrip(" ,.;"))
     if _is_interaction(moment, names):
@@ -336,6 +368,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     else:
         prompt = lead or tail
     negative = _dedupe_negative(neg_summary, neg_moment, assessment.image_negative)
+    woman_only = bool(sex_bits) and all("adult woman" in bit for bit in sex_bits)
+    unlabeled = [name for name in names if not any(name.casefold() in bit.casefold() for bit in sex_bits)]
+    if explicit and woman_only and not unlabeled:
+        negative = _dedupe_negative(negative, "man, male, masculine body, penis, beard")
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     return prompt, negative

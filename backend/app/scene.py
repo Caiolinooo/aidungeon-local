@@ -169,8 +169,21 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     """
     explicit = is_explicit(moment)
     clause = _visual_clause(cast, explicit=explicit)
+    sex_bits = []
+    for card in cast:
+        person = (card.get("title") or "").strip()
+        phrase = npc_assets.sex_phrase(
+            person,
+            npc_assets.sex_label(person, moment, card=card),
+            explicit=explicit,
+        )
+        if phrase:
+            sex_bits.append(phrase)
+    sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
+    sex_line = ". ".join(sex_bits)
     if clause and explicit:
         parts = [
+            sex_line,
             clause,
             "clothes off, nude, do not restore outfits, uncensored",
             (moment or "")[-400:],
@@ -185,6 +198,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         return text[:1400], True
     if clause:
         parts = [
+            sex_line,
             clause,
             style,
             f"wide cinematic shot of {title}, only the characters named above, "

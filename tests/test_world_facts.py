@@ -16,6 +16,48 @@ def _facts(adv, actions, cards=None):
     return world_facts.assess(adv, actions, cards or [], []).facts_line
 
 
+def test_elara_is_a_woman_and_caio_is_a_man():
+    from app import npc_assets
+    assert npc_assets.sex_label("Elara", "Elara recusa. Ela fica no portão.") == "adult woman"
+    assert npc_assets.sex_label("Caio", "Caio observa. Ele espera.") == "adult man"
+    assert npc_assets.sex_label("Elara", "You place Elara on the bed as Caio watches her.") == ""
+    assert npc_assets.sex_label(
+        "Elara", "You place Elara on the bed.",
+        card={"title": "Elara", "entry": "Uma mulher.", "sheet": ""},
+    ) == "adult woman"
+    assert npc_assets.sex_label("Elara", "Elara vê o rei ao longe.") == ""
+    assert npc_assets.sex_label("Caio", "You place Elara on the bed as Caio watches her.") == ""
+
+
+def test_see_calls_elara_a_woman_before_the_act(client, tmp_path):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        db.insert_card(
+            conn, adv["id"], type="character", title="Elara",
+            triggers=["Elara"], entry="Uma mulher de cabelos negros.",
+        )
+    add_action(adv["id"], 0, "start", "Elara está no quarto. Ela observa. Caio está vestido. Ele espera.")
+    add_action(adv["id"], 1, "continue", "Ela está nua. You place Elara on the bed as Caio watches.")
+    override_transport(client, make_v2_transport())
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"]
+    head = prompt.split("BREAK", 1)[0]
+    assert head.lower().startswith("elara is an adult woman")
+    assert "female body" in head.lower()
+    assert "caio is an adult man" in head.lower()
+    assert "Elara (adult woman)" in head
+    assert "Caio (adult man)" in head
+    assert head.lower().index("elara is an adult woman") < head.lower().index("place elara")
+    with db.session() as conn:
+        negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
+    assert "masculine body" not in negative
+
+
 def test_opening_does_not_invent_a_room_or_obedient_elara(tmp_db):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:

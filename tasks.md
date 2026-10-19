@@ -8,3 +8,4 @@ O pedido do jogador é tentativa. Lugar, item, pessoa e consentimento só entram
 4. Pintar o See e o fundo com o lugar real e a recusa, não com o desejo.
 5. Mostrar o aviso na faixa da cena (`notice`).
 6. Impedir o registro de lugar/item/obediência que só existiu no pedido.
+7. Travar o sexo na imagem: mulher fica mulher, homem fica homem, a frase vai no começo do prompt.
