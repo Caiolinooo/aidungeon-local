@@ -15,6 +15,8 @@ Tipos:
   usa img2img a partir dessa âncora, para o rosto fictício continuar o mesmo.
   Pessoa real com arquivo de referência ignora essa âncora e parte da foto
   (`likeness.portrait_init`, denoise `REFERENCE_DENOISE`).
+  CUDA out of memory não reenfileira o mesmo card na hora: a UI pede a cena
+  de novo a cada poucos segundos, e cada erro virava outro txt2img.
 - `scene_backdrop` — pinta o fundo do lugar atual (payload.prompt já pronto,
   sem LLM) em images kind='backdrop'. Wide 1344×768 (bucket SDXL).
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
@@ -33,6 +35,7 @@ import logging
 import os
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -48,6 +51,11 @@ PRIORITY_SEE = 0
 PRIORITY_PRESENT_PORTRAIT = 1
 PRIORITY_BACKDROP = 2
 PRIORITY_BULK_PORTRAIT = 3
+
+# A cena aberta pede retrato de novo assim que o job anterior termina em erro.
+# Sem esta espera, um CUDA OOM vira outro txt2img a cada poucos segundos.
+CUDA_OOM_BACKOFF_S = 300
+CUDA_OOM_RETRY_CAP = 3
 
 _wakeup = threading.Event()
 
@@ -114,6 +122,68 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
     return job
 
 
+def is_cuda_oom(message: str | None) -> bool:
+    """True quando o provider recusou por falta de VRAM."""
+    text = (message or "").lower()
+    return "out of memory" in text or "outofmemory" in text
+
+
+def _utc_stamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _recent_jobs(conn, type_: str, ref_id: str, limit: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE type=? AND ref_id=?"
+        " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (type_, ref_id, int(limit)),
+    ).fetchall()
+    return [db.job_to_dict(row) for row in rows]
+
+
+def cuda_oom_hold(conn, type_: str, ref_id: str, *, explicit: bool = False,
+                  now: datetime | None = None) -> str | None:
+    """Motivo para não enfileirar de novo, ou None se o alvo pode tentar.
+
+    O último CUDA OOM segura o alvo por CUDA_OOM_BACKOFF_S. Sem pedido
+    explícito, CUDA_OOM_RETRY_CAP erros seguidos encerram a tentativa
+    automática. Um job que não é esse erro zera a sequência.
+    """
+    recent = _recent_jobs(conn, type_, ref_id, CUDA_OOM_RETRY_CAP)
+    streak = 0
+    for job in recent:
+        if job["status"] == "error" and is_cuda_oom(job.get("error")):
+            streak += 1
+            continue
+        break
+    if streak == 0:
+        return None
+    newest = recent[0]
+    moment = now or datetime.now(timezone.utc)
+    finished = _utc_stamp(newest.get("finished_at") or newest.get("created_at"))
+    if finished is not None:
+        remaining = CUDA_OOM_BACKOFF_S - (moment - finished).total_seconds()
+        if remaining > 0:
+            return f"CUDA out of memory; retry waits {max(1, int(remaining))}s"
+    if not explicit and streak >= CUDA_OOM_RETRY_CAP:
+        return (
+            "CUDA out of memory; automatic retries capped at "
+            f"{CUDA_OOM_RETRY_CAP}"
+        )
+    return None
+
+
 def enqueue_portrait(conn, adventure_id: str, card_id: str,
                      *, replace: bool = False,
                      priority: int = PRIORITY_PRESENT_PORTRAIT) -> dict | None:
@@ -122,7 +192,8 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
 
     Sem replace, um card que já tem foto oficial não entra na fila — a cena
     e o "gerar todos" não trocam o rosto. replace=True é o botão de regenerar:
-    o job leva o id da âncora para img2img.
+    o job leva o id da âncora para img2img. CUDA OOM recente segura os dois;
+    o botão, passado o prazo, ainda tenta. A cena, no teto, para.
     """
     card = db.get_card(conn, adventure_id, card_id)
     if card and card.get("portrait_image_id") and not replace:
@@ -130,6 +201,11 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
     active = db.find_active_job(conn, "character_portrait", card_id)
     if active:
         return db.raise_job_priority(conn, active["id"], priority)
+    held = cuda_oom_hold(conn, "character_portrait", card_id, explicit=replace)
+    if held:
+        if replace:
+            raise GameError(429, "cuda_oom_backoff", held)
+        return None
     payload: dict = {}
     if replace:
         payload["replace"] = True

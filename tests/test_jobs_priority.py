@@ -7,6 +7,7 @@ import json
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -440,6 +441,104 @@ def test_restart_requeues_assets_and_fails_interrupted_see(tmp_db):
     assert failed["status"] == "error"
     assert failed["result"] == {"code": "interrupted"}
     assert _job(waiting["id"])["status"] == "pending"
+
+
+def _ada_id(adventure_id: str) -> str:
+    with db.session() as conn:
+        return next(card["id"] for card in db.list_cards(conn, adventure_id)
+                    if card["type"] == "character")
+
+
+def _portrait_jobs(adventure_id: str) -> list[dict]:
+    with db.session() as conn:
+        return [job for job in db.list_jobs(conn, adventure_id)
+                if job["type"] == "character_portrait"]
+
+
+def _age_finished(job_id: str, seconds: float) -> None:
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(
+        timespec="milliseconds").replace("+00:00", "Z")
+    with db.session() as conn:
+        conn.execute("UPDATE jobs SET finished_at=? WHERE id=?", (stamp, job_id))
+
+
+def test_cuda_oom_message_matches_the_provider_body():
+    sample = (
+        'HTTP 500 em txt2img: {"error":"OutOfMemoryError","errors":'
+        '"CUDA out of memory. Tried to allocate 2.00 MiB."}'
+    )
+    assert jobs.is_cuda_oom(sample)
+    assert jobs.is_cuda_oom("OutOfMemoryError")
+    assert not jobs.is_cuda_oom("HTTP 500 em txt2img: connection reset")
+    assert not jobs.is_cuda_oom(None)
+
+
+def test_scene_poll_stops_after_cuda_oom_until_backoff_and_cap(client, stack):
+    """A cena aberta reenfileirava o retrato a cada poll. OOM espera minutos
+    e, no teto, a cena para; o botão de regenerar ainda passa depois do prazo."""
+    adv = _tavern()
+    ada = _ada_id(adv["id"])
+    stack.sd_fail = True
+
+    with db.session() as conn:
+        first = jobs.enqueue_portrait(conn, adv["id"], ada)
+    assert jobs.process_pending(stack.transport) == 1
+    failed = _job(first["id"])
+    assert failed["status"] == "error"
+    assert jobs.is_cuda_oom(failed["error"])
+
+    with db.session() as conn:
+        assert jobs.enqueue_portrait(conn, adv["id"], ada) is None
+        held = jobs.cuda_oom_hold(conn, "character_portrait", ada)
+    assert held and "retry waits" in held
+    blocked = client.post(f"/api/adventures/{adv['id']}/cards/{ada}/portrait")
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "cuda_oom_backoff"
+
+    again = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert again.status_code == 200, again.text
+    assert len(_portrait_jobs(adv["id"])) == 1
+    # O fundo entra uma vez. O retrato, não.
+    assert jobs.process_pending(stack.transport) == 1
+    assert len(_portrait_jobs(adv["id"])) == 1
+
+    _age_finished(first["id"], jobs.CUDA_OOM_BACKOFF_S + 30)
+    with db.session() as conn:
+        assert jobs.cuda_oom_hold(conn, "character_portrait", ada) is None
+        second = jobs.enqueue_portrait(conn, adv["id"], ada)
+    assert second["id"] != first["id"]
+    assert jobs.process_pending(stack.transport) == 1
+    assert _job(second["id"])["status"] == "error"
+
+    _age_finished(second["id"], jobs.CUDA_OOM_BACKOFF_S + 30)
+    with db.session() as conn:
+        third = jobs.enqueue_portrait(conn, adv["id"], ada)
+    assert jobs.process_pending(stack.transport) == 1
+    _age_finished(third["id"], jobs.CUDA_OOM_BACKOFF_S + 30)
+
+    with db.session() as conn:
+        capped = jobs.cuda_oom_hold(conn, "character_portrait", ada)
+        assert jobs.enqueue_portrait(conn, adv["id"], ada) is None
+    assert capped and "capped" in capped
+    before = len(_portrait_jobs(adv["id"]))
+    assert client.post(f"/api/adventures/{adv['id']}/scene", json={}).status_code == 200
+    assert len(_portrait_jobs(adv["id"])) == before
+
+    explicit = client.post(f"/api/adventures/{adv['id']}/cards/{ada}/portrait")
+    assert explicit.status_code == 202, explicit.text
+    assert explicit.json()["id"] not in {first["id"], second["id"], third["id"]}
+    assert explicit.json()["payload"]["replace"] is True
+
+
+def test_other_portrait_errors_do_not_open_the_oom_hold(client):
+    adv = _tavern()
+    ada = _ada_id(adv["id"])
+    with db.session() as conn:
+        failed = jobs.enqueue_portrait(conn, adv["id"], ada)
+        db.finish_job(conn, failed["id"], "error", error="HTTP 500 em txt2img: busy")
+        assert jobs.cuda_oom_hold(conn, "character_portrait", ada) is None
+        again = jobs.enqueue_portrait(conn, adv["id"], ada)
+    assert again["id"] != failed["id"]
 
 
 def test_migration_021_upgrades_a_v20_database(tmp_path, monkeypatch):
