@@ -2,8 +2,8 @@
 //
 // Tipos (contrato Action.type):
 //   start / continue / story → prosa corrida (story = narração injetada, itálico sutil)
-//   do                     → "**You do**" + blockquote (destaque do jogador)
-//   say                    → "**You say**" + blockquote com aspas
+//   do                     → rótulo "You" (ou o actor) + blockquote
+//   say                    → "You say" / "{actor} says" + blockquote com aspas
 //   see                    → card de imagem (ação "See", v2): action.image = {id, url, prompt}
 // Hover revela o botão Edit (qualquer bloco, inclusive respostas da IA).
 import { useEffect, useRef, useState } from 'react'
@@ -28,12 +28,45 @@ async function getNarratorVoice() {
   return narratorVoiceCache
 }
 
+function playerLabel(type, actor) {
+  const name = (actor || '').trim()
+  if (!name) return `You ${type}`
+  if (type === 'say') {
+    const pt = typeof navigator !== 'undefined' && /^pt\b/i.test(navigator.language || '')
+    return pt ? `${name} diz` : `${name} says`
+  }
+  return name
+}
+
+// playerDisplayText tira o wrapper "\n> You ...\n". Se o texto ainda veio
+// como "\n> {actor} ...\n", tira o prefixo aqui — o corpo continua sem o wrapper.
+function playerBody(type, text, actor) {
+  const base = playerDisplayText(type, text)
+  const name = (actor || '').trim()
+  if (!name) return base
+  let t = base.trim()
+  if (!t.startsWith('>')) return base
+  t = t.replace(/^>\s*/, '')
+  const who = `(?:You|${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`
+  if (type === 'do') {
+    const m = t.match(new RegExp(`^${who}\\s+([\\s\\S]*)$`, 'i'))
+    if (m) return m[1].trim()
+  } else if (type === 'say') {
+    const quoted = t.match(new RegExp(`^${who}\\s+(?:say|says|diz)\\s+["“]([\\s\\S]*)["”]\\s*$`, 'i'))
+    if (quoted) return quoted[1].trim()
+    const plain = t.match(new RegExp(`^${who}\\s+(?:say|says|diz)\\s+([\\s\\S]*)$`, 'i'))
+    if (plain) return plain[1].trim().replace(/^["“]|["”]$/g, '')
+  }
+  return base
+}
+
 export default function FeedItem({ action, onEdit, disabled, isLatest = false, adventureId = '' }) {
   const { type, text, edited_at } = action
+  const actor = (action.actor || '').trim()
   const isPlayer = type === 'do' || type === 'say'
   const isSee = type === 'see'
   // do/say vêm formatados do backend ("\n> You ...\n") — exibe sem o wrapper
-  const display = isPlayer ? playerDisplayText(type, text) : text
+  const display = isPlayer ? playerBody(type, text, actor) : text
   const shown = isPlayer || isSee ? display : loosenProse(text)
 
   return (
@@ -68,7 +101,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
       ) : isPlayer ? (
         <blockquote className="border-l-4 border-emerald-700/70 pl-4">
           <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-emerald-400">
-            You {type}
+            {playerLabel(type, actor)}
           </div>
           <p className="whitespace-pre-wrap font-prose text-primary">
             {type === 'say' ? `“${display}”` : display}

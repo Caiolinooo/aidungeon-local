@@ -55,7 +55,7 @@ def test_kimi_range_applies_after_grok_range(tmp_path, monkeypatch, migrations_d
         assert "scene_state" in tables
         assert 10 in _numbers(conn)
         assert _numbers(conn) == _files()
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 22
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 23
 
 
 def test_backfill_keeps_old_migrations_from_running_again(tmp_path, monkeypatch,

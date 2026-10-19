@@ -118,3 +118,9 @@ CREATE TABLE adventure_shares(
 ALTER TABLE adventures ADD COLUMN turn_mode INTEGER DEFAULT 0;
 ALTER TABLE adventures ADD COLUMN turn_user TEXT DEFAULT '';
 
+-- Multiplayer ao vivo (migration 023): ator da ação, personagem do jogador
+-- e regras de criação herdadas pela aventura.
+ALTER TABLE actions ADD COLUMN actor TEXT DEFAULT '';
+ALTER TABLE story_cards ADD COLUMN player_username TEXT DEFAULT '';
+ALTER TABLE adventures ADD COLUMN character_rules TEXT DEFAULT '';
+

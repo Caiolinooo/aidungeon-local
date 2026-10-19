@@ -145,14 +145,25 @@ def _override(client, transport) -> None:
 def test_turn_done_comes_before_done(tmp_db):
     adv = _adventure()
     transport = _Llama().transport()
+    seen = []
     with events.subscribe(adv["id"]) as sub:
         for event in game_engine.handle_action(adv["id"], "do", "knock", transport=transport):
             if event["event"] == "done":
-                turn = sub.get(0)
+                while True:
+                    nxt = sub.get(0)
+                    if nxt is None:
+                        break
+                    seen.append(nxt)
+                    if nxt.type == "turn_done":
+                        break
                 break
     action = event["data"]["action"]
-    assert turn is not None and turn.type == "turn_done"
+    turn = next((e for e in seen if e.type == "turn_done"), None)
+    assert turn is not None
     assert turn.data == {"action_id": action["id"], "seq": action["seq"]}
+    # live feed: player_action e tokens saem antes do turn_done
+    assert seen[0].type == "player_action"
+    assert seen.index(next(e for e in seen if e.type == "action")) < seen.index(turn)
 
 
 # ----------------------------------------------------------------- choices

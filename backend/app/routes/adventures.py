@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends, Response
 import exporter
 from app import auth, db, game_engine, jobs
 from app.errors import GameError
-from app.schemas import AdventureCreate, AdventureShareCreate, AdventureUpdate
+from app.schemas import (
+    AdventureCreate, AdventureShareCreate, AdventureUpdate, PlayerCharacterUpsert,
+)
 from app.users import get_user, is_admin
 
 router = APIRouter()
@@ -62,6 +64,11 @@ def create_adventure(body: AdventureCreate,
             sc = db.get_scenario(conn, body.scenario_id)
             if not sc:
                 raise GameError.not_found(f"scenario {body.scenario_id} not found")
+            # Sem coluna nova no scenario: herda se o dict já trouxer a chave
+            # (banco futuro ou JSON). O POST também manda a string direto.
+            rules = body.character_rules
+            if rules is None:
+                rules = sc.get("character_rules") or ""
             adv = db.insert_adventure(
                 conn, scenario_id=sc["id"], owner=info.user,
                 title=body.title or sc["title"],
@@ -72,6 +79,7 @@ def create_adventure(body: AdventureCreate,
                 image_style=body.image_style if body.image_style is not None else (sc.get("image_style") or ""),
                 tags=body.tags if body.tags is not None else sc["tags"],
                 third_person=body.third_person if body.third_person is not None else sc["third_person"],
+                character_rules=rules or "",
                 source="new",
             )
             db.insert_action(conn, adv["id"], 0, "start", sc["opening_text"])
@@ -103,6 +111,7 @@ def create_adventure(body: AdventureCreate,
                 image_style=body.image_style or "",
                 tags=body.tags or [],
                 third_person=bool(body.third_person),
+                character_rules=body.character_rules or "",
                 source="new",
             )
         return db.adventure_state(conn, adv["id"])
@@ -216,6 +225,51 @@ def delete_sharing(adventure_id: str, username: str,
         _managed_adventure(conn, adventure_id, info.user)
         db.unshare_adventure(conn, adventure_id, username)
         return _sharing_view(conn, adventure_id)
+
+
+def _character_view(conn, card: dict | None) -> dict | None:
+    if not card:
+        return None
+    return db.attach_portrait(conn, card)
+
+
+@router.get("/{adventure_id}/characters")
+def list_characters(adventure_id: str,
+                    info: auth.AuthInfo = Depends(auth.require_auth)) -> list[dict]:
+    """Personagens dos jogadores da mesa (cards com player_username)."""
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+        cards = db.list_player_characters(conn, adventure_id)
+        return [
+            {"username": card["player_username"], "card": _character_view(conn, card)}
+            for card in cards
+        ]
+
+
+@router.get("/{adventure_id}/character")
+def get_character(adventure_id: str,
+                  info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+        card = db.player_character(conn, adventure_id, info.user)
+        return {"card": _character_view(conn, card)}
+
+
+@router.put("/{adventure_id}/character")
+def put_character(adventure_id: str, body: PlayerCharacterUpsert,
+                  info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    """Cria ou atualiza o personagem de quem está logado. Preserva id e retrato."""
+    title = body.title.strip()
+    if not title or len(title) > 80:
+        raise GameError.bad_request("invalid_title", "title must be 1–80 characters")
+    sheet = json.dumps(body.sheet.model_dump(), ensure_ascii=False)
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+        card = db.upsert_player_character(
+            conn, adventure_id, info.user,
+            title=title, sheet=sheet, portrait_prompt=body.portrait_prompt,
+        )
+        return {"card": _character_view(conn, card)}
 
 
 @router.post("/{adventure_id}/undo")

@@ -125,6 +125,11 @@ export const api = {
     request(`/adventures/${id}/sharing`, { method: 'POST', body: { username } }),
   unshareAdventure: (id, username) =>
     request(`/adventures/${id}/sharing/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  // Ficha do jogador nesta aventura. GET → {card|null}; PUT devolve o card.
+  getCharacter: (id) => request(`/adventures/${id}/character`),
+  saveCharacter: (id, payload) =>
+    request(`/adventures/${id}/character`, { method: 'PUT', body: payload }),
+  getCharacters: (id) => request(`/adventures/${id}/characters`),
   deleteAdventure: (id) => request(`/adventures/${id}`, { method: 'DELETE' }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
   // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).

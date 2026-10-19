@@ -181,6 +181,7 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "image_style": (row["image_style"] if "image_style" in keys else "") or "",
         "tags": _loads(row["tags"], []),
         "story_cards": _loads(row["story_cards"], []),
+        "character_rules": (row["character_rules"] if "character_rules" in keys else "") or "",
         "third_person": bool(row["third_person"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -208,6 +209,7 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "owner": (row["owner"] if "owner" in row.keys() else "") or "",
         "turn_mode": bool(row["turn_mode"]) if "turn_mode" in row.keys() else False,
         "turn_user": (row["turn_user"] if "turn_user" in row.keys() else "") or "",
+        "character_rules": (row["character_rules"] if "character_rules" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -222,6 +224,7 @@ def action_to_dict(row: sqlite3.Row) -> dict:
         "text": row["text"],
         "created_at": row["created_at"],
         "edited_at": row["edited_at"],
+        "actor": (row["actor"] if "actor" in row.keys() else "") or "",
         # imagem vinculada (actions type=see) — preenchido por list/get_action
         "image": None,
     }
@@ -245,6 +248,7 @@ def card_to_dict(row: sqlite3.Row) -> dict:
         "vrm_id": row["vrm_id"] or "",
         # v0.5.0: ficha estruturada do NPC (JSON ou '')
         "sheet": row["sheet"] or "",
+        "player_username": (row["player_username"] if "player_username" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -362,17 +366,18 @@ def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str |
                      story_summary: str = "", image_style: str = "",
                      tags: list | None = None,
                      third_person: bool = False, source: str = "new",
-                     owner: str = "",
+                     owner: str = "", character_rules: str = "",
                      created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     aid = new_id()
     conn.execute(
         "INSERT INTO adventures(id, scenario_id, title, description, ai_instructions,"
         " plot_essentials, authors_note, story_summary, image_style, tags, third_person,"
-        " source, owner, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " source, owner, character_rules, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (aid, scenario_id, title, description, ai_instructions, plot_essentials,
          authors_note, story_summary, image_style, _dumps(tags, []), int(third_person),
-         source, owner or "", created_at or now, updated_at or now),
+         source, owner or "", character_rules or "", created_at or now, updated_at or now),
     )
     return adventure_to_dict(conn.execute("SELECT * FROM adventures WHERE id=?", (aid,)).fetchone())
 
@@ -389,6 +394,7 @@ def touch_adventure(conn: sqlite3.Connection, adventure_id: str) -> None:
 _ADVENTURE_PATCH_FIELDS = (
     "title", "description", "tags", "ai_instructions", "plot_essentials",
     "authors_note", "story_summary", "image_style", "third_person",
+    "character_rules",
 )
 
 
@@ -513,6 +519,61 @@ def set_turn_mode(conn: sqlite3.Connection, adventure_id: str, enabled: bool,
     )
 
 
+def player_character(conn: sqlite3.Connection, adventure_id: str,
+                     username: str) -> dict | None:
+    """Story card do personagem deste jogador (player_username), ou None."""
+    if not username:
+        return None
+    row = conn.execute(
+        "SELECT * FROM story_cards WHERE adventure_id=? AND player_username=?"
+        " ORDER BY updated_at DESC LIMIT 1",
+        (adventure_id, username),
+    ).fetchone()
+    return card_to_dict(row) if row else None
+
+
+def list_player_characters(conn: sqlite3.Connection, adventure_id: str) -> list[dict]:
+    """Cards com dono de jogador, um por username (o mais recente)."""
+    rows = conn.execute(
+        "SELECT * FROM story_cards WHERE adventure_id=? AND player_username!=''"
+        " ORDER BY player_username COLLATE NOCASE, updated_at DESC",
+        (adventure_id,),
+    ).fetchall()
+    seen: set[str] = set()
+    out: list[dict] = []
+    for row in rows:
+        card = card_to_dict(row)
+        name = card["player_username"]
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(card)
+    return out
+
+
+def upsert_player_character(conn: sqlite3.Connection, adventure_id: str, username: str,
+                            *, title: str, sheet: str, portrait_prompt: str | None = None) -> dict:
+    """Cria ou atualiza o card do jogador. Id e retrato já gravados ficam."""
+    current = player_character(conn, adventure_id, username)
+    if current is None:
+        return insert_card(
+            conn, adventure_id, title=title, type="character",
+            use_for_character_creation=True, sheet=sheet,
+            portrait_prompt=portrait_prompt or "", player_username=username,
+        )
+    fields: dict[str, Any] = {
+        "title": title,
+        "type": "character",
+        "sheet": sheet,
+        "use_for_character_creation": True,
+        "player_username": username,
+    }
+    if portrait_prompt is not None:
+        fields["portrait_prompt"] = portrait_prompt
+    updated = update_card(conn, adventure_id, current["id"], fields)
+    return updated or current
+
+
 def advance_turn(conn: sqlite3.Connection, adv: dict | None) -> str:
     """Próximo da roda (dono, depois shares). Sem turno ou com menos de 2, fica."""
     if not adv:
@@ -622,12 +683,14 @@ def adventure_state(conn: sqlite3.Connection, adventure_id: str) -> dict | None:
 
 # ----------------------------------------------------------------- actions
 def insert_action(conn: sqlite3.Connection, adventure_id: str, seq: int, type: str,
-                  text: str, created_at: str | None = None) -> dict:
+                  text: str, created_at: str | None = None, *,
+                  actor: str = "") -> dict:
     if type not in ACTION_TYPES:
         raise ValueError(f"invalid action type: {type}")
     cur = conn.execute(
-        "INSERT INTO actions(adventure_id, seq, type, text, created_at) VALUES(?,?,?,?,?)",
-        (adventure_id, seq, type, text, created_at or utcnow()),
+        "INSERT INTO actions(adventure_id, seq, type, text, created_at, actor)"
+        " VALUES(?,?,?,?,?,?)",
+        (adventure_id, seq, type, text, created_at or utcnow(), actor or ""),
     )
     row = conn.execute("SELECT * FROM actions WHERE id=?", (cur.lastrowid,)).fetchone()
     return action_to_dict(row)
@@ -735,17 +798,17 @@ def insert_card(conn: sqlite3.Connection, adventure_id: str, *, title: str = "",
                 type: str = "other", triggers: list | None = None, entry: str = "",
                 pinned: bool = False, use_for_character_creation: bool = False,
                 portrait_prompt: str = "", voice: str = "", vrm_id: str = "",
-                sheet: str = "",
+                sheet: str = "", player_username: str = "",
                 created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     cid = new_id()
     conn.execute(
         "INSERT INTO story_cards(id, adventure_id, title, type, triggers, entry, pinned,"
         " use_for_character_creation, portrait_prompt, voice, vrm_id, sheet,"
-        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " player_username, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, adventure_id, title, type or "other", _dumps(triggers, []), entry,
          int(pinned), int(use_for_character_creation), portrait_prompt, voice, vrm_id,
-         sheet, created_at or now, updated_at or now),
+         sheet, player_username or "", created_at or now, updated_at or now),
     )
     return card_to_dict(conn.execute("SELECT * FROM story_cards WHERE id=?", (cid,)).fetchone())
 
@@ -818,11 +881,11 @@ def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
     conn.execute(
         "UPDATE story_cards SET title=?, type=?, triggers=?, entry=?, pinned=?,"
         " use_for_character_creation=?, portrait_prompt=?, voice=?, vrm_id=?, sheet=?,"
-        " updated_at=? WHERE id=?",
+        " player_username=?, updated_at=? WHERE id=?",
         (merged["title"], merged["type"] or "other", _dumps(merged["triggers"], []),
          merged["entry"], int(merged["pinned"]), int(merged["use_for_character_creation"]),
          merged["portrait_prompt"], merged["voice"], merged["vrm_id"],
-         merged["sheet"], utcnow(), card_id),
+         merged["sheet"], merged.get("player_username") or "", utcnow(), card_id),
     )
     return get_card(conn, adventure_id, card_id)
 

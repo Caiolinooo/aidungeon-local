@@ -32,15 +32,18 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
     return { aborted: false }
   }
 
-  // Respostas de erro (401/404/409/422) vêm como JSON no shape Error do contrato
+  // Respostas de erro (401/404/409/422/428) vêm como JSON no shape Error do contrato.
+  // O 2º argumento leva status/code (428 character_required) — o 1º continua sendo a mensagem.
   if (!res.ok || !res.body) {
     if (res.status === 401) notifyUnauthorized()
+    let code = ''
     let msg = `Request failed (${res.status})`
     try {
       const d = await res.json()
+      if (typeof d?.error?.code === 'string') code = d.error.code
       if (d?.error?.message) msg = d.error.message
     } catch { /* ignora */ }
-    onError?.(msg)
+    onError?.(msg, { status: res.status, code })
     return { aborted: false }
   }
 
@@ -66,7 +69,10 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
           result.done = ev.data
           onDone?.(ev.data)
         } else if (ev.event === 'error') {
-          onError?.(ev.data?.message ?? 'Generation failed')
+          onError?.(ev.data?.message ?? 'Generation failed', {
+            status: ev.data?.status,
+            code: typeof ev.data?.code === 'string' ? ev.data.code : '',
+          })
         }
       }
     }

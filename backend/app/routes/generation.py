@@ -23,13 +23,23 @@ router = APIRouter()
 
 
 def _require_turn(adventure_id: str, info: auth.AuthInfo) -> None:
-    """Quem não vê a aventura toma 404. Com turno ligado, só quem tem a vez age."""
+    """Quem não vê a aventura toma 404. Com turno ligado, só quem tem a vez age.
+
+    Mesa com shares exige personagem de quem age — inclusive o dono. See não
+    passa por aqui.
+    """
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         if not adv or not db.can_access_adventure(conn, adv, info.user):
             raise GameError.not_found(f"adventure {adventure_id} not found")
         if adv.get("turn_mode") and (adv.get("turn_user") or "") != info.user:
             raise GameError(403, "not_your_turn", f"vez de {adv.get('turn_user') or ''}")
+        # Mesa com shares: quem age precisa de personagem, dono inclusive.
+        # See não passa por aqui.
+        if len(db.adventure_participants(conn, adv)) > 1:
+            if db.player_character(conn, adventure_id, info.user) is None:
+                raise GameError(428, "character_required",
+                                "crie seu personagem para jogar")
 
 _SENTINEL = object()
 

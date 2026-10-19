@@ -8,6 +8,7 @@ import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
 import ShareModal from '../components/ShareModal.jsx'
+import CharacterModal from '../components/CharacterModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
@@ -34,6 +35,21 @@ import {
 
 // Avatar dock (lazy to keep three.js out of main bundle)
 const ChatAvatarDock = lazy(() => import('../components/avatar/ChatAvatarDock.jsx'))
+
+function unwrapCharacter(res) {
+  if (!res || typeof res !== 'object') return null
+  if ('card' in res) return res.card || null
+  if (res.id || res.title || res.sheet) return res
+  return null
+}
+
+function isCharacterRequired(err, meta) {
+  const code = meta?.code || err?.code || ''
+  const status = meta?.status ?? err?.status
+  if (code === 'character_required' || status === 428) return true
+  const msg = typeof err === 'string' ? err : (err?.message || '')
+  return /character_required/i.test(msg) || /\(428\)/.test(msg)
+}
 
 export default function Play() {
   const { id } = useParams()
@@ -69,8 +85,18 @@ export default function Play() {
   const [inject, setInject] = useState(null)
   const [session, setSession] = useState(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [live, setLive] = useState('')
+  const [characterOpen, setCharacterOpen] = useState(false)
+  const [characterCard, setCharacterCard] = useState(null)
+  const [characterLoading, setCharacterLoading] = useState(false)
+  const [needsCharacter, setNeedsCharacter] = useState(false)
 
   const abortRef = useRef(null)
+  const seenIdsRef = useRef(new Set())
+  const readyRef = useRef(false)
+  const genRef = useRef(null)
+  const openCharacterRef = useRef(() => {})
+  const currentUserRef = useRef('')
   const seeTokenRef = useRef(0)
   const feedRef = useRef(null)
   const nearBottomRef = useRef(true)
@@ -78,6 +104,8 @@ export default function Play() {
   const initialScrollDone = useRef(false)
   const generating = gen !== null
   const currentUser = session?.user || ''
+  genRef.current = gen
+  currentUserRef.current = currentUser
   const turnBlocked = !!(
     adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
   )
@@ -98,16 +126,23 @@ export default function Play() {
   // Load adventure state
   const load = useCallback(async () => {
     setError(null)
+    readyRef.current = false
     try {
       const st = await api.getAdventure(id)
+      const list = [...(st.actions ?? [])].sort(bySeq)
+      seenIdsRef.current = new Set(list.map((a) => a.id).filter((x) => x != null))
       setAdventure(st)
-      setActions([...(st.actions ?? [])].sort(bySeq))
+      setActions(list)
       setUiProfile(st.ui_profile ?? null)
       setUiState(st.ui_state ?? {})
+      setLive('')
+      readyRef.current = true
     } catch (e) {
       setError(e)
       setAdventure(null)
       setActions([])
+      seenIdsRef.current = new Set()
+      readyRef.current = false
     }
   }, [id])
 
@@ -123,31 +158,105 @@ export default function Play() {
     return () => { cancelled = true }
   }, [])
 
-  // turn_changed no barramento SSE. Fecha no erro: o EventSource reconecta sozinho.
+  // Barramento SSE (turno, ação de outro jogador, tokens e narração final).
+  // Sem close no erro: o EventSource reconecta sozinho e reenvia Last-Event-ID.
   useEffect(() => {
     const token = getToken()
     if (!id || !token) return undefined
     const es = new EventSource(
       `${API_BASE}/api/adventures/${id}/events?token=${encodeURIComponent(token)}`,
     )
-    const onTurn = (ev) => {
-      let data
+    const parse = (ev) => {
       try {
-        data = JSON.parse(ev.data || '{}')
+        return JSON.parse(ev.data || 'null')
       } catch {
-        return
+        return null
       }
+    }
+    const onTurn = (ev) => {
+      const data = parse(ev)
       if (typeof data?.turn_user !== 'string') return
-      const turnUser = data.turn_user
-      setAdventure((prev) => (prev ? { ...prev, turn_user: turnUser } : prev))
+      setAdventure((prev) => (prev ? { ...prev, turn_user: data.turn_user } : prev))
+    }
+    const onPlayer = (ev) => {
+      if (!readyRef.current) return
+      const data = parse(ev)
+      if (!data || typeof data !== 'object' || data.id == null) return
+      const actor = typeof data.actor === 'string' ? data.actor : ''
+      if (actor === currentUserRef.current) return
+      if (seenIdsRef.current.has(data.id)) return
+      seenIdsRef.current.add(data.id)
+      setLive('')
+      setActions((prev) => {
+        const list = prev ?? []
+        if (list.some((a) => a.id === data.id)) return list
+        return [...list, data].sort(bySeq)
+      })
+    }
+    const onToken = (ev) => {
+      if (!readyRef.current || genRef.current) return
+      const data = parse(ev)
+      const tok = data && typeof data === 'object' && typeof data.token === 'string'
+        ? data.token
+        : ''
+      if (!tok) return
+      setLive((prev) => prev + tok)
+    }
+    const onAction = (ev) => {
+      if (!readyRef.current) return
+      const data = parse(ev)
+      setLive('')
+      if (genRef.current) return
+      if (!data || typeof data !== 'object' || data.id == null) return
+      if (seenIdsRef.current.has(data.id)) return
+      seenIdsRef.current.add(data.id)
+      setActions((prev) => {
+        const list = prev ?? []
+        if (list.some((a) => a.id === data.id)) return list
+        if (data.seq != null) {
+          const idx = list.findIndex((a) => a.seq === data.seq)
+          if (idx >= 0) {
+            const next = list.slice()
+            next[idx] = data
+            return next.sort(bySeq)
+          }
+        }
+        return [...list, data].sort(bySeq)
+      })
     }
     es.addEventListener('turn_changed', onTurn)
-    es.onerror = () => { es.close() }
+    es.addEventListener('player_action', onPlayer)
+    es.addEventListener('token', onToken)
+    es.addEventListener('action', onAction)
     return () => {
       es.removeEventListener('turn_changed', onTurn)
+      es.removeEventListener('player_action', onPlayer)
+      es.removeEventListener('token', onToken)
+      es.removeEventListener('action', onAction)
       es.close()
     }
   }, [id])
+
+  const openCharacter = useCallback(async () => {
+    setCharacterOpen(true)
+    setCharacterLoading(true)
+    try {
+      const res = await api.getCharacter(id)
+      setCharacterCard(unwrapCharacter(res))
+    } catch (e) {
+      setCharacterCard(null)
+      toast(e.message)
+    } finally {
+      setCharacterLoading(false)
+    }
+  }, [id, toast])
+  openCharacterRef.current = openCharacter
+
+  const promptCharacter = useCallback(() => {
+    setNeedsCharacter(true)
+    toast('Crie seu personagem para jogar')
+    openCharacterRef.current()
+  }, [toast])
 
   const applySharing = (dict) => {
     if (!dict || typeof dict !== 'object') return
@@ -239,7 +348,7 @@ export default function Play() {
       return
     }
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [actions, gen?.text, seeing])
+  }, [actions, gen?.text, seeing, live])
 
   // Choices suggestions
   const fetchChoices = useCallback(async () => {
@@ -254,20 +363,48 @@ export default function Play() {
   // SSE Stream runner
   const runStream = useCallback(
     (kind, path, body, applyDone) => {
-      if (generating) return
+      if (generating || needsCharacter) return
       const ctrl = new AbortController()
       abortRef.current = ctrl
-      setGen({ kind, text: '' })
+      const nextGen = { kind, text: '' }
+      genRef.current = nextGen
+      setGen(nextGen)
+      setLive('')
       setChoices([])
       setWebSources([])
+      const fail = (msg, meta) => {
+        genRef.current = null
+        setGen(null)
+        if (isCharacterRequired(msg, meta)) {
+          promptCharacter()
+          return
+        }
+        const text = typeof msg === 'string' && msg ? msg : (msg?.message || 'Generation failed')
+        toast(text)
+      }
       streamGeneration(path, {
         body,
         signal: ctrl.signal,
         onToken: (tok) => setGen((g) => (g ? { ...g, text: g.text + tok } : g)),
         onDone: (data) => {
           newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
-          setActions((prev) => applyDone(prev ?? [], data).sort(bySeq))
+          setActions((prev) => {
+            const merged = applyDone(prev ?? [], data)
+            const seen = new Set()
+            const out = []
+            for (const action of merged) {
+              if (action?.id != null) {
+                if (seen.has(action.id)) continue
+                seen.add(action.id)
+              }
+              out.push(action)
+            }
+            for (const actionId of seen) seenIdsRef.current.add(actionId)
+            return out.sort(bySeq)
+          })
+          genRef.current = null
           setGen(null)
+          setLive('')
           if (Array.isArray(data.web_sources) && data.web_sources.length) {
             setWebSources(data.web_sources)
           }
@@ -279,19 +416,24 @@ export default function Play() {
               turn_mode: !!st.turn_mode,
               turn_user: st.turn_user ?? '',
               shares: Array.isArray(st.shares) ? st.shares : prev.shares,
+              character_rules: st.character_rules ?? prev.character_rules,
             } : prev))
           }).catch(() => {})
         },
-        onError: (msg) => {
-          toast(msg)
-          setGen(null)
-        },
+        onError: (msg, meta) => fail(msg, meta),
+      }).catch((e) => {
+        if (e?.name === 'AbortError') return
+        fail(e)
       })
     },
-    [generating, toast, fetchChoices, id],
+    [generating, needsCharacter, toast, fetchChoices, id, promptCharacter],
   )
 
   const sendAction = (type, text, opts) => {
+    if (needsCharacter) {
+      openCharacter()
+      return
+    }
     if (turnBlocked) return
     return runStream('action', `/adventures/${id}/action`, {
       type,
@@ -306,6 +448,10 @@ export default function Play() {
   }
 
   const doContinue = () => {
+    if (needsCharacter) {
+      openCharacter()
+      return
+    }
     if (turnBlocked) return
     return runStream('continue', `/adventures/${id}/continue`, null, (prev, data) =>
       data.action ? [...prev, data.action] : prev,
@@ -313,6 +459,10 @@ export default function Play() {
   }
 
   const doRetry = () => {
+    if (needsCharacter) {
+      openCharacter()
+      return
+    }
     if (turnBlocked) return
     return runStream('retry', `/adventures/${id}/retry`, null, (prev, data) => {
       if (!data.action) return prev
@@ -322,6 +472,7 @@ export default function Play() {
 
   const stop = () => {
     abortRef.current?.abort()
+    genRef.current = null
     setGen(null)
   }
 
@@ -450,7 +601,7 @@ export default function Play() {
   const lastAction = actions[actions.length - 1]
   const canShare = !!(session?.admin || (adventure.owner && currentUser === adventure.owner))
   const myTurn = !!(adventure.turn_mode && currentUser && currentUser === (adventure.turn_user || ''))
-  const canRetry = !generating && !turnBlocked && lastAction?.type === 'continue'
+  const canRetry = !generating && !turnBlocked && !needsCharacter && lastAction?.type === 'continue'
   const canUndo = !generating && actions.some((a) => a.type !== 'start')
   const canSee = !generating && !seeing && actions.some((a) => a.type === 'continue')
   const lastAiTextId = [...actions].reverse().find((a) => a.type === 'continue')?.id
@@ -500,7 +651,7 @@ export default function Play() {
     <GamePanel
       profile={uiProfile}
       state={uiState}
-      disabled={generating || turnBlocked}
+      disabled={generating || turnBlocked || needsCharacter}
       regenerating={regeneratingProfile}
       onStateChange={handleUiStateChange}
       onSend={sendAction}
@@ -541,6 +692,16 @@ export default function Play() {
                 {adventure.title}
               </h1>
             </div>
+
+            <button
+              type="button"
+              onClick={openCharacter}
+              aria-label="Personagem"
+              title="Seu personagem"
+              className="min-h-11 shrink-0 flex items-center justify-center rounded-xl border border-subtle bg-surface px-3 py-2 text-sm text-secondary hover:text-primary hover:bg-elevated transition"
+            >
+              🧙
+            </button>
           </div>
 
           {/* Action Toolbar */}
@@ -564,7 +725,7 @@ export default function Play() {
                     onClick={doRetry}
                     disabled={!canRetry}
                     aria-label="Retry last response"
-                    title={turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Regenerate the last AI response' : 'Retry is available after an AI response')}
+                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Regenerate the last AI response' : 'Retry is available after an AI response'))}
                     className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -584,9 +745,9 @@ export default function Play() {
 
                   <button
                     onClick={doContinue}
-                    disabled={generating || turnBlocked}
+                    disabled={generating || turnBlocked || needsCharacter}
                     aria-label="Continue writing"
-                    title={turnBlocked ? 'Aguarde a sua vez' : 'Let the AI write the next paragraph'}
+                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'Let the AI write the next paragraph')}
                     className="min-h-11 flex items-center gap-1 rounded-xl bg-accent-pri px-3.5 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
@@ -747,6 +908,24 @@ export default function Play() {
                 </div>
               )}
 
+              {!generating && live && (
+                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-in fade-in">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
+                    <span className="inline-block h-2 w-2 animate-ping rounded-full bg-accent-pri" />
+                    AI is storytelling…
+                  </div>
+                  <p
+                    className={`streaming-cursor whitespace-pre-wrap text-primary ${fontFamilyCls}`}
+                    style={{
+                      fontSize: `${fontSizeValue}px`,
+                      lineHeight: lineHeightValue,
+                    }}
+                  >
+                    {loosenProse(live)}
+                  </p>
+                </div>
+              )}
+
               {/* See image generation placeholder */}
               {seeing && (
                 <div className="rounded-xl border border-subtle bg-elevated/60 p-4 animate-in fade-in">
@@ -837,7 +1016,7 @@ export default function Play() {
           <GamePanel
             profile={uiProfile}
             state={uiState}
-            disabled={generating || turnBlocked}
+            disabled={generating || turnBlocked || needsCharacter}
             regenerating={regeneratingProfile}
             onStateChange={handleUiStateChange}
             onSend={sendAction}
@@ -847,10 +1026,23 @@ export default function Play() {
           />
         )}
 
+        {needsCharacter && (
+          <div className="border-t border-amber-600/40 bg-amber-950/50 px-4 py-2 text-center text-sm text-amber-200">
+            Crie seu personagem para jogar.
+            <button
+              type="button"
+              onClick={openCharacter}
+              className="ml-2 underline decoration-amber-400/70 hover:text-amber-50"
+            >
+              Abrir ficha
+            </button>
+          </div>
+        )}
+
         {/* Fixed Bottom Input Bar */}
         <InputBar
           disabled={generating}
-          disabledTurn={turnBlocked}
+          disabledTurn={turnBlocked || needsCharacter}
           onSend={sendAction}
           onTextChange={(t) => setInputDirty(t.trim().length > 0)}
           tabs={uiProfile?.tabs}
@@ -921,6 +1113,22 @@ export default function Play() {
           onChanged={applySharing}
         />
       )}
+
+      {characterOpen && (
+        <CharacterModal
+          adventureId={id}
+          rules={adventure.character_rules || ''}
+          card={characterCard}
+          loading={characterLoading}
+          onClose={() => setCharacterOpen(false)}
+          onSaved={(card) => {
+            setCharacterCard(card)
+            setNeedsCharacter(false)
+            setCharacterOpen(false)
+            toast('Personagem salvo.', 'ok')
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -933,10 +1141,12 @@ function EditActionModal({ action, onClose, onSave }) {
   )
   const [saving, setSaving] = useState(false)
 
-  const label =
-    { do: 'You do', say: 'You say', story: 'Story', start: 'Opening', continue: 'AI response' }[
-      action.type
-    ] ?? action.type
+  const actorName = (action.actor || '').trim()
+  const label = actorName
+    ? (action.type === 'say' ? `${actorName} says` : actorName)
+    : ({ do: 'You do', say: 'You say', story: 'Story', start: 'Opening', continue: 'AI response' }[
+        action.type
+      ] ?? action.type)
 
   return (
     <Modal title={`Edit — ${label}`} onClose={onClose} wide>

@@ -98,11 +98,11 @@ def appending(adventure_id: str) -> Iterator[sqlite3.Connection]:
 
 
 def append_action(conn: sqlite3.Connection, adventure_id: str, type_: str,
-                  text: str) -> dict:
+                  text: str, *, actor: str = "") -> dict:
     """Ação no próximo seq. Só dentro de `appending`."""
     last_seq = db.max_seq(conn, adventure_id)
     seq = 0 if last_seq is None else last_seq + 1
-    action = db.insert_action(conn, adventure_id, seq, type_, text)
+    action = db.insert_action(conn, adventure_id, seq, type_, text, actor=actor)
     db.touch_adventure(conn, adventure_id)
     return action
 
@@ -135,6 +135,14 @@ def _adventure_or_404(adventure_id: str) -> dict:
     if not adv:
         raise GameError.not_found(f"adventure {adventure_id} not found")
     return adv
+
+
+def _publish_live(adventure_id: str, type_: str, data: dict) -> None:
+    """Evento do bus para quem observa. Falha aqui não interrompe o stream."""
+    try:
+        events_bus.publish(adventure_id, type_, data)
+    except Exception:
+        log.warning("live event %s not published", type_, exc_info=True)
 
 
 def _format_player_text(type_: str, text: str) -> str:
@@ -321,6 +329,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     stop=built.stop_sequences, transport=transport,
                     state=stream_state):
                 full.append(token)
+                _publish_live(adventure_id, "token", {"token": token})
                 yield {"event": "token", "data": {"token": token}}
 
             text = output_sanitizer.clean_narration("".join(full), stream_state.truncated)
@@ -345,6 +354,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     db.touch_adventure(conn, adventure_id)
                 else:
                     action = append_action(conn, adventure_id, "continue", text)
+                _publish_live(adventure_id, "action", action)
                 # Pesos no mesmo commit da prosa: o turno seguinte já lê
                 # os números novos. Falha aqui não apaga a narração.
                 try:
@@ -407,8 +417,10 @@ def handle_action(adventure_id: str, type_: str, text: str,
 
         with appending(adventure_id) as conn:
             player_action = append_action(conn, adventure_id, type_,
-                                          _format_player_text(type_, text))
+                                          _format_player_text(type_, text),
+                                          actor=user)
             _retry_counts.pop((adventure_id, player_action["seq"]), None)
+        _publish_live(adventure_id, "player_action", player_action)
     except Exception:
         release_generation_lock(adventure_id)
         raise

@@ -20,6 +20,7 @@ posição. A system da posição 0 leva SÓ os blocos estáveis, concatenados co
 "\\n\\n":
     bloco 1  sem cabeçalho (é a diretiva central do narrador)
     bloco 2  "[Plot]"        — quem é você, mundo, regras (Plot Essentials)
+    bloco 2b "[Players]"     — mesa compartilhada: jogador = personagem (≤ 400)
 Os blocos voláteis vão no TOPO da mensagem user final, dentro de um
 elemento <lore>…</lore>, para cards/memórias/resumo/estado não invalidarem
 o prefixo cacheado:
@@ -47,8 +48,8 @@ turno seguinte troca pela ação nova, e o servidor reprocessa a janela
 inteira. Nada volátil pode entrar antes da user final.
 
 Formatação das ações do jogador (byte a byte como no backup):
-    do   → "\\n> You {text}\\n"
-    say  → '\\n> You say "{text}"\\n'
+    do   → "\\n> You {text}\\n"   (multiplayer+ator: "\\n> {actor}: {text}\\n")
+    say  → '\\n> You say "{text}"\\n'  (multiplayer+ator: '\\n> {actor} says "{text}"\\n')
     story/start/continue → prosa pura (verbatim)
     see → fora do narrador (o prompt de imagem não é prosa)
 
@@ -162,7 +163,7 @@ LORE_CUE = (
 # que o narrador escrever. O output_sanitizer limpa as variantes que escapam.
 CONTEXT_STOPS = (
     LORE_OPEN, LORE_CLOSE, "[World info]", "[Memories]", "[Summary]",
-    "[Player state]", "[Plot]", "[Author's note", "[Active Lore",
+    "[Player state]", "[Players]", "[Plot]", "[Author's note", "[Active Lore",
     "[Continuity Anchor", "[Style:", "[Canon:", "[Private:", "[Web Research",
 )
 
@@ -196,7 +197,8 @@ def narrative_window(
     chosen: list[dict] = []
     used = 0
     for action in reversed(pool):
-        cost = estimate(format_action_text(action["type"], action["text"]))
+        cost = estimate(format_action_text(action["type"], action["text"],
+                                           actor=action.get("actor") or ""))
         if used + cost > window_budget:
             break
         chosen.append(action)
@@ -208,7 +210,7 @@ def narrative_window(
         keep = len(pool) - snapped
         chosen = chosen[-keep:] if keep > 0 else []
         used = sum(
-            estimate(format_action_text(a["type"], a["text"]))
+            estimate(format_action_text(a["type"], a["text"], actor=a.get("actor") or ""))
             for a in chosen
         )
     evicted = pool[: len(pool) - len(chosen)]
@@ -243,12 +245,22 @@ def _fit_budget(text: str, budget_tokens: int) -> str:
 
 
 # ------------------------------------------------------- formatação ações
-def format_action_text(type_: str, text: str) -> str:
-    """Renderiza a ação no formato do modelo. Idempotente p/ textos do backup."""
+def format_action_text(type_: str, text: str, *, actor: str = "",
+                       multiplayer: bool = False) -> str:
+    """Renderiza a ação no formato do modelo. Idempotente p/ textos do backup.
+
+    Com vários jogadores e ator gravado, do/say citam o nome em vez de "You".
+    Texto que já começa com ">" (backup) não é reembrulhado.
+    """
     if type_ in ("do", "say"):
         if text.lstrip().startswith(">"):
             return text  # já formatado (ex.: importado do backup)
         inner = text.strip()
+        who = actor.strip()
+        if multiplayer and who:
+            if type_ == "do":
+                return f"\n> {who}: {inner}\n"
+            return f'\n> {who} says "{inner}"\n'
         if type_ == "do":
             return f"\n> You {inner}\n"
         return f'\n> You say "{inner}"\n'
@@ -257,8 +269,10 @@ def format_action_text(type_: str, text: str) -> str:
 
 def story_text(actions: list[dict]) -> str:
     """A história como o narrador lê: ações formatadas, sem `see`."""
-    return "".join(format_action_text(a["type"], a["text"])
-                   for a in narrative_actions(actions))
+    return "".join(
+        format_action_text(a["type"], a["text"], actor=a.get("actor") or "")
+        for a in narrative_actions(actions)
+    )
 
 
 # ---------------------------------------------------- módulos de memória
@@ -341,6 +355,44 @@ def _select_memories(conn: sqlite3.Connection, adventure_id: str, recent_text: s
 
 
 # ------------------------------------------------------------- resultado
+def _is_multiplayer(conn: sqlite3.Connection, adventure: dict) -> bool:
+    """Mais de um participante, ou turno ligado (a mesa já é compartilhada)."""
+    from app import db
+    if adventure.get("turn_mode"):
+        return True
+    return len(db.adventure_participants(conn, adventure)) > 1
+
+
+def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
+    """Uma linha por participante: nome = título + resumo curto da ficha."""
+    from app import db, npc_assets
+    lines: list[str] = []
+    cards = {
+        card["player_username"]: card
+        for card in db.list_player_characters(conn, adventure["id"])
+    }
+    for username in db.adventure_participants(conn, adventure):
+        card = cards.get(username)
+        if not card:
+            lines.append(f"{username} = (sem personagem)")
+            continue
+        title = (card.get("title") or "").strip() or "(sem personagem)"
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        bits: list[str] = []
+        appearance = " ".join(str(sheet.get("appearance") or "").split())
+        if appearance:
+            bits.append(appearance[:120])
+        status = str(sheet.get("status") or "").strip()
+        if status:
+            bits.append(status)
+        stats = sheet.get("stats")
+        if isinstance(stats, dict) and stats:
+            bits.append(" ".join(f"{key} {stats[key]}" for key in stats))
+        extra = "; ".join(bits)
+        lines.append(f"{username} = {title}" + (f" — {extra}" if extra else ""))
+    return "\n".join(lines)
+
+
 def render_player_state(ui_state: dict) -> str:
     """v0.7.0 — bloco compacto "[Player state]" a partir do ui_state do painel
     (stats do tipo {"HP": 14}, inventário [{"name","qty"}], ficha {campo: valor}).
@@ -462,6 +514,14 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if plot:
         system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
 
+    # Mesa compartilhada: quem joga e a ficha de cada um. Estável (só muda
+    # quando alguém edita o personagem), então fica na system, não no <lore>.
+    multiplayer = _is_multiplayer(conn, adventure)
+    if multiplayer:
+        players = _players_block(conn, adventure)
+        if players:
+            system_parts.append("[Players]\n" + _fit_budget(players, 400))
+
     # Em contextos longos (>32k), os tetos de story_cards, memory_bank e
     # story_summary escalam proporcionalmente (até 3x) para injetar mais
     # fatos canônicos sem desperdiçar a janela expandida.
@@ -536,7 +596,11 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["budgets"]["recent_window"] = base_window_budget
     # Mesma seleção do summarizer: see já saiu, descarte em WINDOW_DROP_CHUNK.
     _narrative, window_kept, _evicted, used = narrative_window(actions, window_budget)
-    chosen = [format_action_text(a["type"], a["text"]) for a in window_kept]
+    chosen = [
+        format_action_text(a["type"], a["text"], actor=a.get("actor") or "",
+                           multiplayer=multiplayer)
+        for a in window_kept
+    ]
     messages.extend({"role": "user", "content": text} for text in chosen if text.strip())
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
@@ -547,8 +611,11 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
         note = _fit_budget(note, int(budgets.get("authors_note", 300)))
     if actions:
         last = actions[-1]
-        last_txt = _fit_budget(format_action_text(last["type"], last["text"]),
-                               int(budgets.get("last_action", 200)))
+        last_txt = _fit_budget(
+            format_action_text(last["type"], last["text"],
+                               actor=last.get("actor") or "", multiplayer=multiplayer),
+            int(budgets.get("last_action", 200)),
+        )
     else:
         last_txt = "Begin the story."
     lore_parts: list[str] = list(volatile_parts)

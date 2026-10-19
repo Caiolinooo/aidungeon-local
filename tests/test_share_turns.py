@@ -26,6 +26,14 @@ def _pull(sub) -> list:
     return found
 
 
+def _character(client, adventure_id, title):
+    res = client.put(
+        f"/api/adventures/{adventure_id}/character",
+        json={"title": title, "sheet": {"appearance": title, "status": "alive"}},
+    )
+    assert res.status_code == 200, res.text
+
+
 def _act(client, adventure_id, text="look"):
     return client.post(
         f"/api/adventures/{adventure_id}/action",
@@ -116,6 +124,7 @@ def test_turn_rotation_blocks_the_other_player(client):
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["turn_mode"] is True
     assert enabled.json()["turn_user"] == "tester"
+    _character(client, aid, "Tester")
 
     with events.subscribe(aid) as sub:
         first = _act(client, aid, "open the gate")
@@ -137,6 +146,7 @@ def test_turn_rotation_blocks_the_other_player(client):
     assert client.get(f"/api/adventures/{aid}").json()["turn_user"] == "Mira"
 
     _login(client, "Mira", "mira-pass")
+    _character(client, aid, "Mira")
     followed = client.post(f"/api/adventures/{aid}/continue")
     assert followed.status_code == 200, followed.text
     assert "event: done" in followed.text
@@ -171,9 +181,11 @@ def test_turn_mode_off_lets_both_act(client):
     state = client.get(f"/api/adventures/{aid}").json()
     assert state["turn_mode"] is False
     held = state["turn_user"]
+    _character(client, aid, "Tester")
 
     assert _act(client, aid, "owner moves").status_code == 200
     _login(client, "Mira", "mira-pass")
+    _character(client, aid, "Mira")
     assert _act(client, aid, "mira moves").status_code == 200
     assert client.get(f"/api/adventures/{aid}").json()["turn_user"] == held
     client.headers["Authorization"] = owner_header

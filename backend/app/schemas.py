@@ -89,6 +89,7 @@ class AdventureCreate(BaseModel):
     plot_essentials: str | None = None
     authors_note: str | None = None
     third_person: bool | None = None
+    character_rules: str | None = Field(default=None, max_length=4000)
 
 
 class AdventureUpdate(BaseModel):
@@ -103,6 +104,24 @@ class AdventureUpdate(BaseModel):
     image_style: str | None = None
     third_person: bool | None = None
     turn_mode: bool | None = None
+    character_rules: str | None = Field(default=None, max_length=4000)
+
+
+class CharacterSheet(BaseModel):
+    """Ficha do personagem do jogador. Campos ausentes ficam de fora."""
+    appearance: str = ""
+    body: str = ""
+    clothing: str = ""
+    status: str = ""
+    stats: dict = Field(default_factory=dict)
+    notes: str = ""
+
+
+class PlayerCharacterUpsert(BaseModel):
+    """PUT /adventures/{id}/character — cria ou atualiza o personagem de quem joga."""
+    title: str = Field(min_length=1, max_length=80)
+    sheet: CharacterSheet = Field(default_factory=CharacterSheet)
+    portrait_prompt: str | None = None
 
 
 class AdventureShareCreate(BaseModel):

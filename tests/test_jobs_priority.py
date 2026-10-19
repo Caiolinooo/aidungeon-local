@@ -548,7 +548,13 @@ def test_migration_021_upgrades_a_v20_database(tmp_path, monkeypatch):
     conn.row_factory = sqlite3.Row
     conn.executescript(before)
     conn.execute("PRAGMA user_version = 20")
-    adv = db.insert_adventure(conn, title="Old")
+    adv_id = db.new_id()
+    # DB "v20" legado: insere só as colunas da época (insert_adventure atual
+    # já escreve colunas novas que ainda não existem aqui).
+    conn.execute(
+        "INSERT INTO adventures(id, title, created_at) VALUES(?,?,?)",
+        (adv_id, "Old", db.utcnow()))
+    adv = {"id": adv_id}
     conn.execute(
         "INSERT INTO jobs(id, adventure_id, type, status, ref_id, payload, created_at)"
         " VALUES('j1', ?, 'character_portrait', 'pending', 'c1', '{}', ?)",
