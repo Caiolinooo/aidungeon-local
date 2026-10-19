@@ -141,7 +141,9 @@ Desde 19 out 2026 o app principal e o staging falam com o Forge Neo
 [`sd-webui-forge.service`](sd-webui-forge.service). Checkpoint
 `epicrealismXL_vxviiCrystalclear.safetensors` e VAE `sdxl-vae-fp16-fix.safetensors`,
 apontados para a pasta do A1111 (`--forge-ref-a1111-home /home/caio/sd-webui`).
-O corpo segue DPM++ 2M, scheduler Karras, CFG 5, 20 passos.
+O corpo segue DPM++ 2M, scheduler Karras, CFG 5, 20 passos. No
+`config.json` do Neo, `res_step` é 8: o retrato no ar é 800×720, e o
+padrão 64 recusaria esses dois lados.
 
 O Neo tirou o `--medvram`. No lugar: `--cuda-malloc --expandable-segments
 --cuda-stream --tiled-conv2d 128` e `setting_allocated_vram` 1.0. Com 0,25 o
