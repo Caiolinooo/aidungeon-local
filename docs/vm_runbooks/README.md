@@ -28,9 +28,11 @@ The services co-located on the GPU VM are:
 | Service | Port | Endpoint / Mode | VRAM Footprint (Nominal) | Notes |
 |---|---|---|---|---|
 | **Narrator LLM** (`llama-server`) | 1234 | `http://vm.groupabz.com:1234/v1` | ~14.5 GB | `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf`, MoE 35B (3B active), `enable_thinking=false` required |
-| **Image Generation** (A1111 SDWebUI) | 7860 | `http://127.0.0.1:7860` (local only) | ~0.2 GB idle, surges to ~4.0 GB mid-portrait | SDXL with `epiCRealism XL CrystalClear` / `Juggernaut XL`, `--medvram`, `--no-half-vae`, `sdxl-vae-fp16-fix` |
+| **Image Generation** (A1111 SDWebUI) | 7860 | `http://127.0.0.1:7860` (local only) | ~0.3 GB idle; 5.6 GB peak at 1344×768 with llama loaded (2026-10-18) | SDXL `epiCRealism XL CrystalClear`, `--medvram`, `--no-half-vae`, `sdxl-vae-fp16-fix`, `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
 | **Voice Stack** (Supertonic + Whisper) | 8000 / 8443 | `https://vm.groupabz.com/voice/v1` | ~1.4 GB | TTS (`supertonic-3`), STT (`whisper-1`) behind Nginx reverse proxy |
 | **CPU Embeddings** (`llama-server`) | 8081 | `http://127.0.0.1:8081` (Phase 4) | 0.0 GB (0 MB VRAM) | `Qwen3-Embedding-0.6B.gguf` with `--embeddings --n-gpu-layers 0` running strictly on CPU |
+
+On 2026-10-18 a backdrop txt2img OOM'd inside `lowvram.send_me_to_gpu` (20 MiB allocation, 34 MiB free, 211 MiB of fragmented PyTorch cache). The half-moved CLIP token embedding then failed every later request with `wrapper_CUDA__index_select` (`cpu` vs `cuda:0`). `--medvram` stayed: 1344×768 left 21 MiB free, under the 2 GB bar for `--medvram-sdxl`. The unit drop-in and the rollback patch are `deploy/vm/sd-webui-alloc.conf` and `deploy/vm/sd-webui-lowvram-device.patch`.
 
 ---
 
