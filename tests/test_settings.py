@@ -55,10 +55,13 @@ def test_api_key_empty_string_removes_it(client):
 
 
 def test_put_partial_update_keeps_other_fields(client):
-    client.put("/api/settings/llm", json={"max_tokens": 1200, "context_size": 262144, "streaming": False})
+    client.put("/api/settings/llm", json={"max_tokens": 1200, "context_size": 98304, "streaming": False})
     data = client.get("/api/settings/llm").json()
     assert data["max_tokens"] == 1200
-    assert data["context_size"] == 106496  # clamp de leitura (context_size_limits.max)
+    assert data["context_size"] == 98304  # abaixo do cap: passa intacto
+    # Acima do cap: clamp de leitura (context_size_limits.max)
+    client.put("/api/settings/llm", json={"context_size": 262144})
+    assert client.get("/api/settings/llm").json()["context_size"] == 106496
     assert data["streaming"] is False
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"  # intacto
     assert data["disable_thinking"] is True                      # intacto

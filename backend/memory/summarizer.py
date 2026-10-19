@@ -73,8 +73,8 @@ MEMORY_BANK_PROMPT = (
 ROLLING_SUMMARY_PROMPT = (
     "You maintain a running summary of an ongoing RPG adventure. Current summary:\n"
     "{summary}\n\nNew events:\n{text}\n\nRewrite the summary incorporating the new "
-    "events, in at most 150 words, second person, focusing on facts that must not "
-    "be forgotten."
+    "events, in at most 150 words, in the same language as the story, focusing on "
+    "facts that must not be forgotten. Do not copy image prompts."
 )
 
 

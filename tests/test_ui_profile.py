@@ -239,13 +239,11 @@ def test_context_includes_player_state_block(tmp_db):
         cfg = settings_store.runtime_config(conn)
         built = cb.build_context(adv, actions, cfg, conn)
     sys_msg = built.messages[0]["content"]
-    final_msg = built.messages[-1]["content"]
-    # Layout cache-friendly: blocos voláteis saíram do system para a última
-    # mensagem do usuário.
+    final = built.messages[-1]["content"]
     assert "[Player state]" not in sys_msg
-    assert "[Player state]" in final_msg
-    assert "stats: HP 7" in final_msg
-    assert "inventory: Torch×2" in final_msg
+    assert "[Player state]" in final
+    assert "stats: HP 7" in final
+    assert "inventory: Torch×2" in final
 
 
 def test_context_without_ui_state_has_no_block(tmp_db):
@@ -256,4 +254,4 @@ def test_context_without_ui_state_has_no_block(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         cfg = settings_store.runtime_config(conn)
         built = cb.build_context(adv, actions, cfg, conn)
-    assert "[Player state]" not in built.messages[0]["content"]
+    assert all("[Player state]" not in m["content"] for m in built.messages)

@@ -1,72 +1,88 @@
-# Deploy do backend na VM (vm.groupabz.com)
+# Deploy na VM (vm.groupabz.com)
 
-O backend é um FastAPI + SQLite **persistente** (por isso não vai para a Vercel —
-serverless tem filesystem efêmero, ver PLANO.md §11). Este diretório gera um zip
-auto-contido e documenta a instalação na VM.
+O backend é FastAPI + SQLite **persistente** e serve também o build do frontend
+(SPA). Este documento descreve a instalação que roda hoje na VM.
 
-## 1. Gerar o pacote (na máquina local)
+## Como está hoje
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\vm\package_backend.ps1
+| Item | Valor |
+|---|---|
+| Diretório do app | `/home/caio/aidungeon` (cópia, ainda não é checkout git; ver G9 em `tasks.md`) |
+| Serviço | `aidungeon.service` (usuário `caio`), uvicorn na porta **2122** |
+| Python | venv em `/home/caio/aidungeon/backend/venv` |
+| Segredos | `/home/caio/aidungeon/.env` (lido via `AIDUNGEON_ENV_PATH`) |
+| Banco | `/home/caio/aidungeon/data/aidungeon.db` |
+| Imagens | `/home/caio/aidungeon/data/images/` |
+| Frontend | `/home/caio/aidungeon/frontend/dist` (servido pelo FastAPI) |
+| HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt) |
+| LLM | `llama-server.service` na porta 1234 (ver `docs/vm_runbooks/`) |
+| Embeddings | `llama-embeddings.service` (CPU) na porta 8091 |
+| Imagem | `sd-webui.service` (A1111) na porta 7860 |
+
+Unit atual do app (`/etc/systemd/system/aidungeon.service`):
+
+```ini
+[Unit]
+Description=AIDungeon Local (FastAPI + SPA)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+WorkingDirectory=/home/caio/aidungeon/backend
+Environment=AIDUNGEON_ENV_PATH=/home/caio/aidungeon/.env
+ExecStart=/home/caio/aidungeon/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 2122
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-Produz `deploy\vm\aidungeon-backend.zip` (gitignored) com:
-
-```
-backend\                  código + requirements.txt + schema.sql (SEM .venv)
-config\                   settings.json + models.json
-logs\                     vazio (logs de runtime)
-data\                     vazio (o SQLite nasce aqui no 1º boot)
-.env.example              modelo dos 4 segredos
-aidungeon-backend.service unit systemd de exemplo
-Caddyfile                 TLS opcional (§6)
-README-DEPLOY.md          este arquivo
-```
-
-O pacote **nunca** inclui `.env`, `data\*.db` ou qualquer segredo real.
-
-## 2. Instalar na VM
+## Atualizar o código (até a G9 existir)
 
 ```bash
-# copiar o zip p/ a VM (ex.: scp) e então:
-sudo mkdir -p /opt/aidungeon
-sudo unzip aidungeon-backend.zip -d /opt/aidungeon
-cd /opt/aidungeon
+# na máquina local, a partir da raiz do repositório
+tar czf /tmp/aidungeon-src.tgz backend/app backend/memory backend/migrations \
+    backend/schema.sql backend/requirements.txt config
+scp /tmp/aidungeon-src.tgz caio@vm.groupabz.com:/tmp/
 
-# Python 3.12+ (confira: python3 --version)
-python3.12 -m venv .venv
-./.venv/bin/pip install -r backend/requirements.txt
+# na VM
+cd /home/caio/aidungeon
+cp data/aidungeon.db data/aidungeon.db.bak-$(date +%Y%m%d-%H%M)   # backup
+tar xzf /tmp/aidungeon-src.tgz
+backend/venv/bin/pip install -r backend/requirements.txt
+sudo systemctl restart aidungeon
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:2122/api/health/llm   # 401 = no ar
 ```
 
-## 3. Segredos (.env) — obrigatório
+As migrations em `backend/migrations/` rodam sozinhas no boot (`db.init_db`).
+Frontend: `cd frontend && npm ci && npm run build` na máquina local e copie
+`frontend/dist/` para `/home/caio/aidungeon/frontend/dist/`.
 
-```bash
-cp .env.example /opt/aidungeon/.env
-nano /opt/aidungeon/.env     # preencha os 4 valores
-```
+Rollback: pare o serviço, restaure o tarball anterior e o backup do banco,
+`sudo systemctl start aidungeon`.
+
+## Segredos (`.env`)
 
 | Variável | Como gerar |
 |---|---|
-| `LLM_API_KEY` | a mesma chave do llama.cpp que já roda na VM (`:1234`) |
+| `LLM_API_KEY` | a chave do llama-server (diferente da senha SSH; ver G8) |
 | `AUTH_USER` | usuário do login (ex.: `Caio`) |
 | `AUTH_PASSWORD_HASH` | `python3 -c "import hashlib; print(hashlib.sha256('SUA_SENHA'.encode()).hexdigest())"` |
 | `AUTH_SECRET` | `python3 -c "import secrets; print(secrets.token_hex(32))"` |
 
 Sem as 3 variáveis de auth o app **fail closed**: todas as rotas `/api` respondem
-401 e o login responde 503. Permissões: `chmod 600 /opt/aidungeon/.env`.
+401 e o login responde 503. Permissões: `chmod 600 /home/caio/aidungeon/.env`.
 
-## 4. Teste manual (antes de virar serviço)
+## Instalação do zero (outra máquina)
 
-```bash
-cd /opt/aidungeon/backend
-../.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-# em outro shell:
-curl -i http://127.0.0.1:8000/api/health/llm     # 401 sem token = auth ok, no ar
-```
+O `package_backend.ps1` gera `deploy\vm\aidungeon-backend.zip` (gitignored) com
+`backend\`, `config\`, `.env.example`, a unit de exemplo
+`aidungeon-backend.service` e o `Caddyfile`. Ajuste caminhos e porta da unit de
+exemplo para o diretório escolhido; a referência é a unit acima.
 
-O SQLite é criado sozinho em `/opt/aidungeon/data/aidungeon.db` no primeiro boot.
-**Para levar os dados locais (aventura importada) para a VM:** pare o backend e
-copie o `data\aidungeon.db` local por cima antes do primeiro start.
+## Hardening
 
 ## 5. Serviço systemd
 
@@ -89,6 +105,8 @@ Ajuste `User`/caminhos se instalar em outro diretório.
 
 - **Auth já é obrigatória** no app (Bearer HMAC em todas as rotas `/api`, com
   throttle de 5 falhas → 60s de lockout no login).
+- **VM atual (produção):** exponha só o nginx (8443). A porta 2122 (app) e a
+  1234 (llama-server) não devem ficar abertas para a internet.
 - **Firewall:** libere só o necessário.
   - Modo direto (HTTP na 8000): `sudo ufw allow 8000/tcp`.
   - Modo Caddy (recomendado): feche a 8000 para fora e libere 80/443

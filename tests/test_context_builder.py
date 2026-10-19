@@ -55,7 +55,7 @@ def test_sandwich_order_exact(tmp_db):
     assert roles == ["system", "user", "user"]
     assert roles[0] == "system" and all(r != "system" for r in roles[1:])
 
-    # system: só a base, ai_instructions e [Plot]
+    # system estável: base, ai_instructions e plot (blocos 1–2)
     sys_msg = built.messages[0]["content"]
     sys_order = [
         cb.BASE_SYSTEM_PROMPT,
@@ -73,22 +73,23 @@ def test_sandwich_order_exact(tmp_db):
     assert "You stand in Calimport." in window
     assert "\n> You look around\n" in window
 
-    # voláteis no topo da user final, antes da author's note e da última ação
-    final = built.messages[-1]["content"]
-    final_order = [
-        "[World info]",
+    # 7+8 — user final: voláteis no topo, author's note e a última ação no fim
+    final = built.messages[2]["content"]
+    order = [
+        "[World info]",                 # 3 story cards
         "Baldur's Gate",
-        "[Memories]",
+        "[Memories]",                   # 4 memory bank
         "Zhentarim",
-        "[Summary]",
+        "[Summary]",                    # 5 story_summary
         "Caio chegou a Calimport",
-        "[Author's note:",
-        cb.STYLE_CUE,
-        cb.CANON_CUE,
-        "The market is busy.",
+        "[Author's note: Mundo vivo; NPCs agem por conta própria.]",
     ]
-    positions = [final.index(fragment) for fragment in final_order]
+    positions = [final.index(fragment) for fragment in order]
     assert positions == sorted(positions)
+    assert final.endswith("[Author's note: Mundo vivo; NPCs agem por conta própria.]\n"
+                          f"{cb.STYLE_CUE}\n"
+                          f"{cb.CANON_CUE}\n"
+                          "The market is busy.")
 
 
 def test_empty_blocks_are_skipped(tmp_db):
@@ -175,7 +176,8 @@ def test_block_budget_truncation(tmp_db):
     assert "x" * 6400 in sys_msg and "x" * 6401 not in sys_msg  # plot ≤ 1600 tk
     # author's note truncada a 300 tk dentro da user final, depois do resumo
     final = built.messages[-1]["content"]
-    assert "[Author's note: " + "y" * 1200 + "]" in final
+    assert final.startswith("[Summary]\n")
+    assert "[Author's note: " + "y" * 1200 + "]\n" in final
     assert "y" * 1201 not in final
     assert "[Summary]" not in sys_msg
     assert final.index("[Summary]") < final.index("[Author's note:")
@@ -247,11 +249,35 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
     janela de 2 sobe para WINDOW_DROP_CHUNK e esvazia a janela."""
     adv = make_adventure(title="Trunc2")
     add_action(adv["id"], 0, "start", "S" + "0" * 800)     # ~201 tk
+    for seq in range(1, 11):                               # 10 × ~26 tk
+        add_action(adv["id"], seq, "continue", f"M{seq:02d}" + "1" * 97)
+    add_action(adv["id"], 11, "continue", "CURRENT.")
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        # budget da janela = 250 tokens: cabem as 10 curtas (~260 não; ~234
+        # sem a mais antiga), não a ação 0. O descarte sobe para múltiplo de
+        # WINDOW_DROP_CHUNK (8): saem as ações 0..7 e ficam 8..10, inteiras.
+        # (6200 = budgets fixos, incl. player_state=200 do v0.7.0)
+        cfg = _cfg(conn, context_size=6200 + 1024 + 250)
+        built = _build(adv, actions, cfg)
+    assert built.meta["budgets"]["recent_window"] == 250
+    assert cb.WINDOW_DROP_CHUNK == 8
+    assert built.meta["window_action_count"] == 3
+    window = built.messages[1]["content"]
+    assert window.startswith("M08") and "S000" not in window
+    assert window.count("M") == 3 and len(window) == 3 * 100   # inteiras, sem corte
+
+
+def test_window_chunk_snap_can_empty_the_window(tmp_db):
+    """Janela de 2 ações onde só 1 cabe: dropped=1 sobe para WINDOW_DROP_CHUNK,
+    keep <= 0 e a janela fica vazia (a última ação segue no bloco final)."""
+    adv = make_adventure(title="Trunc3")
+    add_action(adv["id"], 0, "start", "S" + "0" * 800)     # ~201 tk
     add_action(adv["id"], 1, "continue", "M" + "1" * 400)  # ~101 tk
     add_action(adv["id"], 2, "continue", "CURRENT.")
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
-        # budget da janela = 250 tokens: cabe a ação 1 inteira (~101), não a 0.
+        # budget da janela = 250 tokens: caberia a ação 1 inteira (~101), mas
         # dropped=1 → snap 8 → keep<=0. (6200 = budgets fixos)
         cfg = _cfg(conn, context_size=6200 + 1024 + 250)
         built = _build(adv, actions, cfg)

@@ -37,6 +37,7 @@ Formatação das ações do jogador (byte a byte como no backup):
     do   → "\\n> You {text}\\n"
     say  → '\\n> You say "{text}"\\n'
     story/start/continue → prosa pura (verbatim)
+    see → fora do narrador (o prompt de imagem não é prosa)
 
 A formatação é idempotente: textos que já começam com ">" (como os do backup,
 que já vêm formatados) NÃO são re-embrulhados.
@@ -60,8 +61,11 @@ from typing import Any, Callable
 BASE_SYSTEM_PROMPT = (
     "You are the narrator and environment in an interactive text adventure. You control NPCs,\n"
     "sensory consequences, and the immediate world. The player has absolute agency over You.\n"
-    "Continue the story in second person (\"You ...\"), matching the established tone. Write vivid\n"
-    "prose with dialogue, sensory detail and consequences for the player's actions.\n\n"
+    "Continue the story in its own language, tense, and grammatical person. If the story\n"
+    "addresses the player as \"you\", stay in second person. If it narrates a named protagonist,\n"
+    "keep that name and person. Do not switch to English. Do not write image captions,\n"
+    "portrait prompts, or camera directions. Write vivid prose with dialogue, sensory detail\n"
+    "and consequences for the player's actions.\n\n"
     "Player agency invariants (highest priority):\n"
     "- Never write internal thoughts, feelings, decisions, spoken dialogue, or future actions for You.\n"
     "- Describe only the immediate sensory consequences of the player's action and NPC reactions.\n"
@@ -85,6 +89,7 @@ BASE_SYSTEM_PROMPT = (
     "- If the recent text contradicts the Plot block, treat the Plot block as correct and steer\n"
     "  the narrative back to the established setting without commenting on it.\n"
     "- A character card is canon. Use its Appearance, Clothing, Status and Stats exactly.\n"
+    "  Those fields come from the character sheet, not from a portrait prompt.\n"
     "  Do not change hair, face, build, or whether they are alive unless that card says so.\n"
     "- Memories, Plot and World info are canon and override earlier prose.\n"
     "- Do not invent a death, a relative, an item, or a place that those blocks\n"
@@ -95,9 +100,10 @@ BASE_SYSTEM_PROMPT = (
 # estilo telegráfico puxa o modelo de volta; a instrução no system, lá no
 # início, perde para esse exemplo.
 STYLE_CUE = (
-    "[Style: complete grammatical sentences in the story's language, "
+    "[Style: complete grammatical sentences in the story's language and person, "
     "articles and prepositions kept, two or three sentences per paragraph, "
-    "a blank line between paragraphs. Do not copy clipped or run-on prose.]"
+    "a blank line between paragraphs. Do not copy clipped or run-on prose, "
+    "and do not write image prompts.]"
 )
 
 # A prosa recente já descreveu o NPC de outro jeito. Sem este lembrete no
@@ -194,7 +200,7 @@ def format_action_text(type_: str, text: str) -> str:
         if type_ == "do":
             return f"\n> You {inner}\n"
         return f'\n> You say "{inner}"\n'
-    return text  # start/continue/story/see: prosa pura, verbatim
+    return text  # start/continue/story: prosa pura, verbatim
 
 
 # ---------------------------------------------------- módulos de memória
@@ -385,7 +391,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     system_parts: list[str] = []
     volatile_parts: list[str] = []
 
-    # 1 — narrador em 2ª pessoa + ai_instructions (sem cabeçalho)
+    # 1 — narrador + ai_instructions (sem cabeçalho)
     block1 = BASE_SYSTEM_PROMPT
     ai = (adventure.get("ai_instructions") or "").strip()
     if ai:
