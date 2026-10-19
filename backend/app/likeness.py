@@ -74,6 +74,7 @@ class WikiPage:
     extract: str
     description: str
     image_url: str
+    thumb_url: str
     page_url: str
     fictional: bool
     minor: bool
@@ -342,12 +343,15 @@ def _page_from_summary(data: dict) -> WikiPage | None:
     description = " ".join(str(data.get("description") or "").split())
     blob = f"{description}\n{extract}"
     image = ""
+    thumb_url = ""
     original = data.get("originalimage")
     thumb = data.get("thumbnail")
     if isinstance(original, dict) and original.get("source"):
         image = str(original["source"])
-    elif isinstance(thumb, dict) and thumb.get("source"):
-        image = str(thumb["source"])
+    if isinstance(thumb, dict) and thumb.get("source"):
+        thumb_url = str(thumb["source"])
+    if not image:
+        image = thumb_url
     content = ((data.get("content_urls") or {}).get("desktop") or {})
     page_url = str(content.get("page") or "")
     return WikiPage(
@@ -355,6 +359,7 @@ def _page_from_summary(data: dict) -> WikiPage | None:
         extract=extract,
         description=description,
         image_url=image,
+        thumb_url=thumb_url,
         page_url=page_url,
         fictional=_FICTIONAL.search(blob) is not None,
         minor=age_class(blob) == "minor",
@@ -455,6 +460,24 @@ def _download(client: httpx.Client, url: str) -> tuple[bytes, str]:
     if not ext:
         raise GameError(502, "likeness_unavailable", "A referência não é uma imagem.")
     return content, ext
+
+
+def _download_with_fallback(client: httpx.Client, primary: str, thumb: str) -> tuple[bytes, str]:
+    """O original às vezes toma 429. O thumbnail do mesmo arquivo serve."""
+    urls: list[str] = []
+    for url in (primary, thumb):
+        cleaned = _image_url(url)
+        if cleaned and cleaned not in urls:
+            urls.append(cleaned)
+    last: GameError | None = None
+    for url in urls:
+        try:
+            return _download(client, url)
+        except GameError as exc:
+            last = exc
+    if last is not None:
+        raise last
+    raise GameError(502, "likeness_unavailable", "Não consegui baixar a foto de referência.")
 
 
 def _commons_filename(image_url: str) -> str:
@@ -584,7 +607,7 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
         raise GameError(502, "likeness_unavailable", "A Wikipedia não tem uma foto principal.")
     try:
         with _client(transport) as client:
-            content, ext = _download(client, page.image_url)
+            content, ext = _download_with_fallback(client, page.image_url, page.thumb_url)
             license_name = _commons_license(client, page.image_url)
     except GameError:
         raise

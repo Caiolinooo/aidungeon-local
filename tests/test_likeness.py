@@ -146,6 +146,24 @@ def test_english_bits_keeps_one_accented_name():
     assert likeness.english_bits("Ela é uma cantora, também é atriz e é famosa.") == ""
 
 
+def test_download_falls_back_to_the_thumbnail_after_429():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "upload.wikimedia.org" in request.url.host:
+            return httpx.Response(429, text="slow down")
+        if "thumb.wikimedia.org" in request.url.host:
+            return httpx.Response(200, content=PNG_BYTES, headers={"content-type": "image/png"})
+        return httpx.Response(404)
+
+    with likeness._client(httpx.MockTransport(handler)) as client:
+        content, ext = likeness._download_with_fallback(
+            client,
+            "https://upload.wikimedia.org/wikipedia/commons/a/a0/Face.jpg",
+            "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/Face.jpg/330px-Face.jpg",
+        )
+    assert content == PNG_BYTES
+    assert ext == ".png"
+
+
 def test_commons_filename_ignores_the_thumbnail_size():
     url = (
         "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5a/"
