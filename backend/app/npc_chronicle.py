@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any
 
-from app import db, jobs, llm_client, npc_assets, settings_store
+from app import db, jobs, llm_client, npc_assets, settings_store, world_facts
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -48,7 +48,10 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
 }
 Rules:
 - Include someone only if they act, speak, or are discussed in the passage.
-- Include a place, faction, or item only when the passage establishes it. Do not invent a sheet for them.
+- Include a place, faction, or item only when the canon passage establishes it. Do not invent a sheet for them.
+- The player attempt is not canon. Do not create a place, item, or person that appears only there.
+- Do not record that an NPC complied, left, undressed, or changed location unless the canon passage shows it.
+- If the Facts block says a place was not established, do not record that place.
 - Never include the protagonist as a character.
 - Never invent appearance, relatives, death, or numbers.
 - look_changed is true only when the body or face itself changes (scar, curse, aging), not when clothes change.
@@ -397,17 +400,21 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         if not adventure:
             return {"created": 0, "updated": 0}
         actions = db.list_actions(conn, adventure_id)
-        cards = [card for card in db.list_cards(conn, adventure_id)
-                 if card.get("type") == "character"]
+        all_cards = db.list_cards(conn, adventure_id)
+        memories = db.list_memories(conn, adventure_id)
+        cards = [card for card in all_cards if card.get("type") == "character"]
         llm_cfg = settings_store.effective_llm_settings(conn)
         plot = adventure.get("plot_essentials") or ""
+        assessment = world_facts.assess(adventure, actions, all_cards, memories)
     non_see = [action["text"] for action in actions if action["type"] != "see" and action.get("text")]
-    if not non_see:
+    _canon, attempt = world_facts.chronicle_passage(actions)
+    text = (assessment.canon_blob or _canon).strip()
+    if not text and not attempt:
         return {"created": 0, "updated": 0}
+    # Gate barato: turno sem sinal de entidade não chama o LLM.
     latest_turn = "\n".join(non_see[-2:]).strip()
     if not _turn_has_entity_signal(latest_turn, cards, plot):
         return {"created": 0, "updated": 0}
-    text = "\n".join(non_see)[-1800:].strip()
     roster = []
     for card in cards:
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
@@ -420,9 +427,11 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
             "stats": sheet.get("stats") or {},
         })
     user = (
+        f"{assessment.facts_line}\n\n"
         f"Protagonist (do not create a card): {plot[:500]}\n\n"
-        f"Existing characters:\n{json.dumps(roster, ensure_ascii=False)[:3000]}\n\n"
-        f"Recent passage:\n{text}"
+        f"Existing characters:\n{json.dumps(roster, ensure_ascii=False)[:4000]}\n\n"
+        f"Canon passage (only this establishes facts):\n{text or '(none)'}\n\n"
+        f"Player attempt (NOT canon):\n{attempt or '(none)'}"
     )
     content = llm_client.chat_completion(
         llm_cfg,
@@ -434,6 +443,7 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     except (ValueError, TypeError) as exc:
         log.warning("npc_chronicle: JSON ilegível (%s)", exc)
         return {"created": 0, "updated": 0}
+    payload = world_facts.filter_chronicle_payload(payload, assessment)
     with db.session() as conn:
         result = apply_chronicle(conn, adventure_id, payload, plot)
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)

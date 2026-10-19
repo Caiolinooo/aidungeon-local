@@ -327,6 +327,100 @@ def character_canon(cards: list[dict], text: str) -> str:
     )
 
 
+def _card_sex_blob(card: dict | None) -> str:
+    if not card:
+        return ""
+    sheet = parse_sheet(card.get("sheet") or "")
+    parts = [
+        card.get("title") or "",
+        card.get("entry") or "",
+        card.get("portrait_prompt") or "",
+    ]
+    for key in ("appearance", "body", "clothing", "personality", "notes"):
+        value = sheet.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    return " ".join(str(part) for part in parts if part)
+
+
+def _after_name(text: str, end: int) -> str:
+    """O resto da frase, e o pronome que abre a frase seguinte."""
+    rest = text[end:end + 140]
+    pieces = re.split(r"[.!?]", rest, maxsplit=1)
+    same = pieces[0]
+    if len(pieces) < 2:
+        return same
+    word = pieces[1].lstrip().split(" ", 1)[0].strip(",;:")
+    if word.casefold() in set(_FEMALE_WORD) | set(_MALE_WORD):
+        return same + " " + word
+    return same
+
+
+def _sex_sides(text: str, name: str) -> tuple[str, str]:
+    """(antes, depois) de cada menção. O pronome dela não vira o sexo de quem vem em seguida."""
+    if not text or not name:
+        return "", ""
+    pattern = re.compile(r"(?<!\w)" + re.escape(name.strip()) + r"(?!\w)", re.IGNORECASE)
+    before: list[str] = []
+    after: list[str] = []
+    for match in pattern.finditer(text):
+        before.append(text[max(0, match.start() - 16):match.start()])
+        after.append(_after_name(text, match.end()))
+    return " ".join(before), " ".join(after)
+
+
+def _word_hits(text: str, words: tuple[str, ...]) -> int:
+    return sum(
+        1 for word in words
+        if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text or "", re.IGNORECASE)
+    )
+
+
+def sex_label(name: str, *blobs: str, card: dict | None = None) -> str:
+    """'adult woman' ou 'adult man' quando o texto já disse o sexo. Senão vazio.
+
+    O CLIP não lê 'ela'. Sem a palavra woman, um corpo nu vira homem.
+    """
+    name = " ".join((name or "").split())
+    if len(name) < 3:
+        return ""
+    before, after = _sex_sides("\n".join(blobs), name)
+    own = _card_sex_blob(card)
+    female = _word_hits(after, _FEMALE_WORD) + _word_hits(own, _FEMALE_WORD)
+    male = _word_hits(after, _MALE_WORD) + _word_hits(own, _MALE_WORD)
+    first = name.split()[0].casefold()
+    if first in _FEMALE_TITLE:
+        female += 2
+    if first in _MALE_TITLE:
+        male += 2
+    if re.search(r"(?i)\b(?:" + "|".join(_FEMALE_TITLE) + r")\s+$", before):
+        female += 2
+    if re.search(r"(?i)\b(?:" + "|".join(_MALE_TITLE) + r")\s+$", before):
+        male += 2
+    if re.search(r"(?i)\b(?:a|da|na|pela|uma)\s+$", before):
+        female += 2
+    if re.search(r"(?i)\b(?:o|do|no|pelo|um)\s+$", before):
+        male += 2
+    if female > male and female:
+        return "adult woman"
+    if male > female and male:
+        return "adult man"
+    return ""
+
+
+def sex_phrase(name: str, label: str, *, explicit: bool) -> str:
+    """Frase curta no começo do prompt. O CLIP obedece o início."""
+    if label == "adult woman" and explicit:
+        return f"{name} is an adult woman with a female body, breasts and a feminine face"
+    if label == "adult woman":
+        return f"{name} is an adult woman"
+    if label == "adult man" and explicit:
+        return f"{name} is an adult man with a male body"
+    if label == "adult man":
+        return f"{name} is an adult man"
+    return ""
+
+
 def image_canon_clause(cards: list[dict], text: str) -> str:
     """Frase curta no começo do prompt de imagem.
 
@@ -337,6 +431,24 @@ def image_canon_clause(cards: list[dict], text: str) -> str:
     if not lines:
         return ""
     return "exact likeness, " + ", ".join(lines)
+
+
+_FEMALE_WORD = (
+    "woman", "women", "female", "girl", "lady", "she",
+    "mulher", "menina", "garota", "moça", "moca", "ela", "dela", "nela",
+    "senhora", "esposa", "wife", "mother", "daughter", "feminina", "irmã", "irma",
+)
+_MALE_WORD = (
+    "man", "men", "male", "boy", "gentleman", "he",
+    "homem", "menino", "garoto", "rapaz", "ele", "dele", "nele",
+    "marido", "husband", "father", "son", "masculino", "irmão", "irmao",
+)
+_FEMALE_TITLE = ("princess", "princesa", "queen", "rainha", "lady", "senhora", "duchess")
+_MALE_TITLE = ("king", "rei", "prince", "príncipe", "principe", "lord", "senhor", "duke")
+_SKIP_NAME = {
+    "you", "the", "she", "her", "his", "him", "ela", "ele", "uma", "um",
+    "para", "com", "that", "this", "and", "but",
+}
 
 
 def _mentioned(text: str, name: str) -> bool:

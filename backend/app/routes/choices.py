@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app import db, game_engine, llm_client, settings_store
+from app import db, game_engine, llm_client, settings_store, world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -31,7 +31,10 @@ Given the recent scene, output STRICT JSON: an array of exactly {count} options,
 - "do": a physical action ("draw your sword")
 - "say": something to speak ("ask the innkeeper about the missing caravan")
 - "story": a narrative beat the player injects ("a storm rolls in")
-Texts in English, concise (under 120 chars), varied. Output ONLY the JSON array."""
+Texts in English, concise (under 120 chars), varied.
+Do not suggest a place, an item, or NPC compliance that the Facts block says is missing.
+A do or say is an attempt. Prefer what a person in this place would actually accept.
+Output ONLY the JSON array."""
 
 
 def _choices_cfg() -> dict:
@@ -80,6 +83,9 @@ def post_choices(adventure_id: str,
         if not cfg["enabled"]:
             return {"choices": []}
         actions = db.list_actions(conn, adventure_id)
+        cards = db.list_cards(conn, adventure_id)
+        memories = db.list_memories(conn, adventure_id)
+        facts = world_facts.assess(adv, actions, cards, memories).facts_line
         llm_cfg = settings_store.effective_llm_settings(conn)
 
     if not game_engine.acquire_generation_lock(adventure_id):
@@ -89,7 +95,9 @@ def post_choices(adventure_id: str,
         scene = "".join(a["text"] for a in actions if a["type"] != "see")[-2000:]
         messages = [
             {"role": "system", "content": _SYSTEM.replace("{count}", str(cfg["count"]))},
-            {"role": "user", "content": f"Recent scene:\n{scene.strip() or '(beginning of the adventure)'}"},
+            {"role": "user", "content": (
+                f"{facts}\n\nRecent scene:\n{scene.strip() or '(beginning of the adventure)'}"
+            )},
         ]
         try:
             content = llm_client.chat_completion(

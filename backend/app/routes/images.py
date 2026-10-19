@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
-from app import db, game_engine, image_client, llm_client, npc_assets, scene, settings_store
+from app import db, game_engine, image_client, llm_client, npc_assets, scene, settings_store, world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import ImageSettingsUpdate, SeeRequest
@@ -33,16 +33,20 @@ router = APIRouter()
 _PROMPT_BUILDER_SYSTEM = """You describe one moment of an interactive story for a text-to-image model.
 Write a single English sentence whose subject is the action happening right now: who does what to whom, in the place.
 Name every person in the moment, including the player character when the text says "you".
+Call each woman a woman and each man a man. Do not turn a woman into a man.
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not add people who are not in the moment. Do not change the place.
+If the moment says a person refuses, paint the refusal. If it says a destination does not exist, do not invent that place.
 Do not turn the moment into a portrait or a close-up of one face.
 No dialogue, no quotes, no meta text. Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
 Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
+Call each woman a woman and each man a man. A woman has a female body. Do not give her a male body.
 Do not describe hair, face, eyes or age.
 Do not add people who are not in the moment. Do not change the place.
+If the moment says a person refuses, paint the refusal. Do not invent a room or a bed.
 Do not sexualize a child. Output ONLY that sentence."""
 
 # Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
@@ -268,9 +272,22 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     limpa gravada na action see. O retrato não entra como img2img.
     """
     pb = img_cfg["prompt_builder"]
-    moment = current_moment(actions, body.action_seq)
-    explicit = scene.is_explicit(moment)
+    visible = [
+        action for action in actions
+        if action.get("type") != "see" and int(action.get("seq") or 0) <= int(body.action_seq)
+    ]
+    with db.session() as conn:
+        memories = db.list_memories(conn, adv["id"])
+    assessment = world_facts.assess(adv, visible, cards, memories)
+    raw_moment = current_moment(actions, body.action_seq)
+    moment = assessment.image_moment(raw_moment)
+    explicit = scene.is_explicit(assessment.safe_excerpt if assessment.image_directive else moment)
     frame = _cards_in_frame(cards, moment, adv.get("plot_essentials") or "")
+    if assessment.absent:
+        frame = [
+            card for card in frame
+            if not world_facts.name_is_absent(card.get("title") or "", assessment.absent)
+        ]
     clause = _look_clause(frame, explicit=explicit) or (
         "" if explicit else npc_assets.image_canon_clause(cards, moment)
     )
@@ -281,6 +298,30 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     you = re.search(r"(?<!\w)you(?!\w)", moment or "", re.IGNORECASE)
     if you and not any(name.casefold() == player_name.casefold() for name in names):
         names.insert(0, player_name)
+    story_blob = "\n".join(
+        (action.get("text") or "")
+        for action in visible
+        if (action.get("text") or "").strip()
+    )
+    by_name = {card.get("title"): card for card in frame if card.get("title")}
+    for card in cards:
+        title = (card.get("title") or "").strip()
+        if title and npc_assets._mentioned(moment, title) and title not in by_name:
+            if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
+                by_name[title] = card
+                names.append(title)
+    sex_bits = []
+    seen_sex: set[str] = set()
+    for name in names:
+        key = name.casefold()
+        if key in seen_sex:
+            continue
+        seen_sex.add(key)
+        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
+        phrase = npc_assets.sex_phrase(name, label, explicit=explicit)
+        if phrase:
+            sex_bits.append(phrase)
+    sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     canon = ""
     if clause and explicit:
         canon = (
@@ -294,12 +335,22 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             + clause
             + ". Same hair, face, age, build and clothing. Do not invent a different person."
         )
-    location, entry = scene._location(cards, moment)
-    atmosphere = scene.atmosphere_of(moment)
+    location, entry = scene._location(cards, assessment.safe_excerpt or moment)
+    if assessment.image_directive and assessment.where != "unestablished":
+        location = assessment.where
+        for card in cards:
+            if (card.get("type") or "") == "location" and (card.get("title") or "").casefold() == location.casefold():
+                entry = card.get("entry") or entry
+                break
+    atmosphere = scene.atmosphere_of(assessment.safe_excerpt or moment)
     place = ""
     if location and location != "the current scene":
         place = f"Place: {location}. {clip_words(entry or '', 200)}\n"
-    who = ", ".join(names) if names else "only the people named in the moment"
+    who_bits = []
+    for name in names:
+        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
+        who_bits.append(f"{name} ({label})" if label else name)
+    who = ", ".join(who_bits) if who_bits else "only the people named in the moment"
     user = (
         (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
@@ -314,25 +365,32 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     summarized = llm_client.chat_completion(
         llm_cfg, messages, temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
+    summarized = world_facts.scrub_image_text(summarized, assessment)
     summarized, neg_summary = contradicting_looks(summarized, clause)
     _, neg_moment = contradicting_looks(moment.replace("\n", " "), clause)
     # Uma frase em inglês na frente. A prosa crua não entra: ela vinha
     # cortada no meio da palavra e o narrador copiava o prompt.
     sentence = one_image_sentence(summarized)
+    # Recusa estabelecida: a frase visual fixa lidera (e vira caption) — o
+    # modelo resumidor poderia pintar o ato recusado.
+    if world_facts.REFUSAL_IMAGE in assessment.image_directive:
+        sentence = world_facts.REFUSAL_IMAGE
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
     lead_bits = []
+    if sex_bits:
+        lead_bits.append(". ".join(sex_bits))
     if sentence:
         lead_bits.append(sentence)
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
         lead_bits.append(", ".join(where))
-    if names:
-        lead_bits.append("people present: " + ", ".join(names))
+    if who_bits:
+        lead_bits.append("people present: " + ", ".join(who_bits))
     if clause:
         lead_bits.append(clip_words(clause, 260))
     if _is_interaction(moment, names):
@@ -348,7 +406,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         prompt = f"{lead} BREAK {tail}"
     else:
         prompt = lead or tail
-    negative = _dedupe_negative(neg_summary, neg_moment)
+    negative = _dedupe_negative(neg_summary, neg_moment, assessment.image_negative)
+    woman_only = bool(sex_bits) and all("adult woman" in bit for bit in sex_bits)
+    unlabeled = [name for name in names if not any(name.casefold() in bit.casefold() for bit in sex_bits)]
+    if explicit and woman_only and not unlabeled:
+        negative = _dedupe_negative(negative, "man, male, masculine body, penis, beard")
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     caption = sentence or summarized

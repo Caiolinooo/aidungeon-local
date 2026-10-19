@@ -147,7 +147,9 @@ export default function SceneBackdrop({
     : ''
 
   return (
-    <section className="relative h-28 shrink-0 overflow-hidden border-b border-zinc-800 bg-zinc-900 sm:h-32">
+    <section className={`relative shrink-0 overflow-hidden border-b border-zinc-800 bg-zinc-900 ${
+      scene.notice ? 'min-h-36' : 'h-28 sm:h-32'
+    }`}>
       {backdropUrl && (
         <div
           className={`absolute inset-0 bg-cover bg-center transition-all duration-700 ${filters} ${
@@ -160,10 +162,17 @@ export default function SceneBackdrop({
 
       <div className="relative flex h-full flex-col justify-between px-3 py-2">
         <div className="flex items-start justify-between gap-2">
-          {place ? (
-            <div className="rounded-full border border-white/10 bg-black/55 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-100">
-              {place}
-              {scene.backdrop?.status === 'pending' ? ' · painting…' : ''}
+          {place || scene.notice ? (
+            <div className="max-w-[75%] rounded-md border border-white/10 bg-black/55 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-zinc-100">
+              {place ? (
+                <div className="uppercase">
+                  {place}
+                  {scene.backdrop?.status === 'pending' ? ' · painting…' : ''}
+                </div>
+              ) : null}
+              {scene.notice ? (
+                <div className="mt-0.5 font-medium normal-case text-amber-100">{scene.notice}</div>
+              ) : null}
             </div>
           ) : <span />}
           {scene.backdrop?.status === 'error' && (

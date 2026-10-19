@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, npc_assets, settings_store
+from app import db, jobs, npc_assets, settings_store, world_facts
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -107,15 +107,6 @@ def _mood_near(text: str, name: str) -> str | None:
     return best[1] if best else None
 
 
-def _recent_text(conn, adventure_id: str) -> str:
-    rows = conn.execute(
-        "SELECT type, text FROM actions WHERE adventure_id=? ORDER BY seq DESC LIMIT 8",
-        (adventure_id,),
-    ).fetchall()
-    parts = [row["text"] for row in reversed(rows) if row["type"] != "see" and row["text"]]
-    return "\n".join(parts)[-4000:]
-
-
 def _location(cards: list[dict], text: str) -> tuple[str, str]:
     """(título, entry) do card de lugar mencionado por último. Sem card, usa a prosa."""
     best: tuple[int, str, str] | None = None
@@ -178,8 +169,21 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     """
     explicit = is_explicit(moment)
     clause = _visual_clause(cast, explicit=explicit)
+    sex_bits = []
+    for card in cast:
+        person = (card.get("title") or "").strip()
+        phrase = npc_assets.sex_phrase(
+            person,
+            npc_assets.sex_label(person, moment, card=card),
+            explicit=explicit,
+        )
+        if phrase:
+            sex_bits.append(phrase)
+    sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
+    sex_line = ". ".join(sex_bits)
     if clause and explicit:
         parts = [
+            sex_line,
             clause,
             "clothes off, nude, do not restore outfits, uncensored",
             (moment or "")[-400:],
@@ -194,6 +198,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         return text[:1400], True
     if clause:
         parts = [
+            sex_line,
             clause,
             style,
             f"wide cinematic shot of {title}, only the characters named above, "
@@ -248,9 +253,22 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
 
 
 def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
-    """Estado da cena para a UI. Enfileira fundo e retratos que faltam."""
-    text = _recent_text(conn, adventure_id)
+    """Estado da cena para a UI. Enfileira fundo e retratos que faltam.
+
+    O fundo usa só o cânone. Pedido do jogador não pinta um quarto que a
+    história não deu, nem veste a cena com a obediência que o NPC não deu.
+    """
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    actions = [
+        dict(row) for row in conn.execute(
+            "SELECT seq, type, text FROM actions WHERE adventure_id=? ORDER BY seq ASC",
+            (adventure_id,),
+        )
+    ]
     cards = [db.attach_portrait(conn, card) for card in db.list_cards(conn, adventure_id)]
+    memories = db.list_memories(conn, adventure_id)
+    assessment = world_facts.assess(adventure, actions, cards, memories)
+    text = assessment.canon_blob
     if not text.strip():
         return {
             "location": None,
@@ -258,6 +276,8 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
             "signature": "",
             "backdrop": {"status": "none", "image": None, "error": None},
             "cast": [],
+            "where": assessment.where,
+            "notice": assessment.player_notice,
         }
 
     title, entry = _location(cards, text)
@@ -303,4 +323,6 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         "signature": signature,
         "backdrop": backdrop,
         "cast": cast,
+        "where": assessment.where,
+        "notice": assessment.player_notice,
     }
