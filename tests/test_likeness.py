@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import date
 from pathlib import Path
 
 import httpx
 
-from app import db, likeness, npc_assets
+from app import db, events, jobs, likeness, npc_assets
+from app.routes.images import _plan_see
+from app.schemas import SeeRequest
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
 
@@ -241,6 +244,28 @@ def test_resolve_searches_when_the_exact_title_is_missing(tmp_db, tmp_path, monk
     assert json.loads(updated["sheet"])["wiki_title"] == "Neymar"
 
 
+def _see_failed(adventure_id: str, text: str) -> dict:
+    add_action(adventure_id, 0, "do", text)
+    with events.subscribe(adventure_id) as sub:
+        job = jobs.start_see(
+            adventure_id, {"action_seq": 0},
+            lambda: _plan_see(adventure_id, SeeRequest(action_seq=0), None),
+        )
+        failed = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and failed is None:
+            event = sub.get(0.2)
+            if event is not None and event.type == "see_failed":
+                failed = event
+    assert failed is not None
+    assert failed.data["job_id"] == job["id"]
+    with db.session() as conn:
+        stored = db.get_job(conn, job["id"])
+    assert stored["status"] == "error"
+    assert stored["result"] == {"code": failed.data["code"]}
+    return failed.data
+
+
 def test_see_refuses_an_explicit_real_person(client):
     adv = make_adventure()
     _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
@@ -248,6 +273,32 @@ def test_see_refuses_an_explicit_real_person(client):
     resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "real_person_explicit"
+
+
+def test_async_see_refuses_an_explicit_real_person_before_enqueue(client):
+    adv = make_adventure()
+    _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
+    add_action(adv["id"], 0, "do", "Zendaya is naked on the bed.")
+    started = time.monotonic()
+    resp = client.post(
+        f"/api/adventures/{adv['id']}/see",
+        json={"action_seq": 0},
+        headers={"Prefer": "respond-async"},
+    )
+    assert time.monotonic() - started < 0.3
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "real_person_explicit"
+    with db.session() as conn:
+        assert db.list_jobs(conn, adv["id"]) == []
+
+
+def test_worker_see_failed_carries_real_person_and_minor(client):
+    real = make_adventure()
+    _character(real["id"], "Zendaya", real_person=True, real_name="Zendaya")
+    assert _see_failed(real["id"], "Zendaya is naked on the bed.")["code"] == "real_person_explicit"
+    minor = make_adventure()
+    _character(minor["id"], "Clara", minor=True, age=16)
+    assert _see_failed(minor["id"], "Clara is naked on the bed.")["code"] == "minor"
 
 
 def test_see_drops_the_real_person_from_an_explicit_scene(client, tmp_path):

@@ -25,8 +25,6 @@ import threading
 import time
 from dataclasses import dataclass
 
-from app import llm_scheduler
-
 BUFFER_SIZE = 100
 SUBSCRIPTION_MAX = 500
 MAX_CHANNELS = 256
@@ -208,4 +206,11 @@ def reset() -> None:
             subscription.close()
 
 
-llm_scheduler.add_listener(broadcast)
+# Host sem llm_scheduler ainda publica os eventos dos jobs. O listener do
+# breaker só entra quando esse módulo está instalado.
+try:
+    from app import llm_scheduler
+except ImportError:
+    pass
+else:
+    llm_scheduler.add_listener(broadcast)

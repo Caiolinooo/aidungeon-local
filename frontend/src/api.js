@@ -60,15 +60,16 @@ async function parseError(res) {
   return new ApiError(res.status, code, message)
 }
 
-async function request(path, { method = 'GET', body, signal } = {}) {
+async function request(path, { method = 'GET', body, signal, headers } = {}) {
+  const extra = headers || {}
   let res
   try {
     res = await fetch(`${API_BASE}/api${path}`, {
       method,
       // FormData (upload multipart) define o próprio Content-Type com boundary
       headers: body instanceof FormData
-        ? authHeaders()
-        : authHeaders({ 'Content-Type': 'application/json' }),
+        ? authHeaders(extra)
+        : authHeaders({ 'Content-Type': 'application/json', ...extra }),
       body: body instanceof FormData ? body : body != null ? JSON.stringify(body) : undefined,
       signal,
     })
@@ -224,12 +225,14 @@ export const api = {
     }),
 
   // ------------------------------------------------------------ images (v2)
-  // Ação "See": gera imagem da cena (JSON, não-SSE — pode levar minutos).
+  // Ação "See": 202 na hora. A pintura segue no job; a tela consulta o GET.
   see: (advId, { action_seq, extra_prompt } = {}) =>
     request(`/adventures/${advId}/see`, {
       method: 'POST',
       body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
+      headers: { Prefer: 'respond-async' },
     }),
+  getAdventureJob: (advId, jobId) => request(`/adventures/${advId}/jobs/${jobId}`),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
   getChoices: (advId) => request(`/adventures/${advId}/choices`, { method: 'POST' }),
 

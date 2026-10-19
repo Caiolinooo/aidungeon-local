@@ -435,6 +435,28 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     return prompt, negative, caption
 
 
+def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
+    """422 antes de enfileirar, quando o texto e os cards já decidem a recusa.
+
+    Nudez com pessoa real e sem fictício, ou com menor, não espera o LLM.
+    O worker repete o critério: se o prompt nasce lá, o job fica
+    `real_person_explicit` ou `minor`.
+    """
+    with db.session() as conn:
+        adv = db.get_adventure(conn, adventure_id)
+        if not adv:
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        actions = db.list_actions(conn, adventure_id)
+        cards = list(db.list_cards(conn, adventure_id))
+    moment = current_moment(actions, body.action_seq)
+    order = body.extra_prompt.strip()
+    guard_text = "\n".join(part for part in (moment, order) if part)
+    frame = _cards_in_frame(cards, guard_text, adv.get("plot_essentials") or "")
+    decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
+    if decision.refusal:
+        raise GameError(422, decision.refusal, decision.message)
+
+
 def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
     """Prompt do See com o estado da aventura agora. No 202 roda na thread do
     job, fora da fila do SD."""
@@ -475,6 +497,7 @@ def post_see(adventure_id: str, body: SeeRequest,
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
+    _refuse_known_frame(adventure_id, body)
 
     if respond_async or "respond-async" in prefer.lower():
         job = jobs.start_see(
