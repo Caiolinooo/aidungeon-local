@@ -11,7 +11,7 @@ import json
 import httpx
 import pytest
 
-from app import db, deps
+from app import db, deps, jobs
 from conftest import add_action, make_adventure
 
 SHEET_JSON = {
@@ -281,6 +281,58 @@ def test_new_adventure_from_scenario_fills_the_sheets_and_reports(client):
     # o retrato do NPC entra na fila: pendencia, nao erro
     portraits = _check(report, "portraits")
     assert portraits["status"] == "warn", portraits
+    # os textos vivos da ficha tambem entram na fila (job card_assets)
+    queued = client.get(f"/api/adventures/{state['id']}/jobs").json()
+    assert any(j["type"] == "card_assets" for j in queued)
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "warn", sheets
+    assert sheets["items"][0]["fix"] == "wait_for_assets"
+
+
+def test_card_sheets_in_the_queue_is_pending_not_broken(client):
+    """Enquanto a ficha viva esta na fila, o check avisa; sem job, o check acusa."""
+    adv = make_adventure(title="Ficha viva na fila")
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                              sheet=json.dumps({"appearance": "cabelo de estrelas"}))
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "error"
+    assert "humor" in sheets["items"][0]["missing_fields"]
+
+    with db.session() as conn:
+        db.insert_job(conn, adventure_id=adv["id"], type="card_assets",
+                      ref_id=card["id"])
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "warn", sheets
+    assert sheets["items"][0]["fix"] == "wait_for_assets"
+
+
+def test_card_assets_job_fills_the_live_fields(client):
+    """O job card_assets preenche os textos vivos que faltavam na ficha."""
+    adv = make_adventure(title="Ficha viva")
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                              entry="Elara, rainha das fadas de cristal.",
+                              sheet=json.dumps({"appearance": "cabelo de estrelas"}))
+        job = jobs.enqueue_card_assets(conn, adv["id"], card["id"])
+    assert job is not None
+
+    processed = jobs.process_pending(_mock_transport(json.dumps(SHEET_JSON)))
+    assert processed == 1
+
+    with db.session() as conn:
+        card = db.get_card(conn, adv["id"], card["id"])
+    sheet = json.loads(card["sheet"])
+    assert sheet["humor"] == SHEET_JSON["humor"]
+    assert sheet["goals"] == SHEET_JSON["goals"]
+    assert sheet["status"] == "alive"
+    assert sheet["class"], "a classe sai do texto do card"
+    assert set(sheet["stats"]) >= {"str", "dex", "con", "int", "wis", "cha"}
+    # com a ficha completa, a auditoria nao aponta mais nada
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    assert _check(report, "card_sheets")["status"] == "ok"
 
 
 def test_portrait_in_the_queue_is_pending_not_broken(client):

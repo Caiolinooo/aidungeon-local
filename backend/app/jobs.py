@@ -31,6 +31,7 @@ testes determinísticos — a suíte chama `process_pending()` diretamente.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -52,6 +53,7 @@ PRIORITY_PRESENT_PORTRAIT = 1
 PRIORITY_BACKDROP = 2
 PRIORITY_BULK_PORTRAIT = 3
 PRIORITY_LIFE_TICK = 4
+PRIORITY_CARD_ASSETS = 5
 
 # A cena aberta pede retrato de novo assim que o job anterior termina em erro.
 # Sem esta espera, um CUDA OOM vira outro txt2img a cada poucos segundos.
@@ -234,6 +236,37 @@ def enqueue_all_portraits(conn, adventure_id: str) -> list[dict]:
             continue
         job = enqueue_portrait(conn, adventure_id, card["id"],
                                priority=PRIORITY_BULK_PORTRAIT)
+        if job:
+            queued.append(job)
+    return queued
+
+
+def enqueue_card_assets(conn, adventure_id: str, card_id: str) -> dict | None:
+    """Enfileira a ficha viva de um NPC (os campos em branco sao preenchidos
+    pelo LLM em background). Card do jogador nao entra: a ficha dele e do
+    jogador, nao do mundo."""
+    card = db.get_card(conn, adventure_id, card_id)
+    if not card or card.get("player_username"):
+        return None
+    sheet = npc_assets.parse_sheet(card.get("sheet"))
+    if not npc_assets.missing_sheet_fields(sheet):
+        return None
+    active = db.find_active_job(conn, "card_assets", card_id)
+    if active:
+        return active
+    return enqueue(conn, "card_assets", adventure_id, card_id,
+                   priority=PRIORITY_CARD_ASSETS)
+
+
+def enqueue_incomplete_sheets(conn, adventure_id: str) -> list[dict]:
+    """Um job por NPC cuja ficha ainda tem campo em branco."""
+    queued = []
+    for card in db.list_cards(conn, adventure_id):
+        if card["type"] != "character" or card.get("player_username"):
+            continue
+        if db.find_active_job(conn, "card_assets", card["id"]):
+            continue
+        job = enqueue_card_assets(conn, adventure_id, card["id"])
         if job:
             queued.append(job)
     return queued
@@ -426,6 +459,47 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             "prompt": prompt}
 
 
+def _execute_card_assets(job: dict, transport: Any) -> dict:
+    """Preenche os campos em branco da ficha viva de um NPC (papel `assets`).
+
+    A chamada ao LLM roda fora de transação: o banco não fica travado para a
+    narrativa enquanto o modelo escreve. Só os campos pedidos são gravados —
+    o que a ficha já tinha não é reescrito."""
+    adventure_id = job["adventure_id"]
+    card_id = job["ref_id"]
+    with db.session() as conn:
+        adv = db.get_adventure(conn, adventure_id)
+        card = db.get_card(conn, adventure_id, card_id)
+        if not adv:
+            raise GameError(404, "not_found", f"adventure {adventure_id} not found")
+        if not card:
+            raise GameError(404, "not_found", f"card {card_id} not found")
+        llm_cfg = settings_store.effective_llm_settings(conn)
+        sheet = npc_assets.parse_sheet(card.get("sheet"))
+        title = card.get("title") or ""
+        entry = card.get("entry") or ""
+        card_type = card.get("type") or ""
+    wanted = [key for key in npc_assets.missing_sheet_fields(sheet)
+              if key in npc_assets.LLM_SHEET_FIELDS]
+    filled: list[str] = []
+    if wanted:
+        story = f"Story: {adv.get('title') or ''} — {(adv.get('description') or '')[:600]}"
+        extra = npc_assets.fill_missing_fields(
+            llm_cfg, title=title, entry=entry, sheet=sheet, missing=wanted,
+            transport=transport, role="assets", story=story, card_type=card_type,
+        )
+        merged = npc_assets.merge_filled_fields(sheet, extra, wanted)
+        filled = [key for key in wanted if merged.get(key) != sheet.get(key)]
+        sheet = merged
+    complete = npc_assets.ensure_sheet_complete(sheet, entry=entry, card=card)
+    remaining = npc_assets.missing_sheet_fields(complete)
+    with db.session() as conn:
+        db.update_card(conn, adventure_id, card_id,
+                       {"sheet": json.dumps(complete, ensure_ascii=False)})
+    log.info("jobs: ficha de %s preenchida (%s)", card_id, ", ".join(filled) or "nada")
+    return {"card_id": card_id, "filled": filled, "remaining": remaining}
+
+
 # Fundo de cena: bucket SDXL 7:4. A faixa corta o centro; 896×512 ficava mole.
 _BACKDROP_WIDTH = 1344
 _BACKDROP_HEIGHT = 768
@@ -535,6 +609,7 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "scene_backdrop": _execute_backdrop,
     "see_image": _execute_see,
     "npc_day_tick": _execute_day_tick,
+    "card_assets": _execute_card_assets,
 }
 
 
@@ -546,8 +621,13 @@ def _failed(job: dict, code: str, message: str) -> None:
 
 
 def _announce(job: dict, result: dict) -> None:
-    """Evento do tipo, depois do `job_progress` done."""
-    data = {"job_id": job["id"], "image": result["image"]}
+    """Evento do tipo, depois do `job_progress` done.
+
+    Só os jobs de imagem carregam `image`; os demais (dia do mundo, ficha do
+    NPC) publicam o que têm."""
+    data = {"job_id": job["id"]}
+    if result.get("image"):
+        data["image"] = result["image"]
     if job["type"] == "character_portrait":
         events.publish(job["adventure_id"], "portrait_ready",
                        {**data, "card_id": result["card_id"]})
@@ -556,6 +636,10 @@ def _announce(job: dict, result: dict) -> None:
                        {**data, "ref_id": job["ref_id"]})
     elif job["type"] == "see_image":
         events.publish(job["adventure_id"], "see_ready", data)
+    elif job["type"] == "card_assets":
+        events.publish(job["adventure_id"], "card_assets_ready",
+                       {**data, "card_id": result["card_id"],
+                        "filled": result.get("filled") or []})
 
 
 def _run_job(job: dict, transport: Any) -> None:

@@ -34,6 +34,12 @@ SHEET_TEXT_FIELDS = (
 LIFESIM_FIELDS = (
     "humor", "speech", "goals", "background", "lifestyle", "habits", "likes", "sentiments",
 )
+# Campos de texto que o LLM preenche. `class`, `status`, `notes` e `stats`
+# sao deterministicos (ensure_sheet_complete) e nao entram aqui.
+LLM_SHEET_FIELDS = (
+    "appearance", "body", "clothing", "personality", "humor", "speech", "goals",
+    "background", "lifestyle", "habits", "likes", "sentiments",
+)
 SHEET_FIELD_LIMITS = {"sentiments": 240}
 
 _ENRICH_SYSTEM = """You build structured RPG character sheets for an interactive fiction game.
@@ -232,7 +238,7 @@ def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = No
     missing = [key for key in SHEET_TEXT_FIELDS if not _filled(normalized.get(key))]
     if missing:
         try:
-            extra = _fill_missing_fields(
+            extra = fill_missing_fields(
                 llm_cfg, title=title, entry=entry, sheet=normalized, missing=missing,
                 transport=transport, role=role, story=story, card_type=card_type,
             )
@@ -249,10 +255,14 @@ def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = No
     return normalized
 
 
-def _fill_missing_fields(llm_cfg, *, title: str, entry: str, sheet: dict,
+def fill_missing_fields(llm_cfg, *, title: str, entry: str, sheet: dict,
                          missing: list[str], transport, role: str,
                          story: str = "", card_type: str = "") -> dict:
-    """Uma chamada pedindo só o que a primeira ficha deixou em branco."""
+    """Uma chamada pedindo só o que a ficha deixou em branco.
+
+    Devolve o dict cru do LLM (chave -> texto); quem chama decide o que
+    gravar. `missing` limita o que o modelo pode inventar.
+    """
     keys = ", ".join(missing)
     system = (
         "You fill ONLY these missing text fields of one character: "
@@ -377,6 +387,31 @@ def _regen_context(adv: dict, card: dict, sheet: dict) -> str:
 
 def _filled(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def missing_sheet_fields(sheet: dict, fields: Any = None) -> list[str]:
+    """Campos de texto da ficha que ainda estao em branco.
+
+    Fonte unica do "o que falta": a auditoria e o job de ficha usam os dois
+    a mesma lista, entao a pendencia e sempre a mesma.
+    """
+    source = sheet if isinstance(sheet, dict) else {}
+    wanted = tuple(fields) if fields else SHEET_TEXT_FIELDS
+    return [key for key in wanted if not _filled(source.get(key))]
+
+
+def merge_filled_fields(sheet: dict, extra: dict, keys: Any) -> dict:
+    """Grava em `sheet` so os campos pedidos que o LLM devolveu com texto.
+
+    Nao muta a entrada: devolve uma copia. Campo em branco no LLM nao
+    apaga o que a ficha ja tinha.
+    """
+    out = dict(sheet) if isinstance(sheet, dict) else {}
+    for key in keys:
+        raw = extra.get(key) if isinstance(extra, dict) else None
+        if isinstance(raw, str) and raw.strip():
+            out[key] = _field_text(key, raw)
+    return out
 
 
 def regenerate_card(conn, adv: dict, card: dict, llm_cfg: dict, *,

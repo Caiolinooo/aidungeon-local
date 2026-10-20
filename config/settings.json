@@ -72,7 +72,8 @@
       "summary": 60,
       "image_prompt": 20,
       "assistant": 180,
-      "meta": 45
+      "meta": 45,
+      "assets": 120
     },
     "aux_cache_prompt": false,
     "aux_cap": 3,

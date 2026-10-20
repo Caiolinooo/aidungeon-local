@@ -1197,7 +1197,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 # -------------------------------------------------------------------- jobs
-JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick")
+JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick",
+             "card_assets")
 JOB_ACTIVE = ("preparing", "pending", "running")
 
 

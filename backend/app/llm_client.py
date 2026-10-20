@@ -56,14 +56,18 @@ log = logging.getLogger("aidungeon.llm")
 PROBE_TIMEOUT = 15.0
 
 ROLES = ("narrative", "choices", "chronicle", "summary",
-         "image_prompt", "assistant", "meta")
+         "image_prompt", "assistant", "meta", "assets")
 
 # Slot de cada auxiliar quando o servidor tem 4+ slots.
-_AUX_SLOTS_4 = {"choices": 1, "chronicle": 2, "summary": 2,
+# `assets` (ficha viva do NPC) divide o slot 2 com chronicle/summary: assim
+# ele não disputa o slot 3 com a checagem de viabilidade (meta) nem com o
+# prompt de retrato (image_prompt), que rodam no turno do jogador.
+_AUX_SLOTS_4 = {"choices": 1, "chronicle": 2, "summary": 2, "assets": 2,
                 "image_prompt": 3, "assistant": 3, "meta": 3}
 
 DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 45.0, "summary": 60.0,
-                         "image_prompt": 20.0, "assistant": 90.0, "meta": 45.0}
+                         "image_prompt": 20.0, "assistant": 90.0, "meta": 45.0,
+                         "assets": 120.0}
 
 # Cache de descoberta: (base_url, model_alias) -> id do modelo (ou None)
 _discovery_cache: dict[tuple[str, str], str | None] = {}

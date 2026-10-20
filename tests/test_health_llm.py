@@ -112,7 +112,7 @@ def test_health_shows_scheduler_slots_jobs_memory_and_watchdog(probe):
     assert data["slots"]["total"] == 5
     assert data["slots"]["roles"] == {"narrative": 0, "choices": 1, "chronicle": 2,
                                       "summary": 2, "image_prompt": 3, "assistant": 3,
-                                      "meta": 3}
+                                      "meta": 3, "assets": 2}
     assert data["slots"]["watchdog"]["restarts"] == 1
     assert data["slots"]["watchdog"]["stale"] is False
     assert data["jobs"]["pending"] == {"scene_backdrop": 1, "character_portrait": 1}

@@ -10,7 +10,7 @@ própria.
 ```python
 # backend/app/llm_client.py
 ROLES = ("narrative", "choices", "chronicle", "summary",
-         "image_prompt", "assistant", "meta")
+         "image_prompt", "assistant", "meta", "assets")
 
 def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
                     timeout_s: float | None = None,
@@ -32,7 +32,7 @@ def invalidate_slot_cache() -> None: ...
 
 - Mapa de slots pelo `total_slots` de `GET /props`:
 
-  | slots no servidor | narrative | choices | chronicle, summary | image_prompt, assistant, meta |
+  | slots no servidor | narrative | choices | chronicle, summary, assets | image_prompt, assistant, meta |
   |---|---|---|---|---|
   | 4 ou mais (a VM roda `-np 5`) | 0 | 1 | 2 | 3 |
   | 3 | 0 | 1 | 2 | 2 |
@@ -64,8 +64,8 @@ def invalidate_slot_cache() -> None: ...
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`).
 - Timeouts padrão (prazo total em segundos, sobrescrevíveis em
   `config/settings.json → scheduler.timeouts`): `choices` 15, `chronicle` 45,
-  `summary` 60, `image_prompt` 20, `assistant` 180, `meta` 45. `timeout_s`
-  explícito vence o padrão; saídas longas (rascunho de cenário) usam
+  `summary` 60, `image_prompt` 20, `assistant` 180, `meta` 45, `assets` 120.
+  `timeout_s` explícito vence o padrão; saídas longas (rascunho de cenário) usam
   `scaled_timeout`. A narrativa não tem prazo total: `llm.timeout_seconds` é o
   timeout de leitura entre tokens. O `assistant` tem o prazo maior porque a
   ficha do NPC e o rascunho de cenário são saídas longas: eles esperam na fila
@@ -81,7 +81,9 @@ def invalidate_slot_cache() -> None: ...
 - Scheduler (G3, `backend/app/llm_scheduler.py`): toda chamada pede a vez antes
   de abrir a conexão.
   - Prioridade (menor primeiro): `narrative` 0, que nunca espera; `choices` 1;
-    `image_prompt` e `meta` 2; `assistant` 3; `chronicle` 4; `summary` 5.
+    `image_prompt` e `meta` 2; `assistant` 3; `chronicle` 4; `summary` 5;
+    `assets` 6 (a ficha viva do NPC não disputa o slot 3 com o `meta` da
+    checagem nem com o `image_prompt` do retrato).
   - Uma auxiliar por slot fixado e no máximo `scheduler.aux_cap` (3) em voo,
     `aux_cap_during_narrative` (2) com narrativa em curso. Entra a primeira da
     fila que couber.
@@ -148,6 +150,7 @@ def subscribe(adventure_id: str, last_event_id: int | None = None) -> Subscripti
   | `backdrop_ready` | `{job_id, ref_id, image: {id, url, prompt}}` |
   | `see_ready` | `{job_id, image}` (`image` no formato `ImageResult`) |
   | `see_failed` | `{job_id, code, message}` |
+  | `card_assets_ready` | `{job_id, card_id, filled}` (a ficha viva do NPC mudou) |
   | `llm_degraded` | `{reason, until}` |
   | `llm_recovered` | `{}` |
   | `action_check` | `{possible, blockers, risks, notes, action_id?, seq?}` |
@@ -377,11 +380,14 @@ def cancel(conn, job_id: str) -> dict | None: ...
     nunca é reescrita aqui: ela é do `PUT /adventures/{id}/character`.
 - Nascimento da aventura (`POST /api/adventures` com `scenario_id`): os NPCs já
   nascem com a ficha determinística preenchida (`status`, `class` inferida,
-  `stats` estimadas) e os retratos entram na fila; a resposta traz o relatório
-  da auditoria no campo `consistency`. Sem `scenario_id` não há relatório (não
-  há NPC para auditar). Um retrato **na fila** é pendência (`warn`), não erro:
-  o prompt sai junto com a imagem, então só falta o job existir para o check
-  accusing o retrato.
+  `stats` estimadas); os retratos entram na fila (`character_portrait`) e os
+  textos vivos da ficha (`appearance`, `body`, `clothing`, `personality`,
+  `humor`, `speech`, `goals`, `background`, `lifestyle`, `habits`, `likes`,
+  `sentiments`) entram na fila como job `card_assets` — um por NPC com campo
+  em branco, papel `assets` (slot 2, prazo 120 s, prioridade 5). A resposta
+  traz o relatório da auditoria no campo `consistency`. Sem `scenario_id` não
+  há relatório (não há NPC para auditar). Ficha ou retrato **na fila** é
+  pendência (`warn`), não erro: o job existe para preenchê-los.
 
 ## Arquivos compartilhados
 

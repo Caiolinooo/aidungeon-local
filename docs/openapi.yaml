@@ -2317,7 +2317,7 @@ components:
           type: string
         type:
           type: string
-          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick]
+          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick, card_assets]
         status:
           type: string
           enum: [preparing, pending, running, done, error, canceled]
@@ -2329,14 +2329,14 @@ components:
           type: object
         priority:
           type: integer
-          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote.
+          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM).
         supersede_key:
           type: string
           description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>").
         result:
           type: object
           nullable: true
-          description: 'done → character_portrait {"image": {id, url, prompt}, "card_id", "prompt"}; scene_backdrop {"image", "ref_id"}; see_image {"image": ImageResult}. error → {"code"}.'
+          description: 'done → character_portrait {"image": {id, url, prompt}, "card_id", "prompt"}; scene_backdrop {"image", "ref_id"}; see_image {"image": ImageResult}; card_assets {"card_id", "filled", "remaining"}. error → {"code"}.'
         error:
           type: string
           nullable: true

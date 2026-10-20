@@ -104,12 +104,13 @@ def _npc_characters(cards: list[dict]) -> list[dict]:
 
 # --------------------------------------------------------------- checks
 
-def _check_card_sheets(cards: list[dict]) -> dict:
+def _check_card_sheets(conn: sqlite3.Connection, cards: list[dict]) -> dict:
     chars = _characters(cards)
     if not chars:
         return _check("card_sheets", "Fichas dos personagens", OK,
                       "Nenhum personagem na aventura.")
     items: list[dict] = []
+    queued: list[dict] = []
     for card in chars:
         sheet = npc_assets.parse_sheet(card.get("sheet"))
         # A ficha do jogador segue o schema do personagem (status, classe,
@@ -121,12 +122,25 @@ def _check_card_sheets(cards: list[dict]) -> dict:
         missing_stats = [k for k in npc_assets.STATS_KEYS
                          if not isinstance(stats.get(k), int)
                          or not 1 <= int(stats[k]) <= 20]
-        if missing or missing_stats:
-            items.append({"card_id": card.get("id"), "title": card.get("title"),
-                          "missing_fields": missing, "missing_stats": missing_stats})
+        if not (missing or missing_stats):
+            continue
+        item = {"card_id": card.get("id"), "title": card.get("title"),
+                "missing_fields": missing, "missing_stats": missing_stats}
+        # Ficha na fila é pendência, não falha: o job card_assets preenche
+        # os campos em branco quando roda.
+        pending = (not _is_player_card(card)
+                   and db.find_active_job(conn, "card_assets", card.get("id")) is not None)
+        if pending:
+            item["fix"] = "wait_for_assets"
+            queued.append(item)
+        else:
+            items.append(item)
     if items:
         return _check("card_sheets", "Fichas dos personagens", ERROR,
                       f"{len(items)} personagem(ns) com ficha incompleta.", items)
+    if queued:
+        return _check("card_sheets", "Fichas dos personagens", WARN,
+                      f"{len(queued)} ficha(s) em preenchimento na fila.", queued)
     return _check("card_sheets", "Fichas dos personagens", OK,
                   f"{len(chars)} personagem(ns) com ficha completa.")
 
@@ -299,7 +313,7 @@ def audit(conn: sqlite3.Connection, adventure_id: str) -> dict:
         raise GameError.not_found(f"adventure {adventure_id} not found")
     cards = db.list_cards(conn, adventure_id)
     checks = [
-        _check_card_sheets(cards),
+        _check_card_sheets(conn, cards),
         _check_portraits(conn, adv, cards),
         _check_memories(conn, adventure_id),
         _check_npc_minds(conn, adventure_id, cards),
@@ -333,7 +347,7 @@ def repair(conn: sqlite3.Connection, adventure_id: str, check_id: str,
 
 def _repair_cards(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
                   transport: Any) -> dict:
-    report = _check_card_sheets(db.list_cards(conn, adv["id"]))
+    report = _check_card_sheets(conn, db.list_cards(conn, adv["id"]))
     repaired: list[dict] = []
     errors: list[str] = []
     for item in report["items"]:

@@ -129,9 +129,10 @@ def create_adventure(body: AdventureCreate,
             # v0.3.0: pipeline assíncrono — retratos dos NPCs começam a gerar
             # em background; a UI aplica cada um quando o job conclui.
             jobs.enqueue_all_portraits(conn, adv["id"])
-            # Todo NPC nasce com status, classe e atributos; a auditoria
-            # confere o resto (e o reparo com IA fica na aba Check).
+            # Todo NPC nasce com status, classe e atributos; os textos vivos
+            # (humor, laços, goals) saem do LLM em background (job card_assets).
             _complete_npc_sheets(conn, adv["id"])
+            jobs.enqueue_incomplete_sheets(conn, adv["id"])
             report = consistency.audit(conn, adv["id"])
         else:
             adv = db.insert_adventure(

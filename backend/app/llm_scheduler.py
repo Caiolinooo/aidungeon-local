@@ -41,7 +41,7 @@ from typing import Any, Callable, Iterator
 log = logging.getLogger("aidungeon.llm.scheduler")
 
 PRIORITIES = {"narrative": 0, "choices": 1, "image_prompt": 2, "meta": 2,
-              "assistant": 3, "chronicle": 4, "summary": 5}
+              "assistant": 3, "chronicle": 4, "summary": 5, "assets": 6}
 
 # Outcomes do llm_client que contam como falha do servidor.
 SERVER_FAILURES = ("timeout", "stalled")

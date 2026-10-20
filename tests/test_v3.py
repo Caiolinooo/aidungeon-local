@@ -117,9 +117,11 @@ def test_adventure_create_auto_enqueues_character_portraits(client):
     adv = client.post("/api/adventures",
                       json={"scenario_id": scenario["id"]}).json()
     queued = client.get(f"/api/adventures/{adv['id']}/jobs").json()
-    assert len(queued) == 1
-    assert queued[0]["status"] == "pending"
-    assert queued[0]["type"] == "character_portrait"
+    portraits = [j for j in queued if j["type"] == "character_portrait"]
+    assert len(portraits) == 1
+    assert portraits[0]["status"] == "pending"
+    # o NPC também entra na fila do preenchimento da ficha viva (card_assets)
+    assert any(j["type"] == "card_assets" for j in queued)
 
 
 # ---------------------------------------------------------------- lifecycle
