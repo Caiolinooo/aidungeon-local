@@ -360,6 +360,9 @@ def cancel(conn, job_id: str) -> dict | None: ...
   chaves extras (`hp` etc.). O backend completa o que faltar: `status`,
   atributos estimados pela classe e a classe inferida do texto.
 - Auditoria de consistência:
+  - UI: aba `Check` no drawer (ícone de escudo) mostra as seis verificações
+    com o detalhe de cada item quebrado e o botão de reparo por verificação;
+    o reparo mostra quantos itens foram refeitos e a pendência que sobrou.
   - `GET /api/adventures/{id}/consistency` → `{ok, adventure_id, checks[], counts}`
     com as verificações `card_sheets`, `portraits`, `memories`, `npc_minds`,
     `canon_world` e `scene_alignment` (status `ok`/`warn`/`error`).
