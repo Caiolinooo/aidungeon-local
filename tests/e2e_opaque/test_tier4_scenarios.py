@@ -57,6 +57,10 @@ class TestTier4RealWorldScenarios:
 
         captured_turns = []
         def dm_responder(payload):
+            if not payload.get("stream"):
+                # Checagem de viabilidade (auxiliar, sem stream) e geração de
+                # opções: só o narrador conta como turno.
+                return '{"possible": true, "blockers": [], "risks": [], "notes": ""}'
             captured_turns.append(payload)
             turn_idx = len(captured_turns)
             if turn_idx == 1:

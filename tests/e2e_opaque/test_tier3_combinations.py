@@ -54,6 +54,10 @@ class TestTier3Combinations:
 
         captured_prompts = []
         def capture_handler(payload):
+            if not payload.get("stream"):
+                # Checagem de viabilidade (auxiliar, sem stream) e geração de
+                # opções: só o narrador conta como turno.
+                return '{"possible": true, "blockers": [], "risks": [], "notes": ""}'
             captured_prompts.append(payload)
             return ("The", " ground", " shakes", " violently.")
 

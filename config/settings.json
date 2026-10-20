@@ -1,4 +1,11 @@
 {
+  "action_check": {
+    "enabled": true,
+    "mode": "assist",
+    "max_tokens": 300,
+    "timeout_seconds": 20,
+    "min_words": 4
+  },
   "sampler": {
     "temperature": 0.85,
     "top_p": 1.0,

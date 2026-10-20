@@ -14,7 +14,7 @@
 import { getToken } from './auth.js'
 import { notifyUnauthorized, API_BASE } from './api.js'
 
-export async function streamGeneration(path, { body, signal, onToken, onDone, onError } = {}) {
+export async function streamGeneration(path, { body, signal, onToken, onDone, onError, onEvent } = {}) {
   let res
   try {
     const headers = body != null ? { 'Content-Type': 'application/json' } : {}
@@ -73,6 +73,9 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
             status: ev.data?.status,
             code: typeof ev.data?.code === 'string' ? ev.data.code : '',
           })
+        } else {
+          // Eventos extras do contrato (ex.: action_check, que chega antes dos tokens).
+          onEvent?.(ev.event, ev.data)
         }
       }
     }

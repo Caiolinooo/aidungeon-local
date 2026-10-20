@@ -163,7 +163,8 @@ LORE_CUE = (
 # que o narrador escrever. O output_sanitizer limpa as variantes que escapam.
 CONTEXT_STOPS = (
     LORE_OPEN, LORE_CLOSE, "[World info]", "[Memories]", "[Summary]",
-    "[Player state]", "[Players]", "[Plot]", "[NPC minds]", "[Author's note", "[Active Lore",
+    "[Player state]", "[Players]", "[Plot]", "[NPC minds]", "[Verificacao de mundo]",
+    "[Author's note", "[Active Lore",
     "[Continuity Anchor", "[Style:", "[Canon:", "[Private:", "[Web Research",
 )
 

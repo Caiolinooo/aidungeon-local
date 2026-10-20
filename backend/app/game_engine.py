@@ -22,8 +22,9 @@ Semânticas do contrato:
   choices e summary pendentes, nunca o chronicle.
 
 Eventos emitidos pelo gerador (a rota serializa em SSE):
+    {"event": "action_check", "data": {"possible": bool, "blockers": [], "risks": [], "notes": ""}}
     {"event": "token", "data": {"token": "..."}}
-    {"event": "done",  "data": {"player_action"?: Action, "action": Action}}
+    {"event": "done",  "data": {"player_action"?: Action, "action": Action, "action_check"?: object}}
     {"event": "error", "data": {"message": "..."}}
 Antes do `done`, `turn_done {action_id, seq}` sai em `events` (C2).
 """
@@ -38,6 +39,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 from app import (
+    action_check,
     choices_service,
     context_builder,
     db,
@@ -282,6 +284,57 @@ def _advance_committed_turn(conn: sqlite3.Connection, adventure_id: str,
     return db.advance_turn(conn, adv)
 
 
+def _prepare_action_check(conn: sqlite3.Connection, adventure: dict, actions: list[dict],
+                          player_action: dict | None, raw_text: str,
+                          user: str) -> tuple[str, str, dict, dict | None]:
+    """Estado da checagem, ou None quando este turno não passa por ela."""
+    if player_action is None or player_action.get("type") not in ("do", "say"):
+        return "", "", {}, None
+    try:
+        file_cfg = settings_store.load_file_settings().get("action_check") or {}
+    except Exception:
+        log.warning("action_check: configuração indisponível", exc_info=True)
+        return "", "", {}, None
+    if not isinstance(file_cfg, dict) or file_cfg.get("enabled") is not True:
+        return "", "", {}, None
+    text = (raw_text or "").strip()
+    try:
+        min_words = int(file_cfg.get("min_words", 4))
+    except (TypeError, ValueError):
+        min_words = 4
+    if len(text.split()) < min_words:
+        return "", "", {}, None
+    try:
+        cards = db.list_cards(conn, adventure["id"])
+        state = action_check.collect_state(conn, adventure, actions, cards, user)
+    except Exception:
+        log.warning("action_check: estado indisponível", exc_info=True)
+        return "", "", {}, None
+    return text, player_action.get("type") or "", file_cfg, state
+
+
+def _apply_action_check(built, text: str, type_: str, state: dict | None,
+                        llm_cfg: dict, transport: Any, cfg: dict):
+    """Injeta o bloco no contexto. None se não houve veredito; nunca propaga."""
+    if state is None:
+        return None
+    try:
+        verdict = action_check.check_action(
+            text, type_, state, llm_cfg=llm_cfg, transport=transport, cfg=cfg,
+        )
+    except Exception:
+        log.warning("action_check: checagem falhou", exc_info=True)
+        return None
+    if verdict is None or not built.messages:
+        return verdict
+    built.messages[-1] = {
+        "role": built.messages[-1]["role"],
+        "content": context_builder.with_reference(
+            built.messages[-1]["content"], action_check.verdict_block(verdict)),
+    }
+    return verdict
+
+
 def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        retry_of: dict | None,
                        retry_count: int = 0,
@@ -297,6 +350,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
         web_sources: list[dict] = []
         new_turn: str | None = None
         try:
+            verdict = None
+            check_state = None
+            check_cfg: dict = {}
+            check_text = ""
+            check_type = ""
             with db.session() as conn:
                 adventure = db.get_adventure(conn, adventure_id)
                 actions = db.list_actions(conn, adventure_id)
@@ -311,6 +369,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     step = float(sampler.get("retry_temperature_step", 0.05))
                     max_t = float(sampler.get("max_retry_temperature", 1.15))
                     sampler["temperature"] = round(min(base_t + step * retry_count, max_t), 4)
+                check_text, check_type, check_cfg, check_state = _prepare_action_check(
+                    conn, adventure, actions, player_action, raw_query_text, user)
 
             if web_search and raw_query_text.strip():
                 research = web_search_mod.research_context(
@@ -334,6 +394,19 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             ctx_script = scripting.get_adventure_script(adventure_id, "context_modifier")
             if ctx_script:
                 built.messages = scripting.run_context_modifier(ctx_script, built.messages)
+
+            verdict = _apply_action_check(
+                built, check_text, check_type, check_state, llm_cfg, transport, check_cfg)
+            if verdict is not None:
+                payload = verdict.to_dict()
+                yield {"event": "action_check", "data": payload}
+                # No barramento também: os outros jogadores veem a checagem
+                # da ação (com o id da ação para amarrar no balão).
+                live = dict(payload)
+                if player_action:
+                    live["action_id"] = player_action.get("id")
+                    live["seq"] = player_action.get("seq")
+                _publish_live(adventure_id, "action_check", live)
 
             stream_state = llm_client.StreamState()
             for token in llm_client.stream_chat_completion(
@@ -381,6 +454,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 data["player_action"] = player_action
             if web_sources:
                 data["web_sources"] = web_sources
+            if verdict is not None:
+                data["action_check"] = verdict.to_dict()
 
             # Libera o lock antes de emitir 'done' para que chamadas imediatas do
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.

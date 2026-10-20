@@ -51,6 +51,87 @@ function isCharacterRequired(err, meta) {
   return /character_required/i.test(msg) || /\(428\)/.test(msg)
 }
 
+function isPlayerAction(action) {
+  return action?.type === 'do' || action?.type === 'say' || action?.type === 'story'
+}
+
+function lastPlayerAction(list) {
+  if (!Array.isArray(list)) return null
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (isPlayerAction(list[i])) return list[i]
+  }
+  return null
+}
+
+function newestSince(list, baselineId, localOnly, me) {
+  if (!Array.isArray(list)) return null
+  const mine = (me || '').trim()
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const action = list[i]
+    if (!isPlayerAction(action) || action.id == null) continue
+    if (baselineId != null && String(action.id) === String(baselineId)) return null
+    if (localOnly) {
+      const actor = (action.actor || '').trim()
+      if (actor && mine && actor !== mine) continue
+    }
+    return action
+  }
+  return null
+}
+
+function blockerText(item) {
+  if (typeof item === 'string') return item.trim()
+  if (typeof item === 'number' && Number.isFinite(item)) return String(item)
+  if (item && typeof item === 'object') {
+    const text = item.text ?? item.reason ?? item.message ?? ''
+    return String(text).trim()
+  }
+  return ''
+}
+
+function normalizeActionCheck(data) {
+  if (!data || typeof data !== 'object') return null
+  const raw = data.action_check && typeof data.action_check === 'object'
+    ? data.action_check
+    : (typeof data.possible === 'boolean' || Array.isArray(data.blockers) ? data : null)
+  if (!raw) return null
+  const blockers = Array.isArray(raw.blockers) ? raw.blockers.map(blockerText).filter(Boolean) : []
+  return {
+    possible: raw.possible === true,
+    blockers,
+    risks: Array.isArray(raw.risks) ? raw.risks : [],
+    notes: typeof raw.notes === 'string' ? raw.notes : '',
+  }
+}
+
+function ActionCheckNote({ check }) {
+  if (!check) return null
+  if (check.possible) {
+    return (
+      <p className="mt-1 px-4 text-[11px] leading-snug text-emerald-400/90">
+        Ação verificada: possível
+      </p>
+    )
+  }
+  const blockers = Array.isArray(check.blockers) ? check.blockers : []
+  const shown = blockers.slice(0, 3)
+  const rest = blockers.length - shown.length
+  return (
+    <div className="mt-1 max-w-full px-4 text-[11px] leading-snug text-amber-200/95">
+      {shown.length === 0 ? (
+        <p>Ação verificada: não é possível</p>
+      ) : (
+        <ul className="list-disc pl-4">
+          {shown.map((line, i) => (
+            <li key={i} className="break-words">{line}</li>
+          ))}
+          {rest > 0 && <li>…</li>}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export default function Play() {
   const { id } = useParams()
   const toast = useToast()
@@ -90,6 +171,8 @@ export default function Play() {
   const [characterCard, setCharacterCard] = useState(null)
   const [characterLoading, setCharacterLoading] = useState(false)
   const [needsCharacter, setNeedsCharacter] = useState(false)
+  const [actionChecks, setActionChecks] = useState({})
+  const [pendingCheck, setPendingCheck] = useState(null)
 
   const abortRef = useRef(null)
   const seenIdsRef = useRef(new Set())
@@ -102,10 +185,17 @@ export default function Play() {
   const nearBottomRef = useRef(true)
   const newBlockIdRef = useRef(null)
   const initialScrollDone = useRef(false)
+  const actionsRef = useRef(null)
+  const actionChecksRef = useRef({})
+  const awaitingCheckRef = useRef(false)
+  const awaitingBaselineRef = useRef(null)
+  const livePlayerIdsRef = useRef(new Set())
   const generating = gen !== null
   const currentUser = session?.user || ''
   genRef.current = gen
   currentUserRef.current = currentUser
+  actionsRef.current = actions
+  actionChecksRef.current = actionChecks
   const turnBlocked = !!(
     adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
   )
@@ -131,6 +221,11 @@ export default function Play() {
       const st = await api.getAdventure(id)
       const list = [...(st.actions ?? [])].sort(bySeq)
       seenIdsRef.current = new Set(list.map((a) => a.id).filter((x) => x != null))
+      livePlayerIdsRef.current = new Set()
+      awaitingCheckRef.current = false
+      awaitingBaselineRef.current = null
+      setActionChecks({})
+      setPendingCheck(null)
       setAdventure(st)
       setActions(list)
       setUiProfile(st.ui_profile ?? null)
@@ -149,6 +244,65 @@ export default function Play() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Veredito da checagem de viabilidade. Vem pelo bus (outro jogador) ou pelo
+  // stream da própria ação (evento "action_check", antes dos tokens).
+  const handleCheckData = useCallback((data) => {
+    const check = normalizeActionCheck(data)
+    if (!check || !data || typeof data !== 'object') return
+    const raw = data.action_check && typeof data.action_check === 'object' ? data.action_check : data
+    const actionId = data.action_id ?? data.player_action_id ?? raw.action_id ?? raw.player_action_id ?? null
+    const seq = data.seq ?? data.action_seq ?? raw.seq ?? raw.action_seq
+    const list = actionsRef.current ?? []
+    const bind = (id) => {
+      if (id == null) return false
+      awaitingCheckRef.current = false
+      setPendingCheck(null)
+      setActionChecks((prev) => ({ ...prev, [String(id)]: check }))
+      return true
+    }
+    if (actionId != null) {
+      bind(actionId)
+      return
+    }
+    if (seq != null && seq !== '') {
+      const found = list.find((a) => isPlayerAction(a) && String(a.seq) === String(seq))
+      if (found?.id != null) {
+        bind(found.id)
+        return
+      }
+      setPendingCheck({ check, baselineId: null, seq, awaiting: awaitingCheckRef.current })
+      return
+    }
+    if (awaitingCheckRef.current) {
+      const own = newestSince(list, awaitingBaselineRef.current, true, currentUserRef.current)
+      if (own && !actionChecksRef.current[String(own.id)]) {
+        bind(own.id)
+        return
+      }
+      setPendingCheck({
+        check,
+        baselineId: awaitingBaselineRef.current,
+        seq: null,
+        awaiting: true,
+        local: true,
+      })
+      return
+    }
+    const last = lastPlayerAction(list)
+    const already = last?.id != null && !!actionChecksRef.current[String(last.id)]
+    if (last?.id != null && livePlayerIdsRef.current.has(last.id) && !already) {
+      bind(last.id)
+      return
+    }
+    setPendingCheck({
+      check,
+      baselineId: last?.id ?? null,
+      seq: null,
+      awaiting: true,
+      local: false,
+    })
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -186,6 +340,7 @@ export default function Play() {
       if (actor === currentUserRef.current) return
       if (seenIdsRef.current.has(data.id)) return
       seenIdsRef.current.add(data.id)
+      if (isPlayerAction(data)) livePlayerIdsRef.current.add(data.id)
       setLive('')
       setActions((prev) => {
         const list = prev ?? []
@@ -210,6 +365,7 @@ export default function Play() {
       if (!data || typeof data !== 'object' || data.id == null) return
       if (seenIdsRef.current.has(data.id)) return
       seenIdsRef.current.add(data.id)
+      if (isPlayerAction(data)) livePlayerIdsRef.current.add(data.id)
       setActions((prev) => {
         const list = prev ?? []
         if (list.some((a) => a.id === data.id)) return list
@@ -224,18 +380,40 @@ export default function Play() {
         return [...list, data].sort(bySeq)
       })
     }
+    const onCheck = (ev) => {
+      const data = parse(ev)
+      handleCheckData(data)
+    }
     es.addEventListener('turn_changed', onTurn)
     es.addEventListener('player_action', onPlayer)
     es.addEventListener('token', onToken)
     es.addEventListener('action', onAction)
+    es.addEventListener('action_check', onCheck)
     return () => {
       es.removeEventListener('turn_changed', onTurn)
       es.removeEventListener('player_action', onPlayer)
       es.removeEventListener('token', onToken)
       es.removeEventListener('action', onAction)
+      es.removeEventListener('action_check', onCheck)
       es.close()
     }
-  }, [id])
+  }, [id, handleCheckData])
+
+  useEffect(() => {
+    if (!pendingCheck || !Array.isArray(actions) || actions.length === 0) return
+    let target = null
+    if (pendingCheck.seq != null) {
+      target = actions.find((a) => isPlayerAction(a) && String(a.seq) === String(pendingCheck.seq)) || null
+    } else {
+      target = newestSince(actions, pendingCheck.baselineId, !!pendingCheck.local, currentUserRef.current)
+      if (!target?.id || !livePlayerIdsRef.current.has(target.id)) return
+    }
+    if (!target?.id) return
+    const key = String(target.id)
+    setActionChecks((prev) => (prev[key] ? prev : { ...prev, [key]: pendingCheck.check }))
+    setPendingCheck(null)
+    awaitingCheckRef.current = false
+  }, [actions, pendingCheck])
 
   const openCharacter = useCallback(async () => {
     setCharacterOpen(true)
@@ -386,6 +564,9 @@ export default function Play() {
         body,
         signal: ctrl.signal,
         onToken: (tok) => setGen((g) => (g ? { ...g, text: g.text + tok } : g)),
+        onEvent: (name, data) => {
+          if (name === 'action_check') handleCheckData(data)
+        },
         onDone: (data) => {
           newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
           setActions((prev) => {
@@ -400,8 +581,21 @@ export default function Play() {
               out.push(action)
             }
             for (const actionId of seen) seenIdsRef.current.add(actionId)
+            const prevIds = new Set((prev ?? []).map((a) => a.id))
+            for (const action of out) {
+              if (action?.id != null && !prevIds.has(action.id) && isPlayerAction(action)) {
+                livePlayerIdsRef.current.add(action.id)
+              }
+            }
             return out.sort(bySeq)
           })
+          const baked = normalizeActionCheck(data)
+          const bakedId = data?.player_action?.id
+          if (baked && bakedId != null) {
+            awaitingCheckRef.current = false
+            setPendingCheck(null)
+            setActionChecks((prev) => ({ ...prev, [String(bakedId)]: baked }))
+          }
           genRef.current = null
           setGen(null)
           setLive('')
@@ -426,7 +620,7 @@ export default function Play() {
         fail(e)
       })
     },
-    [generating, needsCharacter, toast, fetchChoices, id, promptCharacter],
+    [generating, needsCharacter, toast, fetchChoices, id, promptCharacter, handleCheckData],
   )
 
   const sendAction = (type, text, opts) => {
@@ -435,6 +629,10 @@ export default function Play() {
       return
     }
     if (turnBlocked) return
+    if (type === 'do' || type === 'say' || type === 'story') {
+      awaitingCheckRef.current = true
+      awaitingBaselineRef.current = lastPlayerAction(actionsRef.current)?.id ?? null
+    }
     return runStream('action', `/adventures/${id}/action`, {
       type,
       text,
@@ -480,7 +678,18 @@ export default function Play() {
     try {
       const res = await api.undo(id)
       const removedIds = new Set((res.removed ?? []).map((a) => a.id))
+      const removedKeys = new Set([...removedIds].map((item) => String(item)))
       setActions((prev) => (prev ?? []).filter((a) => !removedIds.has(a.id)))
+      setActionChecks((prev) => {
+        const next = {}
+        for (const [key, value] of Object.entries(prev)) {
+          if (!removedKeys.has(key)) next[key] = value
+        }
+        return next
+      })
+      setPendingCheck(null)
+      awaitingCheckRef.current = false
+      for (const removedId of removedIds) livePlayerIdsRef.current.delete(removedId)
       setChoices([])
       setWebSources([])
       toast('Last turn undone.', 'ok')
@@ -878,16 +1087,21 @@ export default function Play() {
                 </div>
               )}
 
-              {actions.map((a) => (
-                <FeedItem
-                  key={a.id}
-                  action={a}
-                  onEdit={setEditing}
-                  disabled={generating}
-                  isLatest={a.id === lastAiTextId}
-                  adventureId={id}
-                />
-              ))}
+              {actions.map((a) => {
+                const check = a?.id != null ? actionChecks[String(a.id)] : null
+                return (
+                  <div key={a.id} className="min-w-0">
+                    <FeedItem
+                      action={a}
+                      onEdit={setEditing}
+                      disabled={generating}
+                      isLatest={a.id === lastAiTextId}
+                      adventureId={id}
+                    />
+                    {isPlayerAction(a) && check && <ActionCheckNote check={check} />}
+                  </div>
+                )
+              })}
 
               {/* Streaming Cursor Block */}
               {generating && (
