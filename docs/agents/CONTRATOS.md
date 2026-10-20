@@ -225,6 +225,14 @@ class ImagePlan:
   image_id) -> dict` com `{path, width, height, seed, ms}`. Monta o payload do
   provider (Forge/A1111), aplica preset de tamanho e as `face_refs` via ControlNet.
 - `allow_explicit=False` sempre que houver pessoa real no quadro (C8).
+- Regra única de nudez, igual no See e no fundo do chat: a pintura segue a
+  NARRAÇÃO (`scene.narration_moment`: os dois últimos trechos
+  `start`/`continue`/`story`). Fala do jogador, negação ("sem a nudez
+  exposta") e condicional ("se estiver nua") não pintam ninguém nu; a
+  segurança olha tudo (`scene.is_explicit`, por cláusula). A cláusula de
+  identidade do card (roupa e cabelo) é a mesma nos dois prompts:
+  `npc_assets.scene_bits` tira enquadramento e frase de fundo, nunca a
+  frase de roupa.
 
 ## C5 Jobs (dono: Grok)
 
