@@ -195,6 +195,53 @@ def _json_blob(text: str) -> str | None:
     return cleaned[start:end + 1]
 
 
+def _salvage_truncated(text: str) -> Any:
+    """Última chance para JSON cortado pelo teto de tokens: recorta no último
+    '}' ou ']' que fecha um nível, fora de string, e fecha o que ficou aberto.
+    Um rascunho com 8 story cards estourava o max_tokens e o array vinha
+    pela metade — sem o salvamento o rascunho inteiro ia para o 503."""
+    cleaned = re.sub(r"```(?:json)?", "", text or "")
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL)
+    start = cleaned.find("{")
+    if start < 0:
+        return None
+    blob = cleaned[start:]
+    depth: list[str] = []
+    last_close = -1
+    depth_at_close: list[str] = []
+    in_str = False
+    esc = False
+    for i, ch in enumerate(blob):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth.append(ch)
+        elif ch in "}]":
+            opener = "{" if ch == "}" else "["
+            if depth and depth[-1] == opener:
+                depth.pop()
+                last_close = i
+                depth_at_close = list(depth)
+    if last_close < 0 or not depth_at_close:
+        return None
+    cut = blob[: last_close + 1]
+    cut = re.sub(r",\s*$", "", cut)
+    cut = re.sub(r",\s*\"[^\"]*\"\s*:?\s*$", "", cut)
+    closers = "".join("}" if c == "{" else "]" for c in reversed(depth_at_close))
+    try:
+        return json.loads(cut + closers)
+    except json.JSONDecodeError:
+        return None
+
+
 def _as_str(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -278,11 +325,12 @@ def _assistant_cfg(cfg: dict | None) -> dict:
 
 # ------------------------------------------------------------------ público
 def _parse_object(content: str) -> dict | None:
-    """JSON objeto ou None. JSON cortado no meio não derruba a etapa."""
+    """JSON objeto ou None. JSON cortado no meio tenta o salvamento antes de
+    desistir da etapa."""
     try:
         raw = _extract_json(content)
     except (ValueError, TypeError, json.JSONDecodeError):
-        return None
+        raw = _salvage_truncated(content)
     return raw if isinstance(raw, dict) else None
 
 
@@ -405,9 +453,12 @@ def _draft_cards(llm_cfg: dict, assistant_cfg: dict | None, *, brief: str,
     last_exc: llm_client.LlmError | None = None
     saw_content = False
     best: list[dict] = []
+    budget = cfg["cards_max_tokens"]
+    if card_count:
+        budget = max(budget, 300 * card_count)
     for attempt, system in enumerate(systems, start=1):
         try:
-            content = _chat(llm_cfg, system, user, max_tokens=cfg["cards_max_tokens"],
+            content = _chat(llm_cfg, system, user, max_tokens=budget,
                             temperature=cfg["temperature"], transport=transport)
         except llm_client.LlmError as exc:
             last_exc = exc
@@ -545,12 +596,17 @@ def generate_scenario_draft(
         spec_lines.append(web_context)
 
     idea = "\n".join(spec_lines)
+    # Cada story card leva ~350 tokens de JSON (mais com ficha); sem folga o
+    # rascunho trunca no meio do array e o parse falhava com 503.
+    budget = cfg["max_tokens"]
+    if card_count:
+        budget = max(budget, 1400 + 350 * card_count)
     raw: dict | None = None
     last_exc: llm_client.LlmError | None = None
     saw_content = False
     for _attempt in range(2):
         try:
-            raw = _chat_object(llm_cfg, system, idea, max_tokens=cfg["max_tokens"],
+            raw = _chat_object(llm_cfg, system, idea, max_tokens=budget,
                                temperature=cfg["temperature"], transport=transport)
         except llm_client.LlmError as exc:
             last_exc = exc
@@ -628,18 +684,30 @@ def _sheet_value_kept(value: Any) -> bool:
 
 
 def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict:
-    """Preenche a ficha de cada personagem. O que o rascunho já tem prevalece."""
+    """Preenche a ficha de cada personagem. O que o rascunho já tem prevalece.
+
+    Um card que falha (LLM ocupado/lento) não derruba a geração: a ficha
+    determinística fica e o job card_assets completa os textos vivos depois,
+    na criação da aventura.
+    """
     for card in draft.get("story_cards") or []:
         if not isinstance(card, dict):
             continue
         if str(card.get("type") or "").lower() != "character":
             continue
         existing = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
-        built = npc_assets.build_sheet(
-            llm_cfg, title=str(card.get("title") or ""),
-            entry=str(card.get("entry") or ""), sheet=existing or None,
-            transport=transport,
-        )
+        try:
+            built = npc_assets.build_sheet(
+                llm_cfg, title=str(card.get("title") or ""),
+                entry=str(card.get("entry") or ""), sheet=existing or None,
+                transport=transport,
+            )
+        except llm_client.LlmError as exc:
+            log.info("assistant: deepen de '%s' falhou (%s); fica o deterministico",
+                     card.get("title"), exc.message)
+            card["sheet"] = npc_assets.ensure_sheet_complete(
+                existing, entry=str(card.get("entry") or ""), card=card)
+            continue
         portrait = built.pop("portrait_prompt", None)
         merged = dict(built)
         for key, value in existing.items():

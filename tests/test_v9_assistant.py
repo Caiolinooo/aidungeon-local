@@ -335,3 +335,106 @@ def test_generate_keeps_draft_humor_and_fills_lifestyle(client):
     assert card["sheet"]["humor"] == "dry jokes"
     assert card["sheet"]["appearance"] == "ash braid"
     assert card["sheet"]["lifestyle"] == "wakes on the bridge"
+
+
+def test_parse_object_salvages_a_draft_truncated_by_max_tokens():
+    """O JSON cortado pelo teto de tokens fecha no último nível completo."""
+    from app import assistant
+    full = json.dumps(DRAFT, ensure_ascii=False)
+    # corte no meio do 3o card: ele sobrevive, mas sem o campo truncado
+    cut = full[: full.index("Last free port") + 6]
+    salvaged = assistant._parse_object(cut)
+    assert salvaged is not None
+    assert salvaged["title"] == DRAFT["title"]
+    assert salvaged["opening_text"] == DRAFT["opening_text"]
+    assert [c["title"] for c in salvaged["story_cards"]] == [
+        "Ada Vane", "The Leviathan", "Port Sorrow"]
+    assert not salvaged["story_cards"][2].get("entry")
+    # corte mais cedo: só o 1o card fecha
+    earlier = full[: len(full) - 160]
+    salvaged = assistant._parse_object(earlier)
+    assert [c["title"] for c in salvaged["story_cards"]] == ["Ada Vane"]
+    assert assistant._parse_object("sem json aqui") is None
+
+
+def test_generate_salvages_a_draft_truncated_by_max_tokens(client):
+    """8 cards estouravam o teto (2500) e o parse falhava 2x -> 503. Agora o
+    rascunho truncado é salvo e os cards que faltam saem no fallback."""
+    truncated = json.dumps(DRAFT, ensure_ascii=False)
+    truncated = truncated[: len(truncated) - 160]  # só o 1o card fecha
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if path.endswith("/chat/completions"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                content = truncated
+            else:
+                content = json.dumps({"story_cards": DRAFT["story_cards"]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(404, json={"error": path})
+
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.post("/api/assistant/generate", json={
+            "brief": "steampunk pirate hunting a leviathan",
+            "card_count": 3,
+            "web_search_mode": "off",
+            "deep_characters": False,  # o deepen tem teste próprio abaixo
+        })
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["title"] == DRAFT["title"]
+    assert [c["title"] for c in data["story_cards"]] == [
+        "Ada Vane", "The Leviathan", "Port Sorrow"]
+    assert calls["n"] == 2  # rascunho truncado salvo + fallback de cards
+
+
+def test_generate_deep_characters_tolerates_a_card_llm_failure(client):
+    """Um card com LLM indisponível não derruba a geração: fica a ficha
+    determinística e o job card_assets completa os textos vivos depois."""
+    draft = {
+        "title": "Sky",
+        "description": "Airships.",
+        "ai_instructions": "Be concrete.",
+        "plot_essentials": "You fly.",
+        "authors_note": "Wind.",
+        "opening_text": "The deck tilts.",
+        "tags": ["sky"],
+        "story_cards": [{
+            "title": "Ada", "type": "character", "triggers": ["Ada"],
+            "entry": "Captain of the Kestrel.",
+        }],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content)
+            system = body["messages"][0]["content"]
+            if "structured RPG character sheets" in system:
+                return httpx.Response(500, json={"error": "slot busy"})
+            content = json.dumps(draft)
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(404, json={"error": request.url.path})
+
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.post("/api/assistant/generate", json={
+            "brief": "airships over a storm sea",
+            "web_search_mode": "off",
+            "deep_characters": True,
+        })
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    card = resp.json()["story_cards"][0]
+    assert card["sheet"]["status"] == "alive"
+    assert card["sheet"]["class"]
+    assert set(card["sheet"]["stats"]) >= {"str", "dex", "con", "int", "wis", "cha"}

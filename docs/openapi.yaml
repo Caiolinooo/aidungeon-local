@@ -1293,6 +1293,11 @@ paths:
         Mesmo rascunho de /assistant/scenario. current entra no prompt como
         o rascunho a regenerar. deep_characters=true chama a ficha completa
         de cada card type=character; o que o rascunho já tiver prevalece.
+        Robusto a truncamento: se o JSON do rascunho for cortado pelo teto de
+        tokens, o texto é salvo no último nível completo e os cards que faltam
+        saem numa passagem dedicada; se a ficha profunda de um personagem
+        falhar, ele fica com a ficha determinística (status/classe/atributos)
+        e os textos vivos chegam depois pelo job card_assets.
       requestBody:
         required: true
         content:

@@ -388,6 +388,15 @@ def cancel(conn, job_id: str) -> dict | None: ...
   traz o relatório da auditoria no campo `consistency`. Sem `scenario_id` não
   há relatório (não há NPC para auditar). Ficha ou retrato **na fila** é
   pendência (`warn`), não erro: o job existe para preenchê-los.
+- Rascunho via IA (`POST /api/assistant/generate` e `/scenario`): o teto de
+  tokens do rascunho escala com `card_count` (`max(max_tokens,
+  1400 + 350*card_count)`; cards no fallback: `max(cards_max_tokens,
+  300*card_count)`). Se mesmo assim o JSON vier cortado, o parse salva o
+  texto até o último nível completo (`_salvage_truncated`): o card truncado
+  sobrevive sem o campo cortado e, se a lista ficar curta, o fallback de
+  cards completa. Uma falha de LLM na ficha profunda de UM personagem não
+  derruba o rascunho: aquele fica com a ficha determinística e o job
+  `card_assets` completa os textos vivos depois.
 
 ## Arquivos compartilhados
 
