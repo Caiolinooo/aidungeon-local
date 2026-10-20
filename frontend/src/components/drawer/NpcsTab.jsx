@@ -103,6 +103,13 @@ const REGEN_FIELDS = new Set([
 const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
 // Mesmos nomes e ponto de partida de backend/app/npc_bonds.py.
 const BOND_KEYS = ['relationship', 'trust', 'fear', 'desire', 'boldness']
+const BOND_LABELS = {
+  relationship: 'Relation',
+  trust: 'Trust',
+  fear: 'Fear',
+  desire: 'Desire',
+  boldness: 'Bold',
+}
 const BOND_DEFAULTS = { relationship: 40, trust: 40, fear: 15, desire: 15, boldness: 40 }
 
 // sheet armazenada (JSON string) → dict editável (''/inválido → {}).
@@ -126,7 +133,10 @@ function sheetHasContent(sheet) {
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
 function SheetPanel({ sheet, onChange, onRegenerateField }) {
   const inputCls =
-    'w-full rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs outline-none focus:border-emerald-600'
+    'w-full min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs outline-none focus:border-emerald-600'
+  // Sem as setas nativas: num input estreito elas cobrem o dígito (40 vira "4(").
+  const numberCls =
+    `${inputCls} px-1 text-center [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`
   const set = (key, value) => onChange({ ...sheet, [key]: value })
   const setStat = (key, value) => {
     const n = Math.max(1, Math.min(20, Number.parseInt(value, 10) || 0))
@@ -181,37 +191,39 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
           />
         </label>
       ))}
-      <div>
+      <div className="min-w-0">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stats</span>
-        <div className="mt-1 grid grid-cols-6 gap-1">
+        <div className="mt-1 grid grid-cols-3 gap-1.5">
           {STAT_KEYS.map((key) => (
-            <label key={key} className="flex flex-col items-center gap-0.5">
+            <label key={key} className="flex min-w-0 flex-col gap-0.5">
               <span className="text-[10px] uppercase text-zinc-500">{key}</span>
               <input
-                type="number" min={1} max={20}
+                type="number" inputMode="numeric" min={1} max={20} size={3}
                 value={sheet.stats?.[key] ?? ''}
                 onChange={(e) => setStat(key, e.target.value)}
-                className={`${inputCls} text-center`}
+                className={numberCls}
               />
             </label>
           ))}
         </div>
       </div>
-      <div>
+      <div className="min-w-0">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
           Bonds
         </span>
         <p className="text-[10px] text-zinc-600">Updated each turn from what you do.</p>
-        <div className="mt-1 grid grid-cols-5 gap-1">
+        <div className="mt-1 grid grid-cols-1 gap-1">
           {BOND_KEYS.map((key) => (
-            <label key={key} className="flex flex-col items-center gap-0.5">
-              <span className="text-center text-[9px] uppercase leading-tight text-zinc-500">{key}</span>
+            <label key={key} className="flex min-w-0 items-center gap-2">
+              <span className="w-16 shrink-0 text-[10px] uppercase text-zinc-500" title={key}>
+                {BOND_LABELS[key]}
+              </span>
               <input
-                type="number" min={0} max={100}
+                type="number" inputMode="numeric" min={0} max={100} size={3}
                 title={key}
                 value={sheet.bonds?.[key] ?? BOND_DEFAULTS[key]}
                 onChange={(e) => setBond(key, e.target.value)}
-                className={`${inputCls} text-center`}
+                className={numberCls}
               />
             </label>
           ))}
@@ -312,8 +324,8 @@ function NpcRow({
     'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-emerald-600'
 
   return (
-    <li className="rounded-lg border border-zinc-800 bg-zinc-800/50 p-3">
-      <div className="flex gap-3">
+    <li className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-800/50 p-3">
+      <div className="flex min-w-0 gap-3">
         <PortraitThumb card={card} activeJob={job && (job.status === 'pending' || job.status === 'running') ? job : null} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <input
@@ -388,7 +400,7 @@ function NpcRow({
           )}
         </div>
       </div>
-      <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 text-xs text-zinc-400">
+      <div className="mt-2 min-w-0 break-words rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 text-xs text-zinc-400">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">State</p>
         <p>mood: {life.mood || '—'}</p>
         <p>activity: {life.activity || '—'}</p>
@@ -401,7 +413,7 @@ function NpcRow({
           </ul>
         )}
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1">
+      <div className="mt-2 flex w-full min-w-0 flex-wrap items-center gap-1">
         <input
           ref={fileRef}
           type="file"
@@ -416,7 +428,7 @@ function NpcRow({
         <select
           value={photoMode}
           onChange={(e) => setPhotoMode(e.target.value)}
-          className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none focus:border-emerald-600"
+          className="max-w-full min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none focus:border-emerald-600"
         >
           <option value="reference">Reference (fictional NPC)</option>
           <option value="real_person">Real person</option>
@@ -452,7 +464,7 @@ function NpcRow({
           New image from photo
         </button>
       </div>
-      <div className="mt-2 flex flex-wrap justify-end gap-1">
+      <div className="mt-2 flex w-full min-w-0 flex-wrap justify-end gap-1">
         <button
           onClick={() => onSave(card, form)}
           disabled={!dirty || saving}

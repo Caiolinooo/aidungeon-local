@@ -80,7 +80,7 @@ export function InspectorPane({
       </div>
 
       {/* Tab Content Body */}
-      <div className="flex-1 overflow-y-auto p-4 text-primary">
+      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 text-primary">
         {tab === 'cards' && <CardsTab adventure={adventure} />}
         {tab === 'npcs' && <NpcsTab adventure={adventure} />}
         {tab === 'memory' && <MemoryTab adventure={adventure} />}
