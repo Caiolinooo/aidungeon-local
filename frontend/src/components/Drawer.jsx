@@ -4,6 +4,7 @@ import NpcsTab from './drawer/NpcsTab.jsx'
 import MemoryTab from './drawer/MemoryTab.jsx'
 import ConfigTab from './drawer/ConfigTab.jsx'
 import DetailsTab from './drawer/DetailsTab.jsx'
+import ConsistencyTab from './drawer/ConsistencyTab.jsx'
 import {
   BookOpen,
   Users,
@@ -14,6 +15,7 @@ import {
   Info,
   X,
   ChevronRight,
+  ShieldCheck,
 } from 'lucide-react'
 
 // TalkingHead (three.js) is loaded on-demand
@@ -25,6 +27,7 @@ export const INSPECTOR_TABS = [
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'controls', label: 'Controls', icon: Sliders },
   { id: 'avatars', label: 'Avatars', icon: Sparkles },
+  { id: 'consistency', label: 'Check', icon: ShieldCheck },
   { id: 'config', label: 'Config', icon: Settings },
   { id: 'details', label: 'Details', icon: Info },
 ]
@@ -100,6 +103,7 @@ export function InspectorPane({
             <AvatarsTab adventure={adventure} storyText={storyText} />
           </Suspense>
         )}
+        {tab === 'consistency' && <ConsistencyTab adventure={adventure} />}
         {tab === 'config' && <ConfigTab />}
         {tab === 'details' && <DetailsTab adventure={adventure} onAdventureChange={onAdventureChange} />}
       </div>

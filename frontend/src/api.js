@@ -130,6 +130,11 @@ export const api = {
   saveCharacter: (id, payload) =>
     request(`/adventures/${id}/character`, { method: 'PUT', body: payload }),
   getCharacters: (id) => request(`/adventures/${id}/characters`),
+  // Cross-check: ficha ↔ retrato ↔ imagem ↔ memória ↔ embedding.
+  // GET → relatório das 6 verificações; POST → repara uma delas.
+  getConsistency: (id) => request(`/adventures/${id}/consistency`),
+  repairConsistency: (id, check) =>
+    request(`/adventures/${id}/consistency/repair`, { method: 'POST', body: { check } }),
   deleteAdventure: (id) => request(`/adventures/${id}`, { method: 'DELETE' }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
   // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).

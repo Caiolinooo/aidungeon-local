@@ -28,6 +28,7 @@ from app import access, db, jobs, settings_store, users
 from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
+                        consistency as consistency_routes,
                         generation, health, images, import_export, jobs as jobs_routes,
                         memory, scenarios, scene as scene_routes, settings, ui_profile,
                         voice)
@@ -140,6 +141,8 @@ app.include_router(likeness_routes.router, prefix="/api", tags=["likeness"],
                    dependencies=_protected)
 app.include_router(jobs_routes.router, prefix="/api/adventures", tags=["assets"],
                    dependencies=_protected)
+app.include_router(consistency_routes.router, prefix="/api/adventures",
+                   tags=["consistency"], dependencies=_protected)
 app.include_router(memory.router, prefix="/api/adventures", tags=["memory"],
                    dependencies=_protected)
 app.include_router(import_export.router, prefix="/api", tags=["import-export"],
