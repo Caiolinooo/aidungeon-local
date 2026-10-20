@@ -375,6 +375,13 @@ def cancel(conn, job_id: str) -> dict | None: ...
     `partial: true` e o motivo vai para `errors`. Os textos vivos (humor,
     ligações, objetivos) dependem do LLM e ficam de fora. A ficha do jogador
     nunca é reescrita aqui: ela é do `PUT /adventures/{id}/character`.
+- Nascimento da aventura (`POST /api/adventures` com `scenario_id`): os NPCs já
+  nascem com a ficha determinística preenchida (`status`, `class` inferida,
+  `stats` estimadas) e os retratos entram na fila; a resposta traz o relatório
+  da auditoria no campo `consistency`. Sem `scenario_id` não há relatório (não
+  há NPC para auditar). Um retrato **na fila** é pendência (`warn`), não erro:
+  o prompt sai junto com a imagem, então só falta o job existir para o check
+  accusing o retrato.
 
 ## Arquivos compartilhados
 

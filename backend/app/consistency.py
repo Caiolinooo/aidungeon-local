@@ -141,8 +141,15 @@ def _check_portraits(conn: sqlite3.Connection, adv: dict, cards: list[dict]) -> 
         prompt = (card.get("portrait_prompt") or "").strip()
         clothing = (sheet.get("clothing") or "").strip()
         if not prompt:
-            items.append({"card_id": card.get("id"), "title": card.get("title"),
-                          "issue": "sem prompt de retrato", "fix": "rebuild_prompt"})
+            # O job de retrato escreve o prompt junto com a imagem; enquanto ele
+            # está na fila, não é falha — é pendência.
+            if db.find_active_job(conn, "character_portrait", card["id"]):
+                items.append({"card_id": card.get("id"), "title": card.get("title"),
+                              "issue": "retrato na fila: o prompt sai com a imagem",
+                              "fix": "generate_portrait"})
+            else:
+                items.append({"card_id": card.get("id"), "title": card.get("title"),
+                              "issue": "sem prompt de retrato", "fix": "rebuild_prompt"})
             continue
         if clothing and _NUDITY.search(prompt):
             items.append({"card_id": card.get("id"), "title": card.get("title"),

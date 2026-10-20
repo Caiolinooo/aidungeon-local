@@ -178,6 +178,11 @@ paths:
         Com `scenario_id`, copia os campos do scenario para a aventura e grava
         a action inicial (`type=start`, texto = `opening_text` do scenario).
         Sem `scenario_id`, cria aventura em branco.
+
+        Na criação a partir de scenario os NPCs já nascem com a ficha
+        determinística preenchida (status, classe inferida, atributos
+        estimados), os retratos entram na fila e a resposta traz o relatório
+        da auditoria no campo `consistency`.
       requestBody:
         required: true
         content:
@@ -2076,6 +2081,15 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/Memory'
+            consistency:
+              nullable: true
+              description: |
+                Relatório da auditoria (C9). Só vem no `POST /api/adventures`
+                quando a aventura nasce de um scenario: as fichas determinísticas
+                já saem preenchidas (status, classe, atributos) e o resto fica
+                para o reparo da aba Check.
+              allOf:
+                - $ref: '#/components/schemas/ConsistencyReport'
 
     Action:
       type: object

@@ -87,6 +87,7 @@ def test_sheet_roundtrip_via_api(client):
 
 
 def test_adventure_from_scenario_preserves_sheet(client):
+    """A ficha do scenario sobrevive à cópia e nasce com o que é determinístico."""
     scenario = client.post("/api/scenarios", json={
         "title": "Draft", "opening_text": "You wake aboard the Kestrel.",
         "story_cards": [
@@ -97,7 +98,13 @@ def test_adventure_from_scenario_preserves_sheet(client):
     adv = client.post("/api/adventures",
                       json={"scenario_id": scenario["id"]}).json()
     cards = client.get(f"/api/adventures/{adv['id']}/cards").json()
-    assert json.loads(cards[0]["sheet"]) == SHEET
+    sheet = json.loads(cards[0]["sheet"])
+    for key, value in SHEET.items():
+        assert sheet[key] == value, key
+    # status e classe são preenchidos na criação (C9): campo preenchível
+    # nasce preenchido ou estimado.
+    assert sheet["status"] == "alive"
+    assert sheet["class"] == "Captain"
 
 
 # ----------------------------------------------------------------- enrich

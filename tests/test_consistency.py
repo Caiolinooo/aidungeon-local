@@ -250,3 +250,54 @@ def test_repair_fills_what_is_deterministic_when_the_llm_fails(client):
     assert sheet["class"] == "Bardo"  # inferida do texto do card
     assert set(sheet["stats"]) >= {"str", "dex", "con", "int", "wis", "cha"}
     assert not sheet.get("humor"), "texto vivo depende do LLM"
+
+
+def test_new_adventure_from_scenario_fills_the_sheets_and_reports(client):
+    """Criar a aventura já devolve a ficha completa e o relatório da auditoria."""
+    with db.session() as conn:
+        sc = db.insert_scenario(
+            conn, title="A Ultima Danca", description="Uma rainha fada.",
+            opening_text="O claro brilha.",
+            story_cards=[{
+                "title": "Elara", "type": "character",
+                "entry": "Elara, rainha das fadas de cristal, espera no claro.",
+                "sheet": {"appearance": "cabelo flutuando como estrelas"},
+            }],
+        )
+    resp = client.post("/api/adventures", json={"scenario_id": sc["id"]})
+    assert resp.status_code == 201
+    state = resp.json()
+    report = state["consistency"]
+    assert {c["id"] for c in report["checks"]} == {
+        "card_sheets", "portraits", "memories", "npc_minds",
+        "canon_world", "scene_alignment",
+    }
+    # o NPC nasce com status, classe e atributos, mesmo vindo de scenario cru
+    card = next(c for c in state["story_cards"] if c["title"] == "Elara")
+    sheet = json.loads(card["sheet"])
+    assert sheet["status"] == "alive"
+    assert sheet["class"], "a classe precisa sair mesmo sem o LLM"
+    assert set(sheet["stats"]) >= {"str", "dex", "con", "int", "wis", "cha"}
+    # o retrato do NPC entra na fila: pendencia, nao erro
+    portraits = _check(report, "portraits")
+    assert portraits["status"] == "warn", portraits
+
+
+def test_portrait_in_the_queue_is_pending_not_broken(client):
+    """Enquanto o retrato esta na fila, o check avisa; sem job, o check acusa."""
+    adv = make_adventure(title="Retrato na fila")
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                              sheet=json.dumps({"appearance": "cabelo de estrelas"}))
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    portraits = _check(report, "portraits")
+    assert portraits["status"] == "error"
+    assert portraits["items"][0]["fix"] == "rebuild_prompt"
+
+    with db.session() as conn:
+        db.insert_job(conn, adventure_id=adv["id"], type="character_portrait",
+                      ref_id=card["id"])
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    portraits = _check(report, "portraits")
+    assert portraits["status"] == "warn", portraits
+    assert portraits["items"][0]["fix"] == "generate_portrait"

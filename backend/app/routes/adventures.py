@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Response
 
 import exporter
-from app import auth, db, game_engine, jobs, stats as stats_mod
+from app import (auth, consistency, db, game_engine, jobs, npc_assets,
+                 stats as stats_mod)
 from app.errors import GameError
 from app.schemas import (
     AdventureCreate, AdventureShareCreate, AdventureUpdate, PlayerCharacterUpsert,
@@ -53,6 +54,33 @@ def _sharing_view(conn, adventure_id: str) -> dict:
         "turn_mode": bool((adv or {}).get("turn_mode")),
         "turn_user": (adv or {}).get("turn_user") or "",
     }
+
+
+def _complete_npc_sheets(conn, adventure_id: str) -> int:
+    """Todo NPC nasce com status, classe e atributos.
+
+    O rascunho do assistente já vem com a ficha completa, mas cards de
+    cenário importado podem chegar sem status/classe/stats. Aqui o que é
+    determinístico (status, classe pelos textos, atributos estimados) é
+    preenchido na hora; os textos vivos dependem do LLM e ficam para o
+    reparo da aba Check. Devolve quantas fichas foram completadas.
+    """
+    filled = 0
+    for card in db.list_cards(conn, adventure_id):
+        if (card.get("type") or "") != "character":
+            continue
+        if (card.get("player_username") or "").strip():
+            continue  # ficha do jogador tem outro schema
+        sheet = npc_assets.parse_sheet(card.get("sheet"))
+        complete = npc_assets.ensure_sheet_complete(
+            sheet, entry=card.get("entry") or "", card=card)
+        if complete == sheet:
+            continue
+        updated = db.update_card(conn, adventure_id, card["id"],
+                                 {"sheet": json.dumps(complete, ensure_ascii=False)})
+        if updated:
+            filled += 1
+    return filled
 
 
 @router.post("", status_code=201)
@@ -101,6 +129,10 @@ def create_adventure(body: AdventureCreate,
             # v0.3.0: pipeline assíncrono — retratos dos NPCs começam a gerar
             # em background; a UI aplica cada um quando o job conclui.
             jobs.enqueue_all_portraits(conn, adv["id"])
+            # Todo NPC nasce com status, classe e atributos; a auditoria
+            # confere o resto (e o reparo com IA fica na aba Check).
+            _complete_npc_sheets(conn, adv["id"])
+            report = consistency.audit(conn, adv["id"])
         else:
             adv = db.insert_adventure(
                 conn, owner=info.user,
@@ -114,7 +146,11 @@ def create_adventure(body: AdventureCreate,
                 character_rules=body.character_rules or "",
                 source="new",
             )
-        return db.adventure_state(conn, adv["id"])
+            report = None
+        state = db.adventure_state(conn, adv["id"])
+        if report is not None:
+            state["consistency"] = report
+        return state
 
 
 @router.get("")
