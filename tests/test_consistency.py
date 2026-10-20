@@ -98,9 +98,12 @@ def test_incomplete_sheet_is_flagged_and_repaired(client):
     sheet = json.loads(card["sheet"])
     assert sheet["humor"] == SHEET_JSON["humor"]
     assert sheet["stats"]["str"] == 10
-    assert "humor" not in _check(
+    # Depois do reparo a ficha está completa: a auditoria não aponta nada.
+    sheets_after = _check(
         client.get(f"/api/adventures/{adv['id']}/consistency").json(),
-        "card_sheets")["items"][0]["missing_fields"]
+        "card_sheets")
+    assert sheets_after["status"] == "ok"
+    assert sheets_after["items"] == []
 
 
 def test_nude_portrait_prompt_is_flagged_against_a_clothed_sheet(client):
@@ -164,3 +167,50 @@ def test_repair_refuses_a_check_that_cannot_be_repaired(client):
 def test_consistency_of_an_unknown_adventure_is_404(client):
     resp = client.get("/api/adventures/nao-existe/consistency")
     assert resp.status_code == 404
+
+
+def test_player_sheet_is_judged_by_its_own_schema(client):
+    """A ficha do jogador não é ficha de NPC: humor/ligações não são exigidos."""
+    adv = make_adventure(title="Jogador")
+    with db.session() as conn:
+        db.upsert_player_character(
+            conn, adv["id"], "caio", title="Caio",
+            sheet=json.dumps({
+                "appearance": "cabelo curto", "status": "alive", "class": "Ladino",
+                "stats": {"str": 12, "dex": 14, "con": 13, "int": 10, "wis": 11, "cha": 9},
+            }),
+        )
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "ok", sheets
+    assert sheets["items"] == []
+
+
+def test_repair_leaves_the_player_sheet_to_the_character_route(client):
+    adv = make_adventure(title="Jogador sem classe")
+    with db.session() as conn:
+        db.upsert_player_character(
+            conn, adv["id"], "caio", title="Caio",
+            sheet=json.dumps({"appearance": "cabelo curto", "status": "alive",
+                              "stats": {"str": 12, "dex": 14, "con": 13,
+                                        "int": 10, "wis": 11, "cha": 9}}),
+        )
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "error"
+    assert sheets["items"][0]["missing_fields"] == ["class"]
+
+    transport = _mock_transport(json.dumps(SHEET_JSON))
+    client.app.dependency_overrides[deps.get_http_transport] = lambda: transport
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                           json={"check": "card_sheets"})
+    finally:
+        client.app.dependency_overrides.pop(deps.get_http_transport, None)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["repaired"] == []
+    assert body["errors"] and "character" in body["errors"][0]
+    with db.session() as conn:
+        card = db.player_character(conn, adv["id"], "caio")
+    assert "class" not in json.loads(card["sheet"])

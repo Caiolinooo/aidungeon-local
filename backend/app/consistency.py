@@ -92,6 +92,15 @@ def _characters(cards: list[dict]) -> list[dict]:
     return [c for c in cards if (c.get("type") or "") == "character"]
 
 
+def _is_player_card(card: dict) -> bool:
+    """Ficha do jogador (não é NPC): tem outro schema."""
+    return bool((card.get("player_username") or "").strip())
+
+
+def _npc_characters(cards: list[dict]) -> list[dict]:
+    return [c for c in _characters(cards) if not _is_player_card(c)]
+
+
 # --------------------------------------------------------------- checks
 
 def _check_card_sheets(cards: list[dict]) -> dict:
@@ -102,7 +111,10 @@ def _check_card_sheets(cards: list[dict]) -> dict:
     items: list[dict] = []
     for card in chars:
         sheet = npc_assets.parse_sheet(card.get("sheet"))
-        missing = [f for f in npc_assets.SHEET_TEXT_FIELDS
+        # A ficha do jogador segue o schema do personagem (status, classe,
+        # atributos); a do NPC tem os campos de vida (humor, laços, ...).
+        wanted = ("status", "class") if _is_player_card(card) else npc_assets.SHEET_TEXT_FIELDS
+        missing = [f for f in wanted
                    if not (isinstance(sheet.get(f), str) and sheet[f].strip())]
         stats = sheet.get("stats") if isinstance(sheet.get("stats"), dict) else {}
         missing_stats = [k for k in npc_assets.STATS_KEYS
@@ -196,9 +208,9 @@ def _check_memories(conn: sqlite3.Connection, adventure_id: str) -> dict:
 
 def _check_npc_minds(conn: sqlite3.Connection, adventure_id: str,
                      cards: list[dict]) -> dict:
-    chars = _characters(cards)
+    chars = _npc_characters(cards)
     if not chars:
-        return _check("npc_minds", "Mentes dos NPCs", OK, "Nenhum personagem na aventura.")
+        return _check("npc_minds", "Mentes dos NPCs", OK, "Nenhum NPC na aventura.")
     items: list[dict] = []
     for card in chars:
         sheet = npc_assets.parse_sheet(card.get("sheet"))
@@ -213,9 +225,9 @@ def _check_npc_minds(conn: sqlite3.Connection, adventure_id: str,
                           "issue": "sem vida simulada (humor, sentimentos, memórias)"})
     if items:
         return _check("npc_minds", "Mentes dos NPCs", WARN,
-                      f"{len(items)} personagem(ns) sem vida simulada.", items)
+                  f"{len(chars)} NPC(s) sem vida simulada.", items)
     return _check("npc_minds", "Mentes dos NPCs", OK,
-                  f"{len(chars)} personagem(ns) com vida simulada.")
+                  f"{len(chars)} NPC(s) com vida simulada.")
 
 
 def _check_canon_world(conn: sqlite3.Connection, adv: dict) -> dict:
@@ -319,6 +331,11 @@ def _repair_cards(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
     for item in report["items"]:
         card = db.get_card(conn, adv["id"], item["card_id"])
         if not card:
+            continue
+        if _is_player_card(card):
+            # Ficha do jogador: quem completa é o PUT /character.
+            errors.append(f"{card.get('title')}: ficha do jogador — "
+                          "complete pelo PUT /adventures/{id}/character")
             continue
         try:
             updated = npc_assets.enrich_card(conn, adv, card, llm_cfg or {},
