@@ -179,8 +179,18 @@ export const api = {
   listJobs: (advId, status) => request(`/adventures/${advId}/jobs${qs({ status })}`),
   cancelJob: (advId, jobId) =>
     request(`/adventures/${advId}/jobs/${jobId}`, { method: 'DELETE' }),
-  regeneratePortrait: (advId, cardId) =>
-    request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'POST' }),
+  regeneratePortrait: (advId, cardId, body) =>
+    request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'POST', body }),
+  uploadReference: (advId, cardId, file, mode) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('mode', mode || 'reference')
+    return request(`/adventures/${advId}/cards/${cardId}/reference`, { method: 'PUT', body })
+  },
+  deleteReference: (advId, cardId) =>
+    request(`/adventures/${advId}/cards/${cardId}/reference`, { method: 'DELETE' }),
+  deletePortrait: (advId, cardId) =>
+    request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'DELETE' }),
   generateAllPortraits: (advId) =>
     request(`/adventures/${advId}/portraits`, { method: 'POST' }),
   // Fundo do lugar atual + elenco com retrato. Enfileira a pintura se o
@@ -190,6 +200,12 @@ export const api = {
   // v0.5.0 — ficha estruturada do NPC (síncronos, ver docs/openapi.yaml).
   enrichCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}/enrich`, { method: 'POST', body: {} }),
+  regenerateCard: (advId, cardId, body) =>
+    request(`/adventures/${advId}/cards/${cardId}/regenerate`, { method: 'POST', body }),
+  listNpcMemories: (advId, cardId) =>
+    request(`/adventures/${advId}/cards/${cardId}/memories`),
+  simulateDay: (advId) =>
+    request(`/adventures/${advId}/life/tick`, { method: 'POST' }),
 
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),
@@ -256,6 +272,7 @@ export const api = {
       },
     }),
   // Regenera um campo do rascunho (resposta: {field, value} ou {field, story_cards}).
+  assistantGenerate: (body) => request('/assistant/generate', { method: 'POST', body }),
   assistantField: ({ field, brief, current, draft, language, instruction, web_search } = {}) =>
     request('/assistant/field', {
       method: 'POST',

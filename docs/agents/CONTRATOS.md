@@ -290,8 +290,8 @@ def cancel(conn, job_id: str) -> dict | None: ...
   `pending`.
 - A action `see` entra no fim da aventura (o jogador pode ter agido), presa à
   imagem pelo mesmo seq.
-- Recusa do guardrail (cena explícita com pessoa real) chega como `see_failed`
-  com `code="real_person_explicit"`.
+- Recusa do guardrail (cena explícita com menor) chega como `see_failed`
+  com `code="minor"`. Pessoa real adulta não é recusada.
 
 ## C7 Choices
 

@@ -46,6 +46,7 @@ export default function GenerateAdventureModal({ onClose }) {
   const [protagonistAppearance, setProtagonistAppearance] = useState('')
   const [webSearchMode, setWebSearchMode] = useState('auto')
   const [webOnRefine, setWebOnRefine] = useState(false)
+  const [deepCharacters, setDeepCharacters] = useState(true)
 
   const opRef = useRef(false)
   const timerRef = useRef(null)
@@ -76,7 +77,7 @@ export default function GenerateAdventureModal({ onClose }) {
     const timer = setInterval(tick, 1000)
     timerRef.current = timer
     try {
-      setDraft(await api.assistantScenario({
+      const payload = {
         brief: b,
         language,
         genre: genre.trim() || undefined,
@@ -88,7 +89,17 @@ export default function GenerateAdventureModal({ onClose }) {
         image_style: imageStyle.trim() || undefined,
         card_count: Number(cardCount) || 5,
         web_search_mode: webMode,
-      }))
+      }
+      setDraft(await (deepCharacters ? api.assistantGenerate({
+        ...payload,
+        genre: genre.trim(),
+        tone: tone.trim(),
+        protagonist_name: protagonistName.trim(),
+        protagonist_role: protagonistRole.trim(),
+        protagonist_appearance: protagonistAppearance.trim(),
+        image_style: imageStyle.trim(),
+        deep_characters: true,
+      }) : api.assistantScenario(payload)))
     } catch (e) {
       toast(e.message)
     } finally {
@@ -378,6 +389,15 @@ export default function GenerateAdventureModal({ onClose }) {
                   placeholder="e.g. short black hair, plate armor"
                   className={inputCls}
                 />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-zinc-300 sm:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={deepCharacters}
+                  onChange={(e) => setDeepCharacters(e.target.checked)}
+                  className="accent-emerald-600"
+                />
+                Deep characters (full sheets)
               </label>
               <label className="block">
                 {paramLabel('Web search')}

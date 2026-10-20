@@ -46,6 +46,16 @@ class StoryCardUpsert(BaseModel):
     sheet: dict | None = None
 
 
+class PortraitSourceRequest(BaseModel):
+    source: Literal["anchor", "reference"] = "anchor"
+
+
+class CardRegenerateRequest(BaseModel):
+    scope: Literal["all", "field"]
+    field: str | None = None
+    overwrite: bool = False
+
+
 class CardBulkAction(BaseModel):
     action: Literal["delete", "pin", "unpin", "retype"]
     card_ids: list[str] = Field(min_length=1)
@@ -259,6 +269,22 @@ class AssistantScenarioRequest(BaseModel):
     image_style: str | None = None
     card_count: int | None = Field(default=None, ge=3, le=8)
     web_search_mode: Literal["auto", "always", "off"] = "auto"
+
+
+class AssistantGenerateRequest(BaseModel):
+    brief: str = Field(min_length=3)
+    current: dict | None = None
+    language: str = "en"
+    genre: str = ""
+    tone: str = ""
+    pov: Literal["second", "third", "first"] | None = None
+    protagonist_name: str = ""
+    protagonist_role: str = ""
+    protagonist_appearance: str = ""
+    image_style: str = ""
+    card_count: int = Field(default=5, ge=3, le=8)
+    web_search_mode: Literal["auto", "always", "off"] = "auto"
+    deep_characters: bool = True
 
 
 class AssistantFieldRequest(BaseModel):

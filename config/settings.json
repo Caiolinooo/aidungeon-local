@@ -31,10 +31,11 @@
       "story_cards": 1600,
       "memory_bank": 800,
       "story_summary": 800,
-      "recent_window": 58312,
+      "recent_window": 58012,
       "authors_note": 300,
       "last_action": 200,
       "player_state": 200,
+      "npc_minds": 300,
       "response_reserve": 1024
     }
   },
@@ -177,6 +178,13 @@
     "temperature": 0.8,
     "wait_s": 8,
     "note": "Contrato C7. O LLM sugere 'count' opcoes curtas de proxima acao (type do/say/story, texto <= 120 chars, EN) como array JSON, geradas logo depois do done e publicadas em choices_ready. POST /api/adventures/{id}/choices devolve esse cache ou espera ate wait_s pela geracao em curso (503 llm_timeout depois disso). enabled=false -> 200 {\"choices\": []} e nada e pre-gerado."
+  },
+  "life": {
+    "enabled": true,
+    "auto_tick": true,
+    "tick_every_turns": 5,
+    "memories_per_card": 20,
+    "reflection_after": 6
   },
   "ui_profile": {
     "enabled": true,

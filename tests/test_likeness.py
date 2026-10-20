@@ -99,17 +99,17 @@ def test_real_person_in_a_safe_scene_is_not_explicit():
     assert decision.cast == [zendaya]
 
 
-def test_explicit_scene_with_only_a_real_person_is_refused():
+def test_explicit_scene_keeps_a_real_person():
     zendaya = {"type": "character", "title": "Zendaya", "sheet": json.dumps({
         "real_person": True,
     })}
     decision = likeness.decide_frame([zendaya], explicit=True)
-    assert decision.refusal == "real_person_explicit"
-    assert decision.allow_explicit is False
-    assert decision.cast == []
+    assert decision.refusal is None
+    assert decision.allow_explicit is True
+    assert decision.cast == [zendaya]
 
 
-def test_explicit_scene_drops_the_real_person_and_keeps_the_fictional_one():
+def test_explicit_scene_keeps_the_real_person_and_the_fictional_one():
     zendaya = {"type": "character", "title": "Zendaya", "triggers": ["Zendaya"],
                "sheet": json.dumps({"real_person": True, "real_name": "Zendaya"})}
     clara = {"type": "character", "title": "Clara", "triggers": ["Clara"],
@@ -117,8 +117,7 @@ def test_explicit_scene_drops_the_real_person_and_keeps_the_fictional_one():
     decision = likeness.decide_frame([zendaya, clara], explicit=True)
     assert decision.refusal is None
     assert decision.allow_explicit is True
-    assert decision.cast == [clara]
-    assert "Zendaya" not in likeness.omit_names("Zendaya and Clara are naked", decision.dropped)
+    assert zendaya in decision.cast and clara in decision.cast
 
 
 def test_explicit_scene_with_a_minor_is_refused():
@@ -203,7 +202,9 @@ def test_resolve_saves_the_wikipedia_photo_and_keeps_a_user_upload(tmp_db, tmp_p
     assert photo.is_file()
     assert likeness.face_refs_for([updated])[0].image_path == str(photo.resolve())
     with db.session() as conn:
-        uploaded = likeness.save_upload(conn, updated, PNG_BYTES, filename="face.png")
+        uploaded = likeness.save_upload(
+            conn, updated, PNG_BYTES, filename="face.png", mode="real_person",
+        )
         kept = likeness.resolve_card(conn, uploaded, transport=transport, describe=lambda _c: "nope")
     kept_sheet = json.loads(kept["sheet"])
     assert kept_sheet["likeness"]["verified_by_user"] is True
@@ -268,16 +269,22 @@ def _see_failed(adventure_id: str, text: str) -> dict:
     return failed.data
 
 
-def test_see_refuses_an_explicit_real_person(client):
+def test_see_paints_an_explicit_real_person(client, tmp_path):
     adv = make_adventure()
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
     _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
     add_action(adv["id"], 0, "do", "Zendaya is naked on the bed.")
-    resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
-    assert resp.status_code == 422
-    assert resp.json()["error"]["code"] == "real_person_explicit"
+    override_transport(client, make_v2_transport(chat_content="Zendaya lies nude on the bed."))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert "zendaya" in resp.json()["prompt"].lower()
 
 
-def test_async_see_refuses_an_explicit_real_person_before_enqueue(client):
+def test_async_see_enqueues_an_explicit_real_person(client):
     adv = make_adventure()
     _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
     add_action(adv["id"], 0, "do", "Zendaya is naked on the bed.")
@@ -288,30 +295,25 @@ def test_async_see_refuses_an_explicit_real_person_before_enqueue(client):
         headers={"Prefer": "respond-async"},
     )
     assert time.monotonic() - started < 0.3
-    assert resp.status_code == 422
-    assert resp.json()["error"]["code"] == "real_person_explicit"
+    assert resp.status_code == 202, resp.text
     with db.session() as conn:
-        assert db.list_jobs(conn, adv["id"]) == []
+        assert db.list_jobs(conn, adv["id"])
 
 
-def test_worker_see_failed_carries_real_person_and_minor(client):
-    real = make_adventure()
-    _character(real["id"], "Zendaya", real_person=True, real_name="Zendaya")
-    assert _see_failed(real["id"], "Zendaya is naked on the bed.")["code"] == "real_person_explicit"
+def test_worker_see_failed_still_refuses_a_minor(client):
     minor = make_adventure()
     _character(minor["id"], "Clara", minor=True, age=16)
     assert _see_failed(minor["id"], "Clara is naked on the bed.")["code"] == "minor"
 
 
-def test_see_drops_the_real_person_from_an_explicit_scene(client, tmp_path):
+def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path):
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
     _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
                appearance="dark curly hair")
     _character(adv["id"], "Clara", appearance="long red hair, green eyes")
-    # story = o jogador narra: cânone. A nudez está estabelecida, então a cena
-    # é pintada; a pessoa real sai do quadro (likeness) e a fictícia fica.
+    # story = o jogador narra: cânone. A nudez está estabelecida e os dois ficam.
     add_action(adv["id"], 0, "story", "Zendaya and Clara are naked together.")
     override_transport(client, make_v2_transport(
         chat_content="Zendaya and Clara stand nude in the room."))
@@ -323,7 +325,7 @@ def test_see_drops_the_real_person_from_an_explicit_scene(client, tmp_path):
     prompt = resp.json()["prompt"]
     folded = prompt.lower()
     assert "clara" in folded
-    assert "zendaya" not in folded
+    assert "zendaya" in folded
     assert "nude" in folded
     assert "clothes off" in folded
 
@@ -350,7 +352,7 @@ def test_see_of_a_real_person_opens_with_the_face_and_stays_clothed(client, tmp_
     assert "clothes off" not in head.lower()
 
 
-def test_explicit_backdrop_refuses_a_real_person_and_paints_the_room(client, tmp_path):
+def test_explicit_backdrop_keeps_a_real_person(client, tmp_path):
     from test_scene import use_tmp_storage
     use_tmp_storage(tmp_path)
     adv = make_adventure()
@@ -362,10 +364,8 @@ def test_explicit_backdrop_refuses_a_real_person_and_paints_the_room(client, tmp
     with db.session() as conn:
         job = next(item for item in db.list_jobs(conn, adv["id"]) if item["type"] == "scene_backdrop")
     prompt = job["payload"]["prompt"].lower()
-    assert job["payload"]["explicit"] is False
-    assert "zendaya" not in prompt
-    assert "nude" not in prompt
-    assert "no people" in prompt
+    assert job["payload"]["explicit"] is True
+    assert "zendaya" in prompt
 
 
 def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, monkeypatch):
@@ -515,6 +515,7 @@ def test_reference_upload_and_delete_roundtrip(client, tmp_path, monkeypatch):
     resp = client.put(
         f"/api/adventures/{adv['id']}/cards/{card['id']}/reference",
         files={"file": ("face.png", PNG_BYTES, "image/png")},
+        data={"mode": "real_person"},
     )
     assert resp.status_code == 200, resp.text
     sheet = json.loads(resp.json()["sheet"])
@@ -525,3 +526,75 @@ def test_reference_upload_and_delete_roundtrip(client, tmp_path, monkeypatch):
     cleared = json.loads(gone.json()["sheet"])
     assert cleared["likeness"]["reference_image_path"] == ""
     assert cleared["real_person"] is True
+    assert cleared["reference"] == {}
+
+
+def test_reference_upload_does_not_mark_a_fictional_npc(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    adv = make_adventure()
+    card = _character(adv["id"], "Clara", appearance="long red hair")
+    resp = client.put(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/reference",
+        files={"file": ("face.png", PNG_BYTES, "image/png")},
+        data={"mode": "reference"},
+    )
+    assert resp.status_code == 200, resp.text
+    sheet = json.loads(resp.json()["sheet"])
+    assert sheet.get("real_person") is not True
+    assert Path(sheet["reference"]["image_path"]).is_file()
+    updated = resp.json()
+    data, denoise = likeness.portrait_init(updated, b"anchor", anchor_denoise=0.35)
+    assert data == PNG_BYTES
+    assert denoise == likeness.VISUAL_REFERENCE_DENOISE
+
+
+def test_real_person_upload_marks_the_sheet(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    adv = make_adventure()
+    card = _character(adv["id"], "Ada Vane")
+    resp = client.put(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/reference",
+        files={"file": ("face.png", PNG_BYTES, "image/png")},
+        data={"mode": "real_person"},
+    )
+    assert resp.status_code == 200, resp.text
+    sheet = json.loads(resp.json()["sheet"])
+    assert sheet["real_person"] is True
+    assert sheet["reference"]["mode"] == "real_person"
+    assert sheet["likeness"]["reference_image_path"] == sheet["reference"]["image_path"]
+
+
+def test_portrait_from_reference_requires_a_photo(client):
+    adv = make_adventure()
+    card = _character(adv["id"], "Clara")
+    resp = client.post(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/portrait",
+        json={"source": "reference"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "reference_required"
+
+
+def test_delete_portrait_is_idempotent(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "REPO_ROOT", tmp_path)
+    adv = make_adventure()
+    card = _character(adv["id"], "Clara")
+    image_path = tmp_path / "data" / "images" / "face.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(PNG_BYTES)
+    with db.session() as conn:
+        image = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path=str(image_path.relative_to(tmp_path)), prompt="face",
+            kind="portrait", ref_id=card["id"],
+        )
+        db.set_card_portrait(conn, card["id"], image["id"], anchor_id=image["id"])
+    gone = client.delete(f"/api/adventures/{adv['id']}/cards/{card['id']}/portrait")
+    assert gone.status_code == 204
+    assert not image_path.is_file()
+    again = client.delete(f"/api/adventures/{adv['id']}/cards/{card['id']}/portrait")
+    assert again.status_code == 204
+    with db.session() as conn:
+        stored = db.get_card(conn, adv["id"], card["id"])
+    assert stored["portrait_image_id"] in ("", None)
+    assert stored["portrait_anchor_id"] in ("", None)

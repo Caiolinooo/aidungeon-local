@@ -51,6 +51,7 @@ PRIORITY_SEE = 0
 PRIORITY_PRESENT_PORTRAIT = 1
 PRIORITY_BACKDROP = 2
 PRIORITY_BULK_PORTRAIT = 3
+PRIORITY_LIFE_TICK = 4
 
 # A cena aberta pede retrato de novo assim que o job anterior termina em erro.
 # Sem esta espera, um CUDA OOM vira outro txt2img a cada poucos segundos.
@@ -186,7 +187,8 @@ def cuda_oom_hold(conn, type_: str, ref_id: str, *, explicit: bool = False,
 
 def enqueue_portrait(conn, adventure_id: str, card_id: str,
                      *, replace: bool = False,
-                     priority: int = PRIORITY_PRESENT_PORTRAIT) -> dict | None:
+                     priority: int = PRIORITY_PRESENT_PORTRAIT,
+                     force_reference: bool = False) -> dict | None:
     """Enfileira retrato do card (dedupe: reaproveita job ativo, que passa à
     frente se o pedido novo for mais urgente).
 
@@ -207,13 +209,15 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
             raise GameError(429, "cuda_oom_backoff", held)
         return None
     payload: dict = {}
-    if replace:
+    if replace or force_reference:
         payload["replace"] = True
         anchor = ""
-        if card:
+        if card and not force_reference:
             anchor = card.get("portrait_anchor_id") or card.get("portrait_image_id") or ""
         if anchor:
             payload["init_image_id"] = anchor
+    if force_reference:
+        payload["force_reference"] = True
     return enqueue(conn, "character_portrait", adventure_id, card_id, payload,
                    priority=priority)
 
@@ -342,6 +346,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     narrativa enquanto a GPU pinta."""
     payload = job.get("payload") or {}
     replace = bool(payload.get("replace"))
+    force_reference = bool(payload.get("force_reference"))
     anchor_id = str(payload.get("init_image_id") or "")
     anchor = None
     with db.session() as conn:
@@ -385,7 +390,9 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         init_width, init_height = anchor.get("width"), anchor.get("height")
         final = f"{final}, same person, keep the same face".strip()
     init_bytes, denoise = likeness.portrait_init(
-        card, anchor_bytes, anchor_denoise=PORTRAIT_DENOISE,
+        card, None if force_reference else anchor_bytes,
+        anchor_denoise=PORTRAIT_DENOISE,
+        force_reference=force_reference,
     )
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
@@ -482,6 +489,22 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
             "provider": meta["provider"], "action": action}
 
 
+def enqueue_day_tick(conn, adventure_id: str, *, reason: str = "auto") -> dict:
+    """Um dia fora de cena. Não roda o LLM aqui: o worker chama tick_day."""
+    active = db.find_active_job(conn, "npc_day_tick", adventure_id)
+    if active:
+        return active
+    return enqueue(
+        conn, "npc_day_tick", adventure_id, adventure_id,
+        {"reason": reason}, priority=PRIORITY_LIFE_TICK,
+    )
+
+
+def _execute_day_tick(job: dict, transport: Any) -> dict:
+    from app import npc_life
+    return npc_life.tick_day(job["adventure_id"], transport)
+
+
 def _execute_see(job: dict, transport: Any) -> dict:
     """Executa um job see_image (prompt já no payload); devolve {"image": ImageResult}."""
     payload = job.get("payload") or {}
@@ -507,6 +530,7 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "character_portrait": _execute_portrait,
     "scene_backdrop": _execute_backdrop,
     "see_image": _execute_see,
+    "npc_day_tick": _execute_day_tick,
 }
 
 

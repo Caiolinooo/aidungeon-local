@@ -58,8 +58,18 @@ Given the player's idea and configuration parameters, produce a complete, rich s
         "appearance": "face, hair, eyes, distinctive marks (English or target language)",
         "body": "build, height, skin, posture",
         "clothing": "typical outfit and gear",
-        "personality": "traits, voice, mannerisms, motivations",
-        "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
+        "personality": "traits and mannerisms",
+        "humor": "how they joke and what they find absurd",
+        "speech": "vocabulary, rhythm, verbal tics, catchphrases",
+        "goals": "what they want now and what they fear losing",
+        "background": "2-3 sentences of history",
+        "lifestyle": "where they wake, work, eat, sleep, who they live with",
+        "habits": "repeatable tics",
+        "likes": "concrete likes and dislikes",
+        "sentiments": "how they feel about the people in the scene, starting with the player",
+        "status": "alive",
+        "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+        "notes": "secrets and plot facts"
       }
     }
   ]
@@ -78,6 +88,10 @@ Given the player's idea and the scenario draft, produce {card_count_rule} story 
    "entry": "facts the AI must know when triggered",
    "sheet": {"appearance": "face, hair, eyes, marks", "body": "build, height, skin, posture",
              "clothing": "typical outfit", "personality": "traits, mannerisms",
+             "humor": "how they joke", "speech": "how they talk", "goals": "what they want",
+             "background": "history", "lifestyle": "daily routine", "habits": "tics",
+             "likes": "likes and dislikes", "sentiments": "feelings toward the player",
+             "status": "alive", "notes": "secrets",
              "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20}}}
 ]}
 Rules: narrative texts in {language}; include characters, a place, and at least one faction or item when the idea supports them; sheet only for type character (omit otherwise); every card needs a non-empty title, triggers, and entry; output ONLY the JSON object."""
@@ -103,7 +117,7 @@ _FIELD_INSTRUCTIONS = {
     "opening_text": 'Return {"value": "new immersive multi-paragraph opening scene"}.',
     "image_style": 'Return {"value": "concise English art direction / photography style for image generation"}.',
     "tags": 'Return {"value": "comma, separated, tags"}.',
-    "story_cards": 'Return {"story_cards": [{"title": "...", "type": "character|location|faction|item|other", "triggers": ["..."], "entry": "...", "sheet": {"appearance": "...", "body": "...", "clothing": "...", "personality": "...", "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}}}]} with 3 to 8 cards (sheet only for type character).',
+    "story_cards": 'Return {"story_cards": [{"title": "...", "type": "character|location|faction|item|other", "triggers": ["..."], "entry": "...", "sheet": {"appearance": "...", "body": "...", "clothing": "...", "personality": "...", "humor": "...", "speech": "...", "goals": "...", "background": "...", "lifestyle": "...", "habits": "...", "likes": "...", "sentiments": "...", "status": "alive", "notes": "...", "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}}}]} with 3 to 8 cards (full sheet only for type character).',
 }
 
 _SINGLE_CARD_SYSTEM = """You are a lore and character designer for an AI interactive fiction game.
@@ -119,9 +133,18 @@ Return STRICT JSON only (no markdown, no commentary):
     "appearance": "face, hair, eyes, distinctive features",
     "body": "build, height, posture",
     "clothing": "signature outfit and gear",
-    "personality": "temperament, speech style, goals",
+    "personality": "temperament and mannerisms",
+    "humor": "how they joke and what they find absurd",
+    "speech": "vocabulary, rhythm, verbal tics, catchphrases",
+    "goals": "what they want now and what they fear losing",
+    "background": "2-3 sentences of history",
+    "lifestyle": "daily routine",
+    "habits": "repeatable tics",
+    "likes": "concrete likes and dislikes",
+    "sentiments": "how they feel about the player",
     "status": "alive",
-    "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
+    "stats": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+    "notes": "secrets and plot facts"
   }
 }
 Rules:
@@ -465,6 +488,7 @@ def generate_scenario_draft(
     image_style: str | None = None,
     card_count: int | None = None,
     web_search_mode: str = "auto",
+    current: dict | None = None,
 ) -> dict:
     """brief (+ parâmetros opcionais do Story Studio) → ScenarioDraft (dict).
 
@@ -512,6 +536,11 @@ def generate_scenario_draft(
         spec_lines.append("Protagonist Specification: " + "; ".join(proto_bits))
     if image_style:
         spec_lines.append(f"Visual / Image Art Direction: {image_style.strip()}")
+    if current:
+        spec_lines.append(
+            "The current draft to regenerate:\n"
+            + json.dumps(current, ensure_ascii=False)[:4000]
+        )
     if web_context:
         spec_lines.append(web_context)
 
@@ -568,6 +597,39 @@ def generate_scenario_draft(
     _prepend_pov_directive(draft, pov)
     if web_sources:
         draft["web_sources"] = web_sources
+    return draft
+
+
+def _sheet_value_kept(value: Any) -> bool:
+    if value is None or value == "" or value == {} or value == []:
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict:
+    """Preenche a ficha de cada personagem. O que o rascunho já tem prevalece."""
+    from app import npc_assets
+    for card in draft.get("story_cards") or []:
+        if not isinstance(card, dict):
+            continue
+        if str(card.get("type") or "").lower() != "character":
+            continue
+        existing = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
+        built = npc_assets.build_sheet(
+            llm_cfg, title=str(card.get("title") or ""),
+            entry=str(card.get("entry") or ""), sheet=existing or None,
+            transport=transport,
+        )
+        portrait = built.pop("portrait_prompt", None)
+        merged = dict(built)
+        for key, value in existing.items():
+            if _sheet_value_kept(value):
+                merged[key] = value
+        card["sheet"] = merged
+        if portrait and not _sheet_value_kept(card.get("portrait_prompt")):
+            card["portrait_prompt"] = portrait
     return draft
 
 

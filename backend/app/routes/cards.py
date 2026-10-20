@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Response
 from app import db, llm_client, npc_assets, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import CardBulkAction, StoryCardUpsert
+from app.schemas import CardBulkAction, CardRegenerateRequest, StoryCardUpsert
 
 router = APIRouter()
 
@@ -106,6 +106,22 @@ def _card_or_404(conn, adventure_id: str, card_id: str) -> tuple[dict, dict]:
     return adv, card
 
 
+@router.post("/{adventure_id}/cards/{card_id}/regenerate")
+def regenerate_card(adventure_id: str, card_id: str, body: CardRegenerateRequest,
+                    transport=Depends(get_http_transport)) -> dict:
+    """Regenera um campo da ficha, ou os nove textos vivos."""
+    with db.session() as conn:
+        adv, card = _card_or_404(conn, adventure_id, card_id)
+        llm_cfg = settings_store.effective_llm_settings(conn)
+        try:
+            return npc_assets.regenerate_card(
+                conn, adv, card, llm_cfg, scope=body.scope, field=body.field,
+                overwrite=body.overwrite, transport=transport,
+            )
+        except llm_client.LlmError as exc:
+            raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
+
+
 @router.post("/{adventure_id}/cards/{card_id}/enrich")
 def enrich_card(adventure_id: str, card_id: str,
                 transport=Depends(get_http_transport)) -> dict:
@@ -118,6 +134,33 @@ def enrich_card(adventure_id: str, card_id: str,
         except llm_client.LlmError as exc:
             raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
         return db.attach_portrait(conn, card)
+
+
+@router.get("/{adventure_id}/cards/{card_id}/memories")
+def list_card_memories(adventure_id: str, card_id: str) -> dict:
+    from app import npc_life
+    with db.session() as conn:
+        if not db.get_card(conn, adventure_id, card_id):
+            raise GameError.not_found(f"card {card_id} not found")
+        return {"memories": npc_life.list_memories(conn, adventure_id, card_id, limit=20)}
+
+
+@router.delete("/{adventure_id}/cards/{card_id}/portrait", status_code=204)
+def delete_portrait(adventure_id: str, card_id: str) -> Response:
+    """Apaga o retrato e a âncora. 204 mesmo se já não havia imagem."""
+    with db.session() as conn:
+        card = db.get_card(conn, adventure_id, card_id)
+        if not card:
+            raise GameError.not_found(f"card {card_id} not found")
+        seen: list[str] = []
+        for key in ("portrait_image_id", "portrait_anchor_id"):
+            image_id = str(card.get(key) or "")
+            if image_id and image_id not in seen:
+                seen.append(image_id)
+        for image_id in seen:
+            db.delete_image(conn, image_id)
+        db.clear_card_portrait(conn, card_id)
+    return Response(status_code=204)
 
 
 @router.delete("/{adventure_id}/cards/{card_id}", status_code=204)

@@ -38,6 +38,7 @@ Given the recent scene, output STRICT JSON: an array of exactly {count} options,
 Texts in English, concise (under 120 chars), varied.
 Do not suggest a place, an item, or NPC compliance that the Facts block says is missing.
 A do or say is an attempt. Prefer what a person in this place would actually accept.
+Use the character block to make each option specific to who is present.
 Output ONLY the JSON array."""
 
 
@@ -88,14 +89,45 @@ def parse_choices(content: str, count: int) -> list[dict]:
     return choices
 
 
-def messages_for(actions: list[dict], count: int, facts: str = "") -> list[dict]:
+def _cast_block(cards: list[dict], actions: list[dict]) -> str:
+    """Quem está na cena, com voz e humor. No máximo 4 linhas e 250 tokens."""
+    from app import npc_assets, npc_bonds
+    from app.context_builder import estimate_tokens
+
+    recent = "".join(a.get("text") or "" for a in actions if a.get("type") != "see")[-2000:]
+    lines: list[str] = []
+    for card in npc_bonds.characters_in_text(cards, recent)[:4]:
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        parts: list[str] = []
+        for key in ("personality", "humor", "speech", "sentiments"):
+            value = " ".join(str(sheet.get(key) or "").split())[:120]
+            if value:
+                parts.append(value)
+        life = sheet.get("life")
+        if isinstance(life, dict):
+            mood = " ".join(str(life.get("mood") or "").split())[:120]
+            if mood:
+                parts.append(mood)
+        name = " ".join(str(card.get("title") or "").split())
+        if not name:
+            continue
+        lines.append(f"{name} — {'; '.join(parts)}" if parts else name)
+    while lines and estimate_tokens("\n".join(lines)) > 250:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def messages_for(actions: list[dict], count: int, facts: str = "", cast: str = "") -> list[dict]:
     scene = "".join(a["text"] for a in actions if a["type"] != "see")[-2000:]
+    chunks: list[str] = []
+    if facts:
+        chunks.append(facts)
+    if cast:
+        chunks.append("Characters present:\n" + cast)
+    chunks.append(f"Recent scene:\n{scene.strip() or '(beginning of the adventure)'}")
     return [
         {"role": "system", "content": SYSTEM.replace("{count}", str(count))},
-        {"role": "user",
-         "content": f"{facts}\n\nRecent scene:\n{scene.strip() or '(beginning of the adventure)'}"
-                    if facts else
-                    f"Recent scene:\n{scene.strip() or '(beginning of the adventure)'}"},
+        {"role": "user", "content": "\n\n".join(chunks)},
     ]
 
 
@@ -144,6 +176,7 @@ def start(adventure_id: str, *, transport: Any = None) -> _Entry | None:
         memories = db.list_memories(conn, adventure_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
         facts = world_facts.assess(adventure, actions, cards, memories).facts_line
+        cast = _cast_block(cards, actions)
     key = _turn_key(actions)
     with _lock:
         entry = _entries.get(adventure_id)
@@ -152,16 +185,18 @@ def start(adventure_id: str, *, transport: Any = None) -> _Entry | None:
         if entry is not None:
             entry.cancel.set()
         entry = _entries[adventure_id] = _Entry(key)
-    threading.Thread(target=_run, args=(adventure_id, entry, actions, llm_cfg, cfg, transport, facts),
-                     name="choices-pregen", daemon=True).start()
+    threading.Thread(
+        target=_run,
+        args=(adventure_id, entry, actions, llm_cfg, cfg, transport, facts, cast),
+        name="choices-pregen", daemon=True).start()
     return entry
 
 
 def _run(adventure_id: str, entry: _Entry, actions: list[dict], llm_cfg: dict,
-         cfg: dict, transport: Any, facts: str = "") -> None:
+         cfg: dict, transport: Any, facts: str = "", cast: str = "") -> None:
     try:
         content = llm_client.chat_completion(
-            llm_cfg, messages_for(actions, cfg["count"], facts), role="choices",
+            llm_cfg, messages_for(actions, cfg["count"], facts, cast), role="choices",
             temperature=cfg["temperature"], max_tokens=cfg["max_tokens"],
             transport=transport, cancel=entry.cancel)
         entry.choices = parse_choices(content, cfg["count"])

@@ -210,7 +210,14 @@ def _window_around(text: str, name: str) -> str:
 
 
 def emotion_for_card(card: dict, text: str, bonds: dict[str, int]) -> str:
-    """A prosa em volta do nome vence o número da ficha."""
+    """O humor simulado vence a prosa; sem humor, a prosa vence o número."""
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
+    mood = str(life.get("mood") or "").strip()
+    if mood:
+        mapped = emotion_from_text(mood)
+        if mapped:
+            return mapped
     for name in _names(card):
         found = emotion_from_text(_window_around(text, name))
         if found:

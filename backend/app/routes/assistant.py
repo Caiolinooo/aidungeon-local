@@ -12,6 +12,7 @@ from app.errors import GameError
 from app.schemas import (
     AssistantCardRequest,
     AssistantFieldRequest,
+    AssistantGenerateRequest,
     AssistantScenarioRequest,
     AssistantSyncPlotRequest,
     WebSearchRequest,
@@ -50,6 +51,36 @@ def post_assistant_scenario(body: AssistantScenarioRequest,
             card_count=body.card_count,
             web_search_mode=body.web_search_mode,
         )
+    except llm_client.LlmError as exc:
+        raise GameError(503, exc.code, exc.message) from exc
+
+
+@router.post("/assistant/generate")
+def post_assistant_generate(body: AssistantGenerateRequest,
+                            transport: Any = Depends(get_http_transport)) -> dict:
+    """Rascunho completo. Com deep_characters, cada personagem ganha a ficha viva."""
+    llm_cfg = _llm_cfg()
+    try:
+        draft = assistant.generate_scenario_draft(
+            llm_cfg,
+            _assistant_file_cfg(),
+            body.brief,
+            body.language,
+            transport=transport,
+            genre=body.genre or None,
+            tone=body.tone or None,
+            pov=body.pov,
+            protagonist_name=body.protagonist_name or None,
+            protagonist_role=body.protagonist_role or None,
+            protagonist_appearance=body.protagonist_appearance or None,
+            image_style=body.image_style or None,
+            card_count=body.card_count,
+            web_search_mode=body.web_search_mode,
+            current=body.current,
+        )
+        if body.deep_characters:
+            draft = assistant.deepen_characters(llm_cfg, draft, transport)
+        return draft
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
 

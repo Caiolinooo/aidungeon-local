@@ -343,7 +343,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             card for card in frame
             if not world_facts.name_is_absent(card.get("title") or "", assessment.absent)
         ]
-    # A recusa por pessoa real/menor usa o texto cru da cena — mesmo quando
+    # A recusa por menor usa o texto cru da cena — mesmo quando
     # o world-facts rebaixa o explícito para a recusa canônica.
     decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
     if decision.refusal:
@@ -353,7 +353,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if assessment.image_directive:
         # recusa/bloqueio canônico: a cena pintada não é explícita
         explicit = explicit and scene.is_explicit(assessment.safe_excerpt)
-    order = likeness.omit_names(order, decision.dropped)
     if not explicit:
         order = likeness.strip_explicit(order)
     clause = _look_clause(frame, explicit=explicit) or (
@@ -373,8 +372,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     for card in cards:
         title = (card.get("title") or "").strip()
         if title and npc_assets._mentioned(raw_moment, title) and title not in by_name:
-            if card in decision.dropped:
-                continue
             if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
                 by_name[title] = card
                 names.append(title)
@@ -395,7 +392,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     for name in names:
         label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
         who_bits.append(f"{name} ({label})" if label else name)
-    hidden = ", ".join(likeness.display_name(card) for card in decision.dropped)
     canon = ""
     if clause and explicit:
         canon = (
@@ -427,14 +423,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # a tentativa crua do jogador não chega nem ao LLM de prompt.
     painted_source = moment if assessment.image_directive else \
         moment_for_painter(actions, body.action_seq)
-    painted = likeness.omit_names(
-        painted_source or "(an empty scene)",
-        decision.dropped,
-    )
+    painted = painted_source or "(an empty scene)"
     user = (
         (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
-        + (f"Do not depict and do not name: {hidden}.\n" if hidden else "")
         + place
         + ("Player instruction for the picture (obey it): " + order + "\n" if order else "")
         + "Moment to paint:\n"
@@ -447,12 +439,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     summarized = llm_client.chat_completion(
         llm_cfg, messages, role="image_prompt", temperature=0.2,
         max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
-    summarized = likeness.omit_names(summarized, decision.dropped)
     if not explicit:
         summarized = likeness.strip_explicit(summarized)
     summarized, neg_summary = contradicting_looks(summarized, clause)
     summarized = world_facts.scrub_image_text(summarized, assessment)
-    scrubbed_moment = likeness.omit_names(moment, decision.dropped)
+    scrubbed_moment = moment
     _, neg_moment = contradicting_looks(scrubbed_moment.replace("\n", " "), clause)
     # Uma frase em inglês na frente. A prosa crua não entra: ela vinha
     # cortada no meio da palavra e o narrador copiava o prompt.
@@ -513,9 +504,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
     """422 antes de enfileirar, quando o texto e os cards já decidem a recusa.
 
-    Nudez com pessoa real e sem fictício, ou com menor, não espera o LLM.
-    O worker repete o critério: se o prompt nasce lá, o job fica
-    `real_person_explicit` ou `minor`.
+    Nudez com menor não espera o LLM. O worker repete o critério:
+    se o prompt nasce lá, o job fica `minor`.
     """
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)

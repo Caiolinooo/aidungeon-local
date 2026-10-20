@@ -210,6 +210,8 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "turn_mode": bool(row["turn_mode"]) if "turn_mode" in row.keys() else False,
         "turn_user": (row["turn_user"] if "turn_user" in row.keys() else "") or "",
         "character_rules": (row["character_rules"] if "character_rules" in row.keys() else "") or "",
+        "life_day": int(row["life_day"]) if "life_day" in row.keys() and row["life_day"] is not None else 0,
+        "life_tick_seq": int(row["life_tick_seq"]) if "life_tick_seq" in row.keys() and row["life_tick_seq"] is not None else 0,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -890,6 +892,37 @@ def update_card(conn: sqlite3.Connection, adventure_id: str, card_id: str,
     return get_card(conn, adventure_id, card_id)
 
 
+def delete_image(conn: sqlite3.Connection, image_id: str) -> bool:
+    """Apaga a linha e o PNG, se o arquivo resolvido continuar dentro do repo."""
+    image = get_image(conn, image_id)
+    if not image:
+        return False
+    raw = str(image.get("file_path") or "")
+    path = Path(raw)
+    if raw and not path.is_absolute():
+        path = REPO_ROOT / path
+    if raw:
+        try:
+            resolved = path.resolve()
+            root = REPO_ROOT.resolve()
+        except OSError:
+            resolved = None
+            root = REPO_ROOT.resolve()
+        if resolved is not None and (resolved == root or root in resolved.parents):
+            resolved.unlink(missing_ok=True)
+    cur = conn.execute("DELETE FROM images WHERE id=?", (image_id,))
+    return cur.rowcount > 0
+
+
+def clear_card_portrait(conn: sqlite3.Connection, card_id: str) -> bool:
+    """Zera o retrato exibido e a âncora. O card continua."""
+    cur = conn.execute(
+        "UPDATE story_cards SET portrait_image_id='', portrait_anchor_id='', updated_at=? WHERE id=?",
+        (utcnow(), card_id),
+    )
+    return cur.rowcount > 0
+
+
 def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | None,
                       *, anchor_id: str | None = None) -> None:
     """Grava a foto exibida. anchor_id só preenche a âncora se ela ainda está vazia."""
@@ -908,9 +941,73 @@ def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | No
 
 
 def delete_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> bool:
+    conn.execute("DELETE FROM npc_memories WHERE adventure_id=? AND card_id=?",
+                 (adventure_id, card_id))
     cur = conn.execute("DELETE FROM story_cards WHERE id=? AND adventure_id=?",
                        (card_id, adventure_id))
     return cur.rowcount > 0
+
+
+def insert_npc_memory(conn: sqlite3.Connection, *, adventure_id: str, card_id: str,
+                      kind: str, text: str, mood: str = "",
+                      memory_id: str | None = None) -> dict:
+    mid = memory_id or new_id()
+    created = utcnow()
+    conn.execute(
+        "INSERT INTO npc_memories(id, adventure_id, card_id, kind, text, mood, created_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (mid, adventure_id, card_id, kind or "event", text, mood or "", created),
+    )
+    row = conn.execute("SELECT * FROM npc_memories WHERE id=?", (mid,)).fetchone()
+    return _npc_memory_to_dict(row)
+
+
+def list_npc_memories(conn: sqlite3.Connection, adventure_id: str,
+                      card_id: str | None = None, limit: int = 50) -> list[dict]:
+    if card_id:
+        rows = conn.execute(
+            "SELECT * FROM npc_memories WHERE adventure_id=? AND card_id=?"
+            " ORDER BY created_at DESC LIMIT ?",
+            (adventure_id, card_id, int(limit)),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM npc_memories WHERE adventure_id=?"
+            " ORDER BY created_at DESC LIMIT ?",
+            (adventure_id, int(limit)),
+        ).fetchall()
+    return [_npc_memory_to_dict(row) for row in rows]
+
+
+def update_adventure_life(conn: sqlite3.Connection, adventure_id: str, *,
+                          day: int | None = None, tick_seq: int | None = None) -> bool:
+    sets: list[str] = []
+    params: list[Any] = []
+    if day is not None:
+        sets.append("life_day=?")
+        params.append(int(day))
+    if tick_seq is not None:
+        sets.append("life_tick_seq=?")
+        params.append(int(tick_seq))
+    if not sets:
+        return False
+    params.append(adventure_id)
+    cur = conn.execute(
+        f"UPDATE adventures SET {', '.join(sets)} WHERE id=?", params,
+    )
+    return cur.rowcount > 0
+
+
+def _npc_memory_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "adventure_id": row["adventure_id"],
+        "card_id": row["card_id"],
+        "kind": row["kind"] or "event",
+        "text": row["text"] or "",
+        "mood": row["mood"] or "",
+        "created_at": row["created_at"],
+    }
 
 
 # ---------------------------------------------------------------- memories
@@ -1100,7 +1197,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 # -------------------------------------------------------------------- jobs
-JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image")
+JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick")
 JOB_ACTIVE = ("preparing", "pending", "running")
 
 

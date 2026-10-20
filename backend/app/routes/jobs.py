@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app import access, auth, db, jobs
+from app import access, auth, db, jobs, npc_assets
 from app.errors import GameError
+from app.schemas import PortraitSourceRequest
 
 router = APIRouter()
 by_id = APIRouter()
@@ -36,12 +37,23 @@ def enqueue_all_portraits(adventure_id: str) -> dict:
 
 
 @router.post("/{adventure_id}/cards/{card_id}/portrait", status_code=202)
-def enqueue_portrait(adventure_id: str, card_id: str) -> dict:
+def enqueue_portrait(adventure_id: str, card_id: str,
+                     body: PortraitSourceRequest | None = None) -> dict:
+    source = body.source if body else "anchor"
     with db.session() as conn:
         card = db.get_card(conn, adventure_id, card_id)
         if not card:
             raise GameError.not_found(f"card {card_id} not found")
-        return jobs.enqueue_portrait(conn, adventure_id, card_id, replace=True)
+        if source == "reference":
+            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+            ref = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+            if not str(ref.get("image_path") or "").strip():
+                raise GameError(422, "reference_required",
+                                "Este NPC não tem foto de referência.")
+        return jobs.enqueue_portrait(
+            conn, adventure_id, card_id, replace=True,
+            force_reference=source == "reference",
+        )
 
 
 @router.get("/{adventure_id}/jobs")

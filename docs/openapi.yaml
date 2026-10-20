@@ -601,6 +601,20 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AdventureId'
         - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: string
+                  enum: [anchor, reference]
+                  default: anchor
+                  description: |
+                    reference gera o retrato só a partir da foto enviada
+                    (sheet.reference). Sem foto, 422 reference_required.
       responses:
         '202':
           description: Job enfileirado (ou job ativo existente — dedupe).
@@ -608,6 +622,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: source=reference sem foto de referência (reference_required).
+    delete:
+      tags: [assets]
+      summary: Apagar o retrato e a âncora do NPC
+      operationId: deletePortrait
+      description: |
+        Apaga as linhas de imagem do retrato e da âncora, e os PNGs que
+        continuarem dentro do repositório. 204 mesmo se já não havia retrato.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '204':
+          description: Retrato apagado, ou já não havia retrato.
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -635,6 +666,150 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           description: Resposta do LLM não interpretável (generation_failed) — tente de novo.
+
+  /api/adventures/{adventureId}/cards/{cardId}/regenerate:
+    post:
+      tags: [assets]
+      summary: Regenerar um campo da ficha, ou os nove textos vivos
+      operationId: regenerateCard
+      description: |
+        scope=field regenera um campo de REGENERABLE_FIELDS
+        (personality, humor, speech, goals, background, lifestyle, habits,
+        likes, sentiments, portrait_prompt). Campo fora da lista: 422 invalid_field.
+        scope=all preenche só os vazios quando overwrite=false, e substitui os
+        nove textos quando overwrite=true. Não toca entry, appearance, body,
+        clothing, status, stats nem notes. portrait_prompt só entra em scope=field.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardRegenerateRequest'
+      responses:
+        '200':
+          description: Card e a lista do que mudou.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    $ref: '#/components/schemas/StoryCard'
+                  regenerated:
+                    type: array
+                    items:
+                      type: string
+                  skipped:
+                    type: array
+                    items:
+                      type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: invalid_field
+        '503':
+          description: generation_failed
+
+  /api/adventures/{adventureId}/cards/{cardId}/reference:
+    put:
+      tags: [assets]
+      summary: Enviar uma foto de referência do personagem
+      operationId: uploadReference
+      description: |
+        Multipart com file e mode. mode=reference (padrão) grava sheet.reference
+        e não marca pessoa real. mode=real_person também marca real_person e
+        espelha o caminho em likeness. Limpa portrait_anchor_id e mantém o
+        retrato atual. Menor continua recusado.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                mode:
+                  type: string
+                  enum: [reference, real_person]
+                  default: reference
+      responses:
+        '200':
+          description: Card atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '400':
+          description: Imagem inválida ou mode inválido.
+        '422':
+          description: Menor (minor).
+    delete:
+      tags: [assets]
+      summary: Apagar a foto de referência
+      operationId: deleteReference
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: sheet.reference e o caminho do likeness zerados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+
+  /api/adventures/{adventureId}/cards/{cardId}/memories:
+    get:
+      tags: [assets]
+      summary: Memórias recentes do NPC
+      operationId: listNpcMemories
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Até 20 memórias, mais recentes primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NpcMemory'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/life/tick:
+    post:
+      tags: [adventures]
+      summary: Enfileirar um dia fora de cena
+      operationId: tickNpcLife
+      description: Não roda o LLM no request. O worker executa npc_day_tick.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '202':
+          description: Job enfileirado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job:
+                    $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /api/adventures/{adventureId}/jobs:
     get:
@@ -962,6 +1137,35 @@ paths:
           $ref: '#/components/responses/ValidationError'
 
   # ------------------------------------------------------------------ assistant
+  /api/assistant/generate:
+    post:
+      tags: [assistant]
+      summary: Gerar o cenário inteiro, com fichas vivas quando pedido
+      operationId: assistantGenerate
+      description: |
+        Mesmo rascunho de /assistant/scenario. current entra no prompt como
+        o rascunho a regenerar. deep_characters=true chama a ficha completa
+        de cada card type=character; o que o rascunho já tiver prevalece.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantGenerateRequest'
+      responses:
+        '200':
+          description: Rascunho gerado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioDraft'
+        '503':
+          description: generation_failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/assistant/scenario:
     post:
       tags: [assistant]
@@ -1861,11 +2065,13 @@ components:
           type: string
           default: ''
           description: |
-            v0.5.0 — ficha estruturada do NPC como JSON string ('' = sem ficha).
-            Objeto: {appearance, body, clothing, personality, notes (textos de
-            1-2 frases), stats: {str, dex, con, int, wis, cha (1-20)}}.
-            Preenchida pelo endpoint enrich, editável via PATCH (dict no body) e
-            usada para enriquecer o prompt do retrato.
+            Ficha estruturada do NPC como JSON string ('' = sem ficha).
+            Textos: appearance, body, clothing, personality, humor, speech,
+            goals, background, lifestyle, habits, likes, sentiments (até 240),
+            notes. stats: {str, dex, con, int, wis, cha (1-20)}.
+            life: {mood, activity, day, last_tick}.
+            reference: {image_path, source, mode, created_at}.
+            O narrador lê esses campos via card_canon_text.
         portrait:
           type: object
           nullable: true
@@ -1955,7 +2161,7 @@ components:
           type: string
         type:
           type: string
-          enum: [character_portrait, scene_backdrop, see_image]
+          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick]
         status:
           type: string
           enum: [preparing, pending, running, done, error, canceled]
@@ -2502,6 +2708,87 @@ components:
       properties:
         state:
           type: object
+
+    CardRegenerateRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope:
+          type: string
+          enum: [all, field]
+        field:
+          type: string
+        overwrite:
+          type: boolean
+          default: false
+
+    NpcMemory:
+      type: object
+      properties:
+        id:
+          type: string
+        adventure_id:
+          type: string
+        card_id:
+          type: string
+        kind:
+          type: string
+          enum: [event, reflection]
+        text:
+          type: string
+        mood:
+          type: string
+        created_at:
+          type: string
+
+    AssistantGenerateRequest:
+      type: object
+      required: [brief]
+      properties:
+        brief:
+          type: string
+          minLength: 3
+        current:
+          type: object
+          nullable: true
+          description: Rascunho atual a regenerar.
+        language:
+          type: string
+          default: en
+        genre:
+          type: string
+          default: ''
+        tone:
+          type: string
+          default: ''
+        pov:
+          type: string
+          enum: [second, third, first]
+          nullable: true
+        protagonist_name:
+          type: string
+          default: ''
+        protagonist_role:
+          type: string
+          default: ''
+        protagonist_appearance:
+          type: string
+          default: ''
+        image_style:
+          type: string
+          default: ''
+        card_count:
+          type: integer
+          minimum: 3
+          maximum: 8
+          default: 5
+        web_search_mode:
+          type: string
+          enum: [auto, always, off]
+          default: auto
+        deep_characters:
+          type: boolean
+          default: true
 
     AssistantScenarioRequest:
       type: object

@@ -163,7 +163,7 @@ LORE_CUE = (
 # que o narrador escrever. O output_sanitizer limpa as variantes que escapam.
 CONTEXT_STOPS = (
     LORE_OPEN, LORE_CLOSE, "[World info]", "[Memories]", "[Summary]",
-    "[Player state]", "[Players]", "[Plot]", "[Author's note", "[Active Lore",
+    "[Player state]", "[Players]", "[Plot]", "[NPC minds]", "[Author's note", "[Active Lore",
     "[Continuity Anchor", "[Style:", "[Canon:", "[Private:", "[Web Research",
 )
 
@@ -221,6 +221,7 @@ def narrative_window(
 FIXED_BUDGET_KEYS = (
     "ai_instructions", "plot_essentials", "story_cards", "memory_bank",
     "story_summary", "authors_note", "last_action", "player_state",
+    "npc_minds",
 )
 
 
@@ -318,6 +319,40 @@ def _select_cards(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
     return out
 
 
+def _minds_block(conn: sqlite3.Connection, adventure_id: str, cards: list[dict],
+                 budget_tokens: int) -> str:
+    """Humor e memórias de quem já entrou no bloco de cards."""
+    from app import npc_assets, npc_life
+    lines: list[str] = []
+    present = [card for card in cards if (card.get("type") or "") == "character"]
+    if not present:
+        return ""
+    memories = npc_life.recent_for_cards(
+        conn, adventure_id, [card["id"] for card in present], per_card=3,
+    )
+    by_card: dict[str, list[dict]] = {}
+    for row in memories:
+        by_card.setdefault(row.get("card_id") or "", []).append(row)
+    for card in present:
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
+        bits = [
+            " ".join(str(life.get(key) or "").split())
+            for key in ("mood", "activity")
+        ]
+        bits = [bit for bit in bits if bit]
+        name = " ".join(str(card.get("title") or "").split()) or "NPC"
+        head = f"{name} — {'; '.join(bits)}" if bits else name
+        block = [head]
+        for row in by_card.get(card.get("id") or "", [])[:3]:
+            text = " ".join(str(row.get("text") or "").split())[:240]
+            if text:
+                block.append(f"- {text}")
+        if len(block) > 1 or bits:
+            lines.append("\n".join(block))
+    return _fit_budget("\n".join(lines), budget_tokens)
+
+
 def _render_card(card: dict, per_card_budget: int) -> str:
     from app import npc_assets
     return _fit_budget(npc_assets.card_canon_text(card), per_card_budget)
@@ -382,6 +417,12 @@ def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
         appearance = " ".join(str(sheet.get("appearance") or "").split())
         if appearance:
             bits.append(appearance[:120])
+        personality = " ".join(str(sheet.get("personality") or "").split())
+        if personality:
+            bits.append(personality[:120])
+        sentiments = " ".join(str(sheet.get("sentiments") or "").split())
+        if sentiments:
+            bits.append(sentiments[:120])
         status = str(sheet.get("status") or "").strip()
         if status:
             bits.append(status)
@@ -565,6 +606,11 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
         per_card = int(cards_cfg.get("budget_por_card", 150))
         cards_block = "\n\n".join(_render_card(c, per_card) for c in cards)
         volatile_parts.append("[World info]\n" + cards_block)
+        minds = _minds_block(
+            conn, adventure["id"], cards, int(budgets.get("npc_minds", 300)),
+        )
+        if minds:
+            volatile_parts.append("[NPC minds]\n" + minds)
         meta["cards_included"] = [c.get("id") for c in cards]
         extra_canon_tokens += max(0, estimate_tokens(cards_block) - base_cards_budget)
 

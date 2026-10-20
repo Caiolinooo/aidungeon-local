@@ -272,6 +272,16 @@ def put_character(adventure_id: str, body: PlayerCharacterUpsert,
         return {"card": _character_view(conn, card)}
 
 
+@router.post("/{adventure_id}/life/tick", status_code=202)
+def post_life_tick(adventure_id: str,
+                   info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    """Enfileira o dia fora de cena. O LLM roda no worker, não neste request."""
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+        job = jobs.enqueue_day_tick(conn, adventure_id, reason="manual")
+    return {"job": job}
+
+
 @router.post("/{adventure_id}/undo")
 def post_undo(adventure_id: str) -> dict:
     return game_engine.handle_undo(adventure_id)

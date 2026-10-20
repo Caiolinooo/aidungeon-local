@@ -1,11 +1,12 @@
 """Ficha de pessoa real (contrato C8) e o guardrail do que pode ser pintado.
 
-Pessoa real no quadro força allow_explicit falso. Cena explícita com pessoa
-real tira essa pessoa; se ninguém fictício sobra, o See recusa. Menor nunca
-entra em nudez ou sexo, e não ganha foto de referência.
+O bloqueio é só para menores: menor nunca entra em nudez ou sexo, e não
+ganha foto de referência nem retrato. Pessoa real adulta pode ser pintada,
+inclusive em cena explícita, quando o usuário marcou o card assim.
 
 A imagem principal da Wikipedia (REST page/summary) vai para data/references
 com a URL e a licença. Upload manual tem prioridade sobre esse download.
+Uma foto de NPC fictício fica em sheet["reference"] e não marca pessoa real.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import os
 import re
 import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
@@ -30,14 +31,14 @@ from app.image_plan import FaceRef
 
 log = logging.getLogger("aidungeon.likeness")
 
-CODE_REAL = "real_person_explicit"
 CODE_MINOR = "minor"
-MSG_REAL = "Não gero nudez nem sexo com pessoa real."
 MSG_MINOR = "Não gero nudez nem sexo com menor."
 # Retrato de pessoa real, sempre a partir da foto quando ela existe.
 # Abaixo da âncora fictícia (0.35): 0.45 já é denoise alto demais para o rosto
 # da foto sobreviver a outro enquadramento.
 REFERENCE_DENOISE = 0.25
+# Foto enviada de um NPC fictício: um pouco mais solta que a de pessoa real.
+VISUAL_REFERENCE_DENOISE = 0.3
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"
@@ -68,7 +69,6 @@ class FrameDecision:
     allow_explicit: bool
     refusal: str | None = None
     message: str = ""
-    dropped: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -123,44 +123,15 @@ def display_name(card: dict) -> str:
     return " ".join(str(card.get("title") or "").split()) or "the person"
 
 
-def _labels(card: dict) -> list[str]:
-    sheet = sheet_of(card)
-    raw = [card.get("title") or "", sheet.get("real_name") or "", *(card.get("triggers") or [])]
-    labels: list[str] = []
-    for item in raw:
-        text = " ".join(str(item or "").split())
-        if len(text) >= 3 and text not in labels:
-            labels.append(text)
-    return labels
-
-
 def decide_frame(cast: list[dict], *, explicit: bool) -> FrameDecision:
-    """Quem pode ficar no quadro e se a pintura pode ser explícita."""
+    """Quem pode ficar no quadro e se a pintura pode ser explícita.
+
+    Menor em cena explícita recusa o quadro inteiro. Pessoa real adulta fica.
+    """
     minors = [card for card in cast if is_minor(card)]
-    reals = [card for card in cast if is_real_person(card) and not is_minor(card)]
     if explicit and minors:
-        return FrameDecision([], False, CODE_MINOR, MSG_MINOR, list(minors))
-    if explicit and reals:
-        fictional = [card for card in cast if not is_real_person(card) and not is_minor(card)]
-        if not fictional:
-            return FrameDecision([], False, CODE_REAL, MSG_REAL, list(reals))
-        return FrameDecision(fictional, True, None, "", list(reals))
-    allow = bool(explicit) and not reals and not minors
-    return FrameDecision(list(cast), allow, None, "", [])
-
-
-def omit_names(text: str, cards: list[dict]) -> str:
-    """Tira os nomes de quem saiu do quadro. O gesto que sobrou fica."""
-    cleaned = text or ""
-    for card in cards:
-        for name in _labels(card):
-            cleaned = re.sub(
-                r"(?<!\w)" + re.escape(name) + r"(?!\w)",
-                " ",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-    return " ".join(cleaned.split())
+        return FrameDecision([], False, CODE_MINOR, MSG_MINOR)
+    return FrameDecision(list(cast), bool(explicit), None, "")
 
 
 def strip_explicit(text: str) -> str:
@@ -278,17 +249,33 @@ def reference_bytes(card: dict) -> bytes | None:
     return path.read_bytes()
 
 
-def portrait_init(card: dict, anchor: bytes | None, *,
-                  anchor_denoise: float) -> tuple[bytes | None, float | None]:
-    """Foto de referência da pessoa real, mesmo quando já existe âncora gerada.
+def visual_reference_bytes(card: dict) -> bytes | None:
+    """Foto enviada pelo usuário em sheet['reference'], fictícia ou real."""
+    raw = sheet_of(card).get("reference")
+    if not isinstance(raw, dict):
+        return None
+    path = absolute_reference(str(raw.get("image_path") or ""))
+    if path is None:
+        return None
+    return path.read_bytes()
 
-    A âncora de um txt2img antigo não parece a pessoa; regenerar a partir dela
-    nunca chega na foto. Sem arquivo de referência, cai na âncora. Personagem
-    fictício continua na âncora. Menor real não ganha retrato. O See não usa
-    este caminho.
+
+def portrait_init(card: dict, anchor: bytes | None, *,
+                  anchor_denoise: float,
+                  force_reference: bool = False) -> tuple[bytes | None, float | None]:
+    """Foto enviada, senão a referência de pessoa real, senão a âncora.
+
+    `force_reference` ignora a âncora: o retrato novo sai só da foto enviada.
+    Menor real não ganha retrato. O See não usa este caminho.
     """
     if is_real_person(card) and is_minor(card):
         raise GameError(422, CODE_MINOR, "Não gero retrato de menor.")
+    visual = visual_reference_bytes(card)
+    if visual:
+        denoise = REFERENCE_DENOISE if is_real_person(card) else VISUAL_REFERENCE_DENOISE
+        return visual, denoise
+    if force_reference:
+        return None, None
     if is_real_person(card):
         ref = reference_bytes(card)
         if ref:
@@ -643,8 +630,12 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
     return _store_sheet(conn, card, sheet)
 
 
-def save_upload(conn, card: dict, content: bytes, *, filename: str = "") -> dict:
-    """Upload manual. Substitui a foto da Wikipedia e não volta atrás sem force."""
+def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
+                mode: str = "reference") -> dict:
+    """Upload manual. `reference` não marca pessoa real; `real_person` marca."""
+    if mode not in ("reference", "real_person"):
+        raise GameError(400, "invalid_payload",
+                        "mode deve ser 'reference' ou 'real_person'.")
     if is_minor(card):
         raise GameError(422, CODE_MINOR, "Não guardo referência de menor.")
     if not content or len(content) > MAX_IMAGE_BYTES:
@@ -654,27 +645,45 @@ def save_upload(conn, card: dict, content: bytes, *, filename: str = "") -> dict
         raise GameError(400, "invalid_payload", "A referência precisa ser JPEG, PNG ou WebP.")
     rel = _write_reference(card["id"], content, ext)
     sheet = dict(sheet_of(card))
-    previous = likeness_of(card)
-    sheet["real_person"] = True
-    sheet["real_name"] = sheet.get("real_name") or display_name(card)
-    sheet["likeness"] = {
-        "descriptor": previous.get("descriptor") or "",
-        "reference_image_path": rel,
-        "source_url": "",
-        "license": "user upload",
-        "page_url": previous.get("page_url") or "",
-        "verified_by_user": True,
+    sheet["reference"] = {
+        "image_path": rel,
+        "source": "upload",
+        "mode": mode,
+        "created_at": db.utcnow(),
     }
+    if mode == "real_person":
+        previous = likeness_of(card)
+        sheet["real_person"] = True
+        if not str(sheet.get("real_name") or "").strip():
+            sheet["real_name"] = display_name(card)
+        sheet["likeness"] = {
+            "descriptor": previous.get("descriptor") or "",
+            "reference_image_path": rel,
+            "source_url": "",
+            "license": "user upload",
+            "page_url": previous.get("page_url") or "",
+            "verified_by_user": True,
+        }
+    conn.execute(
+        "UPDATE story_cards SET portrait_anchor_id='', updated_at=? WHERE id=?",
+        (db.utcnow(), card["id"]),
+    )
     return _store_sheet(conn, card, sheet)
 
 
 def clear_reference(conn, card: dict) -> dict:
-    """Apaga a foto. A marca de pessoa real continua, para o guardrail valer."""
+    """Apaga a foto enviada e o caminho espelhado no likeness."""
     sheet = dict(sheet_of(card))
     like = dict(likeness_of(card))
-    path = absolute_reference(str(like.get("reference_image_path") or ""))
-    if path is not None:
+    raw_ref = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+    seen: set[Path] = set()
+    for raw in (raw_ref.get("image_path"), like.get("reference_image_path")):
+        path = absolute_reference(str(raw or ""))
+        if path is None or path in seen:
+            continue
+        seen.add(path)
         path.unlink(missing_ok=True)
+    sheet["reference"] = {}
     like["reference_image_path"] = ""
     like["source_url"] = ""
     like["verified_by_user"] = False

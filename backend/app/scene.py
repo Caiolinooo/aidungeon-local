@@ -161,7 +161,6 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         moment = ""
         explicit = False
     else:
-        moment = likeness.omit_names(moment, decision.dropped)
         cast = decision.cast
         explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
@@ -292,7 +291,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
     decision = likeness.decide_frame(cast_cards, explicit=is_explicit(text))
     paint_cast = [] if decision.refusal else decision.cast
-    paint_text = "" if decision.refusal else likeness.omit_names(text, decision.dropped)
+    paint_text = "" if decision.refusal else text
     explicit = False if decision.refusal else decision.allow_explicit
     clause = _visual_clause(paint_cast, explicit=explicit)
     signature = f"{_slug(title)}|{atmosphere}"

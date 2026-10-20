@@ -84,6 +84,48 @@ export default function ScenarioEditor() {
 
   const payload = () => ({ ...form, title: form.title.trim() })
 
+  const regenerateEverything = async () => {
+    const brief = (form.description || form.title || '').trim()
+    if (brief.length < 3) {
+      toast('Description needs at least 3 characters.')
+      return
+    }
+    if (opRef.current) return
+    opRef.current = true
+    setPending('all')
+    try {
+      const count = Math.min(8, Math.max(3, (form.story_cards || []).length || 5))
+      const draft = await api.assistantGenerate({
+        brief,
+        current: payload(),
+        language: draftLanguage(),
+        image_style: form.image_style || '',
+        card_count: count,
+        pov: form.third_person ? 'third' : 'second',
+        deep_characters: true,
+        web_search_mode: 'off',
+      })
+      setForm({
+        title: draft.title ?? form.title,
+        description: draft.description ?? '',
+        ai_instructions: draft.ai_instructions ?? '',
+        plot_essentials: draft.plot_essentials ?? '',
+        authors_note: draft.authors_note ?? '',
+        opening_text: draft.opening_text ?? '',
+        image_style: draft.image_style ?? '',
+        tags: draft.tags ?? [],
+        story_cards: Array.isArray(draft.story_cards) ? draft.story_cards : [],
+        third_person: !!draft.third_person || form.third_person,
+      })
+      toast('Scenario regenerated.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      opRef.current = false
+      setPending(null)
+    }
+  }
+
   const noteWeb = (sources) => {
     if (sources?.length) toast(`Enriched with ${sources.length} web sources.`, 'ok')
   }
@@ -315,9 +357,19 @@ export default function ScenarioEditor() {
         <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300">
           ← Home
         </Link>
-        <h1 className="mt-1 text-2xl font-bold text-zinc-100">
-          {isEdit ? (form.title || 'Edit Scenario') : 'New Scenario'}
-        </h1>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold text-zinc-100">
+            {isEdit ? (form.title || 'Edit Scenario') : 'New Scenario'}
+          </h1>
+          <button
+            type="button"
+            onClick={regenerateEverything}
+            disabled={busy}
+            className="shrink-0 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            {pending === 'all' ? '… generating' : '🎲 Regenerate everything'}
+          </button>
+        </div>
       </header>
 
       <fieldset disabled={busy} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">

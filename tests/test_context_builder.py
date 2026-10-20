@@ -210,8 +210,8 @@ def test_recent_window_dynamic_rule(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    expected = 65536 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200 + 200) - 1024
-    assert built.meta["budgets"]["recent_window"] == expected == 58312
+    expected = 65536 - (700 + 1600 + 1600 + 800 + 800 + 300 + 200 + 200 + 300) - 1024
+    assert built.meta["budgets"]["recent_window"] == expected == 58012
 
 
 def test_long_context_dynamic_scaling_and_continuity_anchor(tmp_db):
@@ -277,8 +277,8 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
         # budget da janela = 250 tokens: cabem as 10 curtas (~260 não; ~234
         # sem a mais antiga), não a ação 0. O descarte sobe para múltiplo de
         # WINDOW_DROP_CHUNK (8): saem as ações 0..7 e ficam 8..10, inteiras.
-        # (6200 = budgets fixos, incl. player_state=200 do v0.7.0)
-        cfg = _cfg(conn, context_size=6200 + 1024 + 250)
+        # (6500 = budgets fixos, incl. player_state=200 e npc_minds=300)
+        cfg = _cfg(conn, context_size=6500 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert cb.WINDOW_DROP_CHUNK == 8
@@ -299,8 +299,8 @@ def test_window_chunk_snap_can_empty_the_window(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         # budget da janela = 250 tokens: caberia a ação 1 inteira (~101), mas
-        # dropped=1 → snap 8 → keep<=0. (6200 = budgets fixos)
-        cfg = _cfg(conn, context_size=6200 + 1024 + 250)
+        # dropped=1 → snap 8 → keep<=0. (6500 = budgets fixos)
+        cfg = _cfg(conn, context_size=6500 + 1024 + 250)
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert built.meta["window_action_count"] == 0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from app import db, likeness, settings_store
 from app.deps import get_http_transport
@@ -42,14 +42,15 @@ def resolve_likeness(adventure_id: str, card_id: str,
 
 @router.put("/adventures/{adventure_id}/cards/{card_id}/reference")
 def put_reference(adventure_id: str, card_id: str,
-                  file: UploadFile = File(...)) -> dict:
-    """Upload manual. Tem prioridade sobre a foto da Wikipedia."""
+                  file: UploadFile = File(...),
+                  mode: str = Form("reference")) -> dict:
+    """Upload manual. `reference` é NPC fictício; `real_person` marca a ficha."""
     card = _card_or_404(adventure_id, card_id)
     content = file.file.read(likeness.MAX_IMAGE_BYTES + 1)
     with db.session() as conn:
         current = db.get_card(conn, adventure_id, card_id) or card
         updated = likeness.save_upload(
-            conn, current, content, filename=file.filename or "",
+            conn, current, content, filename=file.filename or "", mode=mode,
         )
         return db.attach_portrait(conn, updated)
 

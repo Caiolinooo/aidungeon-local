@@ -3,7 +3,8 @@
 Fluxo síncrono sobre o LLM efetivo:
 
 - `enrich_card` — preenche a ficha estruturada (story_cards.sheet, JSON:
-  appearance/body/clothing/personality/stats/notes) e o portrait_prompt a
+  appearance/body/clothing/personality/humor/speech/goals/background/
+  lifestyle/habits/likes/sentiments/stats/notes) e o portrait_prompt a
   partir do entry + contexto da aventura. Cobre cards legados (aventuras
   já existentes) sob demanda.
 
@@ -26,19 +27,36 @@ log = logging.getLogger("aidungeon.npc_assets")
 
 STATS_KEYS = ("str", "dex", "con", "int", "wis", "cha")
 
+SHEET_TEXT_FIELDS = (
+    "appearance", "body", "clothing", "personality", "humor", "speech",
+    "goals", "background", "lifestyle", "habits", "likes", "sentiments", "notes",
+)
+LIFESIM_FIELDS = (
+    "humor", "speech", "goals", "background", "lifestyle", "habits", "likes", "sentiments",
+)
+SHEET_FIELD_LIMITS = {"sentiments": 240}
+
 _ENRICH_SYSTEM = """You build structured RPG character sheets for an interactive fiction game.
 Given the character and the story context, output STRICT JSON (no markdown, no commentary) with exactly these keys:
 {
   "appearance": "face, hair, eyes, distinguishing marks — vivid visual detail",
   "body": "build, height, skin, posture, physical condition",
   "clothing": "typical outfit, armor, accessories",
-  "personality": "traits, mannerisms, speech style",
+  "personality": "traits and mannerisms",
+  "humor": "how they joke, what amuses them, what they find absurd",
+  "speech": "how they talk: vocabulary, rhythm, verbal tics, nicknames, catchphrases",
+  "goals": "what they want now and what they fear losing",
+  "background": "2-3 sentences of history that explain the person",
+  "lifestyle": "daily routine: where they wake, work, eat, sleep, who they live with",
+  "habits": "repeatable tics: smokes, fidgets, counts things, whistles",
+  "likes": "concrete likes and dislikes",
+  "sentiments": "how they feel right now about who is in the scene and about the player; start with the feeling toward the player",
   "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20},
   "status": "alive, dead, missing or injured — only if the text establishes it",
   "notes": "abilities, secrets, plot-relevant facts (optional, short)",
   "portrait_prompt": "one or two English sentences for a text-to-image model: physical appearance, clothing, expression, bust/upper-body framing, neutral background — visual traits only, no names, no quotes"
 }
-Base stats on the character concept (a frail wizard has low str, high int). Keep every text field to 1-2 sentences. Never change an existing appearance, body or status unless the description says that the body itself changed. Output ONLY the JSON object."""
+Every key must be present. Use an empty string when a text field is unknown. status must be one of alive, dead, missing, injured. Base stats on the character concept (a frail wizard has low str, high int). Keep every text field to 1-2 sentences, except background (2-3 sentences). Never change an existing appearance, body or status unless the description says that the body itself changed. Output ONLY the JSON object."""
 
 
 def _extract_json(text: str) -> dict:
@@ -71,14 +89,22 @@ def parse_sheet(raw: str) -> dict:
     return obj if isinstance(obj, dict) else {}
 
 
+def _field_text(key: str, value: str) -> str:
+    """Corta humor/lifestyle/… no teto da chave. Campo vazio depois do strip sai."""
+    text = value.strip()
+    if key in LIFESIM_FIELDS:
+        text = text[: SHEET_FIELD_LIMITS.get(key, 500)]
+    return text
+
+
 def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
     """Recorta o JSON do LLM para o contrato da ficha (campos desconhecidos
     fora; stats coagidos a int 1-20)."""
     sheet: dict[str, Any] = {}
-    for key in ("appearance", "body", "clothing", "personality", "notes", "status"):
+    for key in (*SHEET_TEXT_FIELDS, "status"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            sheet[key] = value.strip()
+            sheet[key] = _field_text(key, value)
     if sheet.get("status") not in ("alive", "dead", "missing", "injured"):
         sheet.pop("status", None)
     stats = data.get("stats")
@@ -109,43 +135,202 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
         if isinstance(previous.get("bonds"), dict):
             sheet["bonds"] = previous["bonds"]
         # Pessoa real, referência e menor não saem quando a ficha é reescrita.
-        for key in ("real_person", "real_name", "wiki_title", "likeness", "minor", "age"):
+        for key in ("real_person", "real_name", "wiki_title", "likeness", "minor", "age",
+                    "life", "reference"):
             if key in previous:
                 sheet[key] = previous[key]
     return sheet
 
 
-# ------------------------------------------------------------------- enrich
-def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
-                transport: Any, *, role: str = "assistant") -> dict:
-    """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado."""
-    existing = parse_sheet(card["sheet"])
-    user = (
-        f"Story: {adv['title']} — {adv['description'][:600]}\n"
-        f"Character: {card['title']} ({card['type']})\n"
-        f"Description: {card['entry'][:1200]}"
+REGENERABLE_FIELDS = (
+    "personality", "humor", "speech", "goals", "background",
+    "lifestyle", "habits", "likes", "sentiments", "portrait_prompt",
+)
+SHEET_REGEN_FIELDS = tuple(key for key in REGENERABLE_FIELDS if key != "portrait_prompt")
+
+_FIELD_SYSTEM = """You rewrite one field of an RPG character sheet.
+Output STRICT JSON (no markdown, no commentary): {"value": "the new text"}.
+One or two sentences. Use an empty string only when the field cannot be known.
+Output ONLY the JSON object."""
+
+_ALL_SYSTEM = """You rewrite the living parts of an RPG character sheet.
+Output STRICT JSON (no markdown, no commentary) with exactly these keys, every one present
+(use an empty string when unknown):
+{
+  "personality": "traits and mannerisms",
+  "humor": "how they joke, what amuses them, what they find absurd",
+  "speech": "how they talk: vocabulary, rhythm, verbal tics, nicknames, catchphrases",
+  "goals": "what they want now and what they fear losing",
+  "background": "2-3 sentences of history that explain the person",
+  "lifestyle": "daily routine: where they wake, work, eat, sleep, who they live with",
+  "habits": "repeatable tics: smokes, fidgets, counts things, whistles",
+  "likes": "concrete likes and dislikes",
+  "sentiments": "how they feel right now about who is in the scene and about the player"
+}
+Do not change appearance, body, clothing, status, stats, notes, or the description.
+Output ONLY the JSON object."""
+
+
+def _sheet_user(title: str, entry: str, sheet: dict, *, story: str = "",
+                card_type: str = "") -> str:
+    label = f"{title} ({card_type})" if card_type else title
+    lines = []
+    if story:
+        lines.append(story)
+    lines.append(f"Character: {label}")
+    lines.append(f"Description: {(entry or '')[:1200]}")
+    if sheet:
+        lines.append(
+            "Existing sheet (improve, don't contradict): "
+            + json.dumps(sheet, ensure_ascii=False)[:800]
+        )
+    return "\n".join(lines)
+
+
+def _complete_sheet(llm_cfg: dict, *, title: str, entry: str, sheet: dict,
+                    transport: Any, role: str, story: str = "",
+                    card_type: str = "") -> tuple[dict, str | None]:
+    messages = [
+        {"role": "system", "content": _ENRICH_SYSTEM},
+        {"role": "user", "content": _sheet_user(
+            title, entry, sheet, story=story, card_type=card_type)},
+    ]
+    content = llm_client.chat_completion(
+        llm_cfg, messages, role=role, temperature=0.4, max_tokens=600, transport=transport,
     )
-    if existing:
-        user += f"\nExisting sheet (improve, don't contradict): {json.dumps(existing, ensure_ascii=False)[:800]}"
-    messages = [{"role": "system", "content": _ENRICH_SYSTEM},
-                {"role": "user", "content": user}]
-    content = llm_client.chat_completion(llm_cfg, messages, role=role, temperature=0.4,
-                                         max_tokens=600, transport=transport)
     try:
         data = _extract_json(content)
     except (ValueError, TypeError) as exc:
         raise _generation_failed(str(exc)) from exc
-
-    sheet = _normalize_sheet(data, existing)
-    if not sheet:
+    normalized = _normalize_sheet(data, sheet)
+    if not normalized:
         raise _generation_failed("resposta sem campos de ficha aproveitáveis")
-    portrait_prompt = data.get("portrait_prompt")
-    fields: dict[str, Any] = {"sheet": json.dumps(sheet, ensure_ascii=False)}
-    if isinstance(portrait_prompt, str) and portrait_prompt.strip():
-        fields["portrait_prompt"] = portrait_prompt.strip()
+    prompt = data.get("portrait_prompt")
+    portrait = prompt.strip() if isinstance(prompt, str) and prompt.strip() else None
+    return normalized, portrait
+
+
+def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = None,
+                transport=None, role: str = "assistant", story: str = "",
+                card_type: str = "") -> dict:
+    """Gera a ficha completa de um NPC por LLM. Devolve o dict normalizado.
+
+    `portrait_prompt`, quando o modelo devolve, vem na mesma dict para o
+    caller gravar na coluna do card — não faz parte da ficha persistida.
+    `story` e `card_type` só entram no prompt (o enrich precisa dos dois).
+    """
+    existing = sheet or {}
+    normalized, portrait = _complete_sheet(
+        llm_cfg, title=title, entry=entry, sheet=existing,
+        transport=transport, role=role, story=story, card_type=card_type,
+    )
+    if portrait:
+        normalized["portrait_prompt"] = portrait
+    return normalized
+
+
+def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
+                transport: Any, *, role: str = "assistant") -> dict:
+    """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado."""
+    existing = parse_sheet(card["sheet"])
+    story = f"Story: {adv['title']} — {(adv.get('description') or '')[:600]}"
+    built = build_sheet(
+        llm_cfg, title=card["title"], entry=card.get("entry") or "",
+        sheet=existing, transport=transport, role=role, story=story,
+        card_type=card.get("type") or "",
+    )
+    portrait = built.pop("portrait_prompt", None)
+    fields: dict[str, Any] = {"sheet": json.dumps(built, ensure_ascii=False)}
+    if portrait:
+        fields["portrait_prompt"] = portrait
     updated = db.update_card(conn, adv["id"], card["id"], fields)
     log.info("npc_assets: ficha enriquecida p/ card %s (%s)", card["id"], card["title"])
     return updated
+
+
+def _regen_context(adv: dict, card: dict, sheet: dict) -> str:
+    return (
+        f"Story: {adv.get('title') or ''} — {(adv.get('description') or '')[:600]}\n"
+        f"Character: {card.get('title') or ''}\n"
+        f"Description: {(card.get('entry') or '')[:1200]}\n"
+        f"Current sheet: {json.dumps(sheet, ensure_ascii=False)[:1200]}"
+    )
+
+
+def _filled(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def regenerate_card(conn, adv: dict, card: dict, llm_cfg: dict, *,
+                    scope: str, field: str | None = None, overwrite: bool = False,
+                    transport: Any = None, role: str = "assistant") -> dict:
+    """Regenera um campo ou os 9 textos vivos. Não toca entry/rosto/status."""
+    if scope == "field" and field not in REGENERABLE_FIELDS:
+        raise GameError(422, "invalid_field", "Campo não regenerável.")
+    if scope not in ("all", "field"):
+        raise GameError(422, "invalid_field", "Campo não regenerável.")
+    sheet = parse_sheet(card.get("sheet") or "")
+    context = _regen_context(adv, card, sheet)
+    regenerated: list[str] = []
+    skipped: list[str] = []
+    fields: dict[str, Any] = {}
+    try:
+        if scope == "field":
+            content = llm_client.chat_completion(
+                llm_cfg,
+                [{"role": "system", "content": _FIELD_SYSTEM},
+                 {"role": "user", "content": f"{context}\nField to rewrite: {field}"}],
+                role=role, temperature=0.4, max_tokens=300, transport=transport,
+            )
+            data = _extract_json(content)
+            raw = data.get("value") if isinstance(data, dict) else None
+            text = _field_text(field, raw) if isinstance(raw, str) and field != "portrait_prompt" else ""
+            if field == "portrait_prompt" and isinstance(raw, str):
+                text = raw.strip()[:500]
+            if text:
+                if field == "portrait_prompt":
+                    fields["portrait_prompt"] = text
+                else:
+                    sheet[field] = text
+                    fields["sheet"] = json.dumps(sheet, ensure_ascii=False)
+                regenerated.append(field)
+            else:
+                skipped.append(field)
+        else:
+            content = llm_client.chat_completion(
+                llm_cfg,
+                [{"role": "system", "content": _ALL_SYSTEM},
+                 {"role": "user", "content": context}],
+                role=role, temperature=0.4, max_tokens=600, transport=transport,
+            )
+            data = _extract_json(content)
+            for key in SHEET_REGEN_FIELDS:
+                if _filled(sheet.get(key)) and not overwrite:
+                    skipped.append(key)
+                    continue
+                raw = data.get(key) if isinstance(data, dict) else None
+                text = _field_text(key, raw) if isinstance(raw, str) else ""
+                if not text:
+                    skipped.append(key)
+                    continue
+                sheet[key] = text
+                regenerated.append(key)
+            if regenerated:
+                fields["sheet"] = json.dumps(sheet, ensure_ascii=False)
+    except GameError:
+        raise
+    except (ValueError, TypeError) as exc:
+        raise _generation_failed(str(exc)) from exc
+    updated = card
+    if fields:
+        saved = db.update_card(conn, adv["id"], card["id"], fields)
+        if saved:
+            updated = saved
+    return {
+        "card": db.attach_portrait(conn, updated),
+        "regenerated": regenerated,
+        "skipped": skipped,
+    }
 
 
 def sheet_context(raw_sheet: str) -> str:
@@ -484,17 +669,30 @@ def card_canon_text(card: dict) -> str:
     status = sheet.get("status")
     if isinstance(status, str) and status.strip():
         first.append(f"Status: {status.strip()}")
+    life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
+    mood = life.get("mood")
+    if isinstance(mood, str) and mood.strip():
+        first.append(f"Mood: {mood.strip()}")
+    activity = life.get("activity")
+    if isinstance(activity, str) and activity.strip():
+        first.append(f"Doing: {activity.strip()}")
     for key, label in (
         ("appearance", "Appearance"),
         ("body", "Body"),
         ("clothing", "Clothing"),
+        ("personality", "Personality"),
+        ("humor", "Humor"),
+        ("speech", "Speech"),
+        ("goals", "Goals"),
+        ("background", "Background"),
+        ("lifestyle", "Lifestyle"),
+        ("habits", "Habits"),
+        ("likes", "Likes"),
+        ("sentiments", "Sentiments"),
     ):
         value = sheet.get(key)
         if isinstance(value, str) and value.strip():
             first.append(f"{label}: {value.strip()}")
-    personality = sheet.get("personality")
-    if isinstance(personality, str) and personality.strip():
-        first.append(f"Personality: {personality.strip()}")
     stats = sheet.get("stats")
     if isinstance(stats, dict) and stats:
         bits = [f"{key} {stats[key]}" for key in STATS_KEYS if key in stats]

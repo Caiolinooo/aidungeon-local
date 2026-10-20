@@ -91,3 +91,14 @@ O pedido do jogador é tentativa. Lugar, item, pessoa e consentimento só entram
 5. Mostrar o aviso na faixa da cena (`notice`).
 6. Impedir o registro de lugar/item/obediência que só existiu no pedido.
 7. Travar o sexo na imagem: mulher fica mulher, homem fica homem, a frase vai no começo do prompt.
+
+## NPCs vivos (ficha, regeneração, foto, life-sim, gerar tudo)
+
+| ID | Tarefa | Status |
+|---|---|---|
+| N1 | Ficha viva: humor, speech, goals, background, lifestyle, habits, likes, sentiments no canônico, nas escolhas e no painel | feito |
+| N2 | Regenerar um campo ou os nove textos; Enrich continua preenchendo o que falta | feito |
+| N3 | Foto de referência sem marcar pessoa real; apagar retrato; retrato novo a partir da foto; bloqueio só de menor | feito |
+| N4 | Life-sim: memórias, mente pós-turno, tick do dia, bloco `[NPC minds]` | feito |
+| N5 | POST /api/assistant/generate com fichas profundas | feito |
+| N6 | OpenAPI dos endpoints e dos campos novos | feito |

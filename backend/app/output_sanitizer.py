@@ -18,7 +18,7 @@ import re
 
 LORE_MARKER = re.compile(
     r"<\s*/?\s*lore\s*>"
-    r"|\[\s*(?:world\s+info|memories|summary|player\s+state|players|plot)\s*\]"
+    r"|\[\s*(?:world\s+info|memories|summary|player\s+state|players|plot|npc\s+minds)\s*\]"
     r"|\[\s*(?:author['’]?s\s+note|active\s+lore|continuity\s+anchor|web\s+research)\b"
     r"|\[\s*(?:style|canon|private)\s*:",
     re.IGNORECASE,

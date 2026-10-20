@@ -274,3 +274,64 @@ def test_scenario_underfilled_cards_fall_through_to_retry(client):
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["story_cards"]) == 3
     assert calls["n"] == 3
+
+
+def test_generate_keeps_draft_humor_and_fills_lifestyle(client):
+    draft = {
+        "title": "Sky",
+        "description": "Airships.",
+        "ai_instructions": "Be concrete.",
+        "plot_essentials": "You fly.",
+        "authors_note": "Wind.",
+        "opening_text": "The deck tilts.",
+        "tags": ["sky"],
+        "story_cards": [{
+            "title": "Ada",
+            "type": "character",
+            "triggers": ["Ada"],
+            "entry": "Captain.",
+            "sheet": {"humor": "dry jokes", "appearance": "ash braid"},
+        }],
+    }
+    sheet = {
+        "appearance": "SHOULD NOT APPLY",
+        "humor": "SHOULD NOT APPLY",
+        "lifestyle": "wakes on the bridge",
+        "personality": "loyal",
+        "speech": "short sentences",
+        "goals": "keep the ship",
+        "background": "born in the docks",
+        "habits": "counts knots",
+        "likes": "black tea",
+        "sentiments": "wary of the player",
+        "status": "alive",
+        "stats": {"str": 12, "dex": 14, "con": 11, "int": 13, "wis": 10, "cha": 15},
+        "notes": "hides maps",
+        "portrait_prompt": "ash braid, bust portrait",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content)
+            system = body["messages"][0]["content"]
+            content = json.dumps(sheet if "structured RPG character sheets" in system else draft)
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(404, json={"error": request.url.path})
+
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.post("/api/assistant/generate", json={
+            "brief": "airships over a storm sea",
+            "web_search_mode": "off",
+            "deep_characters": True,
+            "card_count": 3,
+        })
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    card = resp.json()["story_cards"][0]
+    assert card["sheet"]["humor"] == "dry jokes"
+    assert card["sheet"]["appearance"] == "ash braid"
+    assert card["sheet"]["lifestyle"] == "wakes on the bridge"

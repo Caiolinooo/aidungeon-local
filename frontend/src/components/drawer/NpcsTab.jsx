@@ -77,7 +77,29 @@ function PortraitThumb({ card, activeJob }) {
   )
 }
 
-const SHEET_FIELDS = ['appearance', 'body', 'clothing', 'personality', 'notes']
+const SHEET_FIELDS = [
+  'appearance', 'body', 'clothing', 'personality', 'humor', 'speech',
+  'goals', 'background', 'lifestyle', 'habits', 'likes', 'sentiments', 'notes',
+]
+const FIELD_LABELS = {
+  appearance: 'Aparência',
+  body: 'Corpo',
+  clothing: 'Roupa',
+  personality: 'Personalidade',
+  humor: 'Humor',
+  speech: 'Fala',
+  goals: 'Objetivos',
+  background: 'História',
+  lifestyle: 'Rotina',
+  habits: 'Manias',
+  likes: 'Gosta / não gosta',
+  sentiments: 'Sentimentos',
+  notes: 'Notas',
+}
+const REGEN_FIELDS = new Set([
+  'personality', 'humor', 'speech', 'goals', 'background',
+  'lifestyle', 'habits', 'likes', 'sentiments',
+])
 const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
 // Mesmos nomes e ponto de partida de backend/app/npc_bonds.py.
 const BOND_KEYS = ['relationship', 'trust', 'fear', 'desire', 'boldness']
@@ -102,7 +124,7 @@ function sheetHasContent(sheet) {
 }
 
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
-function SheetPanel({ sheet, onChange }) {
+function SheetPanel({ sheet, onChange, onRegenerateField }) {
   const inputCls =
     'w-full rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs outline-none focus:border-emerald-600'
   const set = (key, value) => onChange({ ...sheet, [key]: value })
@@ -135,7 +157,22 @@ function SheetPanel({ sheet, onChange }) {
       </label>
       {SHEET_FIELDS.map((key) => (
         <label key={key} className="flex flex-col gap-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{key}</span>
+          <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            <span>{FIELD_LABELS[key] || key}</span>
+            {REGEN_FIELDS.has(key) && (
+              <button
+                type="button"
+                title={`Regenerate ${FIELD_LABELS[key] || key}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  onRegenerateField?.(key)
+                }}
+                className="rounded border border-zinc-700 px-1 text-[10px] normal-case tracking-normal text-zinc-300 hover:bg-zinc-700"
+              >
+                ↻
+              </button>
+            )}
+          </span>
           <textarea
             value={sheet[key] ?? ''}
             onChange={(e) => set(key, e.target.value)}
@@ -185,7 +222,11 @@ function SheetPanel({ sheet, onChange }) {
 }
 
 // Linha de um NPC: retrato + campos editáveis inline + ações.
-function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDelete, saving, enriching }) {
+function NpcRow({
+  card, job, adventureId, onSave, onRegenerate, onEnrich, onDelete,
+  onRegenerateField, onRegenerateAll, onUploadPhoto, onDeleteReference,
+  onDeletePortrait, onPortraitFromPhoto, saving, enriching, regenerating,
+}) {
   const toast = useToast()
   const [form, setForm] = useState({
     title: card.title ?? '',
@@ -195,8 +236,23 @@ function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDele
     sheet: parseSheet(card.sheet),
   })
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [memories, setMemories] = useState([])
   const [previewing, setPreviewing] = useState(false)
+  const [photoMode, setPhotoMode] = useState('reference')
   const previewAudioRef = useRef(null)
+  const fileRef = useRef(null)
+  const referencePath = form.sheet?.reference?.image_path || ''
+  const life = form.sheet?.life || {}
+
+  useEffect(() => {
+    let cancelled = false
+    api.listNpcMemories(adventureId, card.id)
+      .then((data) => {
+        if (!cancelled) setMemories((data?.memories || []).slice(0, 3))
+      })
+      .catch(() => { if (!cancelled) setMemories([]) })
+    return () => { cancelled = true }
+  }, [adventureId, card.id, card.updated_at, card.sheet])
 
   // Para o preview de voz pendurado se a linha desmontar no meio do play.
   useEffect(() => {
@@ -273,13 +329,26 @@ function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDele
             placeholder="NPC description"
             className={`${inputCls} resize-y`}
           />
-          <textarea
-            value={form.portrait_prompt}
-            onChange={(e) => setForm({ ...form, portrait_prompt: e.target.value })}
-            rows={2}
-            placeholder="leave empty and the AI writes one from the description"
-            className={`${inputCls} resize-y`}
-          />
+          <label className="flex flex-col gap-1">
+            <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+              <span>Portrait prompt</span>
+              <button
+                type="button"
+                title="Regenerate portrait prompt"
+                onClick={() => onRegenerateField?.(card, 'portrait_prompt')}
+                className="rounded border border-zinc-700 px-1 text-[10px] normal-case tracking-normal text-zinc-300 hover:bg-zinc-700"
+              >
+                ↻
+              </button>
+            </span>
+            <textarea
+              value={form.portrait_prompt}
+              onChange={(e) => setForm({ ...form, portrait_prompt: e.target.value })}
+              rows={2}
+              placeholder="leave empty and the AI writes one from the description"
+              className={`${inputCls} resize-y`}
+            />
+          </label>
           <label className="flex items-center gap-2 text-sm text-zinc-300">
             <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</span>
             <select
@@ -311,9 +380,77 @@ function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDele
             )}
           </button>
           {sheetOpen && (
-            <SheetPanel sheet={form.sheet} onChange={(s) => setForm({ ...form, sheet: s })} />
+            <SheetPanel
+              sheet={form.sheet}
+              onChange={(s) => setForm({ ...form, sheet: s })}
+              onRegenerateField={(field) => onRegenerateField?.(card, field)}
+            />
           )}
         </div>
+      </div>
+      <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 text-xs text-zinc-400">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">State</p>
+        <p>mood: {life.mood || '—'}</p>
+        <p>activity: {life.activity || '—'}</p>
+        <p>day: {life.day ?? 0}</p>
+        {memories.length > 0 && (
+          <ul className="mt-1 list-disc pl-4">
+            {memories.map((memory) => (
+              <li key={memory.id}>{memory.text}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file) onUploadPhoto?.(card, file, photoMode)
+          }}
+        />
+        <select
+          value={photoMode}
+          onChange={(e) => setPhotoMode(e.target.value)}
+          className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none focus:border-emerald-600"
+        >
+          <option value="reference">Reference (fictional NPC)</option>
+          <option value="real_person">Real person</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+        >
+          Upload photo
+        </button>
+        <button
+          type="button"
+          onClick={() => onDeleteReference?.(card)}
+          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+        >
+          Remove photo
+        </button>
+        <button
+          type="button"
+          onClick={() => onDeletePortrait?.(card)}
+          className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-400 hover:bg-red-950"
+        >
+          Delete portrait
+        </button>
+        <button
+          type="button"
+          disabled={!referencePath}
+          onClick={() => onPortraitFromPhoto?.(card)}
+          title={referencePath ? 'Generate a new portrait from the uploaded photo' : 'Upload a photo first'}
+          className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          New image from photo
+        </button>
       </div>
       <div className="mt-2 flex flex-wrap justify-end gap-1">
         <button
@@ -325,11 +462,19 @@ function NpcRow({ card, job, adventureId, onSave, onRegenerate, onEnrich, onDele
         </button>
         <button
           onClick={() => onEnrich(card)}
-          disabled={enriching}
+          disabled={enriching || regenerating}
           title="AI fills the character sheet and a detailed portrait prompt from the description"
           className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
         >
           {enriching ? 'Enriching…' : '✨ Enrich'}
+        </button>
+        <button
+          onClick={() => onRegenerateAll?.(card)}
+          disabled={regenerating}
+          title="Overwrite personality, humor, speech, goals, background, lifestyle, habits, likes and sentiments"
+          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+        >
+          {regenerating ? 'Regenerating…' : '🎲 Regenerate all'}
         </button>
         <button
           onClick={() => onRegenerate(card)}
@@ -358,6 +503,7 @@ export default function NpcsTab({ adventure }) {
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
   const [enrichingId, setEnrichingId] = useState(null)
+  const [regeneratingId, setRegeneratingId] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
   const prevStatuses = useRef({})
 
@@ -381,7 +527,7 @@ export default function NpcsTab({ adventure }) {
       setJobs(list)
       let portraitDone = false
       for (const j of list) {
-        if (j.type === 'character_portrait') {
+        if (j.type === 'character_portrait' || j.type === 'npc_day_tick') {
           const prev = prevStatuses.current[j.id]
           if (prev && prev !== 'done' && j.status === 'done') portraitDone = true
         }
@@ -437,6 +583,16 @@ export default function NpcsTab({ adventure }) {
     }
   }
 
+  const simulateDay = async () => {
+    try {
+      await api.simulateDay(adventure.id)
+      toast('Day queued.', 'ok')
+      fetchJobs()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
   const generateAll = async () => {
     try {
       const { jobs: queued } = await api.generateAllPortraits(adventure.id)
@@ -485,9 +641,81 @@ export default function NpcsTab({ adventure }) {
     }
   }
 
+  const applyRegenerated = (cardId, data) => {
+    if (data?.card) setCards((cs) => cs.map((c) => (c.id === cardId ? data.card : c)))
+  }
+
+  const regenerateFields = async (card, field) => {
+    setRegeneratingId(card.id)
+    try {
+      const data = await api.regenerateCard(adventure.id, card.id, { scope: 'field', field })
+      applyRegenerated(card.id, data)
+      toast('Field regenerated.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
+  const regenerateAll = async (card) => {
+    if (!window.confirm('Regenerate all character fields? This overwrites the current values.')) return
+    setRegeneratingId(card.id)
+    try {
+      const data = await api.regenerateCard(adventure.id, card.id, { scope: 'all', overwrite: true })
+      applyRegenerated(card.id, data)
+      toast('Character fields regenerated.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setRegeneratingId(null)
+    }
+  }
+
   const regenerate = async (card) => {
     try {
       await api.regeneratePortrait(adventure.id, card.id)
+      toast('Portrait job queued.', 'ok')
+      fetchJobs()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const uploadPhoto = async (card, file, mode) => {
+    try {
+      const updated = await api.uploadReference(adventure.id, card.id, file, mode)
+      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      toast('Photo saved.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const deleteReference = async (card) => {
+    try {
+      const updated = await api.deleteReference(adventure.id, card.id)
+      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      toast('Photo removed.', 'ok')
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const deletePortrait = async (card) => {
+    if (!window.confirm('Delete this portrait?')) return
+    try {
+      await api.deletePortrait(adventure.id, card.id)
+      toast('Portrait deleted.', 'ok')
+      reload()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const portraitFromPhoto = async (card) => {
+    try {
+      await api.regeneratePortrait(adventure.id, card.id, { source: 'reference' })
       toast('Portrait job queued.', 'ok')
       fetchJobs()
     } catch (e) {
@@ -524,6 +752,13 @@ export default function NpcsTab({ adventure }) {
             className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-600"
           >
             + Add NPC
+          </button>
+          <button
+            onClick={simulateDay}
+            title="Invent one off-screen day for every NPC"
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+          >
+            ⏩ Simulate a day
           </button>
           <button
             onClick={generateAll}
@@ -565,9 +800,16 @@ export default function NpcsTab({ adventure }) {
                 adventureId={adventure.id}
                 saving={savingId === c.id}
                 enriching={enrichingId === c.id}
+                regenerating={regeneratingId === c.id}
                 onSave={save}
                 onRegenerate={regenerate}
                 onEnrich={enrich}
+                onRegenerateField={regenerateFields}
+                onRegenerateAll={regenerateAll}
+                onUploadPhoto={uploadPhoto}
+                onDeleteReference={deleteReference}
+                onDeletePortrait={deletePortrait}
+                onPortraitFromPhoto={portraitFromPhoto}
                 onDelete={remove}
               />
               {showError && (

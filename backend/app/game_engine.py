@@ -205,6 +205,18 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
         with _post_turn_lock_for(adventure_id):
             try:
                 npc_chronicle.update_from_turn(adventure_id, transport)
+                from app import jobs, npc_life
+                npc_life.run_mind(adventure_id, transport)
+                life = settings_store.load_file_settings().get("life") or {}
+                if life.get("auto_tick", True):
+                    every = int(life.get("tick_every_turns", 5) or 5)
+                    with db.session() as conn:
+                        adventure = db.get_adventure(conn, adventure_id) or {}
+                        actions = db.list_actions(conn, adventure_id)
+                        seq = max((int(action["seq"]) for action in actions), default=0)
+                        last = int(adventure.get("life_tick_seq") or 0)
+                        if every > 0 and seq - last >= every:
+                            jobs.enqueue_day_tick(conn, adventure_id, reason="auto")
             except Exception:
                 pass
             if not cancel.is_set():
