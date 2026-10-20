@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { emotionForLine } from '../../ttsText.js'
 import { useToast } from '../Toast.jsx'
+import { CORE_STATS, roll4d6DropLowest } from '../../utils.js'
 
 const VOICES = ['', 'M1', 'M2', 'M3', 'F1', 'F2', 'F3']
 const EMPTY_CARD = {
@@ -78,10 +79,11 @@ function PortraitThumb({ card, activeJob }) {
 }
 
 const SHEET_FIELDS = [
-  'appearance', 'body', 'clothing', 'personality', 'humor', 'speech',
+  'class', 'appearance', 'body', 'clothing', 'personality', 'humor', 'speech',
   'goals', 'background', 'lifestyle', 'habits', 'likes', 'sentiments', 'notes',
 ]
 const FIELD_LABELS = {
+  class: 'Classe/Papel',
   appearance: 'Aparência',
   body: 'Corpo',
   clothing: 'Roupa',
@@ -100,7 +102,7 @@ const REGEN_FIELDS = new Set([
   'personality', 'humor', 'speech', 'goals', 'background',
   'lifestyle', 'habits', 'likes', 'sentiments',
 ])
-const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+const STAT_KEYS = CORE_STATS.map(([key]) => key)
 // Mesmos nomes e ponto de partida de backend/app/npc_bonds.py.
 const BOND_KEYS = ['relationship', 'trust', 'fear', 'desire', 'boldness']
 const BOND_LABELS = {
@@ -186,25 +188,61 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
           <textarea
             value={sheet[key] ?? ''}
             onChange={(e) => set(key, e.target.value)}
-            rows={2}
+            rows={key === 'class' ? 1 : 2}
             className={`${inputCls} resize-y`}
           />
         </label>
       ))}
       <div className="min-w-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stats</span>
-        <div className="mt-1 grid grid-cols-3 gap-1.5">
-          {STAT_KEYS.map((key) => (
-            <label key={key} className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-[10px] uppercase text-zinc-500">{key}</span>
-              <input
-                type="number" inputMode="numeric" min={1} max={20} size={3}
-                value={sheet.stats?.[key] ?? ''}
-                onChange={(e) => setStat(key, e.target.value)}
-                className={numberCls}
-              />
-            </label>
-          ))}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stats</span>
+          <button
+            type="button"
+            title="Rolar 4d6, descarta o menor"
+            onClick={() => {
+              const stats = { ...(sheet.stats || {}) }
+              for (const key of STAT_KEYS) stats[key] = roll4d6DropLowest()
+              onChange({ ...sheet, stats })
+            }}
+            className="h-7 min-w-7 rounded border border-zinc-700 px-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+          >
+            🎲
+          </button>
+        </div>
+        <div className="mt-1 grid grid-cols-2 gap-1.5">
+          {STAT_KEYS.map((key) => {
+            const parsed = Number.parseInt(sheet.stats?.[key], 10)
+            const shown = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : null
+            const label = CORE_STATS.find(([k]) => k === key)?.[1] || key
+            return (
+              <div key={key} className="min-w-0">
+                <span className="truncate text-[10px] uppercase text-zinc-500" title={key}>{label}</span>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    aria-label={`Diminuir ${key}`}
+                    disabled={shown == null || shown <= 1}
+                    onClick={() => setStat(key, String(shown - 1))}
+                    className="h-7 w-7 shrink-0 rounded border border-zinc-700 text-sm leading-none text-zinc-100 hover:bg-zinc-700 disabled:opacity-40"
+                  >
+                    −
+                  </button>
+                  <span className="w-6 shrink-0 text-center text-xs tabular-nums text-zinc-100">
+                    {shown ?? '—'}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Aumentar ${key}`}
+                    disabled={shown != null && shown >= 20}
+                    onClick={() => setStat(key, String(shown == null ? 1 : shown + 1))}
+                    className="h-7 w-7 shrink-0 rounded border border-zinc-700 text-sm leading-none text-zinc-100 hover:bg-zinc-700 disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
       <div className="min-w-0">

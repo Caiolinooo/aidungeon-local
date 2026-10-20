@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Response
 
 import exporter
-from app import auth, db, game_engine, jobs
+from app import auth, db, game_engine, jobs, stats as stats_mod
 from app.errors import GameError
 from app.schemas import (
     AdventureCreate, AdventureShareCreate, AdventureUpdate, PlayerCharacterUpsert,
@@ -227,6 +227,36 @@ def delete_sharing(adventure_id: str, username: str,
         return _sharing_view(conn, adventure_id)
 
 
+def _complete_player_sheet(raw: dict) -> dict:
+    """Grava `class` pelo alias e não deixa a ficha sem as seis habilidades.
+
+    Stats vazios (ou só com chaves extras) são estimados pela classe,
+    aparência e notas. O que o jogador mandou de número entra normalizado;
+    chave extra (`hp`, por exemplo) segue do jeito que veio.
+    """
+    stored = dict(raw)
+    role = stored.get("class")
+    if isinstance(role, str) and role.strip():
+        stored["class"] = role.strip()
+    else:
+        stored.pop("class", None)
+    stats_in = stored.get("stats") if isinstance(stored.get("stats"), dict) else {}
+    if stats_mod.has_numeric_ability(stats_in):
+        stored["stats"] = stats_mod.normalize_stats(stats_in)
+    else:
+        extras = {key: value for key, value in stats_in.items() if key not in stats_mod.ABILITIES}
+        blob = " ".join(
+            part.strip()
+            for part in (str(stored.get("appearance") or ""), str(stored.get("notes") or ""))
+            if str(part or "").strip()
+        )
+        stored["stats"] = {
+            **stats_mod.estimate_stats(blob, str(stored.get("class") or "")),
+            **extras,
+        }
+    return stored
+
+
 def _character_view(conn, card: dict | None) -> dict | None:
     if not card:
         return None
@@ -262,7 +292,10 @@ def put_character(adventure_id: str, body: PlayerCharacterUpsert,
     title = body.title.strip()
     if not title or len(title) > 80:
         raise GameError.bad_request("invalid_title", "title must be 1–80 characters")
-    sheet = json.dumps(body.sheet.model_dump(), ensure_ascii=False)
+    sheet = json.dumps(
+        _complete_player_sheet(body.sheet.model_dump(by_alias=True)),
+        ensure_ascii=False,
+    )
     with db.session() as conn:
         _visible_adventure(conn, adventure_id, info.user)
         card = db.upsert_player_character(

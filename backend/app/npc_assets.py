@@ -3,7 +3,7 @@
 Fluxo síncrono sobre o LLM efetivo:
 
 - `enrich_card` — preenche a ficha estruturada (story_cards.sheet, JSON:
-  appearance/body/clothing/personality/humor/speech/goals/background/
+  appearance/body/clothing/class/personality/humor/speech/goals/background/
   lifestyle/habits/likes/sentiments/stats/notes) e o portrait_prompt a
   partir do entry + contexto da aventura. Cobre cards legados (aventuras
   já existentes) sob demanda.
@@ -20,7 +20,7 @@ import re
 import unicodedata
 from typing import Any
 
-from app import db, llm_client
+from app import db, llm_client, stats as stats_mod
 from app.errors import GameError
 
 log = logging.getLogger("aidungeon.npc_assets")
@@ -28,7 +28,7 @@ log = logging.getLogger("aidungeon.npc_assets")
 STATS_KEYS = ("str", "dex", "con", "int", "wis", "cha")
 
 SHEET_TEXT_FIELDS = (
-    "appearance", "body", "clothing", "personality", "humor", "speech",
+    "appearance", "body", "clothing", "class", "personality", "humor", "speech",
     "goals", "background", "lifestyle", "habits", "likes", "sentiments", "notes",
 )
 LIFESIM_FIELDS = (
@@ -42,6 +42,7 @@ Given the character and the story context, output STRICT JSON (no markdown, no c
   "appearance": "face, hair, eyes, distinguishing marks — vivid visual detail",
   "body": "build, height, skin, posture, physical condition",
   "clothing": "typical outfit, armor, accessories",
+  "class": "role or profession in a few words, e.g. knight, thief, wizard, bard",
   "personality": "traits and mannerisms",
   "humor": "how they joke, what amuses them, what they find absurd",
   "speech": "how they talk: vocabulary, rhythm, verbal tics, nicknames, catchphrases",
@@ -126,6 +127,8 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
                     sheet[key] = previous[key]
         if previous.get("status") and "status" not in sheet:
             sheet["status"] = previous["status"]
+        if previous.get("class") and "class" not in sheet:
+            sheet["class"] = previous["class"]
         if previous.get("notes") and previous["notes"] not in sheet.get("notes", ""):
             sheet["notes"] = (sheet.get("notes", "") + "\n" + previous["notes"]).strip()
         if previous.get("stats") and "stats" not in sheet:
@@ -226,7 +229,107 @@ def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = No
     )
     if portrait:
         normalized["portrait_prompt"] = portrait
+    missing = [key for key in SHEET_TEXT_FIELDS if not _filled(normalized.get(key))]
+    if missing:
+        try:
+            extra = _fill_missing_fields(
+                llm_cfg, title=title, entry=entry, sheet=normalized, missing=missing,
+                transport=transport, role=role, story=story, card_type=card_type,
+            )
+        except Exception as exc:
+            log.warning(
+                "npc_assets: campos faltantes não preenchidos (%s): %s",
+                ", ".join(missing), exc,
+            )
+        else:
+            for key in missing:
+                raw = extra.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    normalized[key] = _field_text(key, raw)
     return normalized
+
+
+def _fill_missing_fields(llm_cfg, *, title: str, entry: str, sheet: dict,
+                         missing: list[str], transport, role: str,
+                         story: str = "", card_type: str = "") -> dict:
+    """Uma chamada pedindo só o que a primeira ficha deixou em branco."""
+    keys = ", ".join(missing)
+    system = (
+        "You fill ONLY these missing text fields of one character: "
+        f"{keys}. "
+        "Output STRICT JSON (no markdown, no commentary) whose keys are exactly "
+        "the names above. Each value is one or two sentences "
+        "(background may be 2-3). Use an empty string when unknown. "
+        "Do not invent keys that were not requested. Output ONLY the JSON object."
+    )
+    user = _sheet_user(title, entry, sheet, story=story, card_type=card_type)
+    user += f"\nFill only: {keys}"
+    content = llm_client.chat_completion(
+        llm_cfg,
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        role=role, temperature=0.5, max_tokens=600, transport=transport,
+    )
+    data = _extract_json(content)
+    if not isinstance(data, dict):
+        raise ValueError("resposta sem objeto JSON")
+    return data
+
+
+def _clip_role(prose: str) -> str:
+    """Primeira frase curta vira a classe quando nenhuma palavra de ofício aparece."""
+    first = (prose or "").strip().split("\n", 1)[0].strip()
+    sentence = re.split(r"[.!?]", first, maxsplit=1)[0].strip()
+    if not sentence or len(sentence) > 80:
+        return ""
+    return sentence
+
+
+def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = None) -> dict:
+    """Preenche status, stats, class e notes quando faltam. Não muta a entrada."""
+    source = sheet if isinstance(sheet, dict) else {}
+    out = dict(source)
+    description = ""
+    card_entry = ""
+    if isinstance(card, dict):
+        raw_description = card.get("description")
+        raw_entry = card.get("entry")
+        if isinstance(raw_description, str):
+            description = raw_description
+        if isinstance(raw_entry, str):
+            card_entry = raw_entry
+    prose = " ".join(
+        part.strip() for part in (entry, card_entry, description) if part and part.strip()
+    )
+    role = out.get("class")
+    if isinstance(role, str) and role.strip():
+        out["class"] = role.strip()
+    else:
+        inferred = stats_mod.class_from_text(prose) or _clip_role(prose)
+        if inferred:
+            out["class"] = inferred
+        else:
+            out.pop("class", None)
+    notes = out.get("notes")
+    if not isinstance(notes, str) or not notes.strip():
+        note_src = (entry or card_entry).strip()
+        if note_src:
+            out["notes"] = note_src[:500]
+    status = out.get("status")
+    if not isinstance(status, str) or not status.strip():
+        out["status"] = "alive"
+    raw_stats = out.get("stats") if isinstance(out.get("stats"), dict) else {}
+    if not stats_mod.has_numeric_ability(raw_stats):
+        extras = {
+            key: value for key, value in raw_stats.items() if key not in stats_mod.ABILITIES
+        }
+        appearance = out.get("appearance") if isinstance(out.get("appearance"), str) else ""
+        note_text = out.get("notes") if isinstance(out.get("notes"), str) else ""
+        blob = " ".join(part.strip() for part in (appearance, note_text, prose) if part.strip())
+        out["stats"] = {
+            **stats_mod.estimate_stats(blob, str(out.get("class") or "")),
+            **extras,
+        }
+    return out
 
 
 def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
@@ -725,6 +828,9 @@ def card_canon_text(card: dict) -> str:
     status = sheet.get("status")
     if isinstance(status, str) and status.strip():
         first.append(f"Status: {status.strip()}")
+    role = sheet.get("class")
+    if isinstance(role, str) and role.strip():
+        first.append(f"Class: {role.strip()}")
     life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
     mood = life.get("mood")
     if isinstance(mood, str) and mood.strip():

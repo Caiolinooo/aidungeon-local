@@ -22,7 +22,7 @@ import logging
 import re
 from typing import Any
 
-from app import llm_client, web_search as web_search_mod
+from app import llm_client, npc_assets, web_search as web_search_mod
 from app.errors import GameError
 
 log = logging.getLogger("aidungeon.assistant")
@@ -594,10 +594,29 @@ def generate_scenario_draft(
         )
         draft["story_cards"] = fallback if len(fallback) >= len(inline_cards) else inline_cards
 
+    _complete_draft_sheets(draft)
+
     _prepend_pov_directive(draft, pov)
     if web_sources:
         draft["web_sources"] = web_sources
     return draft
+
+
+def _complete_draft_sheets(draft: dict) -> None:
+    """Todo personagem do rascunho sai com status, atributos, classe e notas.
+
+    O LLM pode omitir campos; o que falta é estimado na hora (classe pela
+    prosa, atributos pelo arquétipo, status vivo). Não chama o LLM.
+    """
+    for card in draft.get("story_cards") or []:
+        if not isinstance(card, dict):
+            continue
+        if str(card.get("type") or "").lower() != "character":
+            continue
+        sheet = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
+        card["sheet"] = npc_assets.ensure_sheet_complete(
+            sheet, entry=str(card.get("entry") or ""), card=card,
+        )
 
 
 def _sheet_value_kept(value: Any) -> bool:
@@ -610,7 +629,6 @@ def _sheet_value_kept(value: Any) -> bool:
 
 def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict:
     """Preenche a ficha de cada personagem. O que o rascunho já tem prevalece."""
-    from app import npc_assets
     for card in draft.get("story_cards") or []:
         if not isinstance(card, dict):
             continue
@@ -627,7 +645,11 @@ def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict
         for key, value in existing.items():
             if _sheet_value_kept(value):
                 merged[key] = value
-        card["sheet"] = merged
+        card["sheet"] = npc_assets.ensure_sheet_complete(
+            merged,
+            entry=str(card.get("entry") or ""),
+            card=card,
+        )
         if portrait and not _sheet_value_kept(card.get("portrait_prompt")):
             card["portrait_prompt"] = portrait
     return draft

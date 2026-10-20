@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -118,13 +118,19 @@ class AdventureUpdate(BaseModel):
 
 
 class CharacterSheet(BaseModel):
-    """Ficha do personagem do jogador. Campos ausentes ficam de fora."""
+    """Ficha do personagem do jogador. Campos ausentes ficam de fora.
+
+    `class` é palavra reservada: o campo Python é `class_`, o JSON é `class`.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
     appearance: str = ""
     body: str = ""
     clothing: str = ""
     status: str = ""
     stats: dict = Field(default_factory=dict)
     notes: str = ""
+    class_: str = Field(default="", alias="class")
 
 
 class PlayerCharacterUpsert(BaseModel):

@@ -2,12 +2,68 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
+import { CORE_STATS, abilityMod, roll4d6DropLowest } from '../utils.js'
 
-const STAT_SUGGESTIONS = ['For', 'Des', 'Con', 'Int', 'Sab', 'Car']
+const CORE_KEYS = new Set(CORE_STATS.map(([key]) => key))
+const POINT_MIN = 8
+const POINT_MAX = 15
+const POINT_BUDGET = 27
+const ROLL_MIN = 3
+const ROLL_MAX = 18
 
 const inputCls =
   'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600 disabled:opacity-60'
 const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500'
+const stepBtnCls =
+  'h-7 w-7 shrink-0 rounded-md border border-zinc-600 bg-zinc-800 text-base leading-none text-zinc-100 hover:bg-zinc-700 disabled:opacity-40 sm:h-8 sm:w-8 touch-manipulation'
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n))
+}
+
+function emptyCore() {
+  return { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 }
+}
+
+function pointsSpent(core) {
+  return CORE_STATS.reduce((sum, [key]) => sum + ((core[key] ?? POINT_MIN) - POINT_MIN), 0)
+}
+
+function fitPointBuy(core) {
+  const next = emptyCore()
+  for (const [key] of CORE_STATS) {
+    const n = Number.parseInt(core?.[key], 10)
+    next[key] = clamp(Number.isFinite(n) ? n : POINT_MIN, POINT_MIN, POINT_MAX)
+  }
+  let guard = 64
+  while (pointsSpent(next) > POINT_BUDGET && guard > 0) {
+    guard -= 1
+    let target = CORE_STATS[0][0]
+    for (const [key] of CORE_STATS) {
+      if (next[key] > next[target]) target = key
+    }
+    if (next[target] <= POINT_MIN) break
+    next[target] -= 1
+  }
+  return next
+}
+
+function fitRoll(core) {
+  const next = emptyCore()
+  for (const [key] of CORE_STATS) {
+    const n = Number.parseInt(core?.[key], 10)
+    next[key] = clamp(Number.isFinite(n) ? n : 10, ROLL_MIN, ROLL_MAX)
+  }
+  return next
+}
+
+function coreFitsPointBuy(core) {
+  const legal = CORE_STATS.every(([key]) => {
+    const n = core[key]
+    return Number.isInteger(n) && n >= POINT_MIN && n <= POINT_MAX
+  })
+  return legal && pointsSpent(core) <= POINT_BUDGET
+}
 
 function parseSheet(sheet) {
   if (!sheet) return {}
@@ -21,19 +77,40 @@ function parseSheet(sheet) {
   }
 }
 
-function statsToRows(stats) {
-  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return []
-  return Object.entries(stats).map(([key, value]) => ({
-    key: String(key),
-    value: value == null ? '' : String(value),
-  }))
+function splitStats(stats) {
+  const core = emptyCore()
+  const extras = []
+  let sawCore = false
+  if (stats && typeof stats === 'object' && !Array.isArray(stats)) {
+    for (const [rawKey, rawVal] of Object.entries(stats)) {
+      const key = String(rawKey).trim()
+      if (!key) continue
+      const lower = key.toLowerCase()
+      if (CORE_KEYS.has(lower)) {
+        const n = Number.parseInt(rawVal, 10)
+        if (Number.isFinite(n)) {
+          core[lower] = n
+          sawCore = true
+        }
+        continue
+      }
+      extras.push({ key, value: rawVal == null ? '' : String(rawVal) })
+    }
+  }
+  const mode = sawCore && !coreFitsPointBuy(core) ? 'roll' : 'points'
+  return {
+    mode,
+    core: mode === 'roll' ? fitRoll(core) : fitPointBuy(core),
+    extras,
+  }
 }
 
-function rowsToStats(rows) {
+function buildStats(core, extras) {
   const stats = {}
-  for (const row of rows) {
+  for (const [key] of CORE_STATS) stats[key] = core[key]
+  for (const row of extras) {
     const key = (row.key || '').trim()
-    if (!key) continue
+    if (!key || CORE_KEYS.has(key.toLowerCase())) continue
     const raw = String(row.value ?? '').trim()
     stats[key] = /^-?\d+$/.test(raw) ? Number(raw) : raw
   }
@@ -51,7 +128,7 @@ function blankFromCard(card) {
     status: sheet.status || '',
     notes: sheet.notes || '',
     portrait: card?.portrait_prompt || '',
-    stats: statsToRows(sheet.stats),
+    ...splitStats(sheet.stats),
   }
 }
 
@@ -72,7 +149,9 @@ export default function CharacterModal({
   const [status, setStatus] = useState('')
   const [notes, setNotes] = useState('')
   const [portrait, setPortrait] = useState('')
-  const [stats, setStats] = useState([])
+  const [statMode, setStatMode] = useState('points')
+  const [core, setCore] = useState(emptyCore)
+  const [extras, setExtras] = useState([])
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [applied, setApplied] = useState(undefined)
@@ -88,19 +167,48 @@ export default function CharacterModal({
     setStatus(next.status)
     setNotes(next.notes)
     setPortrait(next.portrait)
-    setStats(next.stats)
+    setStatMode(next.mode)
+    setCore(next.core)
+    setExtras(next.extras)
     setFormError('')
     setApplied(card ?? null)
   }, [card, loading])
 
-  const patchStat = (index, fields) => {
-    setStats((rows) => rows.map((row, i) => (i === index ? { ...row, ...fields } : row)))
+  const stepCore = (key, delta) => {
+    setCore((prev) => {
+      const cur = prev[key]
+      if (statMode === 'points') {
+        const next = cur + delta
+        if (next < POINT_MIN || next > POINT_MAX) return prev
+        if (delta > 0 && pointsSpent(prev) >= POINT_BUDGET) return prev
+        return { ...prev, [key]: next }
+      }
+      const next = clamp(cur + delta, ROLL_MIN, ROLL_MAX)
+      if (next === cur) return prev
+      return { ...prev, [key]: next }
+    })
   }
 
-  const addStat = (key = '') => {
-    const name = key.trim()
-    if (name && stats.some((row) => row.key.trim().toLowerCase() === name.toLowerCase())) return
-    setStats((rows) => [...rows, { key: name, value: '' }])
+  const switchMode = (next) => {
+    if (next === statMode) return
+    setCore((prev) => (next === 'points' ? fitPointBuy(prev) : fitRoll(prev)))
+    setStatMode(next)
+  }
+
+  const resetPoints = () => {
+    setStatMode('points')
+    setCore(emptyCore())
+  }
+
+  const rollAll = () => {
+    const next = emptyCore()
+    for (const [key] of CORE_STATS) next[key] = roll4d6DropLowest()
+    setStatMode('roll')
+    setCore(next)
+  }
+
+  const patchExtra = (index, fields) => {
+    setExtras((rows) => rows.map((row, i) => (i === index ? { ...row, ...fields } : row)))
   }
 
   const save = async (e) => {
@@ -126,7 +234,7 @@ export default function CharacterModal({
           status: status.trim(),
           notes: notes.trim(),
           class: classRole.trim(),
-          stats: rowsToStats(stats),
+          stats: buildStats(core, extras),
         },
         portrait_prompt: portrait.trim(),
       })
@@ -142,6 +250,8 @@ export default function CharacterModal({
   const busy = saving || loading
   const rulesText = (rules || '').trim()
   const formReady = !loading && applied === (card ?? null)
+  const spent = pointsSpent(core)
+  const remaining = POINT_BUDGET - spent
 
   return (
     <Modal title="🧙 Personagem" onClose={saving ? undefined : onClose} wide>
@@ -245,66 +355,167 @@ export default function CharacterModal({
               />
             </label>
 
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className={labelCls}>Atributos</span>
-                <button
-                  type="button"
-                  onClick={() => addStat('')}
-                  disabled={busy}
-                  className="rounded-lg border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className={`${labelCls} mb-0`}>Atributos</span>
+                <div
+                  className="inline-flex rounded-lg border border-zinc-700 p-0.5"
+                  role="group"
+                  aria-label="Modo dos atributos"
                 >
-                  +
-                </button>
-              </div>
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {STAT_SUGGESTIONS.map((key) => (
                   <button
-                    key={key}
                     type="button"
-                    onClick={() => addStat(key)}
+                    aria-pressed={statMode === 'points'}
                     disabled={busy}
-                    className="rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                    onClick={() => switchMode('points')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+                      statMode === 'points' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                    }`}
                   >
-                    + {key}
+                    Pontos
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    aria-pressed={statMode === 'roll'}
+                    disabled={busy}
+                    onClick={() => switchMode('roll')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+                      statMode === 'roll' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                    }`}
+                  >
+                    Sorteio
+                  </button>
+                </div>
               </div>
-              {stats.length === 0 ? (
-                <p className="text-xs text-zinc-500">Nenhum atributo. Use as sugestões ou +.</p>
+
+              {statMode === 'points' ? (
+                <div className="mb-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={`text-xs font-medium ${remaining === 0 ? 'text-amber-300' : 'text-zinc-300'}`}>
+                      Pontos restantes: {remaining}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={resetPoints}
+                      disabled={busy}
+                      className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                    >
+                      Zerar
+                    </button>
+                  </div>
+                  <div className={`mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800 ${remaining === 0 ? 'ring-1 ring-amber-400/80' : ''}`}>
+                    <div
+                      className={`h-full ${remaining === 0 ? 'bg-amber-500' : 'bg-emerald-600'}`}
+                      style={{ width: `${Math.min(100, (spent / POINT_BUDGET) * 100)}%` }}
+                    />
+                  </div>
+                </div>
               ) : (
-                <ul className="flex flex-col gap-1.5">
-                  {stats.map((row, i) => (
-                    <li key={i} className="flex items-center gap-1.5">
-                      <input
-                        value={row.key}
-                        onChange={(e) => patchStat(i, { key: e.target.value })}
-                        placeholder="For"
-                        aria-label={`Atributo ${i + 1}`}
-                        disabled={busy}
-                        className={`${inputCls} w-28 shrink-0`}
-                      />
-                      <input
-                        value={row.value}
-                        onChange={(e) => patchStat(i, { value: e.target.value })}
-                        placeholder="10"
-                        aria-label={`Valor do atributo ${i + 1}`}
-                        disabled={busy}
-                        className={`${inputCls} min-w-0 flex-1`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setStats((rows) => rows.filter((_, j) => j !== i))}
-                        disabled={busy}
-                        aria-label={`Remover atributo ${row.key || i + 1}`}
-                        className="shrink-0 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
-                      >
-                        ✕
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={rollAll}
+                    disabled={busy}
+                    className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    🎲 Rolar 4d6
+                  </button>
+                </div>
               )}
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {CORE_STATS.map(([key, label]) => {
+                  const value = core[key]
+                  const min = statMode === 'points' ? POINT_MIN : ROLL_MIN
+                  const max = statMode === 'points' ? POINT_MAX : ROLL_MAX
+                  const plusBlocked = statMode === 'points' && remaining < 1
+                  return (
+                    <div key={key} className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/40 px-1.5 py-1">
+                      <div className="text-[11px] font-semibold leading-tight text-zinc-100">{label}</div>
+                      <div className="flex items-baseline justify-between gap-1">
+                        <span className="font-mono text-[10px] text-zinc-500">{key}</span>
+                        <span className="font-mono text-[11px] text-emerald-300">{abilityMod(value)}</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-0.5">
+                        <button
+                          type="button"
+                          aria-label={`Diminuir ${label}`}
+                          disabled={busy || value <= min}
+                          onClick={() => stepCore(key, -1)}
+                          className={stepBtnCls}
+                        >
+                          −
+                        </button>
+                        <input
+                          readOnly
+                          tabIndex={-1}
+                          value={value}
+                          aria-label={label}
+                          className="w-10 rounded-md border border-zinc-700 bg-zinc-800 px-0 py-1 text-center text-sm font-semibold tabular-nums text-zinc-100 outline-none sm:w-14"
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Aumentar ${label}`}
+                          disabled={busy || value >= max || plusBlocked}
+                          onClick={() => stepCore(key, 1)}
+                          className={stepBtnCls}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Extras</span>
+                  <button
+                    type="button"
+                    onClick={() => setExtras((rows) => [...rows, { key: '', value: '' }])}
+                    disabled={busy}
+                    className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                </div>
+                {extras.length === 0 ? (
+                  <p className="text-[11px] text-zinc-500">hp e outros, se precisar.</p>
+                ) : (
+                  <ul className="flex flex-col gap-1.5">
+                    {extras.map((row, i) => (
+                      <li key={i} className="flex min-w-0 items-center gap-1.5">
+                        <input
+                          value={row.key}
+                          onChange={(e) => patchExtra(i, { key: e.target.value })}
+                          placeholder="hp"
+                          aria-label={`Atributo extra ${i + 1}`}
+                          disabled={busy}
+                          className={`${inputCls} w-20 shrink-0 px-2 sm:w-28`}
+                        />
+                        <input
+                          value={row.value}
+                          onChange={(e) => patchExtra(i, { value: e.target.value })}
+                          placeholder="10"
+                          aria-label={`Valor do extra ${i + 1}`}
+                          disabled={busy}
+                          className={`${inputCls} min-w-0 flex-1 px-2`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setExtras((rows) => rows.filter((_, j) => j !== i))}
+                          disabled={busy}
+                          aria-label={`Remover atributo ${row.key || i + 1}`}
+                          className="h-8 w-8 shrink-0 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
 
             <label className="block">
