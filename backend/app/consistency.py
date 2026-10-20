@@ -20,6 +20,7 @@ Reparáveis: card_sheets, portraits, memories. Os demais são diagnóstico.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -342,10 +343,21 @@ def _repair_cards(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
                                              transport)
             repaired.append({"card_id": card["id"], "title": card.get("title"),
                              "sheet": npc_assets.parse_sheet(updated.get("sheet"))})
-        except Exception as exc:  # LLM fora: mantém a ficha atual
+        except Exception as exc:  # LLM fora: completa o que é determinístico
             log.warning("consistency: falha ao refazer a ficha de %s: %s",
                         card.get("title"), exc)
-            errors.append(f"{card.get('title')}: {exc}")
+            before = npc_assets.parse_sheet(card.get("sheet") or "")
+            partial = npc_assets.ensure_sheet_complete(
+                before, entry=card.get("entry") or "", card=card)
+            if partial != before:
+                db.update_card(conn, adv["id"], card["id"],
+                               {"sheet": json.dumps(partial, ensure_ascii=False)})
+                repaired.append({"card_id": card["id"], "title": card.get("title"),
+                                 "sheet": partial, "partial": True})
+            errors.append(
+                f"{card.get('title')}: {exc} — completado só com o que é "
+                "determinístico (status, classe, atributos); os textos vivos "
+                "precisam do LLM")
     return {"check": "card_sheets", "repaired": repaired, "errors": errors}
 
 

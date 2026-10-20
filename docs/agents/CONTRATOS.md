@@ -64,10 +64,12 @@ def invalidate_slot_cache() -> None: ...
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`).
 - Timeouts padrão (prazo total em segundos, sobrescrevíveis em
   `config/settings.json → scheduler.timeouts`): `choices` 15, `chronicle` 45,
-  `summary` 60, `image_prompt` 20, `assistant` 90, `meta` 45. `timeout_s`
+  `summary` 60, `image_prompt` 20, `assistant` 180, `meta` 45. `timeout_s`
   explícito vence o padrão; saídas longas (rascunho de cenário) usam
   `scaled_timeout`. A narrativa não tem prazo total: `llm.timeout_seconds` é o
-  timeout de leitura entre tokens.
+  timeout de leitura entre tokens. O `assistant` tem o prazo maior porque a
+  ficha do NPC e o rascunho de cenário são saídas longas: eles esperam na fila
+  do slot enquanto outra auxiliar termina, e o prazo cobre espera + geração.
 - Erros (todos herdam de `LlmError`, com `code` e `message`):
   - `LlmTimeout` (`code="llm_timeout"`): estourou o prazo. Subclasses:
     `LlmQueueTimeout` (a vez não chegou dentro do prazo) e `LlmStalled`
@@ -365,6 +367,11 @@ def cancel(conn, job_id: str) -> dict | None: ...
     `{"check": "card_sheets"|"portraits"|"memories"}` →
     `{check, repaired: [...], errors: [...]}`. As demais verificações são
     informativas (não têm reparo).
+  - Reparo com LLM fora: a ficha do NPC ainda sai com o que é determinístico
+    (`status`, `class`, `stats`) — o item entra em `repaired` com
+    `partial: true` e o motivo vai para `errors`. Os textos vivos (humor,
+    ligações, objetivos) dependem do LLM e ficam de fora. A ficha do jogador
+    nunca é reescrita aqui: ela é do `PUT /adventures/{id}/character`.
 
 ## Arquivos compartilhados
 

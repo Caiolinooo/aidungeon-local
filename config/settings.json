@@ -71,7 +71,7 @@
       "chronicle": 45,
       "summary": 60,
       "image_prompt": 20,
-      "assistant": 90,
+      "assistant": 180,
       "meta": 45
     },
     "aux_cache_prompt": false,
@@ -88,7 +88,7 @@
     },
     "stall_hint_path": "data/llm_stall_hint.json",
     "watchdog_status_path": "/var/lib/slot-watchdog/status.json",
-    "note": "Contrato C1 (docs/agents/CONTRATOS.md). timeouts = prazo total (s) de cada chamada auxiliar, contado da admissao; a espera na fila tambem vai ate esse prazo. Estourou, o socket cai e o llama-server solta o slot. Narrativa no slot 0 com prompt cache; auxiliares fora do slot 0 e sem cache (aux_cache_prompt=false) por causa do livelock do llama.cpp #28280 com slot fixado em modelo hibrido. aux_cap = auxiliares em voo (aux_cap_during_narrative com narrativa em curso). breaker: threshold timeouts seguidos abrem por open_s e as auxiliares respondem llm_degraded. stall: narrativa sem token em first_token_s e sem prompt_progress em progress_s e repetida uma vez no slot do image_prompt; stall_hint_path (relativo a raiz do repo) avisa o slot_watchdog. watchdog_status_path: status.json do slot_watchdog, lido por GET /api/health/llm."
+    "note": "Contrato C1 (docs/agents/CONTRATOS.md). timeouts = prazo total (s) de cada chamada auxiliar, contado da admissao; a espera na fila tambem vai ate esse prazo. Estourou, o socket cai e o llama-server solta o slot. Narrativa no slot 0 com prompt cache; auxiliares fora do slot 0 e sem cache (aux_cache_prompt=false) por causa do livelock do llama.cpp #28280 com slot fixado em modelo hibrido. aux_cap = auxiliares em voo (aux_cap_during_narrative com narrativa em curso). breaker: threshold timeouts seguidos abrem por open_s e as auxiliares respondem llm_degraded. stall: narrativa sem token em first_token_s e sem prompt_progress em progress_s e repetida uma vez no slot do image_prompt; stall_hint_path (relativo a raiz do repo) avisa o slot_watchdog. watchdog_status_path: status.json do slot_watchdog, lido por GET /api/health/llm. O papel assistant tem prazo maior (180s) porque a ficha do NPC e o rascunho de cenario sao saidas longas: eles esperam na fila do slot enquanto outra auxiliar termina, e o prazo cobre espera + geracao."
   },
   "server_config_area": {
     "description": "Todos os campos de 'llm' + sampler sao expostos em GET/PUT /api/settings/llm e na aba Config da UI",

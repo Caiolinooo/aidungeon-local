@@ -214,3 +214,39 @@ def test_repair_leaves_the_player_sheet_to_the_character_route(client):
     with db.session() as conn:
         card = db.player_character(conn, adv["id"], "caio")
     assert "class" not in json.loads(card["sheet"])
+
+
+def test_repair_fills_what_is_deterministic_when_the_llm_fails(client):
+    """LLM fora: status, classe e atributos saem; os textos vivos ficam de fora."""
+    adv = make_adventure(title="Ficha sem LLM")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Elara", type="character",
+                       entry="Elara, rainha das fadas de cristal, espera no claro.",
+                       sheet=json.dumps({"appearance": "cabelo de estrelas",
+                                         "status": "alive"}))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"object": "list",
+                                             "data": [{"id": "mock-model"}]})
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(500, json={"error": "llm fora"})
+        return httpx.Response(404, json={"error": "no mock route"})
+
+    client.app.dependency_overrides[deps.get_http_transport] = (
+        lambda: httpx.MockTransport(handler))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                           json={"check": "card_sheets"})
+    finally:
+        client.app.dependency_overrides.pop(deps.get_http_transport, None)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["repaired"] and body["repaired"][0]["partial"] is True
+    assert body["errors"], "o erro do LLM precisa aparecer para o jogador"
+    with db.session() as conn:
+        card = db.get_card(conn, adv["id"], body["repaired"][0]["card_id"])
+    sheet = json.loads(card["sheet"])
+    assert sheet["class"] == "Bardo"  # inferida do texto do card
+    assert set(sheet["stats"]) >= {"str", "dex", "con", "int", "wis", "cha"}
+    assert not sheet.get("humor"), "texto vivo depende do LLM"
