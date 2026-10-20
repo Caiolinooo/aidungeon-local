@@ -569,8 +569,22 @@ export default function NpcsTab({ adventure }) {
     reload()
   }, [reload])
 
-  // Busca a fila de jobs e detecta transições p/ 'done' de retratos —
-  // nesse caso recarrega os cards para o novo retrato aparecer ao vivo.
+  // Retrato, ficha e CRUD chegam pelo bus do Play. O poll abaixo fica de fallback.
+  useEffect(() => {
+    const onLive = (ev) => {
+      const detail = ev.detail || {}
+      if (detail.adventureId !== adventure.id) return
+      if (detail.type !== 'portrait_ready'
+        && detail.type !== 'card_assets_ready'
+        && detail.type !== 'card_changed') return
+      reload()
+    }
+    window.addEventListener('aidungeon-live', onLive)
+    return () => window.removeEventListener('aidungeon-live', onLive)
+  }, [adventure.id, reload])
+
+  // Fallback: fila de jobs. Retrato pronto também recarrega se o evento SSE faltar.
+  // npc_day_tick não tem evento próprio — continua por aqui.
   const fetchJobs = useCallback(async () => {
     try {
       const list = await api.listJobs(adventure.id)

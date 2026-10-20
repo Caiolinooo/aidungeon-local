@@ -107,6 +107,29 @@ export const api = {
   resetUserPassword: (username, password) =>
     request(`/users/${encodeURIComponent(username)}/password`, { method: 'PUT', body: { password } }),
 
+  // ------------------------------------------------------------- rulesets
+  // GET /rulesets: array de {id, name, description, rules, builtin, ...}.
+  // POST /adventures/{id}/rulesets/apply {ruleset_id, mode?: replace|append}
+  // devolve o registro da aventura (character_rules incluso), sem ações/cards.
+  listRulesets: async () => {
+    const data = await request('/rulesets')
+    if (Array.isArray(data)) return data
+    if (Array.isArray(data?.rulesets)) return data.rulesets
+    return []
+  },
+  getRuleset: (id) => request(`/rulesets/${encodeURIComponent(id)}`),
+  createRuleset: ({ name, description = '', rules }) =>
+    request('/rulesets', { method: 'POST', body: { name, description, rules } }),
+  updateRuleset: (id, payload) =>
+    request(`/rulesets/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }),
+  deleteRuleset: (id) =>
+    request(`/rulesets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  applyRuleset: (adventureId, rulesetId, mode = 'replace') =>
+    request(`/adventures/${adventureId}/rulesets/apply`, {
+      method: 'POST',
+      body: { ruleset_id: rulesetId, mode },
+    }),
+
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),
   getScenario: (id) => request(`/scenarios/${id}`),

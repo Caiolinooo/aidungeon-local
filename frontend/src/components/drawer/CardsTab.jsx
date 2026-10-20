@@ -88,6 +88,19 @@ export default function CardsTab({ adventure }) {
     reload()
   }, [reload])
 
+  useEffect(() => {
+    const onLive = (ev) => {
+      const detail = ev.detail || {}
+      if (detail.adventureId !== adventure.id) return
+      if (detail.type !== 'portrait_ready'
+        && detail.type !== 'card_assets_ready'
+        && detail.type !== 'card_changed') return
+      reload()
+    }
+    window.addEventListener('aidungeon-live', onLive)
+    return () => window.removeEventListener('aidungeon-live', onLive)
+  }, [adventure.id, reload])
+
   // Filtered Cards
   const filteredCards = useMemo(() => {
     if (!cards) return []

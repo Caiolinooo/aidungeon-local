@@ -79,6 +79,19 @@ export default function SceneBackdrop({
     }
   }, [adventureId, storyText, generating])
 
+  // Fundo e retrato prontos: um sync, sem esperar o poll de 4s. O poll segue como fallback.
+  useEffect(() => {
+    if (!adventureId) return undefined
+    const onLive = (ev) => {
+      const detail = ev.detail || {}
+      if (detail.adventureId !== adventureId) return
+      if (detail.type !== 'backdrop_ready' && detail.type !== 'portrait_ready') return
+      api.syncScene(adventureId).then((next) => setScene(next)).catch(() => {})
+    }
+    window.addEventListener('aidungeon-live', onLive)
+    return () => window.removeEventListener('aidungeon-live', onLive)
+  }, [adventureId])
+
   // Ação do jogador: a faixa pisca, a frase aparece, o NPC citado reage.
   useEffect(() => {
     if (!playerAction) return undefined

@@ -597,11 +597,13 @@ def handle_undo(adventure_id: str) -> dict:
         db.touch_adventure(conn, adventure_id)
         remaining = db.list_actions(conn, adventure_id)
         choices_service.cancel(adventure_id)
-        return {
+        result = {
             "removed": removed,
             "last_action": remaining[-1] if remaining else None,
             "action_count": len(remaining),
         }
+    _publish_live(adventure_id, "undo", {})
+    return result
 
 
 # ------------------------------------------------------------------ edit

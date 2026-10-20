@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, Response
 
-from app import db, llm_client, npc_assets, settings_store
+from app import db, events, llm_client, npc_assets, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import CardBulkAction, CardRegenerateRequest, StoryCardUpsert
@@ -25,6 +25,12 @@ def _sheet_str(sheet: dict | None) -> str:
     return json.dumps(sheet, ensure_ascii=False) if sheet else ""
 
 
+def _publish_card(adventure_id: str, card_id: str, action: str) -> None:
+    """Avisa a mesa depois do commit. action: created|updated|deleted|regenerated."""
+    events.publish(adventure_id, "card_changed",
+                   {"card_id": card_id, "action": action})
+
+
 @router.post("/{adventure_id}/cards", status_code=201)
 def create_card(adventure_id: str, body: StoryCardUpsert) -> dict:
     _adventure_or_404(adventure_id)
@@ -39,7 +45,9 @@ def create_card(adventure_id: str, body: StoryCardUpsert) -> dict:
             voice=body.voice or "", vrm_id=body.vrm_id or "",
             sheet=_sheet_str(body.sheet),
         )
-        return db.attach_portrait(conn, card)
+        card = db.attach_portrait(conn, card)
+    _publish_card(adventure_id, card["id"], "created")
+    return card
 
 
 @router.get("/{adventure_id}/cards")
@@ -68,7 +76,11 @@ def bulk_cards(adventure_id: str, body: CardBulkAction) -> dict:
         updated_count = db.bulk_cards_action(
             conn, adventure_id, body.action, body.card_ids, new_type=new_type
         )
-        return {"updated": updated_count, "action": body.action}
+    if updated_count:
+        kind = "deleted" if body.action == "delete" else "updated"
+        for card_id in body.card_ids:
+            _publish_card(adventure_id, card_id, kind)
+    return {"updated": updated_count, "action": body.action}
 
 
 @router.get("/{adventure_id}/cards/{card_id}")
@@ -93,6 +105,7 @@ def update_card(adventure_id: str, card_id: str, body: StoryCardUpsert) -> dict:
             db.attach_portrait(conn, card)
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
+    _publish_card(adventure_id, card_id, "updated")
     return card
 
 
@@ -114,12 +127,14 @@ def regenerate_card(adventure_id: str, card_id: str, body: CardRegenerateRequest
         adv, card = _card_or_404(conn, adventure_id, card_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
         try:
-            return npc_assets.regenerate_card(
+            result = npc_assets.regenerate_card(
                 conn, adv, card, llm_cfg, scope=body.scope, field=body.field,
                 overwrite=body.overwrite, transport=transport,
             )
         except llm_client.LlmError as exc:
             raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
+    _publish_card(adventure_id, card_id, "regenerated")
+    return result
 
 
 @router.post("/{adventure_id}/cards/{card_id}/enrich")
@@ -133,7 +148,9 @@ def enrich_card(adventure_id: str, card_id: str,
             card = npc_assets.enrich_card(conn, adv, card, llm_cfg, transport=transport)
         except llm_client.LlmError as exc:
             raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
-        return db.attach_portrait(conn, card)
+        card = db.attach_portrait(conn, card)
+    _publish_card(adventure_id, card_id, "updated")
+    return card
 
 
 @router.get("/{adventure_id}/cards/{card_id}/memories")
@@ -160,6 +177,7 @@ def delete_portrait(adventure_id: str, card_id: str) -> Response:
         for image_id in seen:
             db.delete_image(conn, image_id)
         db.clear_card_portrait(conn, card_id)
+    _publish_card(adventure_id, card_id, "updated")
     return Response(status_code=204)
 
 
@@ -169,5 +187,6 @@ def delete_card(adventure_id: str, card_id: str) -> Response:
         ok = db.delete_card(conn, adventure_id, card_id)
     if not ok:
         raise GameError.not_found(f"card {card_id} not found")
+    _publish_card(adventure_id, card_id, "deleted")
     return Response(status_code=204)
 

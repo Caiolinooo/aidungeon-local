@@ -14,7 +14,7 @@ import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
 import { emotionForLine, splitNarration } from '../ttsText.js'
 import { loosenProse } from '../prose.js'
-import { Edit2, Volume2, Square, Loader2 } from 'lucide-react'
+import { Edit2, Volume2, Square, Loader2, Eye, EyeOff } from 'lucide-react'
 
 // Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
 // durante a sessão — evita um GET /api/voices a cada clique no 🔊.
@@ -290,6 +290,21 @@ function NarrateButton({ text, adventureId = '' }) {
 // Card de imagem da ação "See": lazy-load via IntersectionObserver (fetch
 // autenticado → blob → objectURL, pois <img> não envia o header Bearer).
 // objectURL é revogado no unmount. Clique abre a imagem em tamanho full (Modal).
+function HiddenImageNotice({ onShow, tall = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onShow}
+      className={`flex w-full flex-col items-center justify-center gap-2 rounded-lg border border-subtle bg-elevated/60 px-4 text-center text-sm text-muted ${
+        tall ? 'min-h-[50vh]' : 'h-48'
+      }`}
+    >
+      <Eye className="h-5 w-5" aria-hidden="true" />
+      <span>Imagem oculta — clique para mostrar</span>
+    </button>
+  )
+}
+
 function SeeImageCard({ action }) {
   const toast = useToast()
   const image = action.image
@@ -297,7 +312,12 @@ function SeeImageCard({ action }) {
   const [failed, setFailed] = useState(false)
   const [fullOpen, setFullOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [concealed, setConcealed] = useState(false)
   const holderRef = useRef(null)
+
+  useEffect(() => {
+    setConcealed(false)
+  }, [image?.id])
 
   useEffect(() => {
     if (!image?.id) return undefined
@@ -366,20 +386,39 @@ function SeeImageCard({ action }) {
 
   return (
     <figure ref={holderRef} className="my-2 overflow-hidden rounded-xl border border-subtle bg-surface/80 p-2">
-      <button
-        type="button"
-        onClick={() => objUrl && setFullOpen(true)}
-        title={objUrl ? 'Open full size' : undefined}
-        className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
-      >
-        {objUrl ? (
-          <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
+      <div className="relative">
+        {concealed ? (
+          <HiddenImageNotice onShow={() => setConcealed(false)} />
         ) : (
-          <div className="flex h-48 items-center justify-center text-sm text-muted">
-            {failed || !image?.id ? 'Could not load the image.' : 'Loading scene illustration…'}
-          </div>
+          <>
+            <button
+              type="button"
+              onClick={() => objUrl && setFullOpen(true)}
+              title={objUrl ? 'Open full size' : undefined}
+              className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
+            >
+              {objUrl ? (
+                <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
+              ) : (
+                <div className="flex h-48 items-center justify-center text-sm text-muted">
+                  {failed || !image?.id ? 'Could not load the image.' : 'Loading scene illustration…'}
+                </div>
+              )}
+            </button>
+            {objUrl && (
+              <button
+                type="button"
+                onClick={() => setConcealed(true)}
+                aria-label="Ocultar imagem"
+                title="Ocultar imagem"
+                className="absolute right-2 top-2 rounded-md border border-subtle bg-surface/90 p-1.5 text-secondary hover:text-primary"
+              >
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+          </>
         )}
-      </button>
+      </div>
       <div className="mt-2 flex items-center justify-between gap-2 px-1">
         {displayCaption ? (
           <figcaption className="line-clamp-2 flex-1 text-xs italic text-secondary">{displayCaption}</figcaption>
@@ -408,7 +447,22 @@ function SeeImageCard({ action }) {
 
       {fullOpen && objUrl && (
         <Modal title="See — Scene Illustration" onClose={() => setFullOpen(false)} wide>
-          <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+          {concealed ? (
+            <HiddenImageNotice onShow={() => setConcealed(false)} tall />
+          ) : (
+            <div className="relative">
+              <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+              <button
+                type="button"
+                onClick={() => setConcealed(true)}
+                aria-label="Ocultar imagem"
+                title="Ocultar imagem"
+                className="absolute right-2 top-2 rounded-md border border-subtle bg-surface/90 p-1.5 text-secondary hover:text-primary"
+              >
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {rawPrompt && (
             <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-subtle bg-elevated/50 p-3">
               <p className="text-xs italic text-secondary">{displayCaption}</p>

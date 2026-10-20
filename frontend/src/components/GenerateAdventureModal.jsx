@@ -47,12 +47,23 @@ export default function GenerateAdventureModal({ onClose }) {
   const [webSearchMode, setWebSearchMode] = useState('auto')
   const [webOnRefine, setWebOnRefine] = useState(false)
   const [deepCharacters, setDeepCharacters] = useState(true)
+  const [rulesets, setRulesets] = useState([])
+  const [rulesetId, setRulesetId] = useState('')
+  const [rulesPreview, setRulesPreview] = useState(false)
 
   const opRef = useRef(false)
   const timerRef = useRef(null)
   const language = langChoice || draftLanguage()
 
   useEffect(() => () => clearInterval(timerRef.current), [])
+
+  useEffect(() => {
+    let cancelled = false
+    api.listRulesets()
+      .then((rows) => { if (!cancelled) setRulesets(rows) })
+      .catch((e) => { if (!cancelled) toast(e.message) })
+    return () => { cancelled = true }
+  }, [toast])
 
   const busy = generating || creating || regen !== null
 
@@ -254,7 +265,10 @@ export default function GenerateAdventureModal({ onClose }) {
         story_cards: draft.story_cards ?? [],
         third_person: !!draft.third_person,
       })
-      const adv = await api.createAdventure({ scenario_id: scenario.id })
+      const picked = rulesets.find((r) => String(r.id) === String(rulesetId))
+      const advBody = { scenario_id: scenario.id }
+      if (picked) advBody.character_rules = String(picked.rules || '').slice(0, 4000)
+      const adv = await api.createAdventure(advBody)
       navigate(`/play/${adv.id}`)
     } catch (e) {
       toast(e.message)
@@ -291,9 +305,52 @@ export default function GenerateAdventureModal({ onClose }) {
   )
 
   const paramLabel = (text) => <span className={`${labelCls} mb-1 block`}>{text}</span>
+  const selectedRuleset = rulesets.find((r) => String(r.id) === String(rulesetId)) || null
+  const selectedRules = String(selectedRuleset?.rules || '').slice(0, 4000)
 
   return (
     <Modal title="Generate with AI" onClose={busy ? undefined : onClose} wide>
+      <div className="mb-4">
+        <label className="block">
+          {paramLabel('Ruleset (opcional)')}
+          <select
+            value={rulesetId}
+            disabled={busy}
+            onChange={(e) => {
+              setRulesetId(e.target.value)
+              setRulesPreview(false)
+            }}
+            className={inputCls}
+          >
+            <option value="">Nenhum</option>
+            {rulesets.map((r) => (
+              <option key={r.id} value={String(r.id)}>
+                {r.name}{r.builtin ? ' (padrão)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedRuleset && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setRulesPreview((open) => !open)}
+              disabled={busy}
+              className="text-xs text-emerald-400 hover:underline disabled:opacity-50"
+            >
+              {rulesPreview ? 'Ocultar prévia' : 'Ver prévia'}
+            </button>
+            {rulesPreview && (
+              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-300">
+                {selectedRules || '—'}
+              </pre>
+            )}
+            <p className="mt-1 text-xs text-zinc-600">
+              Ao criar, estas regras substituem character_rules ({selectedRules.length}/4000).
+            </p>
+          </div>
+        )}
+      </div>
       {!draft ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-zinc-400">

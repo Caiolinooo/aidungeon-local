@@ -107,7 +107,7 @@ export default function ShareModal({ adventureId, owner, onClose, onChanged }) {
   }
 
   return (
-    <Modal title="👥 Compartilhar aventura" onClose={onClose}>
+    <Modal title="👥 Compartilhar aventura" onClose={onClose} minimizable>
       <div className="flex flex-col gap-4">
         <ul className="flex max-h-52 flex-col gap-1.5 overflow-y-auto">
           {!sharing && listed.length === 0 ? (

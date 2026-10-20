@@ -361,6 +361,74 @@ def delete_scenario(conn: sqlite3.Connection, scenario_id: str) -> bool:
     return cur.rowcount > 0
 
 
+# ---------------------------------------------------------------- rulesets
+def ruleset_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"] or "",
+        "rules": row["rules"] or "",
+        "builtin": bool(row["builtin"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def insert_ruleset(conn: sqlite3.Connection, *, name: str, rules: str,
+                   description: str = "", builtin: bool = False,
+                   ruleset_id: str | None = None) -> dict:
+    now = utcnow()
+    rid = ruleset_id or new_id()
+    conn.execute(
+        "INSERT INTO rulesets(id, name, description, rules, builtin, created_at, updated_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (rid, name, description or "", rules, int(bool(builtin)), now, now),
+    )
+    row = conn.execute("SELECT * FROM rulesets WHERE id=?", (rid,)).fetchone()
+    return ruleset_to_dict(row)
+
+
+def list_rulesets(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM rulesets ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    return [ruleset_to_dict(row) for row in rows]
+
+
+def get_ruleset(conn: sqlite3.Connection, ruleset_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM rulesets WHERE id=?", (ruleset_id,)).fetchone()
+    return ruleset_to_dict(row) if row else None
+
+
+_RULESET_PATCH_FIELDS = ("name", "description", "rules")
+
+
+def update_ruleset(conn: sqlite3.Connection, ruleset_id: str, **fields: Any) -> dict | None:
+    """Edita nome, descrição ou regras. None = não altera. Builtin permanece."""
+    if get_ruleset(conn, ruleset_id) is None:
+        return None
+    sets: list[str] = []
+    params: list[Any] = []
+    for key in _RULESET_PATCH_FIELDS:
+        if key not in fields or fields[key] is None:
+            continue
+        sets.append(f"{key}=?")
+        params.append(fields[key])
+    if not sets:
+        return get_ruleset(conn, ruleset_id)
+    sets.append("updated_at=?")
+    params.append(utcnow())
+    params.append(ruleset_id)
+    conn.execute(f"UPDATE rulesets SET {', '.join(sets)} WHERE id=?", params)
+    return get_ruleset(conn, ruleset_id)
+
+
+def delete_ruleset(conn: sqlite3.Connection, ruleset_id: str) -> bool:
+    """Apaga o ruleset. Builtin também pode — cópias já aplicadas são independentes."""
+    cur = conn.execute("DELETE FROM rulesets WHERE id=?", (ruleset_id,))
+    return cur.rowcount > 0
+
+
 # -------------------------------------------------------------- adventures
 def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str | None = None,
                      description: str = "", ai_instructions: str = "",

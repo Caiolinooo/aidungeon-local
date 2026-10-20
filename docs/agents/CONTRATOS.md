@@ -398,6 +398,36 @@ def cancel(conn, job_id: str) -> dict | None: ...
   derruba o rascunho: aquele fica com a ficha determinística e o job
   `card_assets` completa os textos vivos depois.
 
+## C10 Rulesets, mesa ao vivo e conforto de UI (dono: Grok + Kimi)
+
+- Rulesets (`backend/app/routes/rulesets.py`, tabela `rulesets`, migration
+  025): conjuntos de regras de personagem nomeados. Seis builtins pré-
+  carregados (D&D 5e, Tormenta20, GURPS, Call of Cthulhu 7e, FATE Core,
+  Savage Worlds) — texto em pt-BR sem `;` (o runner de migration parte no
+  ponto e vírgula). Leitura aberta a qualquer autenticado; criar/editar/
+  apagar exige `users.is_admin` (403 `forbidden`). `name` é UNIQUE.
+- Aplicar é copiar: `POST /api/adventures/{id}/rulesets/apply`
+  `{ruleset_id, mode: "replace"|"append"}` (dono/admin) copia `rules` para
+  `character_rules` (append = existente + `\n\n` + novo; corte em 4000).
+  O jogador edita a CÓPIA na aba Details; o original nunca muda fora do
+  admin. A resposta do apply é o registro da aventura (sem ações/cards).
+- Mesa ao vivo: além dos eventos de geração (`token`, `action`,
+  `action_check`, `turn_changed`, `turn_done`, `player_action`), o barramento
+  publica `card_changed` `{card_id, action: created|updated|deleted|
+  regenerated}` (CRUD de cards), `character_changed` `{username}` (PUT
+  /character), `adventure_updated` `{fields}` (PATCH /adventures) e `undo`.
+  Jobs publicam `portrait_ready`, `backdrop_ready`, `see_ready`,
+  `card_assets_ready`, `choices_ready/failed`. O frontend (Play.jsx) escuta
+  tudo e recarrega o que mudou — sem reload e sem poll (o poll de jobs de 3 s
+  ficou só como fallback). Durante a narração local o feed não é substituído.
+- Criação de personagem: `CharacterModal` tem modo Guiado (passos Conceito →
+  Atributos → Revisão; presets em `frontend/src/utils.js` `CHARACTER_PRESETS`
+  espelham os arquétipos de `backend/app/stats.py`) e Livre (form atual). O
+  payload do save é idêntico nos dois modos.
+- Minimizar/ocultar: `Modal` tem `minimizable` (default em `wide`) — vira
+  chip flutuante com Restaurar, sem desmontar o conteúdo. Imagens do See
+  (inline e lightbox) têm botão ocultar/mostrar com placeholder neutro.
+
 ## Arquivos compartilhados
 
 `backend/app/db.py`, `backend/app/schemas.py`, `backend/app/main.py` (só registro

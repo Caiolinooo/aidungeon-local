@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Response
 
 import exporter
-from app import (auth, consistency, db, game_engine, jobs, npc_assets,
+from app import (auth, consistency, db, events, game_engine, jobs, npc_assets,
                  stats as stats_mod)
 from app.errors import GameError
 from app.schemas import (
@@ -205,6 +205,7 @@ def patch_adventure(adventure_id: str, body: AdventureUpdate,
                     info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Edita metadados (título/descrição/tags). Campos ausentes não mudam."""
     fields = body.model_dump(exclude_unset=True)
+    changed = list(fields.keys())
     turn_mode = fields.pop("turn_mode", None)
     with db.session() as conn:
         adv = _managed_adventure(conn, adventure_id, info.user)
@@ -213,7 +214,9 @@ def patch_adventure(adventure_id: str, body: AdventureUpdate,
             raise GameError.not_found(f"adventure {adventure_id} not found")
         if turn_mode is not None:
             db.set_turn_mode(conn, adventure_id, bool(turn_mode), adv.get("owner") or "")
-        return db.adventure_state(conn, adventure_id)
+        state = db.adventure_state(conn, adventure_id)
+    events.publish(adventure_id, "adventure_updated", {"fields": changed})
+    return state
 
 
 @router.delete("/{adventure_id}")
@@ -339,7 +342,9 @@ def put_character(adventure_id: str, body: PlayerCharacterUpsert,
             conn, adventure_id, info.user,
             title=title, sheet=sheet, portrait_prompt=body.portrait_prompt,
         )
-        return {"card": _character_view(conn, card)}
+        payload = {"card": _character_view(conn, card)}
+    events.publish(adventure_id, "character_changed", {"username": info.user})
+    return payload
 
 
 @router.post("/{adventure_id}/life/tick", status_code=202)

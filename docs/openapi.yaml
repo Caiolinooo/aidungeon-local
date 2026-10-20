@@ -25,6 +25,8 @@ tags:
     description: Login e verificação de token. Todas as demais rotas /api exigem Bearer.
   - name: scenarios
   - name: adventures
+  - name: rulesets
+    description: Sistemas de regras para criação de personagem. Leitura aberta a qualquer usuário autenticado. Criar, editar e apagar só o admin. Apply copia o texto para character_rules.
   - name: generation
     description: Endpoints que geram texto via LLM e streamam por SSE.
   - name: actions
@@ -1805,6 +1807,176 @@ paths:
               schema:
                 $ref: '#/components/schemas/LlmHealth'
 
+  # ------------------------------------------------------------------ rulesets
+  /api/rulesets:
+    get:
+      tags: [rulesets]
+      summary: Listar rulesets
+      operationId: listRulesets
+      description: Qualquer usuário autenticado. Inclui os seis builtins do seed.
+      responses:
+        '200':
+          description: Lista completa, ordenada pelo nome.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Ruleset'
+    post:
+      tags: [rulesets]
+      summary: Criar ruleset (admin)
+      operationId: createRuleset
+      description: Só o admin. `name` e `rules` são obrigatórios. `builtin` nasce falso.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RulesetUpsert'
+      responses:
+        '201':
+          description: Ruleset criado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruleset'
+        '403':
+          description: Usuário autenticado que não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/rulesets/{id}:
+    get:
+      tags: [rulesets]
+      summary: Obter um ruleset
+      operationId: getRuleset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ruleset.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruleset'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [rulesets]
+      summary: Atualizar ruleset (admin)
+      operationId: updateRuleset
+      description: Campos ausentes não mudam. Builtin também pode ser editado.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RulesetUpsert'
+      responses:
+        '200':
+          description: Ruleset atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ruleset'
+        '403':
+          description: Usuário autenticado que não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [rulesets]
+      summary: Apagar ruleset (admin)
+      operationId: deleteRuleset
+      description: Builtin também pode ser apagado. Cópias já aplicadas em aventuras não mudam.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ruleset apagado.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, id]
+                properties:
+                  deleted:
+                    type: boolean
+                  id:
+                    type: string
+        '403':
+          description: Usuário autenticado que não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/rulesets/apply:
+    post:
+      tags: [rulesets]
+      summary: Aplicar ruleset em character_rules
+      operationId: applyRuleset
+      description: |
+        Exige dono ou admin (`_managed_adventure`). Quem não vê a aventura recebe 404.
+        Quem vê mas não é dono recebe 403.
+
+        `replace` (padrão) substitui `character_rules`.
+        `append` grava `existente + "\n\n" + regras`, mesmo quando o texto atual está vazio.
+        O resultado é cortado em 4000 caracteres.
+
+        A resposta é o registro da aventura (schema Adventure), não o estado completo.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RulesetApply'
+      responses:
+        '200':
+          description: Aventura com character_rules atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Adventure'
+        '403':
+          description: Jogador com acesso que não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1999,6 +2171,11 @@ components:
         authors_note:
           type: string
           default: ''
+        character_rules:
+          type: string
+          default: ''
+          maxLength: 4000
+          description: Regras de criação de personagem injetadas no narrador. O apply de ruleset grava aqui e corta em 4000 caracteres.
         story_summary:
           type: string
           default: ''
@@ -3345,3 +3522,54 @@ components:
           description: Itens que não puderam ser reparados.
           items:
             type: string
+
+    Ruleset:
+      type: object
+      required: [id, name, rules, builtin]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          default: ''
+        rules:
+          type: string
+          maxLength: 4000
+        builtin:
+          type: boolean
+          description: true nos seis sistemas do seed. Cópias aplicadas na aventura são texto independente.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RulesetUpsert:
+      type: object
+      description: POST exige name e rules. PUT aceita qualquer subconjunto. Campos ausentes no PUT não mudam.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        rules:
+          type: string
+          minLength: 1
+          maxLength: 4000
+
+    RulesetApply:
+      type: object
+      required: [ruleset_id]
+      properties:
+        ruleset_id:
+          type: string
+        mode:
+          type: string
+          enum: [replace, append]
+          default: replace

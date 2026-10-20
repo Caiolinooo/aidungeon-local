@@ -241,6 +241,21 @@ export default function Play() {
     }
   }, [id])
 
+  // Mesmo GET do load, sem derrubar o stream local nem os checks.
+  const refreshAdventure = useCallback((opts) => {
+    const replaceActions = !opts || opts.replaceActions !== false
+    const forceActions = !!opts?.forceActions
+    return api.getAdventure(id).then((st) => {
+      setAdventure((prev) => (prev ? { ...prev, ...st } : st))
+      if (!replaceActions) return st
+      if (genRef.current && !forceActions) return st
+      const list = [...(st.actions ?? [])].sort(bySeq)
+      seenIdsRef.current = new Set(list.map((a) => a.id).filter((x) => x != null))
+      setActions(list)
+      return st
+    }).catch(() => null)
+  }, [id])
+
   useEffect(() => {
     load()
   }, [load])
@@ -384,20 +399,109 @@ export default function Play() {
       const data = parse(ev)
       handleCheckData(data)
     }
+    const fan = (type, data) => {
+      window.dispatchEvent(new CustomEvent('aidungeon-live', {
+        detail: { type, adventureId: id, data },
+      }))
+    }
+    const onTurnDone = () => {
+      setLive('')
+      if (!genRef.current) refreshAdventure()
+    }
+    const onChoices = (ev) => {
+      const data = parse(ev)
+      setChoices(Array.isArray(data?.choices) ? data.choices : [])
+    }
+    const onChoicesFailed = () => {
+      setChoices([])
+    }
+    const onPortrait = (ev) => {
+      fan('portrait_ready', parse(ev))
+    }
+    const onBackdrop = (ev) => {
+      fan('backdrop_ready', parse(ev))
+    }
+    const onSee = (ev) => {
+      const data = parse(ev)
+      setSeeing(false)
+      const action = data?.image?.action
+      if (!action || typeof action !== 'object' || action.id == null) {
+        if (!genRef.current) refreshAdventure()
+        return
+      }
+      if (seenIdsRef.current.has(action.id)) return
+      seenIdsRef.current.add(action.id)
+      setActions((prev) => {
+        const list = prev ?? []
+        if (list.some((a) => a.id === action.id)) return list
+        return [...list, action].sort(bySeq)
+      })
+    }
+    const onCardAssets = (ev) => {
+      fan('card_assets_ready', parse(ev))
+    }
+    const onCard = (ev) => {
+      fan('card_changed', parse(ev))
+      if (!genRef.current) refreshAdventure()
+    }
+    const onCharacter = (ev) => {
+      const data = parse(ev)
+      if (!genRef.current) refreshAdventure()
+      const username = typeof data?.username === 'string' ? data.username : ''
+      if (!username || username !== currentUserRef.current) return
+      api.getCharacter(id).then((res) => {
+        const card = unwrapCharacter(res)
+        setCharacterCard(card)
+        if (card) setNeedsCharacter(false)
+      }).catch(() => {})
+    }
+    const onAdventureUpdated = () => {
+      refreshAdventure({ replaceActions: false })
+    }
+    const onUndo = () => {
+      setChoices([])
+      setWebSources([])
+      setLive('')
+      setPendingCheck(null)
+      awaitingCheckRef.current = false
+      refreshAdventure({ forceActions: true })
+    }
     es.addEventListener('turn_changed', onTurn)
     es.addEventListener('player_action', onPlayer)
     es.addEventListener('token', onToken)
     es.addEventListener('action', onAction)
     es.addEventListener('action_check', onCheck)
+    es.addEventListener('turn_done', onTurnDone)
+    es.addEventListener('choices_ready', onChoices)
+    es.addEventListener('choices_failed', onChoicesFailed)
+    es.addEventListener('portrait_ready', onPortrait)
+    es.addEventListener('backdrop_ready', onBackdrop)
+    es.addEventListener('see_ready', onSee)
+    es.addEventListener('card_assets_ready', onCardAssets)
+    es.addEventListener('card_changed', onCard)
+    es.addEventListener('character_changed', onCharacter)
+    es.addEventListener('adventure_updated', onAdventureUpdated)
+    es.addEventListener('undo', onUndo)
     return () => {
       es.removeEventListener('turn_changed', onTurn)
       es.removeEventListener('player_action', onPlayer)
       es.removeEventListener('token', onToken)
       es.removeEventListener('action', onAction)
       es.removeEventListener('action_check', onCheck)
+      es.removeEventListener('turn_done', onTurnDone)
+      es.removeEventListener('choices_ready', onChoices)
+      es.removeEventListener('choices_failed', onChoicesFailed)
+      es.removeEventListener('portrait_ready', onPortrait)
+      es.removeEventListener('backdrop_ready', onBackdrop)
+      es.removeEventListener('see_ready', onSee)
+      es.removeEventListener('card_assets_ready', onCardAssets)
+      es.removeEventListener('card_changed', onCard)
+      es.removeEventListener('character_changed', onCharacter)
+      es.removeEventListener('adventure_updated', onAdventureUpdated)
+      es.removeEventListener('undo', onUndo)
       es.close()
     }
-  }, [id, handleCheckData])
+  }, [id, handleCheckData, refreshAdventure])
 
   useEffect(() => {
     if (!pendingCheck || !Array.isArray(actions) || actions.length === 0) return
@@ -528,16 +632,6 @@ export default function Play() {
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight
   }, [actions, gen?.text, seeing, live])
 
-  // Choices suggestions
-  const fetchChoices = useCallback(async () => {
-    try {
-      const r = await api.getChoices(id)
-      setChoices(Array.isArray(r?.choices) ? r.choices : [])
-    } catch {
-      setChoices([])
-    }
-  }, [id])
-
   // SSE Stream runner
   const runStream = useCallback(
     (kind, path, body, applyDone) => {
@@ -602,17 +696,7 @@ export default function Play() {
           if (Array.isArray(data.web_sources) && data.web_sources.length) {
             setWebSources(data.web_sources)
           }
-          fetchChoices()
-          api.getAdventure(id).then((st) => {
-            setAdventure((prev) => (prev ? {
-              ...prev,
-              owner: st.owner ?? prev.owner,
-              turn_mode: !!st.turn_mode,
-              turn_user: st.turn_user ?? '',
-              shares: Array.isArray(st.shares) ? st.shares : prev.shares,
-              character_rules: st.character_rules ?? prev.character_rules,
-            } : prev))
-          }).catch(() => {})
+          refreshAdventure({ replaceActions: false })
         },
         onError: (msg, meta) => fail(msg, meta),
       }).catch((e) => {
@@ -620,7 +704,7 @@ export default function Play() {
         fail(e)
       })
     },
-    [generating, needsCharacter, toast, fetchChoices, id, promptCharacter, handleCheckData],
+    [generating, needsCharacter, toast, refreshAdventure, id, promptCharacter, handleCheckData],
   )
 
   const sendAction = (type, text, opts) => {
@@ -709,7 +793,13 @@ export default function Play() {
           if (seeTokenRef.current !== token) return
           if (job.status === 'done') {
             const action = job.result?.image?.action
-            if (action) setActions((prev) => [...(prev ?? []), action].sort(bySeq))
+            if (action) {
+              setActions((prev) => {
+                const list = prev ?? []
+                if (action.id != null && list.some((a) => a.id === action.id)) return list
+                return [...list, action].sort(bySeq)
+              })
+            }
             toast('Image generated.', 'ok')
             return
           }

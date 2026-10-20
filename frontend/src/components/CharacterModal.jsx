@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
-import { CORE_STATS, abilityMod, roll4d6DropLowest } from '../utils.js'
+import { CHARACTER_PRESETS, CORE_STATS, abilityMod, roll4d6DropLowest } from '../utils.js'
 
 const CORE_KEYS = new Set(CORE_STATS.map(([key]) => key))
 const POINT_MIN = 8
@@ -117,6 +117,21 @@ function buildStats(core, extras) {
   return stats
 }
 
+const WIZARD_STEPS = ['Conceito', 'Atributos', 'Revisão']
+const STAT_SHORT = { str: 'For', dex: 'Des', con: 'Con', int: 'Int', wis: 'Sab', cha: 'Car' }
+
+function presetSuggestion(preset) {
+  return preset.appearanceHints.join('. ')
+}
+
+function isPresetAppearance(text) {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return true
+  return CHARACTER_PRESETS.some(
+    (preset) => preset.appearanceHints.includes(trimmed) || presetSuggestion(preset) === trimmed,
+  )
+}
+
 function blankFromCard(card) {
   const sheet = parseSheet(card?.sheet)
   return {
@@ -130,6 +145,186 @@ function blankFromCard(card) {
     portrait: card?.portrait_prompt || '',
     ...splitStats(sheet.stats),
   }
+}
+
+function AttributesEditor({
+  busy,
+  statMode,
+  core,
+  remaining,
+  spent,
+  extras,
+  switchMode,
+  resetPoints,
+  rollAll,
+  stepCore,
+  patchExtra,
+  setExtras,
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className={`${labelCls} mb-0`}>Atributos</span>
+        <div
+          className="inline-flex rounded-lg border border-zinc-700 p-0.5"
+          role="group"
+          aria-label="Modo dos atributos"
+        >
+          <button
+            type="button"
+            aria-pressed={statMode === 'points'}
+            disabled={busy}
+            onClick={() => switchMode('points')}
+            className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+              statMode === 'points' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+            }`}
+          >
+            Pontos
+          </button>
+          <button
+            type="button"
+            aria-pressed={statMode === 'roll'}
+            disabled={busy}
+            onClick={() => switchMode('roll')}
+            className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+              statMode === 'roll' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+            }`}
+          >
+            Sorteio
+          </button>
+        </div>
+      </div>
+
+      {statMode === 'points' ? (
+        <div className="mb-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className={`text-xs font-medium ${remaining === 0 ? 'text-amber-300' : 'text-zinc-300'}`}>
+              Pontos restantes: {remaining}
+            </p>
+            <button
+              type="button"
+              onClick={resetPoints}
+              disabled={busy}
+              className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Zerar
+            </button>
+          </div>
+          <div className={`mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800 ${remaining === 0 ? 'ring-1 ring-amber-400/80' : ''}`}>
+            <div
+              className={`h-full ${remaining === 0 ? 'bg-amber-500' : 'bg-emerald-600'}`}
+              style={{ width: `${Math.min(100, (spent / POINT_BUDGET) * 100)}%` }}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={rollAll}
+            disabled={busy}
+            className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            🎲 Rolar 4d6
+          </button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {CORE_STATS.map(([key, label]) => {
+          const value = core[key]
+          const min = statMode === 'points' ? POINT_MIN : ROLL_MIN
+          const max = statMode === 'points' ? POINT_MAX : ROLL_MAX
+          const plusBlocked = statMode === 'points' && remaining < 1
+          return (
+            <div key={key} className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/40 px-1.5 py-1">
+              <div className="text-[11px] font-semibold leading-tight text-zinc-100">{label}</div>
+              <div className="flex items-baseline justify-between gap-1">
+                <span className="font-mono text-[10px] text-zinc-500">{key}</span>
+                <span className="font-mono text-[11px] text-emerald-300">{abilityMod(value)}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-0.5">
+                <button
+                  type="button"
+                  aria-label={`Diminuir ${label}`}
+                  disabled={busy || value <= min}
+                  onClick={() => stepCore(key, -1)}
+                  className={stepBtnCls}
+                >
+                  −
+                </button>
+                <input
+                  readOnly
+                  tabIndex={-1}
+                  value={value}
+                  aria-label={label}
+                  className="w-10 rounded-md border border-zinc-700 bg-zinc-800 px-0 py-1 text-center text-sm font-semibold tabular-nums text-zinc-100 outline-none sm:w-14"
+                />
+                <button
+                  type="button"
+                  aria-label={`Aumentar ${label}`}
+                  disabled={busy || value >= max || plusBlocked}
+                  onClick={() => stepCore(key, 1)}
+                  className={stepBtnCls}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="mt-2">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Extras</span>
+          <button
+            type="button"
+            onClick={() => setExtras((rows) => [...rows, { key: '', value: '' }])}
+            disabled={busy}
+            className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            +
+          </button>
+        </div>
+        {extras.length === 0 ? (
+          <p className="text-[11px] text-zinc-500">hp e outros, se precisar.</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {extras.map((row, i) => (
+              <li key={i} className="flex min-w-0 items-center gap-1.5">
+                <input
+                  value={row.key}
+                  onChange={(e) => patchExtra(i, { key: e.target.value })}
+                  placeholder="hp"
+                  aria-label={`Atributo extra ${i + 1}`}
+                  disabled={busy}
+                  className={`${inputCls} w-20 shrink-0 px-2 sm:w-28`}
+                />
+                <input
+                  value={row.value}
+                  onChange={(e) => patchExtra(i, { value: e.target.value })}
+                  placeholder="10"
+                  aria-label={`Valor do extra ${i + 1}`}
+                  disabled={busy}
+                  className={`${inputCls} min-w-0 flex-1 px-2`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setExtras((rows) => rows.filter((_, j) => j !== i))}
+                  disabled={busy}
+                  aria-label={`Remover atributo ${row.key || i + 1}`}
+                  className="h-8 w-8 shrink-0 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export default function CharacterModal({
@@ -155,6 +350,9 @@ export default function CharacterModal({
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [applied, setApplied] = useState(undefined)
+  const [guided, setGuided] = useState(false)
+  const [step, setStep] = useState(0)
+  const [presetId, setPresetId] = useState('')
 
   useEffect(() => {
     if (loading) return
@@ -172,6 +370,9 @@ export default function CharacterModal({
     setExtras(next.extras)
     setFormError('')
     setApplied(card ?? null)
+    setGuided(false)
+    setStep(0)
+    setPresetId('')
   }, [card, loading])
 
   const stepCore = (key, delta) => {
@@ -205,6 +406,36 @@ export default function CharacterModal({
     for (const [key] of CORE_STATS) next[key] = roll4d6DropLowest()
     setStatMode('roll')
     setCore(next)
+  }
+
+  const applyPreset = (preset) => {
+    setPresetId(preset.id)
+    setClassRole(preset.classHint)
+    setStatMode('points')
+    setCore({ ...preset.stats })
+    const suggestion = presetSuggestion(preset)
+    setAppearance((current) => (isPresetAppearance(current) ? suggestion : current))
+  }
+
+  const goNext = () => {
+    if (step === 0) {
+      const name = title.trim()
+      if (!name) {
+        setFormError('Informe o nome.')
+        return
+      }
+      if (name.length > 80) {
+        setFormError('O nome deve ter no máximo 80 caracteres.')
+        return
+      }
+    }
+    setFormError('')
+    setStep((current) => Math.min(WIZARD_STEPS.length - 1, current + 1))
+  }
+
+  const goBack = () => {
+    setFormError('')
+    setStep((current) => Math.max(0, current - 1))
   }
 
   const patchExtra = (index, fields) => {
@@ -247,15 +478,25 @@ export default function CharacterModal({
     }
   }
 
+  const submit = (event) => {
+    if (guided && step !== WIZARD_STEPS.length - 1) {
+      event.preventDefault()
+      goNext()
+      return
+    }
+    save(event)
+  }
+
   const busy = saving || loading
   const rulesText = (rules || '').trim()
   const formReady = !loading && applied === (card ?? null)
   const spent = pointsSpent(core)
   const remaining = POINT_BUDGET - spent
+  const selectedPreset = CHARACTER_PRESETS.find((preset) => preset.id === presetId) || null
 
   return (
     <Modal title="🧙 Personagem" onClose={saving ? undefined : onClose} wide>
-      <form onSubmit={save} className="flex flex-col gap-3">
+      <form onSubmit={submit} className="flex flex-col gap-3">
         {rulesText && (
           <div className="rounded-lg border border-amber-700/60 bg-amber-950/50 px-3 py-2">
             <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
@@ -269,6 +510,187 @@ export default function CharacterModal({
           <p className="text-sm text-zinc-500">Carregando ficha…</p>
         ) : (
           <>
+            <div
+              className="inline-flex self-start rounded-lg border border-zinc-700 p-0.5"
+              role="group"
+              aria-label="Modo da ficha"
+            >
+              <button
+                type="button"
+                aria-pressed={!guided}
+                disabled={busy}
+                onClick={() => setGuided(false)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+                  !guided ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                }`}
+              >
+                Livre
+              </button>
+              <button
+                type="button"
+                aria-pressed={guided}
+                disabled={busy}
+                onClick={() => setGuided(true)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
+                  guided ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                }`}
+              >
+                Guiado
+              </button>
+            </div>
+            {guided ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs" aria-label="Passos">
+                  {WIZARD_STEPS.map((label, index) => (
+                    <span key={label} className={index === step ? 'font-semibold text-emerald-300' : 'text-zinc-500'}>
+                      {index + 1}. {label}
+                    </span>
+                  ))}
+                </div>
+                {step === 0 && (
+                  <>
+                    <label className="block">
+                      <span className={labelCls}>Nome *</span>
+                      <input
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value.slice(0, 80))}
+                        maxLength={80}
+                        required
+                        autoFocus
+                        autoComplete="off"
+                        placeholder="Nome do personagem"
+                        disabled={busy}
+                        className={inputCls}
+                      />
+                      <span className="mt-1 block text-right text-[10px] text-zinc-500">{title.trim().length}/80</span>
+                    </label>
+                    <div>
+                      <span className={labelCls}>Conceito</span>
+                      <div className="grid grid-cols-2 gap-2" role="group" aria-label="Arquétipos">
+                        {CHARACTER_PRESETS.map((preset) => {
+                          const selected = preset.id === presetId
+                          return (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              aria-pressed={selected}
+                              disabled={busy}
+                              onClick={() => applyPreset(preset)}
+                              className={`rounded-lg border px-2.5 py-2 text-left disabled:opacity-40 ${
+                                selected
+                                  ? 'border-emerald-600 bg-emerald-950/40'
+                                  : 'border-zinc-700 bg-zinc-950/40 hover:bg-zinc-800'
+                              }`}
+                            >
+                              <span className="block text-sm font-semibold text-zinc-100">{preset.name}</span>
+                              <span className="mt-0.5 block text-[10px] leading-snug text-zinc-500">{preset.blurb}</span>
+                              <span className="mt-1 block font-mono text-[10px] leading-snug text-zinc-300">
+                                {CORE_STATS.map(([key]) => `${STAT_SHORT[key]} ${preset.stats[key]}`).join(' · ')}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <label className="block">
+                      <span className={labelCls}>Classe / Papel</span>
+                      <input
+                        value={classRole}
+                        onChange={(e) => setClassRole(e.target.value)}
+                        placeholder="ex.: ladina, bardo, capitão"
+                        disabled={busy}
+                        className={inputCls}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls}>Aparência</span>
+                      <textarea
+                        value={appearance}
+                        onChange={(e) => setAppearance(e.target.value)}
+                        rows={2}
+                        disabled={busy}
+                        placeholder="rosto, cabelo, olhos, marcas"
+                        className={`${inputCls} resize-y`}
+                      />
+                      {selectedPreset && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {selectedPreset.appearanceHints.map((tip) => (
+                            <button
+                              key={tip}
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setAppearance(tip)}
+                              className="rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] leading-snug text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                            >
+                              {tip}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </label>
+                  </>
+                )}
+                {step === 1 && (
+                  <AttributesEditor
+                    busy={busy}
+                    statMode={statMode}
+                    core={core}
+                    remaining={remaining}
+                    spent={spent}
+                    extras={extras}
+                    switchMode={switchMode}
+                    resetPoints={resetPoints}
+                    rollAll={rollAll}
+                    stepCore={stepCore}
+                    patchExtra={patchExtra}
+                    setExtras={setExtras}
+                  />
+                )}
+                {step === 2 && (
+                  <div className="flex flex-col gap-2 text-sm">
+                    {[
+                      ['Nome', title],
+                      ['Classe', classRole],
+                      ['Aparência', appearance],
+                      ['Corpo', body],
+                      ['Roupas', clothing],
+                      ['Status', status],
+                      ['Notas', notes],
+                      ['Retrato', portrait],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{label}</div>
+                        <p className="whitespace-pre-wrap text-zinc-100">{String(value || '').trim() ? value : '—'}</p>
+                      </div>
+                    ))}
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                        Atributos · {statMode === 'points' ? 'Pontos' : 'Sorteio'}
+                      </div>
+                      <ul className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-3">
+                        {CORE_STATS.map(([key, label]) => (
+                          <li key={key} className="rounded-md border border-zinc-800 px-2 py-1 text-xs">
+                            <span className="text-zinc-500">{label}</span>{' '}
+                            <span className="font-mono text-zinc-100">
+                              {core[key]} ({abilityMod(core[key])})
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      {extras.some((row) => (row.key || '').trim()) && (
+                        <p className="mt-1 text-xs text-zinc-400">
+                          {extras
+                            .filter((row) => (row.key || '').trim())
+                            .map((row) => `${row.key}: ${row.value}`)
+                            .join(' · ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
             <label className="block">
               <span className={labelCls}>Nome *</span>
               <input
@@ -355,168 +777,20 @@ export default function CharacterModal({
               />
             </label>
 
-            <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <span className={`${labelCls} mb-0`}>Atributos</span>
-                <div
-                  className="inline-flex rounded-lg border border-zinc-700 p-0.5"
-                  role="group"
-                  aria-label="Modo dos atributos"
-                >
-                  <button
-                    type="button"
-                    aria-pressed={statMode === 'points'}
-                    disabled={busy}
-                    onClick={() => switchMode('points')}
-                    className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
-                      statMode === 'points' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
-                    }`}
-                  >
-                    Pontos
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={statMode === 'roll'}
-                    disabled={busy}
-                    onClick={() => switchMode('roll')}
-                    className={`rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40 ${
-                      statMode === 'roll' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-100'
-                    }`}
-                  >
-                    Sorteio
-                  </button>
-                </div>
-              </div>
-
-              {statMode === 'points' ? (
-                <div className="mb-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className={`text-xs font-medium ${remaining === 0 ? 'text-amber-300' : 'text-zinc-300'}`}>
-                      Pontos restantes: {remaining}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={resetPoints}
-                      disabled={busy}
-                      className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-                    >
-                      Zerar
-                    </button>
-                  </div>
-                  <div className={`mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800 ${remaining === 0 ? 'ring-1 ring-amber-400/80' : ''}`}>
-                    <div
-                      className={`h-full ${remaining === 0 ? 'bg-amber-500' : 'bg-emerald-600'}`}
-                      style={{ width: `${Math.min(100, (spent / POINT_BUDGET) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={rollAll}
-                    disabled={busy}
-                    className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    🎲 Rolar 4d6
-                  </button>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {CORE_STATS.map(([key, label]) => {
-                  const value = core[key]
-                  const min = statMode === 'points' ? POINT_MIN : ROLL_MIN
-                  const max = statMode === 'points' ? POINT_MAX : ROLL_MAX
-                  const plusBlocked = statMode === 'points' && remaining < 1
-                  return (
-                    <div key={key} className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/40 px-1.5 py-1">
-                      <div className="text-[11px] font-semibold leading-tight text-zinc-100">{label}</div>
-                      <div className="flex items-baseline justify-between gap-1">
-                        <span className="font-mono text-[10px] text-zinc-500">{key}</span>
-                        <span className="font-mono text-[11px] text-emerald-300">{abilityMod(value)}</span>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between gap-0.5">
-                        <button
-                          type="button"
-                          aria-label={`Diminuir ${label}`}
-                          disabled={busy || value <= min}
-                          onClick={() => stepCore(key, -1)}
-                          className={stepBtnCls}
-                        >
-                          −
-                        </button>
-                        <input
-                          readOnly
-                          tabIndex={-1}
-                          value={value}
-                          aria-label={label}
-                          className="w-10 rounded-md border border-zinc-700 bg-zinc-800 px-0 py-1 text-center text-sm font-semibold tabular-nums text-zinc-100 outline-none sm:w-14"
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Aumentar ${label}`}
-                          disabled={busy || value >= max || plusBlocked}
-                          onClick={() => stepCore(key, 1)}
-                          className={stepBtnCls}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-
-              <div className="mt-2">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Extras</span>
-                  <button
-                    type="button"
-                    onClick={() => setExtras((rows) => [...rows, { key: '', value: '' }])}
-                    disabled={busy}
-                    className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    +
-                  </button>
-                </div>
-                {extras.length === 0 ? (
-                  <p className="text-[11px] text-zinc-500">hp e outros, se precisar.</p>
-                ) : (
-                  <ul className="flex flex-col gap-1.5">
-                    {extras.map((row, i) => (
-                      <li key={i} className="flex min-w-0 items-center gap-1.5">
-                        <input
-                          value={row.key}
-                          onChange={(e) => patchExtra(i, { key: e.target.value })}
-                          placeholder="hp"
-                          aria-label={`Atributo extra ${i + 1}`}
-                          disabled={busy}
-                          className={`${inputCls} w-20 shrink-0 px-2 sm:w-28`}
-                        />
-                        <input
-                          value={row.value}
-                          onChange={(e) => patchExtra(i, { value: e.target.value })}
-                          placeholder="10"
-                          aria-label={`Valor do extra ${i + 1}`}
-                          disabled={busy}
-                          className={`${inputCls} min-w-0 flex-1 px-2`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setExtras((rows) => rows.filter((_, j) => j !== i))}
-                          disabled={busy}
-                          aria-label={`Remover atributo ${row.key || i + 1}`}
-                          className="h-8 w-8 shrink-0 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
-                        >
-                          ✕
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
+            <AttributesEditor
+              busy={busy}
+              statMode={statMode}
+              core={core}
+              remaining={remaining}
+              spent={spent}
+              extras={extras}
+              switchMode={switchMode}
+              resetPoints={resetPoints}
+              rollAll={rollAll}
+              stepCore={stepCore}
+              patchExtra={patchExtra}
+              setExtras={setExtras}
+            />
 
             <label className="block">
               <span className={labelCls}>Prompt de retrato (opcional)</span>
@@ -529,28 +803,71 @@ export default function CharacterModal({
                 className={`${inputCls} resize-y`}
               />
             </label>
+              </>
+            )}
           </>
         )}
 
         {formError && <p className="text-sm text-red-300">{formError}</p>}
 
-        <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            disabled={!formReady || saving || !title.trim()}
-            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
-          >
-            {saving ? 'Salvando…' : 'Salvar'}
-          </button>
-        </div>
+        {guided && formReady ? (
+          <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+            {step > 0 && (
+              <button
+                type="button"
+                onClick={goBack}
+                disabled={saving}
+                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+              >
+                Voltar
+              </button>
+            )}
+            {step < WIZARD_STEPS.length - 1 ? (
+              <button
+                type="button"
+                onClick={goNext}
+                disabled={saving || (step === 0 && !title.trim())}
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                Continuar
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!formReady || saving || !title.trim()}
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {saving ? 'Salvando…' : 'Salvar'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={!formReady || saving || !title.trim()}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        )}
       </form>
     </Modal>
   )

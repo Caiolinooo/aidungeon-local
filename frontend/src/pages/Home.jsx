@@ -20,6 +20,7 @@ import {
   BookOpen,
   RefreshCw,
   Users as UsersIcon,
+  ShieldCheck,
 } from 'lucide-react'
 
 // Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
@@ -121,6 +122,16 @@ export default function Home() {
             <UsersIcon className="w-4 h-4 text-secondary" />
             <span>Users</span>
           </Link>
+          {session?.admin && (
+            <Link
+              to="/rulesets"
+              title="Rulesets de personagem"
+              className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+            >
+              <ShieldCheck className="w-4 h-4 text-secondary" />
+              <span>Regras</span>
+            </Link>
+          )}
           <Link
             to="/settings"
             title="Global Settings (LLM, Image, Voice, Memory)"

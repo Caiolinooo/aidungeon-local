@@ -340,3 +340,16 @@ class ScriptingSettingsUpdate(BaseModel):
     output_modifier: str | None = None
 
 
+class RulesetUpsert(BaseModel):
+    """POST exige name e rules (a rota recusa ausência). PUT aceita qualquer subconjunto."""
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    rules: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class RulesetApply(BaseModel):
+    """POST /adventures/{id}/rulesets/apply — copia rules para character_rules."""
+    ruleset_id: str = Field(min_length=1)
+    mode: Literal["replace", "append"] = "replace"
+
+

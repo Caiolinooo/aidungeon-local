@@ -9,6 +9,7 @@ import Play from './pages/Play.jsx'
 import ScenarioEditor from './pages/ScenarioEditor.jsx'
 import Settings from './pages/Settings.jsx'
 import Users from './pages/Users.jsx'
+import Rulesets from './pages/Rulesets.jsx'
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
             <Route path="/play/:id" element={<AuthGate><Play /></AuthGate>} />
             <Route path="/settings" element={<AuthGate><Settings /></AuthGate>} />
             <Route path="/users" element={<AuthGate><Users /></AuthGate>} />
+            <Route path="/rulesets" element={<AuthGate><Rulesets /></AuthGate>} />
             <Route path="/scenarios/new" element={<AuthGate><ScenarioEditor /></AuthGate>} />
             <Route path="/scenarios/:id/edit" element={<AuthGate><ScenarioEditor /></AuthGate>} />
             <Route path="*" element={<AuthGate><Home /></AuthGate>} />
