@@ -297,14 +297,25 @@ def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = N
             description = raw_description
         if isinstance(raw_entry, str):
             card_entry = raw_entry
+    # O texto do próprio card serve para inferir classe e atributos quando o
+    # card não tem entry (ex.: ficha gerada por engano, só com a sheet).
+    own = " ".join(
+        str(out.get(field) or "").strip()
+        for field in ("notes", "personality", "goals", "background",
+                      "lifestyle", "habits", "likes", "sentiments", "speech", "humor")
+    )
     prose = " ".join(
         part.strip() for part in (entry, card_entry, description) if part and part.strip()
     )
+    # Arquétipo pode vir do texto da própria ficha; a primeira frase da prosa
+    # (entry/descrição) só entra como classe quando nenhuma palavra de ofício
+    # aparece.
+    infer_text = " ".join(part for part in (prose, own) if part)
     role = out.get("class")
     if isinstance(role, str) and role.strip():
         out["class"] = role.strip()
     else:
-        inferred = stats_mod.class_from_text(prose) or _clip_role(prose)
+        inferred = stats_mod.class_from_text(infer_text) or _clip_role(prose)
         if inferred:
             out["class"] = inferred
         else:
@@ -324,7 +335,8 @@ def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = N
         }
         appearance = out.get("appearance") if isinstance(out.get("appearance"), str) else ""
         note_text = out.get("notes") if isinstance(out.get("notes"), str) else ""
-        blob = " ".join(part.strip() for part in (appearance, note_text, prose) if part.strip())
+        blob = " ".join(part.strip() for part in (appearance, note_text, prose, own)
+                        if part.strip())
         out["stats"] = {
             **stats_mod.estimate_stats(blob, str(out.get("class") or "")),
             **extras,
@@ -343,7 +355,10 @@ def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
         card_type=card.get("type") or "",
     )
     portrait = built.pop("portrait_prompt", None)
-    fields: dict[str, Any] = {"sheet": json.dumps(built, ensure_ascii=False)}
+    # O LLM pode omitir status, atributos ou classe: completa por aqui para
+    # que a ficha saia sempre preenchida (ou estimada).
+    sheet = ensure_sheet_complete(built, entry=card.get("entry") or "", card=card)
+    fields: dict[str, Any] = {"sheet": json.dumps(sheet, ensure_ascii=False)}
     if portrait:
         fields["portrait_prompt"] = portrait
     updated = db.update_card(conn, adv["id"], card["id"], fields)

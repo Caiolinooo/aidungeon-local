@@ -116,6 +116,17 @@ def test_sheet_without_stats_is_estimated_and_class_reaches_canon():
     assert "Stats: str " in rendered
 
 
+def test_class_is_inferred_from_the_sheet_itself():
+    """Card sem entry: a classe vem do texto da própria ficha."""
+    done = npc_assets.ensure_sheet_complete({
+        "personality": "orgulhosa", "notes": "rainha das fadas de cristal",
+    })
+    assert done["class"] == "Bardo"
+    assert done["status"] == "alive"
+    assert set(stats.ABILITIES) <= set(done["stats"])
+    assert done["stats"]["cha"] > done["stats"]["str"]
+
+
 def test_put_character_keeps_class_and_fills_empty_stats(client):
     adv = client.post("/api/adventures", json={"title": "Mesa"}).json()
     saved = client.put(
