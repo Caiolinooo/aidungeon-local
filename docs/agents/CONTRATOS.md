@@ -148,6 +148,7 @@ def subscribe(adventure_id: str, last_event_id: int | None = None) -> Subscripti
   | `see_failed` | `{job_id, code, message}` |
   | `llm_degraded` | `{reason, until}` |
   | `llm_recovered` | `{}` |
+  | `action_check` | `{possible, blockers, risks, notes, action_id?, seq?}` |
   | `meta_result` | `{command, ok, message, card_id?, job_id?}` |
 
 ## C3 Ganchos no game_engine (Grok cria, Kimi implementa)
@@ -334,6 +335,36 @@ def cancel(conn, job_id: str) -> dict | None: ...
 - Guardrail obrigatório (testado): pessoa real no quadro força
   `allow_explicit=False`; cena explícita com pessoa real tira a pessoa do quadro
   ou recusa o See; menores nunca.
+
+## C9 Checagem de viabilidade, ficha do jogador e auditoria (dono: Grok + Kimi)
+
+- Checagem (`backend/app/action_check.py`): roda **antes** do narrador, só
+  para ação do jogador de tipo `do`/`say` com `action_check.enabled` (bloco de
+  topo em `config/settings.json`, fora do `runtime_config`) e texto com pelo
+  menos `min_words` (4). Bloqueio determinístico (item, lugar ou pessoa
+  barrados pelo `world_facts`) fecha sem chamar LLM.
+- Veredito: `{"possible", "blockers", "risks", "notes"}` (listas de texto).
+  Sai no evento `action_check` do stream de `POST /adventures/{id}/action`,
+  **antes** dos tokens, e volta em `data.action_check` do evento `done`.
+  Também é publicado no barramento (`action_check` com `action_id` e `seq` da
+  ação) para os outros jogadores acompanharem a checagem.
+  Falha, timeout ou JSON inválido = turno segue sem veredito (nunca trava).
+- O veredito entra no contexto como bloco `[Verificacao de mundo]` na última
+  mensagem (`context_builder.with_reference`); o narrador reage ao veredito em
+  vez de recusar o turno.
+- Ficha do jogador: `GET`/`PUT /api/adventures/{id}/character` e
+  `GET /api/adventures/{id}/characters`. `sheet.class` (alias de `class_`),
+  `sheet.status` e `sheet.stats` com `str/dex/con/int/wis/cha` em 1–20 mais
+  chaves extras (`hp` etc.). O backend completa o que faltar: `status`,
+  atributos estimados pela classe e a classe inferida do texto.
+- Auditoria de consistência:
+  - `GET /api/adventures/{id}/consistency` → `{ok, adventure_id, checks[], counts}`
+    com as verificações `card_sheets`, `portraits`, `memories`, `npc_minds`,
+    `canon_world` e `scene_alignment` (status `ok`/`warn`/`error`).
+  - `POST /api/adventures/{id}/consistency/repair` com
+    `{"check": "card_sheets"|"portraits"|"memories"}` →
+    `{check, repaired: [...], errors: [...]}`. As demais verificações são
+    informativas (não têm reparo).
 
 ## Arquivos compartilhados
 

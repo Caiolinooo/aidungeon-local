@@ -43,6 +43,8 @@ tags:
     description: Voz (v0.4.0) — TTS Supertonic e STT Whisper via stack OpenAI-compatível da VM; /tts devolve bytes audio/mpeg (não JSON).
   - name: ui-profile
     description: Controles dinâmicos (v0.7.0) — manifesto do painel gerado pela IA (tabs + widgets) e estado dos widgets editável pelo jogador.
+  - name: consistency
+    description: Cross-check do projeto — ficha do NPC ↔ prompt de retrato ↔ imagem ↔ memória ↔ embedding, com reparo por IA.
   - name: health
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
@@ -256,6 +258,16 @@ paths:
         ```
         O evento `done` traz a action `continue` persistida (em `action`) e a
         ação do jogador persistida (em `player_action`).
+
+        Com a checagem de viabilidade ligada (`action_check.enabled` em
+        `config/settings.json`), o stream emite **antes** dos tokens:
+        ```
+        event: action_check
+        data: {"possible": true, "blockers": [], "risks": [], "notes": ""}
+        ```
+        O veredito também volta em `data.action_check` do evento `done`.
+        Quando a checagem não roda (ação curta, tipo `story`, LLM fora do ar),
+        o evento simplesmente não é emitido.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
       requestBody:
@@ -810,6 +822,136 @@ paths:
                     $ref: '#/components/schemas/Job'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/character:
+    get:
+      tags: [cards]
+      summary: Ficha do personagem de quem está logado
+      operationId: getPlayerCharacter
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Card do personagem do jogador (null se ainda não criou).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    allOf:
+                      - $ref: '#/components/schemas/StoryCard'
+                    nullable: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [cards]
+      summary: Criar ou atualizar o personagem de quem está logado
+      description: |
+        A ficha é normalizada: `class` é gravado pelo alias e as seis
+        habilidades saem sempre preenchidas — números enviados são
+        normalizados (1–20) e stats vazios são estimados pela classe,
+        aparência e notas. Chaves extras (`hp`, por exemplo) seguem como vieram.
+      operationId: putPlayerCharacter
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerCharacterUpsert'
+      responses:
+        '200':
+          description: Card salvo (id e retrato preservados).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/characters:
+    get:
+      tags: [cards]
+      summary: Personagens dos jogadores da mesa
+      operationId: listPlayerCharacters
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Um card por jogador da mesa.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    username:
+                      type: string
+                    card:
+                      $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/consistency:
+    get:
+      tags: [consistency]
+      summary: Auditar o cruzamento entre ficha, retrato, imagem, memória e embedding
+      description: |
+        Roda as verificações do projeto (ficha viva do NPC, prompt/portrait,
+        memórias vetorizadas, mente do NPC, cânone do mundo e alinhamento entre a
+        cena do feed e o fundo do painel) e devolve o relatório.
+      operationId: getConsistency
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Relatório das verificações.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsistencyReport'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/consistency/repair:
+    post:
+      tags: [consistency]
+      summary: Reparar uma verificação quebrada
+      description: Refaz fichas incompletas, prompts/retratos divergentes e memórias sem embedding.
+      operationId: repairConsistency
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [check]
+              properties:
+                check:
+                  type: string
+                  enum: [card_sheets, portraits, memories]
+                  description: Verificação a reparar (as demais são informativas).
+      responses:
+        '200':
+          description: O que foi refeito.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsistencyRepair'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /api/adventures/{adventureId}/jobs:
     get:
@@ -3079,3 +3221,108 @@ components:
             message:
               type: string
               example: adventure 3f2a... not found
+
+    CharacterSheet:
+      type: object
+      description: |
+        Ficha do personagem. `class` é a classe/arquétipo (alias do campo
+        interno `class_`); `stats` traz as seis habilidades e aceita chaves
+        extras. O backend completa o que faltar: status, stats estimados pela
+        classe/apresentação/notas e a classe a partir do texto.
+      properties:
+        appearance:
+          type: string
+        body:
+          type: string
+        clothing:
+          type: string
+        status:
+          type: string
+        class:
+          type: string
+          example: Ladino
+        notes:
+          type: string
+        stats:
+          type: object
+          description: str/dex/con/int/wis/cha em 1–20 + chaves extras livres.
+          additionalProperties: true
+          example: {str: 12, dex: 15, con: 12, int: 10, wis: 11, cha: 13}
+
+    PlayerCharacterUpsert:
+      type: object
+      required: [title, sheet]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        sheet:
+          $ref: '#/components/schemas/CharacterSheet'
+        portrait_prompt:
+          type: string
+          nullable: true
+
+    ConsistencyCheck:
+      type: object
+      required: [id, name, status, detail, items]
+      properties:
+        id:
+          type: string
+          enum: [card_sheets, portraits, memories, npc_minds, canon_world, scene_alignment]
+        name:
+          type: string
+          example: Fichas dos NPCs
+        status:
+          type: string
+          enum: [ok, warn, error]
+        detail:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            description: Item quebrado (o formato varia por verificação).
+            additionalProperties: true
+
+    ConsistencyReport:
+      type: object
+      required: [ok, adventure_id, checks, counts]
+      properties:
+        ok:
+          type: boolean
+          description: true quando nenhuma verificação está em warn/error.
+        adventure_id:
+          type: string
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsistencyCheck'
+        counts:
+          type: object
+          properties:
+            ok:
+              type: integer
+            warn:
+              type: integer
+            error:
+              type: integer
+
+    ConsistencyRepair:
+      type: object
+      required: [check, repaired, errors]
+      properties:
+        check:
+          type: string
+          enum: [card_sheets, portraits, memories]
+        repaired:
+          type: array
+          description: Itens refeitos.
+          items:
+            type: object
+            additionalProperties: true
+        errors:
+          type: array
+          description: Itens que não puderam ser reparados.
+          items:
+            type: string
