@@ -350,6 +350,8 @@ _OUTFIT_WORDS = (
     "bra", "panties", "jeans", "skirt", "uniform", "cloak", "cape",
     "silk", "plate", "helmet", "helm", "boots", "boot", "glove", "casaco",
     "choker", "necklace", "heel", "heels", "stocking", "corset", "colar",
+    "garment", "garments", "attire", "sleeve", "sleeves", "sock", "socks",
+    "scarf", "belt", "buttons", "hem", "vestes", "veste", "seda", "transluc",
 )
 
 # Enquadramento de retrato. Na cena ele puxa um busto e apaga o gesto.
@@ -391,6 +393,18 @@ _PT_LOOK_PHRASES = (
     ("cabelos castanhos", "brown hair"),
     ("cabelos cacheados", "curly hair"),
     ("cabelos lisos", "straight hair"),
+    ("cabelo flutuando como estrelas", "hair floating like stars"),
+    ("cabelos flutuando como estrelas", "hair floating like stars"),
+    ("cabelo flutuando", "floating hair"),
+    ("olhos de ambar", "amber eyes"),
+    ("olhos cor de ambar", "amber eyes"),
+    ("vestes translucidas", "translucent garments"),
+    ("veste translucida", "translucent garment"),
+    ("vestes de seda", "silk garments"),
+    ("veste de seda", "silk garment"),
+    ("magro", "slim"),
+    ("agil", "agile"),
+    ("armadura", "armor"),
     ("estrutura fina mas atletica", "slim athletic build"),
     ("postura elegante", "elegant posture"),
     ("jovem adulta", "young adult woman"),
@@ -400,7 +414,8 @@ _PT_LOOK_PHRASES = (
 _PT_WORD = re.compile(
     r"(?<!\w)(?:pele|cabelo|cabelos|olhos|olho|labios|boca|vestido|estrutura|"
     r"atletica|palida|pretos|preto|lisos|liso|cachead\w*|ruivos|ruivo|loiros|"
-    r"loiro|morena|moreno|sobrancelha|nariz|postura)(?!\w)"
+    r"loiro|morena|moreno|sobrancelha|nariz|postura|magro|agil|vestes|veste|"
+    r"transluc\w*|ambar|flutuando|armadura|elegante)(?!\w)"
 )
 
 
@@ -415,6 +430,29 @@ def _looks_portuguese(text: str) -> bool:
     return _PT_WORD.search(_fold(text)) is not None
 
 
+_LEADING_JUNK = re.compile(r"^[\s,;.:]+")
+_DANGLING_TAIL = re.compile(
+    r"(?i)\s+(?:with|on|in|at|of|against|over|and|to|from|a|an|the)$"
+)
+
+
+def _trim_part(part: str) -> str:
+    """Limpa a sobra de pontuação e a preposição que ficou pendurada."""
+    bit = " ".join((part or "").split())
+    bit = _LEADING_JUNK.sub("", bit)
+    bit = _DANGLING_TAIL.sub("", bit)
+    return bit.strip(" ,;:.")
+
+
+def _clip(text: str, limit: int = 240) -> str:
+    """Corta no limite sem deixar palavra pela metade."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(" ,;:.")
+
+
 def _drop_clauses(text: str, words: tuple[str, ...], *, cut: re.Pattern[str] | None = None) -> str:
     kept: list[str] = []
     for part in re.split(r"[,;]", text or ""):
@@ -423,19 +461,25 @@ def _drop_clauses(text: str, words: tuple[str, ...], *, cut: re.Pattern[str] | N
         folded = part.casefold()
         if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in words):
             continue
-        bit = " ".join(part.split())
+        bit = _trim_part(part)
         if bit:
             kept.append(bit)
     return ", ".join(kept)
 
 
+_OUTFIT_PHRASE = re.compile(
+    r"(?i)\b(?:wearing|dressed in|clad in|clothed in|covered (?:in|with))\b[^.;,]*"
+)
+
+
 def without_outfit(text: str) -> str:
-    """Tira o trecho de roupa. O rosto fica, para a cena nua não herdar o vestido."""
-    return _drop_clauses(
-        text,
-        tuple(word for word in _OUTFIT_WORDS if word != "wearing"),
-        cut=re.compile(r"(?i)\bwearing\b"),
-    )
+    """Tira o trecho de roupa. O rosto fica, para a cena nua não herdar o vestido.
+
+    A frase de roupa sai inteira: o resto do retrato (cabelo, olhos, porte)
+    sobrevive, senão a cena nua pinta outra pessoa.
+    """
+    trimmed = _OUTFIT_PHRASE.sub("", text or "")
+    return _drop_clauses(trimmed, tuple(word for word in _OUTFIT_WORDS if word != "wearing"))
 
 
 _PORTRAIT_OF = re.compile(
@@ -443,11 +487,23 @@ _PORTRAIT_OF = re.compile(
 )
 
 
+_BACKGROUND_PHRASE = re.compile(
+    r"(?i)\s+(?:against|on|over|with|in|before|behind)\s+(?:an?|the)\s+"
+    r"[\w-]*(?:\s+[\w-]+){0,2}?\s*background\b"
+    r"|\s+(?:[\w-]+\s+){0,2}?background\b"
+)
+
+
 def without_framing(text: str) -> str:
-    """Tira 'bust portrait' e o fundo neutro. O rosto depois de 'portrait of' fica."""
+    """Tira 'bust portrait' e o fundo neutro. O rosto depois de 'portrait of' fica.
+
+    O fundo sai com a frase, nao com a clausula: a roupa e o cabelo do retrato
+    precisam sobreviver para a cena vestir a personagem como a ficha manda.
+    """
     kept: list[str] = []
     for part in re.split(r"[,;]", text or ""):
         part = _PORTRAIT_OF.sub("", part.strip())
+        part = _BACKGROUND_PHRASE.sub("", part)
         part = re.split(
             r"(?i)\b(?:captured|bust|headshot|close-up|closeup)\b",
             part,
@@ -456,7 +512,7 @@ def without_framing(text: str) -> str:
         folded = part.casefold()
         if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _FRAMING_WORDS):
             continue
-        bit = " ".join(part.split())
+        bit = _trim_part(part)
         if bit:
             kept.append(bit)
     return ", ".join(kept)
@@ -500,7 +556,7 @@ def _portrait_face(card: dict) -> str:
     prompt = " ".join(str(card.get("portrait_prompt") or "").split())
     if not prompt:
         return ""
-    return without_framing(without_outfit(prompt))[:240]
+    return _clip(without_framing(without_outfit(prompt)))
 
 
 def _sheet_person_parts(card: dict) -> list[str]:
@@ -578,7 +634,7 @@ def scene_bits(card: dict, *, explicit: bool = False) -> list[str]:
     for bit in visual_bits(card):
         cleaned = without_framing(bit)
         if cleaned:
-            bits.append(cleaned)
+            bits.append(_clip(cleaned))
     return bits
 
 
@@ -614,7 +670,7 @@ def visual_bits(card: dict) -> list[str]:
     """
     prompt = " ".join(str(card.get("portrait_prompt") or "").split())
     if prompt:
-        return [prompt[:240]]
+        return [prompt]
     sheet = parse_sheet(card.get("sheet") or "")
     bits = []
     for key in ("appearance", "body", "clothing"):
@@ -738,7 +794,7 @@ def mentioned_looks(cards: list[dict], text: str) -> list[str]:
         bits = visual_bits(card)
         if not bits:
             continue
-        line = f"{card.get('title')}: " + "; ".join(bits)
+        line = f"{card.get('title')}: " + _clip("; ".join(bits))
         status = parse_sheet(card.get("sheet") or "").get("status") or ""
         if status in ("dead", "missing", "injured"):
             line += f"; status {status}"

@@ -345,11 +345,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         ]
     # A recusa por menor usa o texto cru da cena — mesmo quando
     # o world-facts rebaixa o explícito para a recusa canônica.
+    # A segurança olha o pedido do jogador tambem.
     decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
     if decision.refusal:
         raise GameError(422, decision.refusal, decision.message)
     frame = decision.cast
-    explicit = decision.allow_explicit
+    # A pintura segue a narracao: um pedido do jogador nao veste a cena.
+    # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
+    explicit = decision.allow_explicit and scene.is_explicit(
+        scene.narration_moment(actions, body.action_seq)
+    )
     if assessment.image_directive:
         # recusa/bloqueio canônico: a cena pintada não é explícita
         explicit = explicit and scene.is_explicit(assessment.safe_excerpt)

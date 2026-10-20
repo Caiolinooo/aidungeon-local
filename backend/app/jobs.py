@@ -71,10 +71,14 @@ Output ONLY the prompt."""
 PORTRAIT_DENOISE = 0.35
 
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
+# Cena vestida: o fundo recusa nudez. Sem isso a pintura trocava a roupa do
+# card e a fada saía nua no painel enquanto o See mostrava o vestido.
+_NUDITY_BAN = "nude, naked, undressed, topless, bottomless, nudity"
 # Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
 _CAST_NEGATIVE = (
     "extra person, crowd, duplicate face, wrong hair, different outfit, costume change, "
     + npc_assets.IDENTITY_NEGATIVE
+    + ", " + _NUDITY_BAN
 )
 # Cena nua: a roupa do card não é negativa. "costume change" vestia de novo.
 _CAST_NEGATIVE_EXPLICIT = (

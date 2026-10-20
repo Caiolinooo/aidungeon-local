@@ -42,7 +42,7 @@ _CAST_LIMIT = 4
 _EXPLICIT_RE = re.compile(
     r"(?<!\w)(?:"
     r"naked|nude|nudes|topless|bottomless|undress(?:ed|ing)?|"
-    r"nua|nuas|nus|pelad[oa]s?|sem roupa|"
+    r"nua|nuas|nu|nus|desnud[oa]s?|pelad[oa]s?|sem roupa|"
     r"sex|sexo|sexual|fuck(?:ing)?|foder|transar|transando|"
     r"orgasm(?:o|s)?|gozar|gozando|ejacul\w*|"
     r"penis|p[eê]nis|vagina|buceta|pau|cock|pussy|clit(?:oris)?|"
@@ -53,9 +53,68 @@ _EXPLICIT_RE = re.compile(
 )
 
 
+# Uma fala negada ou hipotética não pinta ninguém nu. "não estava nua",
+# "se estiver nuda", "seria nua" descrevem ausência de roupa, não nudez.
+# O teste é por limite de palavra: "se desliza" (pronome) não é hipótese.
+_EXPLICIT_NEGATION = re.compile(
+    r"(?<!\w)(?:nao|nunca|nem|recusou|recusa|nega|negou|negando|declinou|"
+    r"not|never|without|unclothed|clothed)(?!\w)"
+    r"|\bsem\s+(?:(?:a|o|as|os|uma|um|nenhuma|nenhum)\s+)?"
+    r"(?:roupa|vestes|vestido|nu|nudez|nua|estar|ser)\b"
+    r"|\bcom\s+(?:(?:a|o|as|os|uma|um)\s+)?(?:roupa|vestes|vestido)\b"
+    r"|\bvestida\b"
+    r"|\bno need to\b|\binstead of\b|\bfully clothed\b"
+)
+# Palavras que abrem uma hipótese, dentro da mesma frase.
+_EXPLICIT_HYPOTHESIS = re.compile(
+    r"(?<!\w)(?:caso|seria|seriam|fosse|fossem|poderia|poderiam|talvez|"
+    r"perhaps|maybe|might|would|were|unless|if)(?!\w)"
+    r"|\bse\s+(?:estiv\w+|estiver\w+|fosse|for|ser\w+|fic\w+|pudess\w+|aparec\w+)\b"
+)
+_CLAUSE_SPLIT = re.compile(r"[,;:.!?…]")
+
+
+def _clause_before(text: str, at: int) -> str:
+    """A cláusula onde a palavra está. Serve para ler negação e hipótese."""
+    head = text[max(0, at - 180):at]
+    parts = [part.strip() for part in _CLAUSE_SPLIT.split(head) if part.strip()]
+    return parts[-1].casefold() if parts else ""
+
+
 def is_explicit(text: str) -> bool:
-    """O momento descreve nudez ou sexo entre adultos."""
-    return _EXPLICIT_RE.search(text or "") is not None
+    """O momento descreve nudez ou sexo entre adultos.
+
+    Uma fala do jogador ("não posso com uma rainha nua!") ou uma hipótese
+    ("se estiver nuda") não conta: a cena segue vestida.
+    """
+    for match in _EXPLICIT_RE.finditer(text or ""):
+        clause = _clause_before(text, match.start())
+        if not clause:
+            return True
+        if _EXPLICIT_NEGATION.search(clause):
+            continue
+        if _EXPLICIT_HYPOTHESIS.search(clause):
+            continue
+        return True
+    return False
+
+
+def narration_moment(actions: list[dict], action_seq: int | None = None) -> str:
+    """Os dois últimos trechos de NARRAÇÃO ('start' e 'continue').
+
+    A ação e a fala do jogador não entram: pedir não é descrever. O See e o
+    fundo do chat pintam a mesma coisa — o que a história narrou, não o que
+    o jogador protestou.
+    """
+    eligible = [
+        action for action in actions
+        if (action.get("type") or "") in world_facts.CANON_TYPES
+        and (action_seq is None or action.get("seq", 0) <= action_seq)
+        and (action.get("text") or "").strip()
+    ]
+    if not eligible:
+        return ""
+    return "\n".join(action["text"].strip() for action in eligible[-2:])[-1400:]
 
 
 def _slug(text: str) -> str:
@@ -259,8 +318,9 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
 def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     """Estado da cena para a UI. Enfileira fundo e retratos que faltam.
 
-    O fundo usa só o cânone. Pedido do jogador não pinta um quarto que a
-    história não deu, nem veste a cena com a obediência que o NPC não deu.
+    O fundo usa o momento narrado agora, nao a fala do jogador. Pedido do
+    jogador não pinta um quarto que a história não deu, nem veste a cena com
+    a obediência que o NPC não deu.
     """
     adventure = db.get_adventure(conn, adventure_id) or {}
     actions = [
@@ -289,10 +349,15 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     cast_cards = []
     for card in _cast(cards, text):
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
+    # A segurança olha tudo: o pedido do jogador tambem conta.
     decision = likeness.decide_frame(cast_cards, explicit=is_explicit(text))
+    # O fundo pinta o momento narrado agora, nao o protesto do jogador.
+    moment = narration_moment(actions)
     paint_cast = [] if decision.refusal else decision.cast
-    paint_text = "" if decision.refusal else text
-    explicit = False if decision.refusal else decision.allow_explicit
+    paint_text = "" if decision.refusal else moment
+    explicit = False if decision.refusal else (
+        decision.allow_explicit and is_explicit(moment)
+    )
     clause = _visual_clause(paint_cast, explicit=explicit)
     signature = f"{_slug(title)}|{atmosphere}"
     if clause:

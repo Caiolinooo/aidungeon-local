@@ -6,6 +6,7 @@ import json
 
 from app import db, jobs
 from conftest import add_action, make_adventure
+from test_v2 import make_v2_transport, override_transport
 from test_v3 import make_assets_transport, use_tmp_storage
 
 
@@ -224,3 +225,130 @@ def test_scene_disabled_does_not_enqueue(client):
 def test_scene_unknown_adventure_404(client):
     resp = client.post("/api/adventures/does-not-exist/scene", json={})
     assert resp.status_code == 404
+
+
+# ------------------------------------------------------- See e fundo: a mesma cena
+_FAIRY_PROMPT = (
+    "Elara is portrayed as a slender, agile fairy queen with a graceful posture, "
+    "wearing translucent silk and crystal garments that shimmer against a neutral "
+    "background. Her hair floats around her head like stars, and her amber eyes "
+    "gaze forward with an intense, captivating expression in a bust portrait."
+)
+
+
+def _fairy(adventure_id: str) -> None:
+    with db.session() as conn:
+        db.insert_card(
+            conn, adventure_id, type="character", title="Elara",
+            triggers=["Elara", "rainha"], entry="Rainha de cristal.",
+            portrait_prompt=_FAIRY_PROMPT,
+        )
+
+
+def _fairy_protest(adventure_id: str) -> None:
+    """A fada vestida e o jogador protestando contra uma rainha nua."""
+    _fairy(adventure_id)
+    add_action(adventure_id, 0, "start", "Elara espera na floresta de cristal.")
+    add_action(adventure_id, 1, "say",
+               "Elara, tenha decência! Crie uma roupa de cristal, não posso me "
+               "vingar lutando com uma rainha nua!")
+    add_action(adventure_id, 2, "continue",
+               "Elara recua um passo, ainda vestida de seda e cristal, e ergue as mãos.")
+
+
+def _backdrop_job(adventure_id: str) -> dict:
+    with db.session() as conn:
+        return next(item for item in db.list_jobs(conn, adventure_id)
+                    if item["type"] == "scene_backdrop")
+
+
+def _see(client, adventure_id: str, action_seq: int) -> str:
+    override_transport(client, make_v2_transport(
+        chat_content=("Elara stands in the crystal forest, wearing translucent silk "
+                      "and crystal garments, hair floating like stars.")))
+    try:
+        resp = client.post(f"/api/adventures/{adventure_id}/see",
+                           json={"action_seq": action_seq})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    return resp.json()["prompt"]
+
+
+def test_the_players_protest_does_not_paint_the_fairy_nude(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    _fairy_protest(adv["id"])
+    resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert resp.status_code == 200, resp.text
+    job = _backdrop_job(adv["id"])
+    prompt = job["payload"]["prompt"].lower()
+    assert job["payload"]["explicit"] is False
+    assert "wearing translucent silk and crystal garments" in prompt
+    assert "hair floats around her head like stars" in prompt
+    assert "nude" not in prompt
+    assert "naked" not in prompt
+    assert "clothes off" not in prompt
+    assert jobs.process_pending(make_assets_transport()) >= 1
+    with db.session() as conn:
+        image = db.latest_image(conn, adv["id"], "backdrop")
+    assert "nude" in image["negative_prompt"].lower()
+
+
+def test_a_hypothetical_nudity_does_not_paint_the_fairy_nude(client, tmp_path):
+    """A fada fala em condicional ("se estiver nua") e continua vestida."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    _fairy(adv["id"])
+    add_action(adv["id"], 0, "continue",
+               "O vestido surge das profundezas da floresta: camadas fluidas que "
+               "brilham sob o frio cortante, bordados em fios finos feitos com "
+               "cristais. A decência é apenas uma ilusão — sussurra Elara enquanto "
+               "ajusta a nova camada de seda translúcida, os ombros agora "
+               "protegidos por um colar. E não posso me vingar com elegância se "
+               "estiver nua!")
+    resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert resp.status_code == 200, resp.text
+    job = _backdrop_job(adv["id"])
+    prompt = job["payload"]["prompt"].lower()
+    assert job["payload"]["explicit"] is False
+    assert "wearing translucent silk and crystal garments" in prompt
+    assert "nude" not in prompt
+    assert "clothes off" not in prompt
+
+
+def test_the_see_and_the_backdrop_paint_the_same_scene(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    _fairy_protest(adv["id"])
+    client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    backdrop = _backdrop_job(adv["id"])["payload"]["prompt"]
+    seen = _see(client, adv["id"], 2)
+
+    for prompt in (backdrop, seen):
+        folded = prompt.lower()
+        assert "wearing translucent silk and crystal garments" in folded
+        assert "hair floats around her head like stars" in folded
+        assert "nude" not in folded
+        assert "naked" not in folded
+        assert "clothes off" not in folded
+
+
+def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    _fairy(adv["id"])
+    add_action(adv["id"], 0, "continue",
+               "Elara desliza o vestido de seda e fica nua, a pele na luz da lua.")
+    client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    job = _backdrop_job(adv["id"])
+    backdrop = job["payload"]["prompt"]
+    seen = _see(client, adv["id"], 0)
+
+    assert job["payload"]["explicit"] is True
+    for prompt in (backdrop, seen):
+        folded = prompt.lower()
+        assert "clothes off" in folded
+        assert "nude" in folded
+        assert "translucent silk and crystal garments" not in folded
+
