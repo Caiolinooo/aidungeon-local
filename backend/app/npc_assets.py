@@ -314,9 +314,12 @@ def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = N
         for field in ("notes", "personality", "goals", "background",
                       "lifestyle", "habits", "likes", "sentiments", "speech", "humor")
     )
-    prose = " ".join(
-        part.strip() for part in (entry, card_entry, description) if part and part.strip()
-    )
+    prose_parts: list[str] = []
+    for part in (entry, card_entry, description):
+        part = part.strip() if part else ""
+        if part and part not in prose_parts:
+            prose_parts.append(part)
+    prose = " ".join(prose_parts)
     # Arquétipo pode vir do texto da própria ficha; a primeira frase da prosa
     # (entry/descrição) só entra como classe quando nenhuma palavra de ofício
     # aparece.
