@@ -78,6 +78,9 @@ Rules:
 - Write all narrative fields in {language} (image_style should be in English for the image model).
 - Write opening_text in {pov_label} perspective, separated into 2 or 3 well-structured paragraphs using \\n\\n.
 - Include {card_count_rule} story_cards covering key characters, locations, and factions/items. Include "sheet" ONLY for type "character".
+- The protagonist is the player, never a story card. Do not give any card their name as title.
+- If a protagonist is specified, plot_essentials must open with their name, role and look, and the opening must put them in the scene. Do not contradict what the player wrote about them.
+- If a ruleset is specified, classes, threats, gear and the opening must fit it. Do not lecture the player about the rules.
 - Output ONLY the valid JSON object."""
 
 _CARDS_SYSTEM = """You are a scenario designer for an AI interactive fiction game (AI Dungeon style).
@@ -515,6 +518,59 @@ def _prepend_pov_directive(draft: dict, pov: str | None) -> None:
     )
 
 
+def _fold_name(text: str) -> str:
+    return " ".join((text or "").casefold().split())
+
+
+def _rules_excerpt(rules: str | None, limit: int = 900) -> str:
+    flat = " ".join((rules or "").split())
+    return flat[:limit].rstrip()
+
+
+def _is_protagonist_card(title: str, name: str) -> bool:
+    """O card é o jogador quando o título é o nome, ou começa por ele."""
+    folded_title = _fold_name(title)
+    folded_name = _fold_name(name)
+    if not folded_title or not folded_name:
+        return False
+    if folded_title == folded_name:
+        return True
+    return folded_title.startswith(folded_name + " ") or folded_title.startswith(folded_name + ",")
+
+
+def bind_protagonist(draft: dict, *, name: str | None = None, role: str | None = None,
+                     appearance: str | None = None, description: str | None = None) -> dict:
+    """Tira o protagonista dos cards e garante que o plot o nomeia.
+
+    O modelo às vezes cria um NPC com o nome do jogador. A ficha de quem
+    joga é outro card, gravado na criação da aventura.
+    """
+    name = (name or "").strip()
+    role = (role or "").strip()
+    appearance = (appearance or "").strip()
+    description = " ".join((description or "").split())
+    if name:
+        draft["story_cards"] = [
+            card for card in (draft.get("story_cards") or [])
+            if not (isinstance(card, dict) and _is_protagonist_card(str(card.get("title") or ""), name))
+        ]
+    plot = draft.get("plot_essentials") or ""
+    folded_plot = _fold_name(plot)
+    bits: list[str] = []
+    if name and _fold_name(name) not in folded_plot:
+        bits.append(f"Nome: {name}")
+    if role and _fold_name(role) not in folded_plot:
+        bits.append(f"Papel: {role}")
+    if appearance and _fold_name(appearance) not in folded_plot:
+        bits.append(f"Aparência: {appearance}")
+    if description and description.casefold() not in plot.casefold():
+        bits.append(description[:800])
+    if bits:
+        lead = "Protagonista — " + "; ".join(bits)
+        draft["plot_essentials"] = f"{lead}\n\n{plot}".rstrip() if plot.strip() else lead
+    return draft
+
+
 def _pov_label(pov: str | None) -> str:
     if pov == "third":
         return "third-person ('he/she/they' or character name)"
@@ -536,6 +592,9 @@ def generate_scenario_draft(
     protagonist_name: str | None = None,
     protagonist_role: str | None = None,
     protagonist_appearance: str | None = None,
+    protagonist_description: str | None = None,
+    ruleset_name: str | None = None,
+    ruleset_rules: str | None = None,
     image_style: str | None = None,
     card_count: int | None = None,
     web_search_mode: str = "auto",
@@ -576,7 +635,7 @@ def generate_scenario_draft(
         spec_lines.append(f"Narrative Tone & Pacing: {tone.strip()}")
     if pov:
         spec_lines.append(f"Narrative POV: {_pov_label(pov)}")
-    if protagonist_name or protagonist_role or protagonist_appearance:
+    if protagonist_name or protagonist_role or protagonist_appearance or protagonist_description:
         proto_bits = []
         if protagonist_name:
             proto_bits.append(f"Name: {protagonist_name.strip()}")
@@ -584,7 +643,26 @@ def generate_scenario_draft(
             proto_bits.append(f"Role/Class: {protagonist_role.strip()}")
         if protagonist_appearance:
             proto_bits.append(f"Appearance: {protagonist_appearance.strip()}")
-        spec_lines.append("Protagonist Specification: " + "; ".join(proto_bits))
+        if proto_bits:
+            spec_lines.append(
+                "Protagonist specification (mandatory; they are the player, not a story card): "
+                + "; ".join(proto_bits)
+            )
+        if protagonist_description and protagonist_description.strip():
+            spec_lines.append(
+                "Protagonist in the player's own words (obey this; invent only what it leaves open):\n"
+                + " ".join(protagonist_description.split())[:1200]
+            )
+    rules_name = (ruleset_name or "").strip()
+    rules_body = _rules_excerpt(ruleset_rules)
+    if rules_name or rules_body:
+        spec_lines.append(
+            "Table ruleset"
+            + (f" ({rules_name})" if rules_name else "")
+            + ": classes, threats, gear and the opening must fit it."
+        )
+        if rules_body:
+            spec_lines.append("Rules excerpt:\n" + rules_body)
     if image_style:
         spec_lines.append(f"Visual / Image Art Direction: {image_style.strip()}")
     if current:
@@ -653,6 +731,13 @@ def generate_scenario_draft(
     _complete_draft_sheets(draft)
 
     _prepend_pov_directive(draft, pov)
+    bind_protagonist(
+        draft,
+        name=protagonist_name,
+        role=protagonist_role,
+        appearance=protagonist_appearance,
+        description=protagonist_description,
+    )
     if web_sources:
         draft["web_sources"] = web_sources
     return draft

@@ -272,6 +272,9 @@ class AssistantScenarioRequest(BaseModel):
     protagonist_name: str | None = None
     protagonist_role: str | None = None
     protagonist_appearance: str | None = None
+    protagonist_description: str | None = None
+    ruleset_name: str | None = None
+    ruleset_rules: str | None = None
     image_style: str | None = None
     card_count: int | None = Field(default=None, ge=3, le=8)
     web_search_mode: Literal["auto", "always", "off"] = "auto"
@@ -287,6 +290,9 @@ class AssistantGenerateRequest(BaseModel):
     protagonist_name: str = ""
     protagonist_role: str = ""
     protagonist_appearance: str = ""
+    protagonist_description: str = ""
+    ruleset_name: str = ""
+    ruleset_rules: str = ""
     image_style: str = ""
     card_count: int = Field(default=5, ge=3, le=8)
     web_search_mode: Literal["auto", "always", "off"] = "auto"

@@ -162,7 +162,7 @@ export default function Home() {
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-accent-pri/50 bg-elevated px-3.5 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/20 transition"
           >
             <Sparkles className="w-4 h-4" />
-            <span>Generate with AI</span>
+            <span>Gerar com IA</span>
           </button>
           <button
             onClick={() => setShowNew(true)}

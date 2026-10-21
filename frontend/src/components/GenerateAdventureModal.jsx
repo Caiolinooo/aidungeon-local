@@ -16,6 +16,16 @@ function draftLanguage() {
   return /^[a-z]{2}$/.test(sub) ? sub : 'pt'
 }
 
+function characterTitle(name, description) {
+  const named = name.trim()
+  if (named) return named.slice(0, 80)
+  const line = description.trim().split('\n')[0].trim()
+  if (!line || line.length > 40 || /[,.:;]/.test(line)) return ''
+  const words = line.split(/\s+/).filter(Boolean)
+  if (words.length >= 1 && words.length <= 3) return line
+  return ''
+}
+
 function stageFor(elapsedSec, webMode) {
   if (elapsedSec < 4 && webMode !== 'off') return '🌐 Searching the web…'
   if (elapsedSec < 25) return '✍️ Writing scenario…'
@@ -44,6 +54,10 @@ export default function GenerateAdventureModal({ onClose }) {
   const [protagonistName, setProtagonistName] = useState('')
   const [protagonistRole, setProtagonistRole] = useState('')
   const [protagonistAppearance, setProtagonistAppearance] = useState('')
+  const [heroMode, setHeroMode] = useState('describe')
+  const [heroStep, setHeroStep] = useState(0)
+  const [heroText, setHeroText] = useState('')
+  const [heroGoal, setHeroGoal] = useState('')
   const [webSearchMode, setWebSearchMode] = useState('auto')
   const [webOnRefine, setWebOnRefine] = useState(false)
   const [deepCharacters, setDeepCharacters] = useState(true)
@@ -88,6 +102,10 @@ export default function GenerateAdventureModal({ onClose }) {
     const timer = setInterval(tick, 1000)
     timerRef.current = timer
     try {
+      const pickedRules = rulesets.find((r) => String(r.id) === String(rulesetId))
+      const described = heroMode === 'describe'
+        ? heroText.trim()
+        : (heroGoal.trim() ? `O que quer: ${heroGoal.trim()}` : '')
       const payload = {
         brief: b,
         language,
@@ -97,6 +115,9 @@ export default function GenerateAdventureModal({ onClose }) {
         protagonist_name: protagonistName.trim() || undefined,
         protagonist_role: protagonistRole.trim() || undefined,
         protagonist_appearance: protagonistAppearance.trim() || undefined,
+        protagonist_description: described || undefined,
+        ruleset_name: pickedRules?.name || undefined,
+        ruleset_rules: pickedRules ? String(pickedRules.rules || '').slice(0, 900) : undefined,
         image_style: imageStyle.trim() || undefined,
         card_count: Number(cardCount) || 5,
         web_search_mode: webMode,
@@ -108,6 +129,9 @@ export default function GenerateAdventureModal({ onClose }) {
         protagonist_name: protagonistName.trim(),
         protagonist_role: protagonistRole.trim(),
         protagonist_appearance: protagonistAppearance.trim(),
+        protagonist_description: described,
+        ruleset_name: pickedRules?.name || '',
+        ruleset_rules: pickedRules ? String(pickedRules.rules || '').slice(0, 900) : '',
         image_style: imageStyle.trim(),
         deep_characters: true,
       }) : api.assistantScenario(payload)))
@@ -266,9 +290,25 @@ export default function GenerateAdventureModal({ onClose }) {
         third_person: !!draft.third_person,
       })
       const picked = rulesets.find((r) => String(r.id) === String(rulesetId))
-      const advBody = { scenario_id: scenario.id }
-      if (picked) advBody.character_rules = String(picked.rules || '').slice(0, 4000)
-      const adv = await api.createAdventure(advBody)
+      const described = heroMode === 'describe' ? heroText.trim() : heroGoal.trim()
+      const title = characterTitle(protagonistName, heroMode === 'describe' ? heroText : '')
+      const adv = await api.createAdventure({ scenario_id: scenario.id })
+      try {
+        if (title) {
+          await api.saveCharacter(adv.id, {
+            title,
+            sheet: {
+              appearance: protagonistAppearance.trim(),
+              class: protagonistRole.trim(),
+              notes: described,
+              status: 'alive',
+            },
+          })
+        }
+        if (picked) await api.applyRuleset(adv.id, String(picked.id))
+      } catch (e) {
+        toast(`Aventura criada. A ficha ou o sistema não entrou: ${e.message}`)
+      }
       navigate(`/play/${adv.id}`)
     } catch (e) {
       toast(e.message)
@@ -309,10 +349,10 @@ export default function GenerateAdventureModal({ onClose }) {
   const selectedRules = String(selectedRuleset?.rules || '').slice(0, 4000)
 
   return (
-    <Modal title="Generate with AI" onClose={busy ? undefined : onClose} wide>
+    <Modal title="Gerar com IA" onClose={busy ? undefined : onClose} wide>
       <div className="mb-4">
         <label className="block">
-          {paramLabel('Ruleset (opcional)')}
+          {paramLabel('Sistema de regras (opcional)')}
           <select
             value={rulesetId}
             disabled={busy}
@@ -354,47 +394,169 @@ export default function GenerateAdventureModal({ onClose }) {
       {!draft ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-zinc-400">
-            Describe the adventure you want — in any language. The AI drafts a full scenario
-            (title, plot, opening, story cards) in that language for you to review before creating.
+            Descreva a aventura em qualquer língua. O rascunho (título, abertura e cards)
+            sai nessa língua para você revisar antes de criar. O ruleset e o personagem
+            abaixo entram na história e viram a ficha de quem joga.
           </p>
           <fieldset disabled={generating} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
-            <textarea
-              value={brief}
-              onChange={(e) => setBrief(e.target.value)}
-              rows={4}
-              autoFocus
-              placeholder='e.g. "A steampunk pirate hunting a sky leviathan across floating islands"'
-              className={`${inputCls} resize-y`}
-            />
+            <label className="block">
+              {paramLabel('A ideia')}
+              <textarea
+                value={brief}
+                onChange={(e) => setBrief(e.target.value)}
+                rows={4}
+                autoFocus
+                placeholder="Ex.: um pirata a vapor caçando um leviatã do céu entre ilhas flutuantes"
+                className={`${inputCls} resize-y`}
+              />
+            </label>
+            <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <span className={labelCls}>Seu personagem</span>
+                <div className="flex rounded-lg border border-zinc-700 p-0.5 text-xs">
+                  <button
+                    type="button"
+                    disabled={generating}
+                    onClick={() => setHeroMode('describe')}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'describe' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    Descrever
+                  </button>
+                  <button
+                    type="button"
+                    disabled={generating}
+                    onClick={() => setHeroMode('steps')}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'steps' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    Passo a passo
+                  </button>
+                </div>
+              </div>
+              {heroMode === 'describe' ? (
+                <div className="flex flex-col gap-3">
+                  <label className="block">
+                    {paramLabel('Nome')}
+                    <input
+                      value={protagonistName}
+                      onChange={(e) => setProtagonistName(e.target.value)}
+                      placeholder="Ex.: Alusair. Pode ficar no texto, se preferir."
+                      autoComplete="off"
+                      className={inputCls}
+                    />
+                  </label>
+                  <label className="block">
+                    {paramLabel('Quem você é')}
+                    <textarea
+                      value={heroText}
+                      onChange={(e) => setHeroText(e.target.value)}
+                      rows={4}
+                      placeholder="De onde veio, o que faz, como se parece e o que procura. A aventura nasce em volta disso."
+                      className={`${inputCls} resize-y`}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <p className="text-xs text-zinc-500">Pergunta {heroStep + 1} de 4. Pode pular.</p>
+                  {heroStep === 0 && (
+                    <label className="block">
+                      {paramLabel('Como você se chama?')}
+                      <input
+                        value={protagonistName}
+                        onChange={(e) => setProtagonistName(e.target.value)}
+                        placeholder="Ex.: Alusair"
+                        autoComplete="off"
+                        className={inputCls}
+                      />
+                    </label>
+                  )}
+                  {heroStep === 1 && (
+                    <label className="block">
+                      {paramLabel('Qual é o seu papel?')}
+                      <input
+                        value={protagonistRole}
+                        onChange={(e) => setProtagonistRole(e.target.value)}
+                        placeholder="Ex.: cavaleiro exilado"
+                        className={inputCls}
+                      />
+                    </label>
+                  )}
+                  {heroStep === 2 && (
+                    <label className="block">
+                      {paramLabel('Como você se parece?')}
+                      <input
+                        value={protagonistAppearance}
+                        onChange={(e) => setProtagonistAppearance(e.target.value)}
+                        placeholder="Ex.: cabelo preto curto, armadura de placas"
+                        className={inputCls}
+                      />
+                    </label>
+                  )}
+                  {heroStep === 3 && (
+                    <label className="block">
+                      {paramLabel('O que você quer nesta história?')}
+                      <textarea
+                        value={heroGoal}
+                        onChange={(e) => setHeroGoal(e.target.value)}
+                        rows={3}
+                        placeholder="Ex.: recuperar o selo do rei antes que a frota parta"
+                        className={`${inputCls} resize-y`}
+                      />
+                    </label>
+                  )}
+                  <div className="flex justify-between">
+                    <button
+                      type="button"
+                      disabled={heroStep === 0}
+                      onClick={() => setHeroStep((step) => Math.max(0, step - 1))}
+                      className={miniBtnCls}
+                    >
+                      Voltar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={heroStep === 3}
+                      onClick={() => setHeroStep((step) => Math.min(3, step + 1))}
+                      className={miniBtnCls}
+                    >
+                      Próxima
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-zinc-600">
+                Em branco, a ficha fica para o jogo. Com nome, ela já nasce salva.
+              </p>
+            </section>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
-                {paramLabel('Genre / Setting')}
+                {paramLabel('Gênero / cenário')}
                 <input
                   value={genre}
                   onChange={(e) => setGenre(e.target.value)}
-                  placeholder="e.g. dark fantasy, floating islands"
+                  placeholder="Ex.: fantasia sombria, ilhas flutuantes"
                   className={inputCls}
                 />
               </label>
               <label className="block">
-                {paramLabel('Tone & Pacing')}
+                {paramLabel('Tom e ritmo')}
                 <input
                   value={tone}
                   onChange={(e) => setTone(e.target.value)}
-                  placeholder="e.g. tense, fast, grim"
+                  placeholder="Ex.: tenso, rápido, sombrio"
                   className={inputCls}
                 />
               </label>
               <label className="block">
-                {paramLabel('Narrative POV')}
+                {paramLabel('Ponto de vista')}
                 <select value={pov} onChange={(e) => setPov(e.target.value)} className={inputCls}>
-                  <option value="second">Second person</option>
-                  <option value="third">Third person</option>
-                  <option value="first">First person</option>
+                  <option value="second">Segunda pessoa (você)</option>
+                  <option value="third">Terceira pessoa</option>
+                  <option value="first">Primeira pessoa (eu)</option>
                 </select>
               </label>
               <label className="block">
-                {paramLabel('Story cards')}
+                {paramLabel('Cards da história')}
                 <select value={cardCount} onChange={(e) => setCardCount(e.target.value)} className={inputCls}>
                   {[3, 4, 5, 6, 7, 8].map((n) => (
                     <option key={n} value={String(n)}>{n}</option>
@@ -402,48 +564,20 @@ export default function GenerateAdventureModal({ onClose }) {
                 </select>
               </label>
               <label className="block">
-                {paramLabel('Language')}
+                {paramLabel('Língua')}
                 <select value={langChoice} onChange={(e) => setLangChoice(e.target.value)} className={inputCls}>
-                  <option value="">Auto (browser default)</option>
+                  <option value="">Automática (o navegador)</option>
                   <option value="pt">Português</option>
                   <option value="en">English</option>
                   <option value="es">Español</option>
                 </select>
               </label>
               <label className="block">
-                {paramLabel('Visual style for images')}
+                {paramLabel('Estilo das imagens')}
                 <input
                   value={imageStyle}
                   onChange={(e) => setImageStyle(e.target.value)}
-                  placeholder="e.g. ink sketch, dramatic lighting"
-                  className={inputCls}
-                />
-              </label>
-              <label className="block sm:col-span-2">
-                {paramLabel('Protagonist name')}
-                <input
-                  value={protagonistName}
-                  onChange={(e) => setProtagonistName(e.target.value)}
-                  placeholder="e.g. Alusair"
-                  autoComplete="off"
-                  className={inputCls}
-                />
-              </label>
-              <label className="block">
-                {paramLabel('Role')}
-                <input
-                  value={protagonistRole}
-                  onChange={(e) => setProtagonistRole(e.target.value)}
-                  placeholder="e.g. exiled knight"
-                  className={inputCls}
-                />
-              </label>
-              <label className="block">
-                {paramLabel('Appearance')}
-                <input
-                  value={protagonistAppearance}
-                  onChange={(e) => setProtagonistAppearance(e.target.value)}
-                  placeholder="e.g. short black hair, plate armor"
+                  placeholder="Ex.: nanquim, luz dramática"
                   className={inputCls}
                 />
               </label>
@@ -454,14 +588,14 @@ export default function GenerateAdventureModal({ onClose }) {
                   onChange={(e) => setDeepCharacters(e.target.checked)}
                   className="accent-emerald-600"
                 />
-                Deep characters (full sheets)
+                Fichas profundas (NPCs completos)
               </label>
               <label className="block">
-                {paramLabel('Web search')}
+                {paramLabel('Pesquisa na web')}
                 <select value={webSearchMode} onChange={(e) => setWebSearchMode(e.target.value)} className={inputCls}>
-                  <option value="auto">Auto</option>
-                  <option value="always">Always</option>
-                  <option value="off">Off</option>
+                  <option value="auto">Automática</option>
+                  <option value="always">Sempre</option>
+                  <option value="off">Desligada</option>
                 </select>
               </label>
             </div>
@@ -469,8 +603,8 @@ export default function GenerateAdventureModal({ onClose }) {
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600">
               {generating
-                ? `${stage || 'Generating…'} This often takes about a minute.`
-                : 'Nothing is saved until you click "Create Adventure".'}
+                ? `${stage || 'Gerando…'} Isso costuma levar cerca de um minuto.`
+                : 'Nada é salvo até você clicar em Criar aventura.'}
             </span>
             <div className="flex gap-2">
               <button
@@ -478,14 +612,14 @@ export default function GenerateAdventureModal({ onClose }) {
                 disabled={generating}
                 className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 onClick={generate}
                 disabled={generating || brief.trim().length < 3}
                 className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
               >
-                {generating ? 'Generating…' : 'Generate draft'}
+                {generating ? 'Gerando…' : 'Gerar rascunho'}
               </button>
             </div>
           </div>
@@ -626,7 +760,7 @@ export default function GenerateAdventureModal({ onClose }) {
               onClick={() => setDraft(null)}
               className="text-sm text-zinc-500 hover:text-zinc-300"
             >
-              ← Start over with a new idea
+              ← Outra ideia
             </button>
             <button
               type="button"
@@ -634,7 +768,7 @@ export default function GenerateAdventureModal({ onClose }) {
               disabled={busy}
               className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
             >
-              {creating ? 'Creating…' : 'Create Adventure'}
+              {creating ? 'Criando…' : 'Criar aventura'}
             </button>
           </div>
         </fieldset>

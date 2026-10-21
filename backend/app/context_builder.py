@@ -427,6 +427,12 @@ def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
         status = str(sheet.get("status") or "").strip()
         if status:
             bits.append(status)
+        role = " ".join(str(sheet.get("class") or "").split())
+        if role:
+            bits.append(role[:80])
+        notes = " ".join(str(sheet.get("notes") or "").split())
+        if notes:
+            bits.append(notes[:180])
         stats = sheet.get("stats")
         if isinstance(stats, dict) and stats:
             bits.append(" ".join(f"{key} {stats[key]}" for key in stats))
