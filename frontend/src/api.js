@@ -130,6 +130,19 @@ export const api = {
       body: { ruleset_id: rulesetId, mode },
     }),
 
+  // ------------------------------------------------------------- sim / vida
+  simGet: (id) => request(`/adventures/${id}/sim`),
+  simSetPack: (id, pack) =>
+    request(`/adventures/${id}/sim/pack`, { method: 'PUT', body: { pack } }),
+  simSetLife: (id, enabled, wage = 5) =>
+    request(`/adventures/${id}/sim/life`, { method: 'PUT', body: { enabled, wage_per_hour: wage } }),
+  simAdvance: (id, minutes, activity) =>
+    request(`/adventures/${id}/sim/life/advance`, { method: 'POST', body: { minutes, activity } }),
+  simPutActor: (id, body) =>
+    request(`/adventures/${id}/sim/actor`, { method: 'PUT', body }),
+  simRoll: (id, expr, mode = '') =>
+    request(`/adventures/${id}/sim/roll`, { method: 'POST', body: { expr, mode } }),
+
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),
   getScenario: (id) => request(`/scenarios/${id}`),

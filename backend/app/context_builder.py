@@ -629,11 +629,19 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
         extra_canon_tokens += max(0, estimate_tokens(sum_block) - base_sum_budget)
 
     # 5b — estado do painel dinâmico (v0.7.0): HP/inventário/ficha que o
-    # jogador edita nos widgets. Sem ele a IA narra dano/tesouro no escuro.
-    player_state = render_player_state(adventure.get("ui_state") or {})
-    if player_state:
-        volatile_parts.append("[Player state]\n" + _fit_budget(
-            player_state, int(budgets.get("player_state", 200))))
+    # jogador edita nos widgets. Com pack de regras, o actor do motor
+    # substitui esse bloco. Sem ele a IA narra dano/tesouro no escuro.
+    sim_state = adventure.get("sim_state") if isinstance(adventure.get("sim_state"), dict) else {}
+    if not (sim_state.get("pack") or ""):
+        player_state = render_player_state(adventure.get("ui_state") or {})
+        if player_state:
+            volatile_parts.append("[Player state]\n" + _fit_budget(
+                player_state, int(budgets.get("player_state", 320))))
+    from app.sim import state as sim_state_mod
+    sim_block = sim_state_mod.render_block(adventure, conn, actions)
+    if sim_block:
+        volatile_parts.append(_fit_budget(
+            sim_block, int(budgets.get("player_state", 320))))
 
     messages: list[dict] = [{"role": "system", "content": "\n\n".join(system_parts)}]
 

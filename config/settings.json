@@ -1,4 +1,11 @@
 {
+  "sim": {
+    "enabled": true,
+    "max_tokens": 220,
+    "timeout_seconds": 20,
+    "min_words": 3,
+    "npc_colocation_chance": 0.25
+  },
   "action_check": {
     "enabled": true,
     "mode": "assist",
@@ -38,10 +45,10 @@
       "story_cards": 1600,
       "memory_bank": 800,
       "story_summary": 800,
-      "recent_window": 58012,
+      "recent_window": 57892,
       "authors_note": 300,
       "last_action": 200,
-      "player_state": 200,
+      "player_state": 320,
       "npc_minds": 300,
       "response_reserve": 1024
     }

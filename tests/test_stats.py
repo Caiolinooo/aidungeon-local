@@ -20,14 +20,15 @@ def test_point_buy_cost_and_total():
     assert stats.POINT_BUY_BUDGET == 27
     assert stats.point_buy_cost(8) == 0
     assert stats.point_buy_cost(10) == 2
-    assert stats.point_buy_cost(15) == 7
+    assert stats.point_buy_cost(14) == 7
+    assert stats.point_buy_cost(15) == 9
     assert stats.point_buy_cost(7) == 0
     assert stats.point_buy_cost(16) == 0
     bought = {key: 12 for key in stats.ABILITIES}
     assert stats.point_buy_total(bought) == 24
     floor = {key: 8 for key in stats.ABILITIES}
     floor["str"] = 15
-    assert stats.point_buy_total(floor) == 7
+    assert stats.point_buy_total(floor) == 9
     assert stats.point_buy_total({}) == 0
 
 

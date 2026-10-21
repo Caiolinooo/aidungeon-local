@@ -212,9 +212,58 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "character_rules": (row["character_rules"] if "character_rules" in row.keys() else "") or "",
         "life_day": int(row["life_day"]) if "life_day" in row.keys() and row["life_day"] is not None else 0,
         "life_tick_seq": int(row["life_tick_seq"]) if "life_tick_seq" in row.keys() and row["life_tick_seq"] is not None else 0,
+        "sim_state": _sim_state(row),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def _sim_state(row: sqlite3.Row) -> dict:
+    if "sim_state" not in row.keys():
+        return {}
+    parsed = _loads(row["sim_state"], {})
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def set_sim_state(conn: sqlite3.Connection, adventure_id: str, state: dict) -> None:
+    conn.execute(
+        "UPDATE adventures SET sim_state=?, updated_at=? WHERE id=?",
+        (_dumps(state if isinstance(state, dict) else {}, {}), utcnow(), adventure_id),
+    )
+
+
+def set_action_rules(conn: sqlite3.Connection, action_id: int, payload: dict) -> None:
+    conn.execute(
+        "UPDATE actions SET rules_json=? WHERE id=?",
+        (_dumps(payload if isinstance(payload, dict) else {}, {}), action_id),
+    )
+
+
+def clear_action_rules(conn: sqlite3.Connection, action_id: int) -> None:
+    conn.execute("UPDATE actions SET rules_json='' WHERE id=?", (action_id,))
+
+
+def get_action_rules(conn: sqlite3.Connection, action_id: int) -> dict | None:
+    row = conn.execute("SELECT rules_json FROM actions WHERE id=?", (action_id,)).fetchone()
+    if row is None or "rules_json" not in row.keys():
+        return None
+    payload = _loads(row["rules_json"], None)
+    if not isinstance(payload, dict) or not payload:
+        return None
+    return payload
+
+
+def _action_resolution(row: sqlite3.Row) -> dict | None:
+    """Só o desfecho. `before` fica no banco para o undo e não sai na API."""
+    if "rules_json" not in row.keys():
+        return None
+    payload = _loads(row["rules_json"], None)
+    if not isinstance(payload, dict):
+        return None
+    resolution = payload.get("resolution")
+    if not isinstance(resolution, dict) or not resolution:
+        return None
+    return resolution
 
 
 def action_to_dict(row: sqlite3.Row) -> dict:
@@ -227,6 +276,7 @@ def action_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "edited_at": row["edited_at"],
         "actor": (row["actor"] if "actor" in row.keys() else "") or "",
+        "rules": _action_resolution(row),
         # imagem vinculada (actions type=see) — preenchido por list/get_action
         "image": None,
     }
@@ -505,8 +555,8 @@ def update_adventure(conn: sqlite3.Connection, adventure_id: str, **fields: Any)
 
 def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
     """Remove a aventura e todos os dependentes (schema não tem ON DELETE CASCADE)."""
-    for table in ("jobs", "images", "memories", "story_cards", "actions",
-                  "adventure_shares"):
+    for table in ("jobs", "images", "memories", "npc_memories", "story_cards",
+                  "actions", "adventure_shares"):
         conn.execute(f"DELETE FROM {table} WHERE adventure_id=?", (adventure_id,))
     cur = conn.execute("DELETE FROM adventures WHERE id=?", (adventure_id,))
     return cur.rowcount > 0

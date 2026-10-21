@@ -1,0 +1,2 @@
+ALTER TABLE adventures ADD COLUMN sim_state TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE actions ADD COLUMN rules_json TEXT NOT NULL DEFAULT '';

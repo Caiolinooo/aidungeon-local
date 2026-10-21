@@ -102,3 +102,19 @@ O pedido do jogador é tentativa. Lugar, item, pessoa e consentimento só entram
 | N4 | Life-sim: memórias, mente pós-turno, tick do dia, bloco `[NPC minds]` | feito |
 | N5 | POST /api/assistant/generate com fichas profundas | feito |
 | N6 | OpenAPI dos endpoints e dos campos novos | feito |
+
+## Motor de regras + Modo Vida
+
+Plano: `local://rpg-life-sim-plan.md`. Brief: `outputs/rpg-life-sim-research.md`.
+
+| ID | Tarefa | Status |
+|---|---|---|
+| S1 | Brief de pesquisa | feito |
+| S2 | Point-buy 5e, recência normalizada, delete de `npc_memories` | feito |
+| S3 | Migration 026 + `sim/state.py` | feito |
+| S4 | Dados e packs d20/d100 | feito |
+| S5 | Classificador de intenção | feito |
+| S6 | Resolução + Modo Vida | feito |
+| S7 | Integração no turno e rotas `/sim` | feito |
+| S8 | Frontend Vida/Regras | feito |
+| S9 | Testes, pytest, build, smoke | feito |

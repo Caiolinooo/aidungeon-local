@@ -36,6 +36,7 @@ from app.routes import auth as auth_routes
 from app.routes import events as events_routes
 from app.routes import likeness as likeness_routes
 from app.routes import rulesets as rulesets_routes
+from app.routes import sim as sim_routes
 from app.routes import users as users_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -123,6 +124,8 @@ app.include_router(scenarios.router, prefix="/api/scenarios", tags=["scenarios"]
 app.include_router(adventures.router, prefix="/api/adventures", tags=["adventures"],
                    dependencies=_protected)
 app.include_router(rulesets_routes.router, prefix="/api", tags=["rulesets"],
+                   dependencies=_protected)
+app.include_router(sim_routes.router, prefix="/api/adventures", tags=["sim"],
                    dependencies=_protected)
 app.include_router(scene_routes.router, prefix="/api/adventures", tags=["scene"],
                    dependencies=_protected)

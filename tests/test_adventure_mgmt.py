@@ -49,8 +49,10 @@ def test_delete_adventure_removes_dependents(client):
     adv = make_adventure()
     add_action(adv["id"], 0, "start", "Once upon a time.")
     with db.session() as conn:
-        db.insert_card(conn, adv["id"], title="NPC", entry="e")
+        card = db.insert_card(conn, adv["id"], title="NPC", entry="e")
         db.insert_memory(conn, adv["id"], "mem")
+        db.insert_npc_memory(conn, adventure_id=adv["id"], card_id=card["id"],
+                             kind="event", text="viu o rio")
 
     res = client.delete(f"/api/adventures/{adv['id']}")
     assert res.status_code == 200
@@ -58,7 +60,8 @@ def test_delete_adventure_removes_dependents(client):
 
     assert client.get(f"/api/adventures/{adv['id']}").status_code == 404
     with db.session() as conn:
-        for table in ("actions", "story_cards", "memories", "images", "jobs"):
+        for table in ("actions", "story_cards", "memories", "npc_memories",
+                      "images", "jobs"):
             count = conn.execute(
                 f"SELECT COUNT(*) AS c FROM {table} WHERE adventure_id=?",
                 (adv["id"],)).fetchone()["c"]

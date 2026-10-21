@@ -5,6 +5,7 @@ import MemoryTab from './drawer/MemoryTab.jsx'
 import ConfigTab from './drawer/ConfigTab.jsx'
 import DetailsTab from './drawer/DetailsTab.jsx'
 import ConsistencyTab from './drawer/ConsistencyTab.jsx'
+import SimTab from './drawer/SimTab.jsx'
 import {
   BookOpen,
   Users,
@@ -16,6 +17,7 @@ import {
   X,
   ChevronRight,
   ShieldCheck,
+  Dices,
 } from 'lucide-react'
 
 // TalkingHead (three.js) is loaded on-demand
@@ -30,6 +32,7 @@ export const INSPECTOR_TABS = [
   { id: 'consistency', label: 'Check', icon: ShieldCheck },
   { id: 'config', label: 'Config', icon: Settings },
   { id: 'details', label: 'Details', icon: Info },
+  { id: 'sim', label: 'Vida/Regras', icon: Dices },
 ]
 
 export function InspectorPane({
@@ -41,6 +44,7 @@ export function InspectorPane({
   onClose,
   isDocked = false,
   controlsComponent = null,
+  simVersion = 0,
 }) {
   return (
     <aside
@@ -106,6 +110,9 @@ export function InspectorPane({
         {tab === 'consistency' && <ConsistencyTab adventure={adventure} />}
         {tab === 'config' && <ConfigTab />}
         {tab === 'details' && <DetailsTab adventure={adventure} onAdventureChange={onAdventureChange} />}
+        {tab === 'sim' && (
+          <SimTab adventure={adventure} onAdventureChange={onAdventureChange} version={simVersion} />
+        )}
       </div>
     </aside>
   )
@@ -121,6 +128,7 @@ export default function Drawer({
   tab,
   setTab,
   controlsComponent,
+  simVersion = 0,
 }) {
   const [internalTab, setInternalTab] = useState('cards')
   const activeTab = tab || internalTab
@@ -142,6 +150,7 @@ export default function Drawer({
         onClose={onClose}
         isDocked={false}
         controlsComponent={controlsComponent}
+        simVersion={simVersion}
       />
     </div>
   )

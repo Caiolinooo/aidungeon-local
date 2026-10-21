@@ -1,0 +1,57 @@
+{
+  "id": "d100",
+  "name": "d100 (Call of Cthulhu / BRP)",
+  "resolution": "d100",
+  "rulesets": ["coc-7e"],
+  "abilities": ["for", "con", "tam", "des", "app", "int", "pod", "edu"],
+  "ability_alias": {
+    "str": "for",
+    "dex": "des",
+    "con": "con",
+    "int": "int",
+    "wis": "pod",
+    "cha": "app"
+  },
+  "ability_scale": 5,
+  "hp": {"formula": "(con+tam)//10"},
+  "ac": null,
+  "currency": null,
+  "start_gold": 0,
+  "san": {"start": "pod", "max": 99},
+  "difficulty": {"trivial": 1.0, "easy": 1.0, "medium": 1.0, "hard": 0.5, "very_hard": 0.2},
+  "skills": {
+    "luta": 25,
+    "armas de fogo": 20,
+    "furtividade": 20,
+    "escutar": 20,
+    "procurar": 25,
+    "psicologia": 10,
+    "persuasao": 10,
+    "biblioteca": 20,
+    "ocultismo": 5,
+    "primeiros socorros": 30
+  },
+  "skill_default": 20,
+  "toughness": {
+    "weak": {"hp": 5, "atk": 30, "dmg": "1d3", "xp": 0},
+    "normal": {"hp": 10, "atk": 45, "dmg": "1d6+1", "xp": 0},
+    "tough": {"hp": 16, "atk": 60, "dmg": "1d10+2", "xp": 0},
+    "boss": {"hp": 30, "atk": 75, "dmg": "2d8+4", "xp": 0}
+  },
+  "weapons": {
+    "desarmado": {"dice": "1d3", "skill": "luta"},
+    "faca": {"dice": "1d4", "skill": "luta"},
+    "cassetete": {"dice": "1d6", "skill": "luta"},
+    "machado": {"dice": "1d8", "skill": "luta"},
+    "revolver": {"dice": "1d10", "skill": "armas de fogo"},
+    "rifle": {"dice": "2d6", "skill": "armas de fogo"},
+    "espingarda": {"dice": "4d6", "skill": "armas de fogo"}
+  },
+  "sanity_loss": {
+    "minor": ["0", "1d3"],
+    "major": ["1d3", "1d6"],
+    "severe": ["1d6", "1d10"]
+  },
+  "consumables": {},
+  "xp_levels": null
+}

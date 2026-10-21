@@ -139,6 +139,18 @@ def _adventure_or_404(adventure_id: str) -> dict:
     return adv
 
 
+def _revert_applied_rules(adventure_id: str, action_id: int | None) -> None:
+    """Narrador falhou depois do motor: desfaz PV/itens para a próxima tentativa."""
+    if not action_id:
+        return
+    try:
+        from app.sim import engine as sim_engine
+        with appending(adventure_id) as conn:
+            sim_engine.revert(conn, adventure_id, action_id)
+    except Exception:
+        log.warning("sim: revert falhou", exc_info=True)
+
+
 def _publish_live(adventure_id: str, type_: str, data: dict) -> None:
     """Evento do bus para quem observa. Falha aqui não interrompe o stream."""
     try:
@@ -217,7 +229,8 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
                         actions = db.list_actions(conn, adventure_id)
                         seq = max((int(action["seq"]) for action in actions), default=0)
                         last = int(adventure.get("life_tick_seq") or 0)
-                        if every > 0 and seq - last >= every:
+                        life_clock = ((adventure.get("sim_state") or {}).get("life") or {})
+                        if every > 0 and seq - last >= every and not life_clock.get("enabled"):
                             jobs.enqueue_day_tick(conn, adventure_id, reason="auto")
             except Exception:
                 pass
@@ -355,6 +368,9 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             check_cfg: dict = {}
             check_text = ""
             check_type = ""
+            resolution = None
+            applied_action_id = None
+            rules_block = ""
             with db.session() as conn:
                 adventure = db.get_adventure(conn, adventure_id)
                 actions = db.list_actions(conn, adventure_id)
@@ -371,6 +387,31 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     sampler["temperature"] = round(min(base_t + step * retry_count, max_t), 4)
                 check_text, check_type, check_cfg, check_state = _prepare_action_check(
                     conn, adventure, actions, player_action, raw_query_text, user)
+
+            from app.sim import engine as sim_engine
+            if player_action is not None and retry_of is None:
+                outcome = sim_engine.run_turn(
+                    adventure_id, adventure, player_action, actions, user,
+                    llm_cfg, cfg, transport,
+                )
+                if outcome and outcome.get("refusal"):
+                    refusal = outcome["refusal"]
+                    with appending(adventure_id) as conn:
+                        db.delete_action(conn, player_action["id"])
+                    _publish_live(adventure_id, "undo", {})
+                    yield {"event": "refused", "data": {
+                        "action_id": player_action["id"], "reason": refusal,
+                    }}
+                    yield {"event": "error", "data": {
+                        "message": refusal, "code": "rules_refused",
+                    }}
+                    return
+                if outcome and outcome.get("resolution"):
+                    resolution = outcome["resolution"]
+                    applied_action_id = player_action["id"]
+                    rules_block = resolution.get("block") or ""
+            elif retry_of is not None:
+                rules_block = sim_engine.reuse_block(actions, retry_of) or ""
 
             if web_search and raw_query_text.strip():
                 research = web_search_mod.research_context(
@@ -394,6 +435,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             ctx_script = scripting.get_adventure_script(adventure_id, "context_modifier")
             if ctx_script:
                 built.messages = scripting.run_context_modifier(ctx_script, built.messages)
+
+            if rules_block and built.messages:
+                built.messages[-1] = {
+                    "role": built.messages[-1]["role"],
+                    "content": context_builder.with_reference(
+                        built.messages[-1]["content"], rules_block),
+                }
+            if resolution is not None and player_action is not None:
+                rolled = {**resolution, "action_id": player_action["id"]}
+                yield {"event": "rules_roll", "data": rolled}
+                _publish_live(adventure_id, "rules_roll", rolled)
 
             verdict = _apply_action_check(
                 built, check_text, check_type, check_state, llm_cfg, transport, check_cfg)
@@ -426,6 +478,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             if not text.strip():
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.
+                _revert_applied_rules(adventure_id, applied_action_id)
                 yield {"event": "error", "data": {
                     "message": "the narrator returned no story text; nothing was saved, try again"}}
                 return
@@ -456,6 +509,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 data["web_sources"] = web_sources
             if verdict is not None:
                 data["action_check"] = verdict.to_dict()
+            if resolution is not None:
+                data["rules"] = resolution
 
             # Libera o lock antes de emitir 'done' para que chamadas imediatas do
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
@@ -468,8 +523,10 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             _spawn_post_turn(adventure_id, transport)
             yield {"event": "done", "data": data}
         except llm_client.LlmError as exc:
+            _revert_applied_rules(adventure_id, applied_action_id)
             yield {"event": "error", "data": {"message": exc.message}}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
+            _revert_applied_rules(adventure_id, applied_action_id)
             yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         finally:
             if not lock_released:
@@ -586,10 +643,15 @@ def handle_undo(adventure_id: str) -> dict:
             # ele não é parte do turno e fica.
             prev = next((a for a in reversed(actions[:-1]) if a["type"] != "see"), None)
             if prev and prev["type"] in db.PLAYER_TYPES:
+                from app.sim import engine as sim_engine
+                sim_engine.revert(conn, adventure_id, prev["id"])
                 db.delete_action(conn, prev["id"])
                 removed.append(prev)
         else:
             # ação do jogador órfã (geração falhou) ou 'see': remove só ela
+            if last["type"] in db.PLAYER_TYPES:
+                from app.sim import engine as sim_engine
+                sim_engine.revert(conn, adventure_id, last["id"])
             db.delete_action(conn, last["id"])
             removed.append(last)
 

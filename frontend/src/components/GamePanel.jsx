@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { api } from '../api.js'
 
 // Painel de controles dinâmico (v0.7.0) — renderiza os widgets do manifesto
 // gerado pela IA (ui_profile): dice / stats / inventory / character.
 //
-//  - dice:      rolagem local (RNG do cliente); o resultado pode virar ação
+//  - dice:      rolagem no servidor (/sim/roll); o resultado pode virar ação
 //               ("Send") ou texto no input ("+ Input").
 //  - stats:     steppers −/+ com barra quando o stat tem max; clamp min/max.
 //  - inventory: chips com qty; toque insere "use <item>" no input; add/remove.
@@ -13,12 +14,8 @@ import { useEffect, useRef, useState } from 'react'
 // debounce e persiste em PUT /api/adventures/:id/ui-state, que o backend
 // injeta no contexto da IA como "[Player state]".
 
-function rollDie(sides) {
-  return 1 + Math.floor(Math.random() * sides)
-}
-
 // --------------------------------------------------------------------- dice
-function DiceWidget({ widget, disabled, onSend, onInsert }) {
+function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
   const [rolling, setRolling] = useState(null) // sides do dado girando
   const [display, setDisplay] = useState(null) // valor exibido na animação
   const [result, setResult] = useState(null) // { sides, value }
@@ -27,18 +24,21 @@ function DiceWidget({ widget, disabled, onSend, onInsert }) {
   useEffect(() => () => clearInterval(timerRef.current), [])
 
   const roll = (sides) => {
-    if (disabled || rolling !== null) return
+    if (disabled || rolling !== null || !adventureId) return
     setResult(null)
     setRolling(sides)
     const started = Date.now()
+    const pending = api.simRoll(adventureId, `d${sides}`).catch(() => null)
     timerRef.current = setInterval(() => {
-      setDisplay(rollDie(sides))
+      setDisplay(1 + Math.floor(Math.random() * sides))
       if (Date.now() - started > 500) {
         clearInterval(timerRef.current)
-        const value = rollDie(sides)
-        setRolling(null)
-        setDisplay(value)
-        setResult({ sides, value })
+        pending.then((data) => {
+          const value = typeof data?.total === 'number' ? data.total : null
+          setRolling(null)
+          setDisplay(value)
+          setResult(value == null ? null : { sides, value })
+        })
       }
     }, 60)
   }
@@ -283,9 +283,11 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
 export default function GamePanel({
   profile, state, disabled, regenerating,
   onStateChange, onSend, onInsert, onRegenerate, onClose,
-  inline = false,
+  inline = false, adventureId = null, packOn = false,
 }) {
-  const widgets = profile?.widgets ?? []
+  const widgets = (profile?.widgets ?? []).filter((widget) =>
+    !(packOn && (widget.type === 'stats' || widget.type === 'inventory')),
+  )
   if (widgets.length === 0) return null
 
   if (inline) {
@@ -316,7 +318,7 @@ export default function GamePanel({
                 {widget.label}
               </h3>
               {widget.type === 'dice' && (
-                <DiceWidget widget={widget} disabled={disabled} onSend={onSend} onInsert={onInsert} />
+                <DiceWidget widget={widget} disabled={disabled} onSend={onSend} onInsert={onInsert} adventureId={adventureId} />
               )}
               {widget.type === 'stats' && (
                 <StatsWidget
@@ -388,7 +390,7 @@ export default function GamePanel({
                 {widget.label}
               </h3>
               {widget.type === 'dice' && (
-                <DiceWidget widget={widget} disabled={disabled} onSend={onSend} onInsert={onInsert} />
+                <DiceWidget widget={widget} disabled={disabled} onSend={onSend} onInsert={onInsert} adventureId={adventureId} />
               )}
               {widget.type === 'stats' && (
                 <StatsWidget

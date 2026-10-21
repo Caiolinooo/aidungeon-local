@@ -104,6 +104,28 @@ function normalizeActionCheck(data) {
   }
 }
 
+function changeLabel(change) {
+  const who = change?.who || ''
+  const what = change?.what || ''
+  return `${who} ${what} ${change?.from}→${change?.to}`.trim()
+}
+
+function RulesNote({ rules }) {
+  const steps = Array.isArray(rules?.steps) ? rules.steps : []
+  const changes = Array.isArray(rules?.changes) ? rules.changes : []
+  if (steps.length === 0 && changes.length === 0) return null
+  return (
+    <div className="mt-1 flex max-w-full flex-col gap-1 px-4 text-[11px] leading-snug">
+      {steps.map((step, i) => (
+        <p key={i} className="break-words text-sky-300/90">{step?.text || ''}</p>
+      ))}
+      {changes.length > 0 && (
+        <p className="break-words text-zinc-400">{changes.map(changeLabel).join('; ')}</p>
+      )}
+    </div>
+  )
+}
+
 function ActionCheckNote({ check }) {
   if (!check) return null
   if (check.possible) {
@@ -172,6 +194,8 @@ export default function Play() {
   const [characterLoading, setCharacterLoading] = useState(false)
   const [needsCharacter, setNeedsCharacter] = useState(false)
   const [actionChecks, setActionChecks] = useState({})
+  const [rulesChips, setRulesChips] = useState({})
+  const [simVersion, setSimVersion] = useState(0)
   const [pendingCheck, setPendingCheck] = useState(null)
 
   const abortRef = useRef(null)
@@ -190,6 +214,7 @@ export default function Play() {
   const awaitingCheckRef = useRef(false)
   const awaitingBaselineRef = useRef(null)
   const livePlayerIdsRef = useRef(new Set())
+  const sentTextRef = useRef('')
   const generating = gen !== null
   const currentUser = session?.user || ''
   genRef.current = gen
@@ -481,7 +506,19 @@ export default function Play() {
     es.addEventListener('card_changed', onCard)
     es.addEventListener('character_changed', onCharacter)
     es.addEventListener('adventure_updated', onAdventureUpdated)
+    const onSimChanged = () => {
+      setSimVersion((v) => v + 1)
+      if (!genRef.current) refreshAdventure({ replaceActions: false })
+    }
+    const onRulesRoll = (ev) => {
+      const data = parse(ev)
+      if (!data || data.action_id == null) return
+      setRulesChips((prev) => ({ ...prev, [String(data.action_id)]: data }))
+      setSimVersion((v) => v + 1)
+    }
     es.addEventListener('undo', onUndo)
+    es.addEventListener('sim_changed', onSimChanged)
+    es.addEventListener('rules_roll', onRulesRoll)
     return () => {
       es.removeEventListener('turn_changed', onTurn)
       es.removeEventListener('player_action', onPlayer)
@@ -499,6 +536,8 @@ export default function Play() {
       es.removeEventListener('character_changed', onCharacter)
       es.removeEventListener('adventure_updated', onAdventureUpdated)
       es.removeEventListener('undo', onUndo)
+      es.removeEventListener('sim_changed', onSimChanged)
+      es.removeEventListener('rules_roll', onRulesRoll)
       es.close()
     }
   }, [id, handleCheckData, refreshAdventure])
@@ -652,6 +691,10 @@ export default function Play() {
           return
         }
         const text = typeof msg === 'string' && msg ? msg : (msg?.message || 'Generation failed')
+        if (meta?.code === 'rules_refused') {
+          toast(text)
+          return
+        }
         toast(text)
       }
       streamGeneration(path, {
@@ -660,6 +703,20 @@ export default function Play() {
         onToken: (tok) => setGen((g) => (g ? { ...g, text: g.text + tok } : g)),
         onEvent: (name, data) => {
           if (name === 'action_check') handleCheckData(data)
+          if (name === 'rules_roll' && data?.action_id != null) {
+            setRulesChips((prev) => ({ ...prev, [String(data.action_id)]: data }))
+            setSimVersion((v) => v + 1)
+          }
+          if (name === 'refused') {
+            const actionId = data?.action_id
+            if (actionId != null) {
+              setActions((prev) => (prev ?? []).filter((a) => a.id !== actionId))
+              seenIdsRef.current.delete(actionId)
+              livePlayerIdsRef.current.delete(actionId)
+            }
+            const sent = sentTextRef.current
+            if (sent) setInject({ text: sent, nonce: Date.now() })
+          }
         },
         onDone: (data) => {
           newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
@@ -716,6 +773,7 @@ export default function Play() {
     if (type === 'do' || type === 'say' || type === 'story') {
       awaitingCheckRef.current = true
       awaitingBaselineRef.current = lastPlayerAction(actionsRef.current)?.id ?? null
+      sentTextRef.current = text
     }
     return runStream('action', `/adventures/${id}/action`, {
       type,
@@ -946,6 +1004,7 @@ export default function Play() {
     </button>
   ) : null
 
+  const packOn = !!(adventure?.sim_state?.pack)
   const controlsContent = uiProfile ? (
     <GamePanel
       profile={uiProfile}
@@ -957,6 +1016,8 @@ export default function Play() {
       onInsert={insertToInput}
       onRegenerate={regenerateProfile}
       inline={true}
+      adventureId={id}
+      packOn={packOn}
     />
   ) : null
 
@@ -1179,6 +1240,9 @@ export default function Play() {
 
               {actions.map((a) => {
                 const check = a?.id != null ? actionChecks[String(a.id)] : null
+                const rules = a?.id != null
+                  ? (rulesChips[String(a.id)] || a.rules || null)
+                  : null
                 return (
                   <div key={a.id} className="min-w-0">
                     <FeedItem
@@ -1189,6 +1253,7 @@ export default function Play() {
                       adventureId={id}
                     />
                     {isPlayerAction(a) && check && <ActionCheckNote check={check} />}
+                    {isPlayerAction(a) && rules && <RulesNote rules={rules} />}
                   </div>
                 )
               })}
@@ -1327,6 +1392,8 @@ export default function Play() {
             onInsert={insertToInput}
             onRegenerate={regenerateProfile}
             onClose={() => setPanelOpen(false)}
+            adventureId={id}
+            packOn={packOn}
           />
         )}
 
@@ -1375,6 +1442,7 @@ export default function Play() {
             onClose={() => setIsInspectorDocked(false)}
             isDocked={true}
             controlsComponent={controlsContent}
+            simVersion={simVersion}
           />
         </div>
       )}
@@ -1392,6 +1460,7 @@ export default function Play() {
         tab={inspectorTab}
         setTab={setInspectorTab}
         controlsComponent={controlsContent}
+        simVersion={simVersion}
       />
 
       {/* Action Edit Modal */}

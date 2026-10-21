@@ -8,6 +8,12 @@ const CORE_KEYS = new Set(CORE_STATS.map(([key]) => key))
 const POINT_MIN = 8
 const POINT_MAX = 15
 const POINT_BUDGET = 27
+// Espelha backend/app/stats.py POINT_BUY_COSTS (tabela 5e, não valor-8).
+const POINT_BUY_COSTS = { 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 }
+
+function pointCost(value) {
+  return POINT_BUY_COSTS[value] ?? 0
+}
 const ROLL_MIN = 3
 const ROLL_MAX = 18
 
@@ -26,7 +32,7 @@ function emptyCore() {
 }
 
 function pointsSpent(core) {
-  return CORE_STATS.reduce((sum, [key]) => sum + ((core[key] ?? POINT_MIN) - POINT_MIN), 0)
+  return CORE_STATS.reduce((sum, [key]) => sum + pointCost(core[key] ?? POINT_MIN), 0)
 }
 
 function fitPointBuy(core) {
@@ -235,7 +241,8 @@ function AttributesEditor({
           const value = core[key]
           const min = statMode === 'points' ? POINT_MIN : ROLL_MIN
           const max = statMode === 'points' ? POINT_MAX : ROLL_MAX
-          const plusBlocked = statMode === 'points' && remaining < 1
+          const stepCost = pointCost(value + 1) - pointCost(value)
+          const plusBlocked = statMode === 'points' && (value >= max || remaining < stepCost)
           return (
             <div key={key} className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/40 px-1.5 py-1">
               <div className="text-[11px] font-semibold leading-tight text-zinc-100">{label}</div>
@@ -381,7 +388,7 @@ export default function CharacterModal({
       if (statMode === 'points') {
         const next = cur + delta
         if (next < POINT_MIN || next > POINT_MAX) return prev
-        if (delta > 0 && pointsSpent(prev) >= POINT_BUDGET) return prev
+        if (delta > 0 && pointsSpent({ ...prev, [key]: next }) > POINT_BUDGET) return prev
         return { ...prev, [key]: next }
       }
       const next = clamp(cur + delta, ROLL_MIN, ROLL_MAX)

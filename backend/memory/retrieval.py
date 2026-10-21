@@ -10,7 +10,8 @@ Score de cada memória:
                       (stopwords pt-BR e en, palavras com < 3 letras fora).
     keyword_bonus   = 50 pontos por palavra significativa coincidente + 50 pontos
                       adicionais se a palavra coincidente estiver capitalizada (nomes próprios).
-    recency         = seq_end (NULL cai para o id).
+    recency         = RECENCY_WEIGHT * (seq_end / max_seq), teto 50.
+                      seq_end NULL cai para o id. Sem max_recency o termo é 0.
 
 Seleção: até top_k que caibam no budget, por ranking de score. A memória mais
 recente entra sempre que top_k > 1 e ela cabe (troca o pior slot se preciso).
@@ -51,8 +52,10 @@ DEFAULT_QUERY_TIMEOUT_S = 1.5
 # Ações gravadas entre o vetor da cena e o turno que o usa: a do jogador e
 # alguns See. Desfazer (seq menor) ou mais que isso pede vetor novo.
 SCENE_VECTOR_MAX_LAG = 3
-# Uma palavra em comum vale mais que centenas de ações de distância.
+# Uma palavra em comum vale mais que a memória mais nova do banco.
 OVERLAP_WEIGHT = 1000
+# Recência normalizada: no máximo 50, para não derrubar similaridade ~0,9.
+RECENCY_WEIGHT = 50.0
 
 Estimator = Callable[[str], int]
 
@@ -244,12 +247,15 @@ def score_memory(
     *,
     query_vec: list[float] | None = None,
     mem_vec: list[float] | None = None,
+    max_recency: float = 0.0,
 ) -> float:
-    """Scoring híbrido: cosine * 1000 + keyword_bonus + recency.
+    """Scoring híbrido: cosine * 1000 + keyword_bonus + recência normalizada.
 
     Fallback automático: se query_vec ou mem_vec for None, pontua por keyword overlap + recency.
+    recência = RECENCY_WEIGHT * (_recency / max_recency) quando max_recency > 0; senão 0.
     """
-    recency = _recency(memory)
+    raw_recency = _recency(memory)
+    recency = RECENCY_WEIGHT * (raw_recency / max_recency) if max_recency > 0 else 0.0
     if query_vec is not None and mem_vec is not None:
         sim = embeddings_client.cosine_similarity(query_vec, mem_vec)
         if not math.isfinite(sim):
@@ -317,6 +323,7 @@ def select_memories(
 
     target_dim = len(query_vec) if query_vec is not None else None
     reference = significant_words(recent_text)
+    max_recency = max((_recency(mem) for mem in memories), default=0.0)
 
     # Calcular score de cada memória
     scores: dict[int, float] = {}
@@ -324,7 +331,8 @@ def select_memories(
         mem_id = mem.get("id") or 0
         valid_vec = _get_valid_vector(mem, target_model, target_dim)
         scores[mem_id] = score_memory(
-            mem, reference, query_vec=query_vec, mem_vec=valid_vec
+            mem, reference, query_vec=query_vec, mem_vec=valid_vec,
+            max_recency=max_recency,
         )
 
     newest = max(memories, key=lambda m: (_recency(m), m.get("id") or 0))

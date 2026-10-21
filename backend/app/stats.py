@@ -25,6 +25,8 @@ STAT_MAX = 20
 POINT_BUY_BUDGET = 27
 POINT_BUY_MIN = 8
 POINT_BUY_MAX = 15
+# Tabela padrão 5e. 14 e 15 custam mais que o passo de 1.
+POINT_BUY_COSTS = {8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9}
 
 # Palavra (PT/EN) → rótulo da classe e quanto sobe acima da base 10.
 # A ordem é a do contrato: o primeiro grupo que casar nomeia a classe.
@@ -74,14 +76,14 @@ def _as_stat(value) -> int | None:
 
 
 def point_buy_cost(value: int) -> int:
-    """Custo linear v-8 dentro de 8..15. Fora da faixa o custo é 0."""
+    """Custo padrão 5e dentro de 8..15. Fora da faixa o custo é 0."""
     try:
         number = int(value)
     except (TypeError, ValueError):
         return 0
     if isinstance(value, bool) or not POINT_BUY_MIN <= number <= POINT_BUY_MAX:
         return 0
-    return number - POINT_BUY_MIN
+    return POINT_BUY_COSTS.get(number, 0)
 
 
 def point_buy_total(stats: dict) -> int:

@@ -120,6 +120,22 @@ def apply_ruleset(adventure_id: str, body: RulesetApply,
             merged = incoming
         updated = db.update_adventure(
             conn, adventure_id, character_rules=merged[:_RULES_CAP])
+        if updated is not None:
+            from app import npc_assets
+            from app.sim import packs, rules as sim_rules, state as sim_state
+            pack_id = packs.pack_for_ruleset(body.ruleset_id)
+            sim = sim_state.load(updated)
+            sim["pack"] = pack_id
+            if pack_id:
+                card = db.player_character(conn, adventure_id, info.user)
+                sheet = npc_assets.parse_sheet((card or {}).get("sheet") or "")
+                title = ((card or {}).get("title") or "").strip() or info.user or "Jogador"
+                sim_rules.ensure_actor(
+                    sim, packs.load_pack(pack_id), info.user, title,
+                    sheet.get("stats") if isinstance(sheet.get("stats"), dict) else None,
+                )
+            db.set_sim_state(conn, adventure_id, sim)
+            updated = db.get_adventure(conn, adventure_id)
     if updated is None:
         raise GameError.not_found(f"adventure {adventure_id} not found")
     return updated

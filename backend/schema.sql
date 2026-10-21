@@ -253,4 +253,8 @@ Morte. Incapacitado pede um teste de Vigor. Falha deixa o herói sangrando e for
   '2026-10-20T00:00:00.000Z',
   '2026-10-20T00:00:00.000Z');
 
+-- Motor de regras e Modo Vida (migration 026).
+ALTER TABLE adventures ADD COLUMN sim_state TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE actions ADD COLUMN rules_json TEXT NOT NULL DEFAULT '';
+
 

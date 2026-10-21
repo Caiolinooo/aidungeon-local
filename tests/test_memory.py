@@ -710,6 +710,42 @@ def test_proof1_paraphrase_no_shared_words_retrieves_memory(tmp_db):
     assert mems[0]["text"] == text_mem_a
 
 
+def test_old_high_similarity_beats_recent_low_similarity(tmp_db):
+    """Similaridade 0,9 antiga vence similaridade 0,3 recente (recência teto 50)."""
+    adv = make_adventure()
+    model = "Qwen3-Embedding-0.6B"
+    query = [1.0, 0.0]
+    old_vec = [0.9, (1 - 0.81) ** 0.5]
+    new_vec = [0.3, (1 - 0.09) ** 0.5]
+    with db.session() as conn:
+        db.insert_memory(conn, adv["id"], "ancient sealed dragon cavern",
+                         seq_start=1, seq_end=1,
+                         embedding=embeddings_client.pack_vector(old_vec),
+                         embedding_model=model, embedding_dim=2)
+        db.insert_memory(conn, adv["id"], "breakfast alone at the inn",
+                         seq_start=800, seq_end=800,
+                         embedding=embeddings_client.pack_vector(new_vec),
+                         embedding_model=model, embedding_dim=2)
+        mems = retrieval.select_memories(
+            conn, adv["id"], "qqq zzz",
+            query_vector=query,
+            settings={"embeddings": {"model": model, "enabled": True}},
+            budget_tokens=600, top_k=1,
+        )
+    assert len(mems) == 1
+    assert mems[0]["seq_end"] == 1
+    assert embeddings_client.cosine_similarity(query, old_vec) == 0.9
+    recent_score = retrieval.score_memory(
+        {"seq_end": 800, "text": "breakfast alone at the inn"},
+        set(), query_vec=query, mem_vec=new_vec, max_recency=800,
+    )
+    old_score = retrieval.score_memory(
+        {"seq_end": 1, "text": "ancient sealed dragon cavern"},
+        set(), query_vec=query, mem_vec=old_vec, max_recency=800,
+    )
+    assert old_score > recent_score
+
+
 def test_proof2_unrelated_text_does_not_retrieve_it(tmp_db):
     """Prova 2: Texto sem relação semântica não recupera memória não-relacionada."""
     adv = make_adventure()

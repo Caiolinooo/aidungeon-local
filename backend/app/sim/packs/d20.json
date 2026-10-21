@@ -1,0 +1,47 @@
+{
+  "id": "d20",
+  "name": "D20 (D&D 5e / Tormenta20)",
+  "resolution": "d20",
+  "rulesets": ["dnd-5e", "tormenta20"],
+  "abilities": ["str", "dex", "con", "int", "wis", "cha"],
+  "ability_alias": {
+    "str": "str",
+    "dex": "dex",
+    "con": "con",
+    "int": "int",
+    "wis": "wis",
+    "cha": "cha"
+  },
+  "ability_scale": 1,
+  "hp": {"base": 10, "ability": "con", "per_level": 6},
+  "ac": {"base": 10, "ability": "dex"},
+  "currency": "Ouro",
+  "start_gold": 15,
+  "san": null,
+  "dc": {"trivial": 5, "easy": 10, "medium": 15, "hard": 20, "very_hard": 25},
+  "toughness": {
+    "weak": {"hp": 6, "ac": 10, "atk": 2, "dmg": "1d4", "xp": 25, "gold": "1d6"},
+    "normal": {"hp": 18, "ac": 13, "atk": 4, "dmg": "1d6+2", "xp": 50, "gold": "2d6"},
+    "tough": {"hp": 45, "ac": 15, "atk": 6, "dmg": "2d6+3", "xp": 200, "gold": "4d6"},
+    "boss": {"hp": 110, "ac": 17, "atk": 8, "dmg": "3d8+4", "xp": 900, "gold": "10d6"}
+  },
+  "weapons": {
+    "desarmado": {"dice": "1d3", "ability": "str"},
+    "adaga": {"dice": "1d4", "ability": "dex"},
+    "espada": {"dice": "1d8", "ability": "str"},
+    "machado": {"dice": "1d8", "ability": "str"},
+    "maca": {"dice": "1d6", "ability": "str"},
+    "lanca": {"dice": "1d6", "ability": "str"},
+    "arco": {"dice": "1d6", "ability": "dex"},
+    "besta": {"dice": "1d8", "ability": "dex"},
+    "cajado": {"dice": "1d6", "ability": "str"},
+    "espada grande": {"dice": "2d6", "ability": "str"},
+    "magia": {"dice": "1d10", "ability": "int"}
+  },
+  "consumables": {"pocao de cura": {"heal": "2d4+2"}},
+  "xp_levels": [0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000],
+  "prof_formula": "2+(level-1)//4",
+  "sanity": null,
+  "skills": {},
+  "skill_default": null
+}
