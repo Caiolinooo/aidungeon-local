@@ -378,10 +378,24 @@ def _repair_cards(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
         card = db.get_card(conn, adv["id"], item["card_id"])
         if not card:
             continue
-        if _is_player_card(card):
-            # Ficha do jogador: quem completa é o PUT /character.
-            errors.append(f"{card.get('title')}: ficha do jogador — "
-                          "complete pelo PUT /adventures/{id}/character")
+        # Status, classe e atributos saem sem LLM — e a ficha do jogador só
+        # precisa deles. Só os textos vivos do NPC pedem o modelo.
+        living = [f for f in item["missing_fields"] if f not in ("status", "class")]
+        if not living:
+            before = npc_assets.parse_sheet(card.get("sheet") or "")
+            partial = npc_assets.ensure_sheet_complete(
+                before, entry=card.get("entry") or "", card=card)
+            if partial != before:
+                db.update_card(conn, adv["id"], card["id"],
+                               {"sheet": json.dumps(partial, ensure_ascii=False)})
+                repaired.append({"card_id": card["id"], "title": card.get("title"),
+                                 "sheet": partial})
+            still = [f for f in item["missing_fields"]
+                     if not str(partial.get(f) or "").strip()]
+            if still:
+                hint = ("edite o personagem no drawer" if _is_player_card(card)
+                        else "sem texto para inferir " + ", ".join(still))
+                errors.append(f"{card.get('title')}: {hint}")
             continue
         try:
             updated = npc_assets.enrich_card(conn, adv, card, llm_cfg or {},

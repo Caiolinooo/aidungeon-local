@@ -186,8 +186,36 @@ def test_player_sheet_is_judged_by_its_own_schema(client):
     assert sheets["items"] == []
 
 
-def test_repair_leaves_the_player_sheet_to_the_character_route(client):
+def test_repair_completes_the_player_sheet_without_llm(client):
+    """Classe e atributos do jogador são determinísticos: saem sem chamar o LLM."""
     adv = make_adventure(title="Jogador sem classe")
+    with db.session() as conn:
+        db.upsert_player_character(
+            conn, adv["id"], "caio", title="Caio",
+            sheet=json.dumps({"appearance": "cabelo curto", "status": "alive",
+                              "notes": "Guarda da cidade, veterano de rondas."}),
+        )
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    sheets = _check(report, "card_sheets")
+    assert sheets["status"] == "error"
+    assert sheets["items"][0]["missing_fields"] == ["class"]
+
+    resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                       json={"check": "card_sheets"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["errors"] == []
+    assert len(body["repaired"]) == 1
+    with db.session() as conn:
+        card = db.player_character(conn, adv["id"], "caio")
+    sheet = json.loads(card["sheet"])
+    assert sheet["class"] == "Guerreiro"
+    assert sheet["stats"]["str"] > sheet["stats"]["cha"]
+
+
+def test_repair_points_to_the_drawer_when_the_player_sheet_has_no_text(client):
+    """Ficha do jogador sem texto nenhum: nada a inferir, o recado é o drawer."""
+    adv = make_adventure(title="Jogador vazio")
     with db.session() as conn:
         db.upsert_player_character(
             conn, adv["id"], "caio", title="Caio",
@@ -195,25 +223,40 @@ def test_repair_leaves_the_player_sheet_to_the_character_route(client):
                               "stats": {"str": 12, "dex": 14, "con": 13,
                                         "int": 10, "wis": 11, "cha": 9}}),
         )
-    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
-    sheets = _check(report, "card_sheets")
-    assert sheets["status"] == "error"
-    assert sheets["items"][0]["missing_fields"] == ["class"]
-
-    transport = _mock_transport(json.dumps(SHEET_JSON))
-    client.app.dependency_overrides[deps.get_http_transport] = lambda: transport
-    try:
-        resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
-                           json={"check": "card_sheets"})
-    finally:
-        client.app.dependency_overrides.pop(deps.get_http_transport, None)
+    resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                       json={"check": "card_sheets"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["repaired"] == []
-    assert body["errors"] and "character" in body["errors"][0]
+    assert body["errors"] and "drawer" in body["errors"][0]
     with db.session() as conn:
         card = db.player_character(conn, adv["id"], "caio")
     assert "class" not in json.loads(card["sheet"])
+
+
+def test_repair_fills_an_npc_class_without_llm_when_only_it_is_missing(client):
+    """NPC com texto e só a classe faltando não precisa do modelo."""
+    adv = make_adventure(title="Dragao sem classe")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Dragao", type="character",
+                       entry="Um dragao roxo cabeçudo, de cartola e bengala.",
+                       sheet=json.dumps({
+                           "appearance": "escamas roxas", "status": "alive",
+                           "body": "corpulento", "clothing": "cartola e bengala",
+                           "personality": "vaidoso", "humor": "irônico",
+                           "speech": "pausado", "goals": "impressionar",
+                           "background": "veio do circo", "lifestyle": "noturno",
+                           "habits": "coleciona chapéus", "likes": "palco",
+                           "sentiments": "apego ao dono", "notes": "fumaça roxa",
+                           "stats": {"str": 18, "dex": 10, "con": 16,
+                                     "int": 8, "wis": 10, "cha": 12}}))
+    resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                       json={"check": "card_sheets"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["errors"] == []
+    assert len(body["repaired"]) == 1
+    assert body["repaired"][0]["sheet"]["class"]
 
 
 def test_repair_fills_what_is_deterministic_when_the_llm_fails(client):

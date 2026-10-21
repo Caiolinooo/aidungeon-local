@@ -89,8 +89,9 @@ export default function ConsistencyTab({ adventure }) {
       const fixed = Array.isArray(res?.repaired) ? res.repaired.length : 0
       const errors = Array.isArray(res?.errors) ? res.errors : []
       if (errors.length) {
-        const why = String(errors[0] || '').slice(0, 140)
-        toast(`Reparado: ${fixed}. Pendência: ${why}`, 'error')
+        const why = errors.slice(0, 2).map((e) => String(e).slice(0, 110)).join(' · ')
+        const more = errors.length > 2 ? ` (+${errors.length - 2})` : ''
+        toast(`Reparado: ${fixed}. Pendência: ${why}${more}`, 'error')
       } else {
         toast(fixed ? `Reparado: ${fixed} item(ns).` : 'Nada a reparar.', 'ok')
       }
