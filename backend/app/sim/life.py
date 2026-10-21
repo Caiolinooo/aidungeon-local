@@ -246,8 +246,11 @@ def advance(state: dict, minutes: int, activity: str, actor_key_: str,
             life["relations_day"] = {}
             crossed = True
         remaining -= slice_min
+    reactions: list[str] = []
     if player_needs is not None and actor is not None:
-        actor["needs"] = _clamp_needs(player_needs, player_delta)
+        final_needs = _clamp_needs(player_needs, player_delta)
+        reactions = _react(life, player_needs, final_needs)
+        actor["needs"] = final_needs
         if worked:
             wage = int(life.get("wage_per_hour") or 0)
             resources = actor.setdefault("resources", {"gold": 0, "san": None})
@@ -262,6 +265,7 @@ def advance(state: dict, minutes: int, activity: str, actor_key_: str,
         "to": clock(int(life["minute"])),
         "day": int(life["day"]),
         "crossed_midnight": crossed,
+        "reactions": reactions,
     }
 
 
@@ -271,6 +275,59 @@ def _clamp_needs(start: dict[str, float], delta: dict[str, float]) -> dict[str, 
         value = start.get(key, NEED_START) + delta.get(key, 0.0)
         stored[key] = int(max(0, min(100, round(value))))
     return stored
+
+
+_WARN: dict[str, str] = {
+    "fome": "A fome aperta.",
+    "energia": "O cansaço pesa.",
+    "higiene": "O cheiro começa a incomodar.",
+    "social": "A solidão pesa.",
+    "diversao": "O tédio domina.",
+    "bexiga": "A bexiga reclama.",
+}
+_CRIT: dict[str, str] = {
+    "fome": "Fome crítica — forças se esvaindo.",
+    "energia": "Exaustão crítica — difícil ficar de pé.",
+    "higiene": "Imundo — todos notam.",
+    "social": "Isolamento crítico — angústia.",
+    "diversao": "Tédio crítico — nada tem graça.",
+    "bexiga": "Bexiga no limite — precisa de banheiro já.",
+}
+
+
+def _react(life: dict, start: dict[str, float], final: dict[str, int]) -> list[str]:
+    """Reações ao cruzar limiares de necessidade. Consequências em 0 (Sims-like):
+    bexiga 0 → acidente (higiene despenca, alívio forçado); energia 0 → desmaio
+    (dorme onde está). As outras só avisam — a penalidade nos testes já morde."""
+    fired: list[str] = []
+    for key in NEEDS:
+        before = float(start.get(key, NEED_START) or 0)
+        after = int(final.get(key, 0))
+        if after == 0 and before > 0:
+            if key == "bexiga":
+                final["higiene"] = max(0, int(final.get("higiene", 0)) - 40)
+                final["bexiga"] = 20
+                fired.append("Não aguentou: acidente! A higiene despenca.")
+            elif key == "energia":
+                final["energia"] = 25
+                fired.append("Desabou de exaustão e dormiu onde estava.")
+            else:
+                fired.append(_CRIT[key])
+        elif after < 15 and before >= 15:
+            fired.append(_CRIT[key])
+        elif after < 25 and before >= 25:
+            fired.append(_WARN[key])
+    if fired:
+        bucket = life.setdefault("reactions", [])
+        if not isinstance(bucket, list):
+            bucket = []
+            life["reactions"] = bucket
+        day = int(life.get("day") or 1)
+        at = clock(int(life.get("minute") or 0))
+        for text in fired:
+            bucket.append({"day": day, "clock": at, "text": text})
+        del bucket[:-10]
+    return fired
 
 
 def _relations(life: dict, npcs: dict, slice_min: int, chance: float, rng) -> None:
@@ -384,5 +441,10 @@ def render(state: dict, user: str, scene_cards: list[dict]) -> str:
         rel_bits.append(f"{name_a}–{name_b}: {relation_label(int(value or 0))}")
     if rel_bits:
         lines.append("Relações: " + ". ".join(rel_bits) + ".")
+    recent = life.get("reactions") if isinstance(life.get("reactions"), list) else []
+    bits = [str(item.get("text") or "") for item in recent[-2:] if isinstance(item, dict)]
+    bits = [bit for bit in bits if bit]
+    if bits:
+        lines.append("Recente: " + " ".join(bits))
     lines.append("Use estes fatos com naturalidade; não cite números.")
     return "\n".join(lines)

@@ -66,6 +66,9 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
   const [skillName, setSkillName] = useState('')
   const [expr, setExpr] = useState('4dF')
   const [roll, setRoll] = useState(null)
+  const [resolution, setResolution] = useState(null)
+  const [weapon, setWeapon] = useState('')
+  const [skillCheck, setSkillCheck] = useState('')
 
   const id = adventure?.id
 
@@ -117,6 +120,12 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
   const npcNames = Object.fromEntries((life?.npcs || []).map((npc) => [npc.card_id, npc.name || npc.card_id]))
 
   const save = (body) => run(() => api.simPutActor(id, body))
+
+  const act = (body) => run(async () => {
+    const payload = await api.simAction(id, body)
+    setResolution(payload?.resolution || null)
+    return payload
+  })
 
   return (
     <div className="flex flex-col gap-4 text-xs text-primary">
@@ -177,18 +186,28 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               {inventory.map((row) => (
                 <li key={row.name} className="flex items-center justify-between gap-2">
                   <span>{row.name} × {row.qty}</span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className="text-[11px] text-rose-300 hover:underline disabled:opacity-40"
-                    onClick={() => save({
-                      inventory: inventory
-                        .map((item) => item.name === row.name ? { ...item, qty: item.qty - 1 } : item)
-                        .filter((item) => item.qty > 0),
-                    })}
-                  >
-                    remover
-                  </button>
+                  <span className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="text-[11px] text-emerald-300 hover:underline disabled:opacity-40"
+                      onClick={() => act({ kind: 'use_item', item: row.name })}
+                    >
+                      usar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="text-[11px] text-rose-300 hover:underline disabled:opacity-40"
+                      onClick={() => save({
+                        inventory: inventory
+                          .map((item) => item.name === row.name ? { ...item, qty: item.qty - 1 } : item)
+                          .filter((item) => item.qty > 0),
+                      })}
+                    >
+                      remover
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -264,15 +283,19 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
           {needs && lifeOn && (
             <div className="flex flex-col gap-1.5">
               <div className="text-[11px] text-muted">Humor {moodOf(needs)}</div>
-              {NEED_ORDER.map((key) => (
-                <div key={key}>
-                  <div className="mb-0.5 flex justify-between text-[11px] text-muted">
-                    <span>{NEED_LABEL[key]}</span>
-                    <span>{needs[key] ?? 0}</span>
+              {NEED_ORDER.map((key) => {
+                const value = needs[key] ?? 0
+                const tone = value < 15 ? 'bg-rose-600' : value < 25 ? 'bg-amber-500' : 'bg-accent-pri'
+                return (
+                  <div key={key}>
+                    <div className="mb-0.5 flex justify-between text-[11px] text-muted">
+                      <span>{NEED_LABEL[key]}{value < 15 ? ' ⚠' : ''}</span>
+                      <span>{value}</span>
+                    </div>
+                    <Bar value={value} max={100} tone={tone} />
                   </div>
-                  <Bar value={needs[key] ?? 0} max={100} />
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
           {lifeOn && (
@@ -288,6 +311,18 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                   {button.label}
                 </button>
               ))}
+            </div>
+          )}
+          {lifeOn && (life.reactions || []).length > 0 && (
+            <div>
+              <div className="mb-1 text-[11px] text-muted">Reações</div>
+              <ul className="flex max-h-28 flex-col gap-0.5 overflow-y-auto text-[11px]">
+                {(life.reactions || []).slice().reverse().map((item, index) => (
+                  <li key={`${item.day}-${item.clock}-${index}`} className="text-amber-200">
+                    <span className="text-muted">D{item.day} {item.clock}</span> {item.text}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {(life.npcs || []).length > 0 && (
@@ -312,13 +347,109 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
       )}
 
       {(view?.foes || []).length > 0 && (
-        <section className="rounded-xl border border-subtle p-3">
-          <div className="mb-1 text-[11px] text-muted">Inimigos</div>
+        <section className="flex flex-col gap-2 rounded-xl border border-subtle p-3">
+          <div className="text-[11px] text-muted">Inimigos</div>
+          <input
+            value={weapon}
+            onChange={(e) => setWeapon(e.target.value)}
+            placeholder="arma (opcional)"
+            className="rounded-lg border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri"
+          />
           <ul className="flex flex-col gap-1">
             {view.foes.map((foe) => (
-              <li key={foe.name}>{foe.name}: {foe.hp}/{foe.hp_max} PV</li>
+              <li key={foe.name} className="flex items-center justify-between gap-2">
+                <span>{foe.name}: {foe.hp}/{foe.hp_max} PV</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => act({ kind: 'attack', target: foe.name, weapon: weapon.trim(), hostile: true })}
+                  className="rounded-lg bg-rose-700/80 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-600 disabled:opacity-40"
+                >
+                  Atacar
+                </button>
+              </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {actor && view?.pack && (
+        <section className="flex flex-col gap-2 rounded-xl border border-subtle p-3">
+          <div className="text-[11px] text-muted">Ações rápidas</div>
+          <form
+            className="flex gap-1"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const name = skillCheck.trim()
+              if (!name) return
+              act({ kind: 'skill', skill: name, difficulty: 'medium' })
+            }}
+          >
+            <input
+              value={skillCheck}
+              onChange={(e) => setSkillCheck(e.target.value)}
+              placeholder={proficient.length ? `ex.: ${proficient[0]}` : 'perícia ou habilidade'}
+              className="min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri"
+            />
+            <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40">
+              Testar
+            </button>
+          </form>
+          {proficient.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {proficient.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => act({ kind: 'skill', skill: name, difficulty: 'medium' })}
+                  className="rounded-full border border-subtle px-2 py-0.5 text-[11px] hover:bg-elevated disabled:opacity-40"
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
+          {hpMax != null && (
+            <div className="flex flex-wrap gap-1">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => act({ kind: 'rest', minutes: 60 })}
+                className="rounded-lg border border-subtle px-2 py-1 text-[11px] hover:bg-elevated disabled:opacity-40"
+              >
+                Descanso 1h
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => act({ kind: 'rest', minutes: 480 })}
+                className="rounded-lg border border-subtle px-2 py-1 text-[11px] hover:bg-elevated disabled:opacity-40"
+              >
+                Sono 8h
+              </button>
+            </div>
+          )}
+          {resolution && (
+            <div className="flex flex-col gap-0.5 rounded-lg bg-elevated p-2 text-[11px]">
+              {(resolution.steps || []).map((step, index) => (
+                <div key={index} className="text-sky-300">{step.text}</div>
+              ))}
+              {(resolution.changes || []).map((row, index) => (
+                <div key={`c${index}`} className="text-zinc-400">
+                  {row.who} {row.what} {row.from}→{row.to}
+                </div>
+              ))}
+              {resolution.time && (
+                <div className="text-muted">
+                  +{resolution.time.minutes} min (agora {resolution.time.to}, dia {resolution.time.day})
+                </div>
+              )}
+              {(resolution.time?.reactions || []).map((text, index) => (
+                <div key={`r${index}`} className="text-amber-200">{text}</div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 

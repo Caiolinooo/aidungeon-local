@@ -87,3 +87,73 @@ def test_colocation_respects_the_daily_cap():
         life.DEFAULT_ROUTINE.update(saved)
     assert sim["life"]["relations"]["clara|tomas"] == 6
     assert sim["life"]["relations_day"]["clara|tomas"] == 6
+
+
+def test_crossing_25_warns_once_and_15_escalates():
+    sim = state.empty()
+    life.enable(sim, 5)
+    actor = _actor()
+    actor["needs"]["fome"] = 27
+    sim["actors"]["_solo"] = actor
+    jumped = life.advance(sim, 60, "other", "_solo", [], Always(), 0)
+    # 1h de "other" tira 4 de fome: 27 -> 23, cruza o aviso de 25
+    assert sim["actors"]["_solo"]["needs"]["fome"] == 23
+    assert jumped["reactions"] == ["A fome aperta."]
+    assert sim["life"]["reactions"][-1]["text"] == "A fome aperta."
+    # mais 2h: 23 -> 15, nada novo (já avisou em 25); depois 15 -> 11, crítico
+    jumped = life.advance(sim, 120, "other", "_solo", [], Always(), 0)
+    assert jumped["reactions"] == []
+    jumped = life.advance(sim, 120, "other", "_solo", [], Always(), 0)
+    assert sim["actors"]["_solo"]["needs"]["fome"] == 7
+    assert jumped["reactions"] == ["Fome crítica — forças se esvaindo."]
+
+
+def test_bladder_at_zero_is_an_accident():
+    sim = state.empty()
+    life.enable(sim, 5)
+    actor = _actor()
+    actor["needs"]["bexiga"] = 4
+    actor["needs"]["higiene"] = 80
+    sim["actors"]["_solo"] = actor
+    jumped = life.advance(sim, 60, "other", "_solo", [], Always(), 0)
+    needs = sim["actors"]["_solo"]["needs"]
+    assert needs["bexiga"] == 20
+    assert needs["higiene"] == 38  # 80 - 2 da hora - 40 do acidente
+    assert "acidente" in jumped["reactions"][-1]
+
+
+def test_energy_at_zero_collapses_into_sleep():
+    sim = state.empty()
+    life.enable(sim, 5)
+    actor = _actor(energia=2)
+    sim["actors"]["_solo"] = actor
+    jumped = life.advance(sim, 60, "other", "_solo", [], Always(), 0)
+    assert sim["actors"]["_solo"]["needs"]["energia"] == 25
+    assert "Desabou de exaustão" in jumped["reactions"][-1]
+
+
+def test_reactions_feed_caps_at_ten():
+    sim = state.empty()
+    life.enable(sim, 5)
+    for index in range(15):
+        sim["life"].setdefault("reactions", []).append(
+            {"day": 1, "clock": "08:00", "text": f"evento {index}"}
+        )
+    actor = _actor()
+    actor["needs"]["fome"] = 26
+    sim["actors"]["_solo"] = actor
+    life.advance(sim, 60, "other", "_solo", [], Always(), 0)
+    assert len(sim["life"]["reactions"]) == 10
+    assert sim["life"]["reactions"][-1]["text"] == "A fome aperta."
+
+
+def test_render_includes_recent_reactions():
+    sim = state.empty()
+    life.enable(sim, 5)
+    sim["actors"]["_solo"] = _actor()
+    sim["life"]["reactions"] = [
+        {"day": 1, "clock": "09:00", "text": "A fome aperta."},
+        {"day": 1, "clock": "10:00", "text": "A bexiga reclama."},
+    ]
+    block = life.render(sim, "_solo", [])
+    assert "Recente: A fome aperta. A bexiga reclama." in block

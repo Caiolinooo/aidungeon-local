@@ -142,6 +142,8 @@ export const api = {
     request(`/adventures/${id}/sim/actor`, { method: 'PUT', body }),
   simRoll: (id, expr, mode = '') =>
     request(`/adventures/${id}/sim/roll`, { method: 'POST', body: { expr, mode } }),
+  simAction: (id, body) =>
+    request(`/adventures/${id}/sim/action`, { method: 'POST', body }),
 
   // ------------------------------------------------------------- scenarios
   listScenarios: (params = {}) => request(`/scenarios${qs(params)}`),

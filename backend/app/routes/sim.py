@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -103,6 +105,18 @@ def _clock_view(sim: dict, user: str) -> dict | None:
             "label": life.relation_label(int(value or 0)),
             "value": int(value or 0),
         })
+    reactions = []
+    raw_rx = life_state.get("reactions") if isinstance(life_state.get("reactions"), list) else []
+    for item in raw_rx[-10:]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            reactions.append({
+                "day": int(item.get("day") or day),
+                "clock": str(item.get("clock") or ""),
+                "text": text,
+            })
     return {
         "enabled": bool(life_state.get("enabled")),
         "day": day,
@@ -112,6 +126,7 @@ def _clock_view(sim: dict, user: str) -> dict | None:
         "season": season,
         "npcs": npcs,
         "relations": relations,
+        "reactions": reactions,
     }
 
 
@@ -296,3 +311,91 @@ def post_roll(adventure_id: str, body: RollBody,
         "modifier": rolled.modifier,
         "total": rolled.total,
     }
+
+
+class ActionBody(BaseModel):
+    """Ação mecânica direta (sem LLM): o jogador clicou, o servidor rola."""
+    kind: str
+    target: str = ""
+    toughness: str = "normal"
+    hostile: bool = False
+    weapon: str = ""
+    item: str = ""
+    skill: str = ""
+    ability: str = ""
+    gold: int = 0
+    difficulty: str = "medium"
+    advantage: str = ""
+    minutes: int = 5
+    heal: bool = False
+
+
+_ACTION_KINDS = ("attack", "skill", "save", "use_item", "buy", "take", "rest")
+
+
+@router.post("/{adventure_id}/sim/action")
+def post_action(adventure_id: str, body: ActionBody,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    if body.kind not in _ACTION_KINDS:
+        raise GameError(422, "invalid_kind", "unknown action kind")
+    from app import game_engine
+    minutes = max(1, min(720, int(body.minutes or 5)))
+    activity = "rest"
+    if body.kind == "rest" and minutes >= 360:
+        activity = "sleep"
+    elif body.kind != "rest":
+        activity = "other"
+    raw = intent.normalize({
+        "kind": body.kind, "ability": body.ability, "skill": body.skill,
+        "target": body.target, "toughness": body.toughness, "hostile": body.hostile,
+        "weapon": body.weapon, "item": body.item, "gold": body.gold,
+        "difficulty": body.difficulty, "advantage": body.advantage,
+        "minutes": minutes, "activity": activity, "shock": "none", "heal": body.heal,
+    })
+    import random
+    rng = random.SystemRandom()
+    with game_engine.appending(adventure_id) as conn:
+        adventure = _visible_adventure(conn, adventure_id, info.user)
+        sim = state.load(adventure)
+        pack_id = sim.get("pack") or ""
+        life_state = sim.get("life") if isinstance(sim.get("life"), dict) else None
+        life_on = bool(life_state and life_state.get("enabled"))
+        if not pack_id and not life_on:
+            raise GameError(409, "sim_off", "rules and life mode are off")
+        pack = packs.load_pack(pack_id)
+        cards = db.list_cards(conn, adventure_id)
+        stats_raw, title = _sheet_stats(conn, adventure_id, info.user)
+        actor = rules.ensure_actor(sim, pack, info.user, title, stats_raw)
+        key = state.actor_key(info.user)
+        penalty = life.penalty(actor, pack) if life_on else 0
+        resolution = rules.resolve(sim, pack, raw, key, cards, penalty, rng)
+        if resolution.refusal:
+            raise GameError(409, "rules_refused", resolution.refusal)
+        time_info = None
+        if life_on:
+            time_info = life.advance(
+                sim, int(raw.get("minutes") or 5), raw.get("activity") or "other",
+                key, cards, rng, 0.25,
+            )
+            if time_info.get("crossed_midnight"):
+                from app import jobs
+                jobs.enqueue_day_tick(conn, adventure_id, reason="clock")
+        for card_id, status in resolution.card_status.items():
+            card = db.get_card(conn, adventure_id, card_id)
+            if not card:
+                continue
+            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+            sheet["status"] = status
+            db.update_card(conn, adventure_id, card_id, {
+                "sheet": json.dumps(sheet, ensure_ascii=False),
+            })
+        db.set_sim_state(conn, adventure_id, sim)
+        saved = db.get_adventure(conn, adventure_id) or adventure
+        payload = _view(saved, info.user)
+        payload["resolution"] = {
+            "steps": resolution.steps,
+            "changes": resolution.changes,
+            "time": time_info,
+        }
+    _publish(adventure_id)
+    return payload
