@@ -335,6 +335,58 @@ def test_card_assets_job_fills_the_live_fields(client):
     assert _check(report, "card_sheets")["status"] == "ok"
 
 
+def test_sheet_sentiments_count_as_a_mind_and_the_player_does_not(client):
+    """Sentimentos ficam na ficha, não em life.sentiments. O jogador não é NPC."""
+    adv = make_adventure(title="Mentes")
+    with db.session() as conn:
+        db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            sheet=json.dumps({"sentiments": "desconfiada do visitante",
+                              "humor": "ironia seca"}),
+        )
+        db.insert_card(
+            conn, adv["id"], title="Mudo", type="character",
+            entry="Um guarda calado no portão.",
+            sheet=json.dumps({"appearance": "alto"}),
+        )
+        db.upsert_player_character(
+            conn, adv["id"], "caio", title="Caio",
+            sheet=json.dumps({"status": "alive", "class": "Ladino"}),
+        )
+        db.insert_card(
+            conn, adv["id"], title="Ronda", type="character",
+            sheet=json.dumps({"life": {"mood": "atento", "activity": "na muralha"}}),
+        )
+    report = client.get(f"/api/adventures/{adv['id']}/consistency").json()
+    minds = _check(report, "npc_minds")
+    assert minds["repairable"] is True
+    assert minds["status"] == "warn"
+    assert minds["detail"] == "1 NPC sem vida simulada."
+    assert [item["title"] for item in minds["items"]] == ["Mudo"]
+    assert _check(report, "canon_world")["repairable"] is False
+
+
+def test_repair_npc_minds_fills_the_sheet_instead_of_refusing(client):
+    adv = make_adventure(title="Mente vazia")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], title="Caio", type="character",
+                       entry="Caio espera no portão.",
+                       sheet=json.dumps({"appearance": "cabelo curto"}))
+    transport = _mock_transport(json.dumps(SHEET_JSON))
+    client.app.dependency_overrides[deps.get_http_transport] = lambda: transport
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/consistency/repair",
+                           json={"check": "npc_minds"})
+    finally:
+        client.app.dependency_overrides.pop(deps.get_http_transport, None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["repaired"][0]["title"] == "Caio"
+    assert body["repaired"][0]["sentiments"]
+    minds = _check(body["report"], "npc_minds")
+    assert minds["status"] == "ok"
+
+
 def test_portrait_in_the_queue_is_pending_not_broken(client):
     """Enquanto o retrato esta na fila, o check avisa; sem job, o check acusa."""
     adv = make_adventure(title="Retrato na fila")

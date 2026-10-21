@@ -15,7 +15,8 @@ Checks (id):
   canon_world     o cânone narrado não contradiz o mundo
   scene_alignment o último fundo e o último "See" pintaram a mesma cena
 
-Reparáveis: card_sheets, portraits, memories. Os demais são diagnóstico.
+Reparáveis: card_sheets, portraits, memories, npc_minds. Cânone e cena
+são diagnóstico: o botão de reparo não aparece para eles.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ ERROR = "error"
 
 CHECKS = ("card_sheets", "portraits", "memories", "npc_minds",
           "canon_world", "scene_alignment")
-REPAIRABLE = ("card_sheets", "portraits", "memories")
+REPAIRABLE = ("card_sheets", "portraits", "memories", "npc_minds")
 
 # Marcadores de nudez (pt/en). A ficha fala pt-BR, o prompt de retrato fala en.
 _NUDITY = re.compile(
@@ -86,7 +87,7 @@ def _longest_common_run(left: list[str], right: list[str]) -> int:
 def _check(cid: str, name: str, status: str, detail: str,
            items: list[dict] | None = None) -> dict:
     return {"id": cid, "name": name, "status": status, "detail": detail,
-            "items": items or []}
+            "items": items or [], "repairable": cid in REPAIRABLE}
 
 
 def _characters(cards: list[dict]) -> list[dict]:
@@ -228,6 +229,29 @@ def _check_memories(conn: sqlite3.Connection, adventure_id: str) -> dict:
                   f"{len(mems)} memória(s) com embedding utilizável.")
 
 
+def _mind_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _has_simulated_life(sheet: dict, memories: list) -> bool:
+    """Humor e sentimentos ficam na ficha. O bloco `life` guarda humor e rotina.
+
+    `life.sentiments` não é gravado em lugar nenhum: olhar só para ele
+    acusava uma ficha completa.
+    """
+    life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
+    if any(_mind_text(sheet.get(key)) for key in ("humor", "sentiments")):
+        return True
+    if any(_mind_text(life.get(key)) for key in ("mood", "activity", "sentiments")):
+        return True
+    return bool(memories)
+
+
+def _npc_phrase(count: int, tail: str) -> str:
+    noun = "NPC" if count == 1 else "NPCs"
+    return f"{count} {noun} {tail}"
+
+
 def _check_npc_minds(conn: sqlite3.Connection, adventure_id: str,
                      cards: list[dict]) -> dict:
     chars = _npc_characters(cards)
@@ -236,20 +260,18 @@ def _check_npc_minds(conn: sqlite3.Connection, adventure_id: str,
     items: list[dict] = []
     for card in chars:
         sheet = npc_assets.parse_sheet(card.get("sheet"))
-        life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
         try:
             mems = npc_life.list_memories(conn, adventure_id, card["id"], limit=50)
         except Exception:  # memória de NPC é opcional para o relatório
             mems = []
-        sentiments = (life.get("sentiments") or "").strip()
-        if not sentiments and not mems:
+        if not _has_simulated_life(sheet, mems):
             items.append({"card_id": card.get("id"), "title": card.get("title"),
                           "issue": "sem vida simulada (humor, sentimentos, memórias)"})
     if items:
         return _check("npc_minds", "Mentes dos NPCs", WARN,
-                  f"{len(chars)} NPC(s) sem vida simulada.", items)
+                      _npc_phrase(len(items), "sem vida simulada."), items)
     return _check("npc_minds", "Mentes dos NPCs", OK,
-                  f"{len(chars)} NPC(s) com vida simulada.")
+                  _npc_phrase(len(chars), "com vida simulada."))
 
 
 def _check_canon_world(conn: sqlite3.Connection, adv: dict) -> dict:
@@ -342,6 +364,8 @@ def repair(conn: sqlite3.Connection, adventure_id: str, check_id: str,
         return _repair_cards(conn, adv, llm_cfg, transport)
     if check_id == "portraits":
         return _repair_portraits(conn, adv, llm_cfg, transport)
+    if check_id == "npc_minds":
+        return _repair_npc_minds(conn, adv, llm_cfg, transport)
     return _repair_memories(conn, adventure_id, transport)
 
 
@@ -412,6 +436,31 @@ def _repair_portraits(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
                         card.get("title"), exc)
             errors.append(f"{card.get('title')}: {exc}")
     return {"check": "portraits", "repaired": repaired, "errors": errors}
+
+
+def _repair_npc_minds(conn: sqlite3.Connection, adv: dict, llm_cfg: dict | None,
+                      transport: Any) -> dict:
+    """Preenche humor e sentimentos da ficha. A mente do turno continua no pós-turno."""
+    report = _check_npc_minds(conn, adv["id"], db.list_cards(conn, adv["id"]))
+    repaired: list[dict] = []
+    errors: list[str] = []
+    for item in report["items"]:
+        card = db.get_card(conn, adv["id"], item["card_id"])
+        if not card or _is_player_card(card):
+            continue
+        try:
+            updated = npc_assets.enrich_card(conn, adv, card, llm_cfg or {},
+                                             transport)
+        except Exception as exc:
+            log.warning("consistency: falha ao refazer a mente de %s: %s",
+                        card.get("title"), exc)
+            errors.append(f"{card.get('title')}: {exc}")
+            continue
+        sheet = npc_assets.parse_sheet(updated.get("sheet"))
+        repaired.append({"card_id": card["id"], "title": card.get("title"),
+                         "sentiments": _mind_text(sheet.get("sentiments")),
+                         "humor": _mind_text(sheet.get("humor"))})
+    return {"check": "npc_minds", "repaired": repaired, "errors": errors}
 
 
 def _repair_memories(conn: sqlite3.Connection, adventure_id: str,

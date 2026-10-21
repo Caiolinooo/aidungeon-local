@@ -2,7 +2,7 @@
 
 `GET /adventures/{id}/consistency` audita a cadeia e devolve o relatório.
 `POST /adventures/{id}/consistency/repair` refaz o elo quebrado (ficha,
-retrato ou embedding de memória) e devolve o que foi refeito.
+retrato, mente do NPC ou embedding de memória) e devolve o que foi refeito.
 """
 
 from __future__ import annotations

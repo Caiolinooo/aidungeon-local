@@ -188,7 +188,7 @@ export default function ConsistencyTab({ adventure }) {
                 </ul>
               )}
 
-              {c.status !== 'ok' && (
+              {c.status !== 'ok' && c.repairable !== false && (
                 <button
                   onClick={() => repair(c.id)}
                   disabled={repairing === c.id}
