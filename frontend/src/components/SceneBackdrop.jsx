@@ -201,7 +201,7 @@ export default function SceneBackdrop({
         </div>
 
         {scene.cast?.length > 0 && (
-          <div className="flex justify-center gap-4">
+          <div className="flex items-end justify-start gap-3">
             {scene.cast.map((npc) => {
               const src = urls[npc.portrait?.id]
               const stepped = reacting && namedIn(playerText, npc.title)
