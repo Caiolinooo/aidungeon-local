@@ -230,7 +230,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                 placeholder="item"
                 className="min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri"
               />
-              <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40">
+              <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-canvas disabled:opacity-40">
                 +
               </button>
             </form>
@@ -391,7 +391,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               placeholder={proficient.length ? `ex.: ${proficient[0]}` : 'perícia ou habilidade'}
               className="min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri"
             />
-            <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40">
+            <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-canvas disabled:opacity-40">
               Testar
             </button>
           </form>
@@ -476,7 +476,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
             onChange={(e) => setExpr(e.target.value)}
             className="min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri"
           />
-          <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40">
+          <button type="submit" disabled={busy} className="rounded-lg bg-accent-pri px-2 py-1 text-[11px] font-semibold text-canvas disabled:opacity-40">
             Rolar
           </button>
         </div>

@@ -217,7 +217,7 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-accent-pri hover:bg-accent-hov text-white text-xs font-semibold shadow-md transition"
+            className="px-4 py-2 rounded-xl bg-accent-pri hover:bg-accent-hov text-canvas text-xs font-semibold shadow-md transition"
           >
             Aplicar e fechar
           </button>

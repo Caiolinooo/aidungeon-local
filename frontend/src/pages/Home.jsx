@@ -165,7 +165,7 @@ export default function Home() {
           </button>
           <button
             onClick={() => setShowNew(true)}
-            className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition"
           >
             <Plus className="w-4 h-4" />
             <span>Nova aventura</span>
@@ -486,7 +486,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
             <button
               onClick={start}
               disabled={creating}
-              className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+              className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
             >
               {creating ? 'Criando…' : 'Começar aventura'}
             </button>
@@ -558,7 +558,7 @@ function ImportModal({ onClose, onImported }) {
             <button
               onClick={doImport}
               disabled={!file || importing}
-              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
             >
               {importing ? 'Importing…' : 'Import'}
             </button>
@@ -604,7 +604,7 @@ function ImportModal({ onClose, onImported }) {
               <div className="flex justify-end">
                 <button
                   onClick={onClose}
-                  className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov"
+                  className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov"
                 >
                   Done
                 </button>
@@ -649,7 +649,7 @@ function ImportModal({ onClose, onImported }) {
             </button>
             <button
               onClick={() => navigate(`/play/${report.adventure_id}`)}
-              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov"
+              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov"
             >
               ▶ Open adventure
             </button>
@@ -809,7 +809,7 @@ function RenameModal({ adventure, onClose, onRenamed }) {
           <button
             onClick={save}
             disabled={saving || !title.trim()}
-            className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+            className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
           >
             {saving ? 'Salvando…' : 'Salvar'}
           </button>

@@ -6,29 +6,29 @@
 :root,
 [data-theme="obsidian"],
 .theme-obsidian {
-  --n-950: 9 9 11;
-  --n-900: 24 24 27;
-  --n-800: 39 39 42;
-  --n-700: 63 63 70;
-  --n-600: 82 82 91;
-  --n-500: 113 113 122;
-  --n-400: 161 161 170;
-  --n-300: 212 212 216;
-  --n-200: 228 228 231;
-  --n-100: 244 244 245;
-  --n-50: 241 241 245;
+  --n-950: 10 9 8;
+  --n-900: 20 18 16;
+  --n-800: 31 28 25;
+  --n-700: 55 50 44;
+  --n-600: 76 69 61;
+  --n-500: 110 102 92;
+  --n-400: 158 149 136;
+  --n-300: 205 197 184;
+  --n-200: 226 220 208;
+  --n-100: 240 235 226;
+  --n-50: 250 246 238;
 
-  --accent-950: 2 44 34;
-  --accent-900: 6 78 59;
-  --accent-800: 6 95 70;
-  --accent-700: 4 120 87;
-  --accent-600: 5 150 105;
-  --accent-500: 16 185 129;
-  --accent-400: 52 211 153;
-  --accent-300: 110 231 183;
-  --accent-200: 167 243 208;
-  --accent-100: 209 250 229;
-  --accent-50: 236 253 245;
+  --accent-950: 36 26 6;
+  --accent-900: 64 47 11;
+  --accent-800: 92 68 16;
+  --accent-700: 120 91 22;
+  --accent-600: 148 114 30;
+  --accent-500: 176 139 42;
+  --accent-400: 203 169 62;
+  --accent-300: 226 199 106;
+  --accent-200: 241 224 158;
+  --accent-100: 249 240 202;
+  --accent-50: 253 249 232;
 
   --danger-950: 69 10 10;
   --danger-900: 127 29 29;
@@ -63,8 +63,8 @@
   --text-primary-rgb: var(--n-100);
   --text-secondary-rgb: var(--n-400);
   --text-muted-rgb: var(--n-500);
-  --accent-primary-rgb: var(--accent-700);
-  --accent-hover-rgb: var(--accent-600);
+  --accent-primary-rgb: var(--accent-500);
+  --accent-hover-rgb: var(--accent-400);
   --accent-gold-rgb: var(--warn-500);
   --info-text-rgb: 125 211 252;
   color-scheme: dark;
@@ -72,29 +72,29 @@
 
 [data-theme="parchment"],
 .theme-parchment {
-  --n-950: 244 233 213;
-  --n-900: 250 243 228;
-  --n-800: 255 253 248;
-  --n-700: 216 197 162;
-  --n-600: 160 138 104;
-  --n-500: 138 118 89;
-  --n-400: 107 90 67;
-  --n-300: 84 69 47;
-  --n-200: 59 47 30;
-  --n-100: 42 33 20;
-  --n-50: 228 221 201;
+  --n-950: 240 229 208;
+  --n-900: 247 239 222;
+  --n-800: 253 248 236;
+  --n-700: 214 196 164;
+  --n-600: 165 140 106;
+  --n-500: 133 111 82;
+  --n-400: 104 85 62;
+  --n-300: 80 65 45;
+  --n-200: 56 45 31;
+  --n-100: 38 30 20;
+  --n-50: 226 218 198;
 
-  --accent-50: 236 253 245;
-  --accent-100: 2 44 34;
-  --accent-200: 6 78 59;
-  --accent-300: 6 95 70;
-  --accent-400: 4 120 87;
-  --accent-500: 5 150 105;
-  --accent-600: 6 95 70;
-  --accent-700: 4 120 87;
-  --accent-800: 6 78 59;
-  --accent-900: 209 250 229;
-  --accent-950: 236 253 245;
+  --accent-50: 253 249 232;
+  --accent-100: 36 26 6;
+  --accent-200: 64 47 11;
+  --accent-300: 92 68 16;
+  --accent-400: 120 91 22;
+  --accent-500: 148 114 30;
+  --accent-600: 110 82 18;
+  --accent-700: 138 104 26;
+  --accent-800: 92 68 16;
+  --accent-900: 253 249 232;
+  --accent-950: 253 249 232;
 
   --danger-50: 255 247 247;
   --danger-100: 127 29 29;
@@ -139,28 +139,28 @@
 [data-theme="oled"],
 .theme-oled {
   --n-950: 0 0 0;
-  --n-900: 10 10 10;
-  --n-800: 18 18 18;
-  --n-700: 38 38 38;
-  --n-600: 107 107 116;
-  --n-500: 139 139 148;
-  --n-400: 163 163 163;
-  --n-300: 196 196 196;
-  --n-200: 224 224 224;
-  --n-100: 245 245 245;
-  --n-50: 38 38 38;
+  --n-900: 10 9 8;
+  --n-800: 20 18 16;
+  --n-700: 48 44 39;
+  --n-600: 70 64 57;
+  --n-500: 104 97 88;
+  --n-400: 154 146 134;
+  --n-300: 203 196 184;
+  --n-200: 225 220 209;
+  --n-100: 240 236 228;
+  --n-50: 250 247 240;
 
-  --accent-950: 2 44 34;
-  --accent-900: 6 78 59;
-  --accent-800: 6 95 70;
-  --accent-700: 4 120 87;
-  --accent-600: 5 150 105;
-  --accent-500: 16 185 129;
-  --accent-400: 52 211 153;
-  --accent-300: 110 231 183;
-  --accent-200: 167 243 208;
-  --accent-100: 209 250 229;
-  --accent-50: 236 253 245;
+  --accent-950: 36 26 6;
+  --accent-900: 64 47 11;
+  --accent-800: 92 68 16;
+  --accent-700: 120 91 22;
+  --accent-600: 148 114 30;
+  --accent-500: 176 139 42;
+  --accent-400: 203 169 62;
+  --accent-300: 226 199 106;
+  --accent-200: 241 224 158;
+  --accent-100: 249 240 202;
+  --accent-50: 253 249 232;
 
   --danger-950: 69 10 10;
   --danger-900: 127 29 29;
@@ -195,8 +195,8 @@
   --text-primary-rgb: var(--n-100);
   --text-secondary-rgb: var(--n-400);
   --text-muted-rgb: var(--n-500);
-  --accent-primary-rgb: var(--accent-700);
-  --accent-hover-rgb: var(--accent-600);
+  --accent-primary-rgb: var(--accent-500);
+  --accent-hover-rgb: var(--accent-400);
   --accent-gold-rgb: var(--warn-500);
   --info-text-rgb: 125 211 252;
   color-scheme: dark;
@@ -218,6 +218,41 @@ body {
   font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Vinheta quente no canvas: o fundo chapado lia como painel de admin.
+   Puro CSS (sem imagem): leve aquecimento no topo + escurecimento nas bordas. */
+[data-theme="obsidian"] body,
+.theme-obsidian body,
+[data-theme="oled"] body,
+.theme-oled body {
+  background-image:
+    radial-gradient(120% 90% at 50% -20%, rgb(var(--accent-500) / 0.10), transparent 60%),
+    radial-gradient(100% 100% at 50% 120%, rgb(0 0 0 / 0.55), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Títulos de cena e cabeçalhos de prosa: serifa editorial com respiro. */
+.display-serif {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, Cambria, 'Times New Roman', serif;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+
+/* Prosa do narrador: capitular na primeira letra de cada turno. */
+.prose-turn::first-letter {
+  font-size: 2.7em;
+  float: left;
+  line-height: 0.82;
+  padding-right: 0.1em;
+  margin-top: 0.04em;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  color: rgb(var(--accent-primary-rgb));
+}
+
+/* Filete de separação entre turnos (o container verde saiu de cena). */
+.turn-rule {
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgb(var(--border-subtle-rgb)), transparent);
 }
 
 button,

@@ -210,7 +210,7 @@ export default function MemoryTab({ adventure }) {
           <button
             onClick={saveMeta}
             disabled={saving}
-            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white shadow hover:bg-accent-hov transition disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{saving ? 'Salvando…' : 'Salvar essenciais e nota'}</span>
@@ -379,7 +379,7 @@ export default function MemoryTab({ adventure }) {
                 type="button"
                 onClick={saveMemoryItem}
                 disabled={memorySaving}
-                className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
+                className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition disabled:opacity-50"
               >
                 {memorySaving ? 'Salvando…' : 'Salvar memória'}
               </button>

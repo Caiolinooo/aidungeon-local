@@ -222,7 +222,7 @@ export default function InputBar({
               title={t.placeholder || t.label}
               className={`min-h-9 flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-all sm:flex-none ${
                 tab === t.id
-                  ? 'bg-accent-pri text-white shadow-sm'
+                  ? 'bg-accent-pri text-canvas shadow-sm'
                   : 'text-muted hover:bg-surface hover:text-primary'
               } disabled:opacity-50`}
             >
@@ -261,7 +261,7 @@ export default function InputBar({
               aria-pressed={panelOpen}
               className={`h-11 w-11 shrink-0 rounded-full border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 panelOpen
-                  ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
+                  ? 'border-accent-pri bg-accent-pri text-canvas hover:bg-accent-hov'
                   : 'border-subtle bg-elevated text-secondary hover:text-primary'
               }`}
             >
@@ -296,7 +296,7 @@ export default function InputBar({
             aria-pressed={webOn}
             className={`h-11 w-11 shrink-0 rounded-full border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               webOn
-                ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
+                ? 'border-accent-pri bg-accent-pri text-canvas hover:bg-accent-hov'
                 : 'border-subtle bg-elevated text-secondary hover:text-primary'
             }`}
           >
@@ -306,7 +306,7 @@ export default function InputBar({
             onClick={submit}
             disabled={inputLocked || !text.trim()}
             title={disabledTurn ? 'Aguarde a sua vez' : undefined}
-            className="h-11 flex-1 rounded-full bg-accent-pri px-5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none"
+            className="h-11 flex-1 rounded-full bg-accent-pri px-5 text-sm font-semibold text-canvas shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none"
           >
             Enviar
           </button>

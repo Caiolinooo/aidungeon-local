@@ -562,7 +562,7 @@ export default function GenerateAdventureModal({ onClose }) {
                     type="button"
                     disabled={generating}
                     onClick={() => setHeroMode('describe')}
-                    className={`rounded-md px-2.5 py-1 ${heroMode === 'describe' ? 'bg-accent-pri text-white' : 'text-secondary hover:text-primary'}`}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'describe' ? 'bg-accent-pri text-canvas' : 'text-secondary hover:text-primary'}`}
                   >
                     Descrever
                   </button>
@@ -570,7 +570,7 @@ export default function GenerateAdventureModal({ onClose }) {
                     type="button"
                     disabled={generating}
                     onClick={() => setHeroMode('steps')}
-                    className={`rounded-md px-2.5 py-1 ${heroMode === 'steps' ? 'bg-accent-pri text-white' : 'text-secondary hover:text-primary'}`}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'steps' ? 'bg-accent-pri text-canvas' : 'text-secondary hover:text-primary'}`}
                   >
                     Passo a passo
                   </button>
@@ -761,7 +761,7 @@ export default function GenerateAdventureModal({ onClose }) {
               <button
                 onClick={generate}
                 disabled={generating || brief.trim().length < 3}
-                className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+                className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
               >
                 {generating ? 'Gerando…' : 'Gerar rascunho'}
               </button>
@@ -920,7 +920,7 @@ export default function GenerateAdventureModal({ onClose }) {
                 type="button"
                 onClick={create}
                 disabled={busy || !draft.title?.trim()}
-                className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+                className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
               >
                 {creating ? 'Criando…' : 'Criar aventura'}
               </button>

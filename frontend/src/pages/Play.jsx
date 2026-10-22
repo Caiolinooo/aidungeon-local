@@ -977,7 +977,7 @@ export default function Play() {
         <div className="flex gap-2">
           <button
             onClick={load}
-            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov transition"
+            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov transition"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Tentar de novo</span>
@@ -1033,7 +1033,7 @@ export default function Play() {
     loose: 2.0,
   }[readerPrefs?.lineHeight || 'relaxed']
 
-  const fontSizeValue = readerPrefs?.fontSize || 17
+  const fontSizeValue = readerPrefs?.fontSize || 19
 
   const shareButton = canShare ? (
     <button
@@ -1041,7 +1041,7 @@ export default function Play() {
       onClick={() => setShareOpen(true)}
       aria-label="Compartilhar aventura"
       title="Compartilhar aventura"
-      className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface px-3 py-2 text-sm text-secondary hover:text-primary hover:bg-elevated transition"
+      className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-sm text-secondary hover:text-primary hover:bg-elevated transition"
     >
       👥
     </button>
@@ -1069,7 +1069,7 @@ export default function Play() {
       {/* LEFT COLUMN: Main Story Pane */}
       <div className="flex flex-1 min-w-0 flex-col h-full overflow-hidden relative">
         {/* Header + Action Bar */}
-        <header className="flex flex-col gap-2 border-b border-subtle bg-surface px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:justify-between shrink-0">
+        <header className="flex shrink-0 flex-col gap-2 border-b border-subtle/70 bg-canvas/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2">
             {/* Mobile Drawer Button */}
             <button
@@ -1090,7 +1090,7 @@ export default function Play() {
             </Link>
 
             <div className="min-w-0 flex-1 pl-1">
-              <h1 className="truncate text-xs sm:text-sm font-bold text-primary">
+              <h1 className="display-serif truncate text-sm font-semibold tracking-tight text-primary sm:text-base">
                 {adventure.title}
               </h1>
             </div>
@@ -1148,7 +1148,7 @@ export default function Play() {
                     disabled={generating || turnBlocked || needsCharacter}
                     aria-label="Continuar a narração"
                     title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'A IA escreve o próximo parágrafo')}
-                    className="flex h-10 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
+                    className="flex h-10 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition disabled:opacity-40"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
                     <span className="hidden sm:inline">Continuar</span>
@@ -1191,7 +1191,7 @@ export default function Play() {
                         </button>
                         <button
                           onClick={doSee}
-                          className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
+                          className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition"
                         >
                           Pintar a cena
                         </button>
@@ -1264,7 +1264,7 @@ export default function Play() {
             className="h-full overflow-y-auto overscroll-y-contain px-4 py-6"
           >
             <div
-              className={`mx-auto flex flex-col gap-4 pb-14 sm:pb-4 transition-all duration-150 ${colWidthCls} ${fontFamilyCls}`}
+              className={`mx-auto flex flex-col gap-6 pb-14 sm:pb-4 transition-all duration-150 ${colWidthCls} ${fontFamilyCls}`}
               style={{
                 fontSize: `${fontSizeValue}px`,
                 lineHeight: lineHeightValue,
@@ -1574,7 +1574,7 @@ function EditActionModal({ action, onClose, onSave }) {
               setSaving(false)
             }}
             disabled={saving}
-            className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
+            className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition disabled:opacity-50"
           >
             {saving ? 'Salvando…' : 'Salvar'}
           </button>

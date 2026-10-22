@@ -274,7 +274,7 @@ export default function Settings() {
           <button
             onClick={handleSave}
             disabled={saving || loading}
-            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{saving ? 'Salvando…' : 'Salvar'}</span>
@@ -295,7 +295,7 @@ export default function Settings() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-medium transition text-left whitespace-nowrap shrink-0 ${
                   active
-                    ? 'bg-accent-pri text-white font-semibold shadow-sm'
+                    ? 'bg-accent-pri text-canvas font-semibold shadow-sm'
                     : 'text-secondary hover:text-primary hover:bg-elevated/60'
                 }`}
               >
@@ -393,7 +393,7 @@ export default function Settings() {
                             onClick={() => setLlmForm({ ...llmForm, context_size: preset.val })}
                             className={`rounded-lg px-2 py-1 text-[10px] font-mono transition ${
                               llmForm.context_size === preset.val
-                                ? 'bg-accent-pri text-white font-bold'
+                                ? 'bg-accent-pri text-canvas font-bold'
                                 : 'border border-subtle bg-elevated text-secondary hover:text-primary'
                             }`}
                           >

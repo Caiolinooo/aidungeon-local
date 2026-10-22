@@ -72,7 +72,7 @@ export default function Modal({
             ref={restoreRef}
             type="button"
             onClick={() => setMinimized(false)}
-            className="shrink-0 rounded-full bg-accent-pri px-3 py-1 text-xs font-semibold text-white hover:bg-accent-hov"
+            className="shrink-0 rounded-full bg-accent-pri px-3 py-1 text-xs font-semibold text-canvas hover:bg-accent-hov"
             aria-label="Restaurar"
           >
             Restaurar

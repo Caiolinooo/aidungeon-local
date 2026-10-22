@@ -375,7 +375,7 @@ export default function CardsTab({ adventure }) {
           </button>
           <button
             onClick={() => openEditor(null)}
-            className="flex items-center gap-1.5 rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition"
+            className="flex items-center gap-1.5 rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition"
           >
             <Plus className="w-4 h-4" />
             <span>Nova ficha</span>
@@ -411,7 +411,7 @@ export default function CardsTab({ adventure }) {
             onClick={() => setTypeFilter(t)}
             className={`rounded-lg px-2.5 py-1 text-[11px] font-medium capitalize transition ${
               typeFilter === t
-                ? 'bg-accent-pri text-white shadow-sm'
+                ? 'bg-accent-pri text-canvas shadow-sm'
                 : 'border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated'
             }`}
           >
@@ -749,7 +749,7 @@ export default function CardsTab({ adventure }) {
                   type="button"
                   onClick={save}
                   disabled={saving || enriching}
-                  className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
+                  className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition disabled:opacity-50"
                 >
                   {saving ? 'Salvando…' : 'Salvar ficha'}
                 </button>

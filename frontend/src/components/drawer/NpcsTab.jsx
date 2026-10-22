@@ -507,7 +507,7 @@ function NpcRow({
         <button
           onClick={() => onSave(card, form)}
           disabled={!dirty || saving}
-          className="rounded-md bg-accent-pri px-2 py-1 text-xs font-medium text-white hover:bg-accent-hov disabled:opacity-50"
+          className="rounded-md bg-accent-pri px-2 py-1 text-xs font-medium text-canvas hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Save'}
         </button>
@@ -833,7 +833,7 @@ export default function NpcsTab({ adventure }) {
         <div className="flex gap-1">
           <button
             onClick={() => { setNpcName(''); setNamingNpc(true) }}
-            className="rounded-md bg-accent-pri px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-hov"
+            className="rounded-md bg-accent-pri px-3 py-1.5 text-sm font-medium text-canvas hover:bg-accent-hov"
           >
             + Adicionar NPC
           </button>

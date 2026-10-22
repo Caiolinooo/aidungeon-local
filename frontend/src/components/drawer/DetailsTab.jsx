@@ -175,7 +175,7 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
             type="button"
             onClick={saveRules}
             disabled={rulesBusy || rules === savedRules}
-            className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+            className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
           >
             {saving ? 'Salvando…' : 'Salvar'}
           </button>

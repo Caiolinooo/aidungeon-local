@@ -63,7 +63,7 @@ function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
             className={`flex h-12 w-12 items-center justify-center rounded-lg text-xl font-black ${
               rolling !== null
                 ? 'animate-pulse bg-surface text-secondary'
-                : 'bg-accent-pri text-white'
+                : 'bg-accent-pri text-canvas'
             }`}
           >
             {display}
@@ -74,7 +74,7 @@ function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
               <button
                 onClick={() => onSend('do', `rolls a d${result.sides} and gets ${result.value}`)}
                 disabled={disabled}
-                className="min-h-11 rounded-lg bg-accent-pri px-3 py-2 text-xs font-semibold text-white hover:bg-accent-hov disabled:opacity-40"
+                className="min-h-11 rounded-lg bg-accent-pri px-3 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov disabled:opacity-40"
               >
                 Enviar rolagem
               </button>

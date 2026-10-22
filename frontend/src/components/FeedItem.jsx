@@ -73,22 +73,15 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
   return (
     <div
       id={`action-${action.id}`}
-      className={`group relative rounded-xl px-4 pb-3 pt-9 transition-colors hover:bg-elevated/40 sm:pt-4 ${
-        isLatest ? 'border-l-2 border-accent-pri bg-accent-pri/10' : ''
+      className={`group relative px-1 pb-7 pt-1 ${
+        isLatest ? 'border-l-2 border-accent-pri/55 pl-4' : ''
       }`}
     >
-      {isLatest && (
-        <div className="mb-1.5 flex items-center gap-2">
-          <span className="inline-flex items-center rounded bg-accent-pri px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-sm">
-            Novo
-          </span>
-        </div>
-      )}
       <button
         onClick={() => onEdit(action)}
         disabled={disabled}
         title="Editar ação"
-        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
+        className="absolute right-2 top-1 flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
       >
         <Edit2 className="w-3 h-3" />
         <span>Editar</span>
@@ -100,8 +93,8 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
       {isSee ? (
         <SeeImageCard action={action} />
       ) : isPlayer ? (
-        <blockquote className="border-l-4 border-accent-pri/70 pl-4">
-          <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-accent-pri">
+        <blockquote className="border-l border-accent-pri/35 pl-4">
+          <div className="mb-1.5 font-sans text-[10px] font-semibold uppercase tracking-[0.22em] text-accent-pri">
             {playerLabel(type, actor)}
           </div>
           <p className="whitespace-pre-wrap font-prose text-primary">
@@ -110,7 +103,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
         </blockquote>
       ) : (
         <p
-          className={`whitespace-pre-wrap font-prose ${
+          className={`prose-turn whitespace-pre-wrap font-prose ${
             type === 'story' ? 'italic text-secondary' : 'text-primary'
           }`}
         >

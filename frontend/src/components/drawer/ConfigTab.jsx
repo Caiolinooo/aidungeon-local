@@ -271,7 +271,7 @@ export default function ConfigTab() {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar configurações'}
         </button>
@@ -474,7 +474,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar voz'}
         </button>
@@ -722,7 +722,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar imagem'}
         </button>

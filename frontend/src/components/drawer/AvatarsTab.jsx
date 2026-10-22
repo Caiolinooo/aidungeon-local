@@ -147,7 +147,7 @@ export default function AvatarsTab({ adventure, storyText }) {
             onClick={() => pickNpc(c.id)}
             className={`rounded-md px-2 py-1 text-xs font-medium ${
               selected?.id === c.id
-                ? 'bg-accent-pri text-white'
+                ? 'bg-accent-pri text-canvas'
                 : 'border border-subtle text-secondary hover:bg-elevated'
             }`}
           >
@@ -169,7 +169,7 @@ export default function AvatarsTab({ adventure, storyText }) {
                 onClick={() => pickModel(key)}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   cfg.model === key
-                    ? 'bg-accent-pri text-white'
+                    ? 'bg-accent-pri text-canvas'
                     : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
@@ -180,7 +180,7 @@ export default function AvatarsTab({ adventure, storyText }) {
               onClick={() => pickModel('custom')}
               className={`rounded-md px-2 py-1 text-xs font-medium ${
                 cfg.model === 'custom'
-                  ? 'bg-accent-pri text-white'
+                  ? 'bg-accent-pri text-canvas'
                   : 'border border-subtle text-secondary hover:bg-elevated'
               }`}
             >
@@ -212,7 +212,7 @@ export default function AvatarsTab({ adventure, storyText }) {
                 onClick={() => setCfg((c) => ({ ...c, body: b }))}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   cfg.body === b
-                    ? 'bg-accent-pri text-white'
+                    ? 'bg-accent-pri text-canvas'
                     : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
@@ -229,7 +229,7 @@ export default function AvatarsTab({ adventure, storyText }) {
                 onClick={() => pickMood(m)}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   effectiveMood === m
-                    ? 'bg-accent-pri text-white'
+                    ? 'bg-accent-pri text-canvas'
                     : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
@@ -260,7 +260,7 @@ export default function AvatarsTab({ adventure, storyText }) {
             <button
               onClick={save}
               disabled={!dirty || saving}
-              className={`${inputCls} bg-accent-pri font-medium text-white hover:bg-accent-hov disabled:opacity-50`}
+              className={`${inputCls} bg-accent-pri font-medium text-canvas hover:bg-accent-hov disabled:opacity-50`}
             >
               {saving ? 'Salvando…' : 'Salvar avatar'}
             </button>
