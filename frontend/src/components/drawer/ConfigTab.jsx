@@ -3,10 +3,10 @@ import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
 
 const HEALTH_STYLE = {
-  ok: 'bg-emerald-900 text-emerald-300',
-  unreachable: 'bg-red-900 text-red-300',
-  auth_error: 'bg-amber-900 text-amber-300',
-  error: 'bg-red-900 text-red-300',
+  ok: 'bg-accent-900 text-accent-pri',
+  unreachable: 'bg-danger-900 text-danger-300',
+  auth_error: 'bg-warn-900 text-warn-300',
+  error: 'bg-danger-900 text-danger-300',
 }
 
 // Aba Config: GET/PUT /api/settings/llm (campos do contrato — api_key é
@@ -87,29 +87,29 @@ export default function ConfigTab() {
     }
   }
 
-  if (settings === null || form === null) return <p className="text-sm text-zinc-500">Carregando…</p>
+  if (settings === null || form === null) return <p className="text-sm text-muted">Carregando…</p>
 
   const contextSizeMax = settings.context_size_max ?? 106496
   const inputCls =
-    'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-emerald-600'
-  const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500'
+    'w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm outline-none focus:border-accent-pri'
+  const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-muted'
 
   return (
     <div className="flex flex-col gap-4">
       {health && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-800/40 p-3 text-sm">
+        <div className="rounded-lg border border-subtle bg-surface/40 p-3 text-sm">
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${HEALTH_STYLE[health.status] ?? HEALTH_STYLE.error}`}>
               {health.status}
             </span>
-            <span className="text-zinc-400">{health.provider}</span>
+            <span className="text-secondary">{health.provider}</span>
           </div>
-          <div className="mt-2 text-xs text-zinc-500">
+          <div className="mt-2 text-xs text-muted">
             <div>
               Model discovered:{' '}
-              <span className="text-zinc-300">{health.model_discovered ?? settings.model_discovered ?? '—'}</span>
+              <span className="text-secondary">{health.model_discovered ?? settings.model_discovered ?? '—'}</span>
             </div>
-            {health.details && <div className="mt-1 text-zinc-500">{health.details}</div>}
+            {health.details && <div className="mt-1 text-muted">{health.details}</div>}
           </div>
         </div>
       )}
@@ -139,7 +139,7 @@ export default function ConfigTab() {
           {settings.api_key && (
             <button
               onClick={clearKey}
-              className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950"
+              className="shrink-0 rounded-lg border border-danger-900 px-3 text-xs text-danger-400 hover:bg-danger-950"
             >
               Clear
             </button>
@@ -182,38 +182,38 @@ export default function ConfigTab() {
           step={16}
           value={form.max_tokens}
           onChange={(e) => setForm({ ...form, max_tokens: e.target.value })}
-          className="w-full accent-emerald-600"
+          className="w-full accent-accent-600"
         />
-        <div className="flex justify-between text-[10px] text-zinc-600">
+        <div className="flex justify-between text-[10px] text-muted">
           <span>100</span>
           <span>2048</span>
         </div>
       </label>
 
       <div className="flex gap-5">
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <label className="flex items-center gap-2 text-sm text-secondary">
           <input
             type="checkbox"
             checked={form.streaming}
             onChange={(e) => setForm({ ...form, streaming: e.target.checked })}
-            className="accent-emerald-600"
+            className="accent-accent-600"
           />
           Streaming
         </label>
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <label className="flex items-center gap-2 text-sm text-secondary">
           <input
             type="checkbox"
             checked={form.disable_thinking}
             onChange={(e) => setForm({ ...form, disable_thinking: e.target.checked })}
-            className="accent-emerald-600"
+            className="accent-accent-600"
           />
           Disable thinking (Qwen3.x)
         </label>
       </div>
 
       {/* v2 — subsection Generation: sampler do LLM (settings/llm) */}
-      <div className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-800/40 p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Geração</h3>
+      <div className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface/40 p-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Geração</h3>
 
         <label className="block">
           <span className={labelCls}>Temperature: {Number(form.temperature).toFixed(2)}</span>
@@ -224,9 +224,9 @@ export default function ConfigTab() {
             step={0.05}
             value={form.temperature}
             onChange={(e) => setForm({ ...form, temperature: e.target.value })}
-            className="w-full accent-emerald-600"
+            className="w-full accent-accent-600"
           />
-          <div className="flex justify-between text-[10px] text-zinc-600">
+          <div className="flex justify-between text-[10px] text-muted">
             <span>0.00 (focused)</span>
             <span>2.00 (wild)</span>
           </div>
@@ -241,9 +241,9 @@ export default function ConfigTab() {
             step={0.05}
             value={form.top_p}
             onChange={(e) => setForm({ ...form, top_p: e.target.value })}
-            className="w-full accent-emerald-600"
+            className="w-full accent-accent-600"
           />
-          <div className="flex justify-between text-[10px] text-zinc-600">
+          <div className="flex justify-between text-[10px] text-muted">
             <span>0.00</span>
             <span>1.00</span>
           </div>
@@ -258,9 +258,9 @@ export default function ConfigTab() {
             step={0.05}
             value={form.repetition_penalty}
             onChange={(e) => setForm({ ...form, repetition_penalty: e.target.value })}
-            className="w-full accent-emerald-600"
+            className="w-full accent-accent-600"
           />
-          <div className="flex justify-between text-[10px] text-zinc-600">
+          <div className="flex justify-between text-[10px] text-muted">
             <span>1.00 (off)</span>
             <span>2.00</span>
           </div>
@@ -271,7 +271,7 @@ export default function ConfigTab() {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar configurações'}
         </button>
@@ -351,9 +351,9 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
 
   if (loaded === null || form === null) {
     return (
-      <div className="border-t border-zinc-800 pt-4">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</h3>
-        <p className="text-sm text-zinc-500">Carregando…</p>
+      <div className="border-t border-subtle pt-4">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Voice</h3>
+        <p className="text-sm text-muted">Carregando…</p>
       </div>
     )
   }
@@ -366,27 +366,27 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
       : []
 
   return (
-    <div className="flex flex-col gap-4 border-t border-zinc-800 pt-4">
+    <div className="flex flex-col gap-4 border-t border-subtle pt-4">
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</h3>
-        <p className="mt-0.5 text-xs text-zinc-600">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Voice</h3>
+        <p className="mt-0.5 text-xs text-muted">
           Text-to-speech narration and speech-to-text dictation (OpenAI-compatible provider).
         </p>
         {loaded.drama3_enabled ? (
-          <p className="mt-1 text-xs text-emerald-500">Drama-3 está ligado. As falas saem com uma direção de emoção.</p>
+          <p className="mt-1 text-xs text-accent-pri">Drama-3 está ligado. As falas saem com uma direção de emoção.</p>
         ) : (
-          <p className="mt-1 text-xs text-zinc-600">
+          <p className="mt-1 text-xs text-muted">
             Drama-3 is off on this machine (not enough free VRAM). Supertonic still speaks, and each line sends an emotion tag.
           </p>
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-zinc-300">
+      <label className="flex items-center gap-2 text-sm text-secondary">
         <input
           type="checkbox"
           checked={form.enabled}
           onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-          className="accent-emerald-600"
+          className="accent-accent-600"
         />
         Enabled
       </label>
@@ -416,7 +416,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
           {loaded.api_key && (
             <button
               onClick={clearKey}
-              className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950"
+              className="shrink-0 rounded-lg border border-danger-900 px-3 text-xs text-danger-400 hover:bg-danger-950"
             >
               Clear
             </button>
@@ -474,7 +474,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar voz'}
         </button>
@@ -558,34 +558,34 @@ function ImageSettingsSection({ inputCls, labelCls }) {
 
   if (loaded === null || form === null) {
     return (
-      <div className="border-t border-zinc-800 pt-4">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Imagens</h3>
-        <p className="text-sm text-zinc-500">Carregando…</p>
+      <div className="border-t border-subtle pt-4">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Imagens</h3>
+        <p className="text-sm text-muted">Carregando…</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4 border-t border-zinc-800 pt-4">
+    <div className="flex flex-col gap-4 border-t border-subtle pt-4">
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Imagens</h3>
-        <p className="mt-0.5 text-xs text-zinc-600">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Imagens</h3>
+        <p className="mt-0.5 text-xs text-muted">
           Provider used by the "See" action to illustrate the current scene.
         </p>
       </div>
 
       <div className="flex gap-5">
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <label className="flex items-center gap-2 text-sm text-secondary">
           <input
             type="checkbox"
             checked={form.enabled}
             onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-            className="accent-emerald-600"
+            className="accent-accent-600"
           />
           Enabled
         </label>
-        <label className="flex flex-1 items-center gap-2 text-sm text-zinc-300">
-          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Provider</span>
+        <label className="flex flex-1 items-center gap-2 text-sm text-secondary">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">Provider</span>
           <select
             value={form.provider}
             onChange={(e) => setForm({ ...form, provider: e.target.value })}
@@ -678,7 +678,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
               {loaded.openai_api_key && (
                 <button
                   onClick={clearKey}
-                  className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950"
+                  className="shrink-0 rounded-lg border border-danger-900 px-3 text-xs text-danger-400 hover:bg-danger-950"
                 >
                   Clear
                 </button>
@@ -722,7 +722,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         <button
           onClick={save}
           disabled={saving}
-          className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+          className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Salvar imagem'}
         </button>

@@ -19,6 +19,8 @@ VERDICT = {
     "blockers": [],
     "risks": ["a guarda pode ouvir"],
     "notes": "nada impede esperar junto ao portao",
+    "cost": "ruido na trilha",
+    "consequence": "a ronda muda de posto",
 }
 
 
@@ -133,8 +135,10 @@ def test_world_facts_block_does_not_call_the_llm(tmp_db):
     checks = [event for event in events if event["event"] == "action_check"]
     assert len(checks) == 1
     data = checks[0]["data"]
-    assert set(data) == {"possible", "blockers", "risks", "notes"}
+    assert set(data) == {"possible", "blockers", "risks", "notes", "cost", "consequence"}
     assert data["possible"] is False
+    assert data["cost"] == ""
+    assert data["consequence"] == ""
     assert data["risks"] == []
     blob = " ".join(data["blockers"]).casefold()
     assert "sword" in blob
@@ -147,6 +151,8 @@ def test_world_facts_block_does_not_call_the_llm(tmp_db):
     content = narrator.narrator()["messages"][-1]["content"]
     assert content.startswith("<lore>\n[Verificacao de mundo]\n")
     assert "A acao do jogador e NAO E POSSIVEL." in content
+    assert "Custo esperado: \n" in content
+    assert "Consequência: \n" in content
     assert "Nao mencione esta verificacao ao jogador." in content
 
 
@@ -175,6 +181,8 @@ def test_valid_llm_verdict_reaches_the_narrator_and_the_event(tmp_db):
     assert "A acao do jogador e NAO E POSSIVEL." not in content
     assert "a guarda pode ouvir" in content
     assert "nada impede esperar junto ao portao" in content
+    assert "Custo esperado: ruido na trilha" in content
+    assert "Consequência: a ronda muda de posto" in content
 
 
 def test_garbage_llm_json_does_not_break_the_turn(tmp_db):

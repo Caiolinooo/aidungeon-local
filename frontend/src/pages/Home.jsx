@@ -175,7 +175,7 @@ export default function Home() {
           <button
             onClick={logout}
             title="Sign out and return to login"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-muted hover:text-red-400 hover:bg-elevated transition"
+            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-muted hover:text-danger-400 hover:bg-elevated transition"
           >
             <LogOut className="w-4 h-4" />
             <span>Log out</span>
@@ -190,7 +190,7 @@ export default function Home() {
 
 
       {error && (
-        <div className="mb-6 flex items-center justify-between rounded-lg border border-red-900 bg-red-950/60 px-4 py-3 text-sm text-red-200">
+        <div className="mb-6 flex items-center justify-between rounded-lg border border-danger-900 bg-danger-950/60 px-4 py-3 text-sm text-danger-200">
           <span>
             {error.status === 0
               ? 'Não foi possível falar com o servidor (http://127.0.0.1:8000). Ele está no ar?'
@@ -198,7 +198,7 @@ export default function Home() {
           </span>
           <button
             onClick={load}
-            className="rounded-md border border-red-800 px-3 py-1 text-xs font-semibold hover:bg-red-900"
+            className="rounded-md border border-danger-800 px-3 py-1 text-xs font-semibold hover:bg-danger-900"
           >
             ↻ Tentar de novo
           </button>
@@ -206,35 +206,35 @@ export default function Home() {
       )}
 
       {adventures === null ? (
-        <p className="text-zinc-500">Carregando…</p>
+        <p className="text-muted">Carregando…</p>
       ) : adventures.length === 0 && !error ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 p-16 text-center">
-          <p className="text-lg text-zinc-400">Nenhuma aventura ainda.</p>
-          <p className="max-w-md text-sm text-zinc-600">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-subtle p-16 text-center">
+          <p className="text-lg text-secondary">Nenhuma aventura ainda.</p>
+          <p className="max-w-md text-sm text-muted">
             Start a new adventure from a scenario, or import your AI Dungeon backup (.zip) to
             continue an existing story from the exact point where you stopped.
           </p>
         </div>
       ) : (
         <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Suas aventuras</h2>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Suas aventuras</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {adventures.map((a) => (
               <Link
                 key={a.id}
                 to={`/play/${a.id}`}
-                className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-900 p-4 transition-colors hover:border-emerald-700 hover:bg-zinc-900/80"
+                className="flex h-full flex-col rounded-xl border border-subtle bg-elevated p-4 transition-colors hover:border-accent-pri hover:bg-elevated/80"
               >
                 <div className="mb-1 flex items-start justify-between gap-2">
-                  <h3 className="font-semibold text-zinc-100">
+                  <h3 className="font-semibold text-primary">
                     {a.title}
                     {session?.admin && a.owner ? (
-                      <span className="ml-2 text-[10px] font-normal uppercase text-zinc-500">{a.owner}</span>
+                      <span className="ml-2 text-[10px] font-normal uppercase text-muted">{a.owner}</span>
                     ) : null}
                   </h3>
                   <div className="flex shrink-0 items-center gap-1">
                     {a.source === 'import' && (
-                      <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-[10px] uppercase text-zinc-300">
+                      <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] uppercase text-secondary">
                         imported
                       </span>
                     )}
@@ -252,7 +252,7 @@ export default function Home() {
                 {(a.shared_by || (a.turn_mode && session?.user && a.turn_user === session.user)) && (
                   <div className="mb-2 flex flex-wrap items-center gap-1.5">
                     {a.shared_by ? (
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-secondary">
                         👥 de {a.shared_by}
                       </span>
                     ) : null}
@@ -267,7 +267,7 @@ export default function Home() {
                 <p className="mb-3 line-clamp-4 flex-1 whitespace-pre-wrap font-prose text-sm text-secondary">
                   {a.last_excerpt || a.excerpt || a.description || '…'}
                 </p>
-                <div className="flex items-center justify-between text-xs text-zinc-600">
+                <div className="flex items-center justify-between text-xs text-muted">
                   <span>{a.action_count ?? 0} actions</span>
                   <span>{fmtDate(a.updated_at)}</span>
                 </div>
@@ -379,22 +379,22 @@ function NewAdventureModal({ onClose, onDeleted }) {
     <Modal title="Nova aventura" onClose={onClose} wide>
       {bar}
       {scenarios === null ? (
-        <p className="text-sm text-zinc-500">Carregando cenários…</p>
+        <p className="text-sm text-muted">Carregando cenários…</p>
       ) : (
         <div className="flex flex-col gap-2">
           {stories.length > 0 && (
-            <div className="mb-2 rounded-lg border border-zinc-800 p-3">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <div className="mb-2 rounded-lg border border-subtle p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 Delete an existing adventure
               </div>
               <ul className="max-h-40 space-y-1 overflow-y-auto">
                 {stories.map((story) => (
                   <li key={story.id} className="flex items-center justify-between gap-2 rounded px-1 py-1">
-                    <span className="truncate text-sm text-zinc-200">{story.title}</span>
+                    <span className="truncate text-sm text-primary">{story.title}</span>
                     <button
                       type="button"
                       onClick={() => setPendingDelete(story)}
-                      className="shrink-0 rounded px-2 py-1 text-xs text-red-300 hover:bg-red-950"
+                      className="shrink-0 rounded px-2 py-1 text-xs text-danger-300 hover:bg-danger-950"
                     >
                       Apagar
                     </button>
@@ -402,13 +402,13 @@ function NewAdventureModal({ onClose, onDeleted }) {
                 ))}
               </ul>
               {pendingDelete && (
-                <div className="mt-2 rounded border border-red-900 bg-red-950/40 p-2 text-sm text-red-100">
+                <div className="mt-2 rounded border border-danger-900 bg-danger-950/40 p-2 text-sm text-danger-100">
                   Delete “{pendingDelete.title}” permanently?
                   <div className="mt-2 flex justify-end gap-2">
                     <button
                       type="button"
                       onClick={() => setPendingDelete(null)}
-                      className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300"
+                      className="rounded border border-subtle px-2 py-1 text-xs text-secondary"
                     >
                       Cancelar
                     </button>
@@ -416,7 +416,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                       type="button"
                       onClick={confirmDelete}
                       disabled={deleting}
-                      className="rounded bg-red-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                      className="rounded bg-danger-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
                     >
                       {deleting ? 'Apagando…' : 'Delete'}
                     </button>
@@ -427,13 +427,13 @@ function NewAdventureModal({ onClose, onDeleted }) {
           )}
           <label
             className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
-              selected === 'blank' ? 'border-emerald-600 bg-emerald-950/30' : 'border-zinc-800 hover:border-zinc-700'
+              selected === 'blank' ? 'border-accent-pri bg-accent-950/30' : 'border-subtle hover:border-subtle'
             }`}
           >
-            <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => setSelected('blank')} className="mt-1 accent-emerald-600" />
+            <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => setSelected('blank')} className="mt-1 accent-accent-600" />
             <div>
-              <div className="font-semibold text-zinc-100">Aventura em branco</div>
-              <div className="text-sm text-zinc-500">Começa com a história vazia — você define a cena.</div>
+              <div className="font-semibold text-primary">Aventura em branco</div>
+              <div className="text-sm text-muted">Começa com a história vazia — você define a cena.</div>
             </div>
           </label>
 
@@ -441,17 +441,17 @@ function NewAdventureModal({ onClose, onDeleted }) {
             <label
               key={s.id}
               className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
-                selected === s.id ? 'border-emerald-600 bg-emerald-950/30' : 'border-zinc-800 hover:border-zinc-700'
+                selected === s.id ? 'border-accent-pri bg-accent-950/30' : 'border-subtle hover:border-subtle'
               }`}
             >
-              <input type="radio" name="scenario" checked={selected === s.id} onChange={() => setSelected(s.id)} className="mt-1 accent-emerald-600" />
+              <input type="radio" name="scenario" checked={selected === s.id} onChange={() => setSelected(s.id)} className="mt-1 accent-accent-600" />
               <div className="min-w-0 flex-1">
-                <div className="font-semibold text-zinc-100">{s.title}</div>
-                {s.description && <div className="line-clamp-2 text-sm text-zinc-500">{s.description}</div>}
+                <div className="font-semibold text-primary">{s.title}</div>
+                {s.description && <div className="line-clamp-2 text-sm text-muted">{s.description}</div>}
                 {s.tags?.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {s.tags.map((t) => (
-                      <span key={t} className="rounded-full bg-zinc-700 px-2 py-0.5 text-[10px] text-zinc-300">
+                      <span key={t} className="rounded-full bg-elevated px-2 py-0.5 text-[10px] text-secondary">
                         {t}
                       </span>
                     ))}
@@ -464,7 +464,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                   title="Editar cenário"
                   aria-label={`Editar “${s.title}”`}
                   onClick={(e) => editScenario(e, s)}
-                  className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
+                  className="rounded-lg border border-subtle px-2 py-1 text-sm text-secondary hover:bg-surface"
                 >
                   ✎
                 </button>
@@ -473,7 +473,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                   title="Apagar cenário"
                   aria-label={`Apagar “${s.title}”`}
                   onClick={(e) => deleteScenario(e, s)}
-                  className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
+                  className="rounded-lg border border-subtle px-2 py-1 text-sm text-secondary hover:bg-surface"
                 >
                   🗑
                 </button>
@@ -482,13 +482,13 @@ function NewAdventureModal({ onClose, onDeleted }) {
           ))}
 
           <div className="mt-3 flex items-center justify-between">
-            <Link to="/scenarios/new" className="text-sm text-emerald-400 hover:underline" onClick={onClose}>
+            <Link to="/scenarios/new" className="text-sm text-accent-pri hover:underline" onClick={onClose}>
               + Create a new scenario
             </Link>
             <button
               onClick={start}
               disabled={creating}
-              className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
             >
               {creating ? 'Criando…' : 'Começar aventura'}
             </button>
@@ -528,19 +528,19 @@ function ImportModal({ onClose, onImported }) {
     <Modal title="Importar backup do AI Dungeon" onClose={onClose}>
       {!report ? (
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-zinc-400">
-            Escolha o <code className="text-zinc-300">.zip</code> exportado do AI Dungeon
-            (contém <code className="text-zinc-300">metadata.json</code> +{' '}
-            <code className="text-zinc-300">actions-*.json</code>). A história continua do
+          <p className="text-sm text-secondary">
+            Escolha o <code className="text-secondary">.zip</code> exportado do AI Dungeon
+            (contém <code className="text-secondary">metadata.json</code> +{' '}
+            <code className="text-secondary">actions-*.json</code>). A história continua do
             ponto exato em que parou.
           </p>
           <button
             onClick={() => fileRef.current?.click()}
-            className="rounded-lg border border-dashed border-zinc-700 p-6 text-center text-sm text-zinc-400 hover:border-zinc-500"
+            className="rounded-lg border border-dashed border-subtle p-6 text-center text-sm text-secondary hover:border-subtle"
           >
             {file ? (
-              <span className="text-zinc-200">
-                📦 {file.name} <span className="text-zinc-500">({(file.size / 1024).toFixed(0)} KB)</span>
+              <span className="text-primary">
+                📦 {file.name} <span className="text-muted">({(file.size / 1024).toFixed(0)} KB)</span>
               </span>
             ) : (
               'Clique para escolher o arquivo .zip'
@@ -554,13 +554,13 @@ function ImportModal({ onClose, onImported }) {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
           <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            <button onClick={onClose} className="rounded-lg border border-subtle px-4 py-2 text-sm text-secondary hover:bg-surface">
               Cancelar
             </button>
             <button
               onClick={doImport}
               disabled={!file || importing}
-              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
             >
               {importing ? 'Importing…' : 'Import'}
             </button>
@@ -571,15 +571,15 @@ function ImportModal({ onClose, onImported }) {
           {report.multi ? (
             // Backup multi-aventura: resumo agregado + lista de títulos importados.
             <>
-              <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
-                <h3 className="font-semibold text-emerald-300">
+              <div className="rounded-lg border border-accent-900 bg-accent-950/40 p-4">
+                <h3 className="font-semibold text-accent-pri">
                   Import complete — {report.imported} adventure{report.imported === 1 ? '' : 's'} imported
                 </h3>
                 <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
                   {(report.results || []).map((r, i) => (
-                    <li key={r.adventure_id ?? i} className="flex items-baseline justify-between gap-2 rounded bg-zinc-800/60 px-2 py-1 text-sm">
-                      <span className="truncate text-zinc-200">{r.title}</span>
-                      <span className="shrink-0 text-xs text-zinc-500">{r.actions_imported ?? 0} actions</span>
+                    <li key={r.adventure_id ?? i} className="flex items-baseline justify-between gap-2 rounded bg-surface/60 px-2 py-1 text-sm">
+                      <span className="truncate text-primary">{r.title}</span>
+                      <span className="shrink-0 text-xs text-muted">{r.actions_imported ?? 0} actions</span>
                     </li>
                   ))}
                 </ul>
@@ -590,11 +590,11 @@ function ImportModal({ onClose, onImported }) {
                   (r.warnings || []).map((w) => `${r.title}: ${w}`)
                 )
                 return warnings.length > 0 ? (
-                  <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-3">
-                    <h4 className="mb-1 text-sm font-semibold text-amber-300">
+                  <div className="rounded-lg border border-warn-900 bg-warn-950/40 p-3">
+                    <h4 className="mb-1 text-sm font-semibold text-warn-300">
                       Warnings ({warnings.length})
                     </h4>
-                    <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-amber-200/80">
+                    <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-warn-200/80">
                       {warnings.map((w, i) => (
                         <li key={i}>{w}</li>
                       ))}
@@ -606,7 +606,7 @@ function ImportModal({ onClose, onImported }) {
               <div className="flex justify-end">
                 <button
                   onClick={onClose}
-                  className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                  className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov"
                 >
                   Done
                 </button>
@@ -614,30 +614,30 @@ function ImportModal({ onClose, onImported }) {
             </>
           ) : (
             <>
-              <div className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-4">
-                <h3 className="font-semibold text-emerald-300">Import complete — “{report.title}”</h3>
+              <div className="rounded-lg border border-accent-900 bg-accent-950/40 p-4">
+                <h3 className="font-semibold text-accent-pri">Import complete — “{report.title}”</h3>
             <ul className="mt-2 grid grid-cols-3 gap-2 text-center text-sm">
-              <li className="rounded bg-zinc-800/60 p-2">
-                <div className="text-xl font-bold text-zinc-100">{report.actions_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">ações</div>
+              <li className="rounded bg-surface/60 p-2">
+                <div className="text-xl font-bold text-primary">{report.actions_imported ?? 0}</div>
+                <div className="text-xs text-muted">ações</div>
               </li>
-              <li className="rounded bg-zinc-800/60 p-2">
-                <div className="text-xl font-bold text-zinc-100">{report.cards_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">fichas</div>
+              <li className="rounded bg-surface/60 p-2">
+                <div className="text-xl font-bold text-primary">{report.cards_imported ?? 0}</div>
+                <div className="text-xs text-muted">fichas</div>
               </li>
-              <li className="rounded bg-zinc-800/60 p-2">
-                <div className="text-xl font-bold text-zinc-100">{report.memories_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">memórias</div>
+              <li className="rounded bg-surface/60 p-2">
+                <div className="text-xl font-bold text-primary">{report.memories_imported ?? 0}</div>
+                <div className="text-xs text-muted">memórias</div>
               </li>
             </ul>
           </div>
 
           {report.warnings?.length > 0 && (
-            <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-3">
-              <h4 className="mb-1 text-sm font-semibold text-amber-300">
+            <div className="rounded-lg border border-warn-900 bg-warn-950/40 p-3">
+              <h4 className="mb-1 text-sm font-semibold text-warn-300">
                 Warnings ({report.warnings.length})
               </h4>
-              <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-amber-200/80">
+              <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs text-warn-200/80">
                 {report.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -646,12 +646,12 @@ function ImportModal({ onClose, onImported }) {
           )}
 
           <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            <button onClick={onClose} className="rounded-lg border border-subtle px-4 py-2 text-sm text-secondary hover:bg-surface">
               Fechar
             </button>
             <button
               onClick={() => navigate(`/play/${report.adventure_id}`)}
-              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+              className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov"
             >
               ▶ Open adventure
             </button>
@@ -705,7 +705,7 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
   }
 
   const itemCls =
-    'block w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+    'block w-full px-3 py-2 text-left text-sm text-secondary hover:bg-surface hover:text-primary'
 
   return (
     <div ref={rootRef} className="relative" onClick={guard}>
@@ -737,7 +737,7 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
             <span>Exportar .zip</span>
           </button>
           <button
-            className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-red-400 hover:bg-red-950/40 hover:text-red-300 transition"
+            className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-danger-400 hover:bg-danger-950/40 hover:text-danger-300 transition"
             onClick={() => {
               onClose()
               onDelete()
@@ -782,7 +782,7 @@ function RenameModal({ adventure, onClose, onRenamed }) {
     <Modal title="Renomear aventura" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1">
-          <span className="text-sm font-medium text-zinc-300">Título</span>
+          <span className="text-sm font-medium text-secondary">Título</span>
           <input
             autoFocus
             value={title}
@@ -790,28 +790,28 @@ function RenameModal({ adventure, onClose, onRenamed }) {
             onKeyDown={(e) => {
               if (e.key === 'Enter') save()
             }}
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+            className="rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri"
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-sm font-medium text-zinc-300">
-            Descrição <span className="text-zinc-500">(opcional)</span>
+          <span className="text-sm font-medium text-secondary">
+            Descrição <span className="text-muted">(opcional)</span>
           </span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
-            className="resize-y rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+            className="resize-y rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri"
           />
         </label>
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+          <button onClick={onClose} className="rounded-lg border border-subtle px-4 py-2 text-sm text-secondary hover:bg-surface">
             Cancelar
           </button>
           <button
             onClick={save}
             disabled={saving || !title.trim()}
-            className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
           >
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
@@ -843,21 +843,21 @@ function DeleteModal({ adventure, onClose, onDeleted }) {
   return (
     <Modal title="Apagar aventura" onClose={onClose}>
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-zinc-300">
-          Delete <span className="font-semibold text-zinc-100">“{adventure.title}”</span>?
+        <p className="text-sm text-secondary">
+          Delete <span className="font-semibold text-primary">“{adventure.title}”</span>?
         </p>
-        <p className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">
+        <p className="rounded-lg border border-danger-900 bg-danger-950/40 p-3 text-sm text-danger-200">
           This permanently removes the story, its actions, fichas and memories. This action
           cannot be undone.
         </p>
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+          <button onClick={onClose} className="rounded-lg border border-subtle px-4 py-2 text-sm text-secondary hover:bg-surface">
             Cancelar
           </button>
           <button
             onClick={confirm}
             disabled={busy}
-            className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+            className="rounded-lg bg-danger-700 px-4 py-2 text-sm font-semibold text-white hover:bg-danger-600 disabled:opacity-50"
           >
             {busy ? 'Apagando…' : 'Apagar de vez'}
           </button>

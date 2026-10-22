@@ -162,7 +162,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                 <span>PV {hp}/{hpMax}</span>
                 {actor.ac != null && <span>CA {actor.ac}</span>}
               </div>
-              <Bar value={hp || 0} max={hpMax} tone={actor.down ? 'bg-danger-600' : 'bg-emerald-600'} />
+              <Bar value={hp || 0} max={hpMax} tone={actor.down ? 'bg-danger-600' : 'bg-accent-hov'} />
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">
@@ -190,7 +190,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                     <button
                       type="button"
                       disabled={busy}
-                      className="text-[11px] text-emerald-300 hover:underline disabled:opacity-40"
+                      className="text-[11px] text-accent-pri hover:underline disabled:opacity-40"
                       onClick={() => act({ kind: 'use_item', item: row.name })}
                     >
                       usar
@@ -318,7 +318,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               <div className="mb-1 text-[11px] text-muted">Reações</div>
               <ul className="flex max-h-28 flex-col gap-0.5 overflow-y-auto text-[11px]">
                 {(life.reactions || []).slice().reverse().map((item, index) => (
-                  <li key={`${item.day}-${item.clock}-${index}`} className="text-amber-200">
+                  <li key={`${item.day}-${item.clock}-${index}`} className="text-warn-200">
                     <span className="text-muted">D{item.day} {item.clock}</span> {item.text}
                   </li>
                 ))}
@@ -436,7 +436,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                 <div key={index} className="text-info">{step.text}</div>
               ))}
               {(resolution.changes || []).map((row, index) => (
-                <div key={`c${index}`} className="text-zinc-400">
+                <div key={`c${index}`} className="text-muted">
                   {row.who} {row.what} {row.from}→{row.to}
                 </div>
               ))}
@@ -446,7 +446,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                 </div>
               )}
               {(resolution.time?.reactions || []).map((text, index) => (
-                <div key={`r${index}`} className="text-amber-200">{text}</div>
+                <div key={`r${index}`} className="text-warn-200">{text}</div>
               ))}
             </div>
           )}

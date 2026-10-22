@@ -91,12 +91,21 @@ BASE_SYSTEM_PROMPT = (
     "- If an NPC asks a question or initiates a conflict, stop immediately to let the player answer.\n"
     "- Never break the fourth wall. The <lore> notes and the bracketed notes are private\n"
     "  reference: never repeat, quote or continue them, and never write tags or headers.\n\n"
+    "Pacing invariants:\n"
+    "- Tell exactly one story beat per turn. Do not summarize, montage, or skip time.\n"
+    "  End the turn mid-beat with the scene still open.\n"
+    "- If the action succeeds, show a concrete cost: noise, fatigue, blood, attention,\n"
+    "  a resource the player already has, or a relationship shift. If it fails, show\n"
+    "  partial progress, a worse position, or a new complication.\n"
+    "- Never narrate the player's inner thoughts, decisions, or next move.\n"
+    "  Never write dialogue for the player.\n\n"
     "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
+    "- Write at least 3 sentences per beat.\n"
     "- Write complete sentences in the story's language. Keep articles and\n"
     "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
     "- Every sentence has a subject and a verb and ends with . ? or !\n"
-    "- Two or three sentences per paragraph. Separate paragraphs with a blank line.\n"
-    "- Do not chain clauses with semicolons. Do not end a paragraph with an ellipsis.\n"
+    "- Use paragraphs of 2–3 sentences separated by a blank line.\n"
+    "- Do not chain clauses with semicolons. Do not end with ellipsis.\n"
     "- Vary wording; do not repeat the same image or sentence pattern.\n"
     "- Show events through action, dialogue and the senses. Stop while the scene is\n"
     "  still open — never wrap up the scene or narrate an epilogue.\n\n"
@@ -646,14 +655,13 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
         extra_canon_tokens += max(0, estimate_tokens(sum_block) - base_sum_budget)
 
     # 5b — estado do painel dinâmico (v0.7.0): HP/inventário/ficha que o
-    # jogador edita nos widgets. Com pack de regras, o actor do motor
-    # substitui esse bloco. Sem ele a IA narra dano/tesouro no escuro.
-    sim_state = adventure.get("sim_state") if isinstance(adventure.get("sim_state"), dict) else {}
-    if not (sim_state.get("pack") or ""):
-        player_state = render_player_state(adventure.get("ui_state") or {})
-        if player_state:
-            volatile_parts.append("[Player state]\n" + _fit_budget(
-                player_state, int(budgets.get("player_state", 320))))
+    # jogador edita nos widgets. Entra sempre no <lore>, mesmo com pack de
+    # regras: o narrador precisa saber o que a ação pode custar. O bloco do
+    # motor vem em seguida e não substitui este.
+    player_state = render_player_state(adventure.get("ui_state") or {})
+    if player_state:
+        volatile_parts.append("[Player state]\n" + _fit_budget(
+            player_state, int(budgets.get("player_state", 320))))
     from app.sim import state as sim_state_mod
     sim_block = sim_state_mod.render_block(adventure, conn, actions)
     if sim_block:

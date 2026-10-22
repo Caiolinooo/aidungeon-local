@@ -13,9 +13,9 @@ import { api } from '../api.js'
 import { playerDisplayText } from '../utils.js'
 
 const MOOD_RING = {
-  happy: 'border-amber-300',
+  happy: 'border-warn-300',
   sad: 'border-info',
-  angry: 'border-red-500',
+  angry: 'border-danger-500',
   fear: 'border-accent-pri',
   love: 'border-accent-gld',
 }
@@ -160,7 +160,7 @@ export default function SceneBackdrop({
     : ''
 
   return (
-    <section className={`relative shrink-0 overflow-hidden border-b border-zinc-800 bg-zinc-900 ${
+    <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
       scene.notice ? 'min-h-36' : 'h-28 sm:h-32'
     }`}>
       {backdropUrl && (
@@ -171,12 +171,12 @@ export default function SceneBackdrop({
           style={{ backgroundImage: `url("${backdropUrl}")` }}
         />
       )}
-      <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/55 to-zinc-950/35" />
+      <div className="absolute inset-0 bg-gradient-to-t from-canvas via-canvas/55 to-canvas/35" />
 
       <div className="relative flex h-full flex-col justify-between px-3 py-2">
         <div className="flex items-start justify-between gap-2">
           {place || scene.notice ? (
-            <div className="max-w-[75%] rounded-md border border-white/10 bg-black/55 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-zinc-100">
+            <div className="max-w-[75%] rounded-md border border-subtle bg-canvas/55 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-primary">
               {place ? (
                 <div className="uppercase">
                   {place}
@@ -184,16 +184,16 @@ export default function SceneBackdrop({
                 </div>
               ) : null}
               {scene.notice ? (
-                <div className="mt-0.5 font-medium normal-case text-amber-100">{scene.notice}</div>
+                <div className="mt-0.5 font-medium normal-case text-warn-100">{scene.notice}</div>
               ) : null}
             </div>
           ) : <span />}
           {scene.backdrop?.status === 'error' && (
             <button
               onClick={retry}
-              className="rounded-md border border-amber-800 bg-zinc-950/90 px-2 py-1 text-[10px] text-amber-200"
+              className="rounded-md border border-warn-800 bg-canvas/90 px-2 py-1 text-[10px] text-warn-200"
             >
-              Scene painting failed — retry
+              Cenário falhou — repetir
             </button>
           )}
         </div>
@@ -212,16 +212,16 @@ export default function SceneBackdrop({
                     <img
                       src={src}
                       alt=""
-                      className={`h-10 w-10 rounded-full border-2 object-cover shadow-lg shadow-black/50 sm:h-12 sm:w-12 ${
-                        MOOD_RING[npc.mood] || 'border-white/70'
+                      className={`h-10 w-10 rounded-full border-2 object-cover shadow-lg shadow-canvas/50 sm:h-12 sm:w-12 ${
+                        MOOD_RING[npc.mood] || 'border-primary/70'
                       }`}
                     />
                   ) : (
-                    <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-white/40 bg-zinc-900/80 text-xs font-semibold text-zinc-200 sm:h-12 sm:w-12">
+                    <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-subtle bg-elevated/80 text-xs font-semibold text-primary sm:h-12 sm:w-12">
                       {initials(npc.title)}
                     </div>
                   )}
-                  <figcaption className="mt-0.5 max-w-full truncate text-[9px] font-medium text-zinc-100 drop-shadow">
+                  <figcaption className="mt-0.5 max-w-full truncate text-[9px] font-medium text-primary drop-shadow">
                     {npc.title}
                   </figcaption>
                 </figure>
@@ -230,7 +230,7 @@ export default function SceneBackdrop({
           </div>
         )}
 
-        <p className={`truncate text-center text-[11px] text-zinc-100 ${line ? '' : 'invisible'}`}>
+        <p className={`truncate text-center text-[11px] text-primary ${line ? '' : 'invisible'}`}>
           {line || '·'}
         </p>
       </div>

@@ -51,7 +51,7 @@ function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
             key={sides}
             onClick={() => roll(sides)}
             disabled={disabled || rolling !== null}
-            className="min-h-11 min-w-11 rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm font-bold text-zinc-100 hover:border-emerald-600 hover:bg-zinc-700 active:scale-95 disabled:opacity-40"
+            className="min-h-11 min-w-11 rounded-lg border border-subtle bg-surface px-3 py-2 text-sm font-bold text-primary hover:border-accent-pri hover:bg-elevated active:scale-95 disabled:opacity-40"
           >
             d{sides}
           </button>
@@ -62,26 +62,26 @@ function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
           <span
             className={`flex h-12 w-12 items-center justify-center rounded-lg text-xl font-black ${
               rolling !== null
-                ? 'animate-pulse bg-zinc-800 text-zinc-400'
-                : 'bg-emerald-700 text-white'
+                ? 'animate-pulse bg-surface text-secondary'
+                : 'bg-accent-pri text-white'
             }`}
           >
             {display}
           </span>
           {result && (
             <>
-              <span className="text-xs text-zinc-500">d{result.sides}</span>
+              <span className="text-xs text-muted">d{result.sides}</span>
               <button
                 onClick={() => onSend('do', `rolls a d${result.sides} and gets ${result.value}`)}
                 disabled={disabled}
-                className="min-h-11 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
+                className="min-h-11 rounded-lg bg-accent-pri px-3 py-2 text-xs font-semibold text-white hover:bg-accent-hov disabled:opacity-40"
               >
                 Enviar rolagem
               </button>
               <button
                 onClick={() => onInsert(`rolls a d${result.sides}: ${result.value} — `)}
                 disabled={disabled}
-                className="min-h-11 rounded-lg border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                className="min-h-11 rounded-lg border border-subtle px-3 py-2 text-xs text-secondary hover:bg-surface disabled:opacity-40"
               >
                 + Input
               </button>
@@ -111,26 +111,26 @@ function StatsWidget({ widget, values, disabled, onChange }) {
         const low = pct !== null && pct <= 25
         return (
           <div key={stat.name} className="flex items-center gap-2">
-            <span className="w-20 shrink-0 truncate text-xs font-semibold uppercase tracking-wide text-zinc-400">
+            <span className="w-20 shrink-0 truncate text-xs font-semibold uppercase tracking-wide text-secondary">
               {stat.name}
             </span>
             <button
               onClick={() => bump(stat, -1)}
               disabled={disabled || (stat.min != null && value <= stat.min)}
               aria-label={`Diminuir ${stat.name}`}
-              className="min-h-11 min-w-11 shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 text-lg font-bold text-zinc-200 hover:bg-zinc-700 active:scale-95 disabled:opacity-30"
+              className="min-h-11 min-w-11 shrink-0 rounded-lg border border-subtle bg-surface text-lg font-bold text-primary hover:bg-elevated active:scale-95 disabled:opacity-30"
             >
               −
             </button>
             <div className="min-w-0 flex-1">
-              <div className="text-center text-sm font-bold tabular-nums text-zinc-100">
+              <div className="text-center text-sm font-bold tabular-nums text-primary">
                 {value}
-                {stat.max != null && <span className="text-zinc-500">/{stat.max}</span>}
+                {stat.max != null && <span className="text-muted">/{stat.max}</span>}
               </div>
               {pct !== null && (
-                <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-surface">
                   <div
-                    className={`h-full rounded-full transition-all ${low ? 'bg-red-600' : 'bg-emerald-600'}`}
+                    className={`h-full rounded-full transition-all ${low ? 'bg-danger-600' : 'bg-accent-hov'}`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
@@ -140,7 +140,7 @@ function StatsWidget({ widget, values, disabled, onChange }) {
               onClick={() => bump(stat, +1)}
               disabled={disabled || (stat.max != null && value >= stat.max)}
               aria-label={`Aumentar ${stat.name}`}
-              className="min-h-11 min-w-11 shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 text-lg font-bold text-zinc-200 hover:bg-zinc-700 active:scale-95 disabled:opacity-30"
+              className="min-h-11 min-w-11 shrink-0 rounded-lg border border-subtle bg-surface text-lg font-bold text-primary hover:bg-elevated active:scale-95 disabled:opacity-30"
             >
               +
             </button>
@@ -178,28 +178,28 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
   return (
     <div className="flex flex-col gap-2">
       {list.length === 0 && (
-        <p className="text-xs text-zinc-600">Vazio — adicione o que você pegar.</p>
+        <p className="text-xs text-muted">Vazio — adicione o que você pegar.</p>
       )}
       <div className="flex flex-wrap gap-1.5">
         {list.map((item, idx) => (
           <span
             key={`${item.name}-${idx}`}
-            className="inline-flex min-h-11 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800 pl-3 pr-1 text-xs text-zinc-200"
+            className="inline-flex min-h-11 items-center gap-1 rounded-full border border-subtle bg-surface pl-3 pr-1 text-xs text-primary"
           >
             <button
               onClick={() => onInsert(`usa o item ${item.name} `)}
               disabled={disabled}
               title={`Inserir "usa o item ${item.name}" no campo`}
-              className="py-2 hover:text-emerald-300 disabled:opacity-40"
+              className="py-2 hover:text-accent-pri disabled:opacity-40"
             >
               {item.name}
-              {item.qty > 1 && <span className="ml-1 text-zinc-500">×{item.qty}</span>}
+              {item.qty > 1 && <span className="ml-1 text-muted">×{item.qty}</span>}
             </button>
             <button
               onClick={() => remove(idx)}
               disabled={disabled}
               aria-label={`Remover ${item.name}`}
-              className="min-h-11 min-w-11 -my-2 rounded-full text-zinc-500 hover:text-red-400 disabled:opacity-40"
+              className="min-h-11 min-w-11 -my-2 rounded-full text-muted hover:text-danger-400 disabled:opacity-40"
             >
               ×
             </button>
@@ -213,12 +213,12 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())}
           placeholder="Adicionar item…"
           disabled={disabled}
-          className="min-h-11 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-50"
+          className="min-h-11 min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none placeholder:text-muted focus:border-accent-pri disabled:opacity-50"
         />
         <button
           onClick={add}
           disabled={disabled || !newItem.trim()}
-          className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+          className="min-h-11 shrink-0 rounded-lg border border-subtle px-3 py-2 text-xs font-semibold text-primary hover:bg-surface disabled:opacity-40"
         >
           + Adicionar
         </button>
@@ -243,7 +243,7 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
         const value = values?.[field.name] ?? field.value ?? ''
         return (
           <div key={field.name} className="flex items-baseline gap-2 text-sm">
-            <dt className="w-24 shrink-0 truncate text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <dt className="w-24 shrink-0 truncate text-xs font-semibold uppercase tracking-wide text-muted">
               {field.name}
             </dt>
             {editing === field.name ? (
@@ -256,7 +256,7 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
                   if (e.key === 'Escape') setEditing(null)
                 }}
                 autoFocus
-                className="min-w-0 flex-1 rounded border border-emerald-700 bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                className="min-w-0 flex-1 rounded border border-accent-pri bg-surface px-2 py-1 text-sm text-primary outline-none"
               />
             ) : (
               <dd
@@ -266,11 +266,11 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
                   setDraft(value)
                 }}
                 title={disabled ? undefined : 'Toque para editar'}
-                className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-zinc-100 ${
-                  disabled ? '' : 'cursor-text hover:bg-zinc-800'
+                className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-primary ${
+                  disabled ? '' : 'cursor-text hover:bg-surface'
                 }`}
               >
-                {value || <span className="text-zinc-600">—</span>}
+                {value || <span className="text-muted">—</span>}
               </dd>
             )}
           </div>
@@ -384,9 +384,9 @@ export default function GamePanel({
           {widgets.map((widget) => (
             <section
               key={widget.id}
-              className="min-w-[16rem] shrink-0 snap-start rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 sm:min-w-0 sm:shrink"
+              className="min-w-[16rem] shrink-0 snap-start rounded-xl border border-subtle bg-elevated/70 p-3 sm:min-w-0 sm:shrink"
             >
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-zinc-400">
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-secondary">
                 {widget.label}
               </h3>
               {widget.type === 'dice' && (

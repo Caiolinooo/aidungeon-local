@@ -174,7 +174,7 @@ function ActionCheckNote({ check }) {
   if (!check) return null
   if (check.possible) {
     return (
-      <p className="mt-1 px-4 text-[11px] leading-snug text-emerald-400/90">
+      <p className="mt-1 px-4 text-[11px] leading-snug text-accent-pri/90">
         Ação verificada: possível
       </p>
     )
@@ -183,7 +183,7 @@ function ActionCheckNote({ check }) {
   const shown = blockers.slice(0, 3)
   const rest = blockers.length - shown.length
   return (
-    <div className="mt-1 max-w-full px-4 text-[11px] leading-snug text-amber-200/95">
+    <div className="mt-1 max-w-full px-4 text-[11px] leading-snug text-warn-200/95">
       {shown.length === 0 ? (
         <p>Ação verificada: não é possível</p>
       ) : (
@@ -969,7 +969,7 @@ export default function Play() {
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center bg-canvas text-primary">
-        <p className="text-red-300">
+        <p className="text-danger-300">
           {error.status === 0
             ? 'Não foi possível falar com o servidor (http://127.0.0.1:8000). Ele está no ar?'
             : error.message}
@@ -1114,7 +1114,7 @@ export default function Play() {
                 {shareButton}
                 <button
                   onClick={stop}
-                  className="min-h-11 flex items-center gap-1.5 rounded-xl bg-red-800 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 shadow transition"
+                  className="min-h-11 flex items-center gap-1.5 rounded-xl bg-danger-800 px-4 py-2 text-xs font-semibold text-white hover:bg-danger-700 shadow transition"
                   title="Parar a geração"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
@@ -1251,7 +1251,7 @@ export default function Play() {
           <div
             className={`shrink-0 border-b px-4 py-2 text-center text-sm font-semibold ${
               myTurn
-                ? 'border-emerald-600/40 bg-emerald-600/15 text-emerald-400'
+                ? 'border-accent-pri/40 bg-accent-hov/15 text-accent-pri'
                 : 'border-accent-pri/40 bg-accent-pri/15 text-accent-pri'
             }`}
             role="status"
@@ -1431,12 +1431,12 @@ export default function Play() {
         )}
 
         {needsCharacter && (
-          <div className="border-t border-amber-600/40 bg-amber-950/50 px-4 py-2 text-center text-sm text-amber-200">
+          <div className="border-t border-warn-600/40 bg-warn-950/50 px-4 py-2 text-center text-sm text-warn-200">
             Crie seu personagem para jogar.
             <button
               type="button"
               onClick={openCharacter}
-              className="ml-2 underline decoration-amber-400/70 hover:text-amber-50"
+              className="ml-2 underline decoration-warn-400/70 hover:text-warn-50"
             >
               Abrir ficha
             </button>

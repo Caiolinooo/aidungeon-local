@@ -134,31 +134,31 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Título</span>
-        <p className="text-lg font-semibold text-zinc-100">{adventure.title}</p>
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Título</span>
+        <p className="text-lg font-semibold text-primary">{adventure.title}</p>
       </div>
 
       <div>
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Description</span>
-        <p className="whitespace-pre-wrap text-sm text-zinc-400">{adventure.description || '—'}</p>
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Description</span>
+        <p className="whitespace-pre-wrap text-sm text-secondary">{adventure.description || '—'}</p>
       </div>
 
       <div>
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Tags</span>
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Tags</span>
         <div className="flex flex-wrap gap-1.5">
-          {(adventure.tags ?? []).length === 0 && <span className="text-sm text-zinc-600">—</span>}
+          {(adventure.tags ?? []).length === 0 && <span className="text-sm text-muted">—</span>}
           {(adventure.tags ?? []).map((t) => (
-            <span key={t} className="rounded-full bg-zinc-700 px-2.5 py-0.5 text-xs text-zinc-200">
+            <span key={t} className="rounded-full bg-elevated px-2.5 py-0.5 text-xs text-primary">
               {t}
             </span>
           ))}
         </div>
       </div>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+      <section className="rounded-xl border border-subtle bg-canvas/40 p-3">
         <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Regras da aventura</span>
-          <span className={`text-xs ${rules.length >= RULES_MAX ? 'text-red-400' : 'text-zinc-500'}`}>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">Regras da aventura</span>
+          <span className={`text-xs ${rules.length >= RULES_MAX ? 'text-danger-400' : 'text-muted'}`}>
             {rules.length}/{RULES_MAX}
           </span>
         </div>
@@ -168,25 +168,25 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
           rows={6}
           disabled={rulesBusy}
           placeholder="Regras de criação de personagem desta aventura"
-          className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600 disabled:opacity-60"
+          className="w-full resize-y rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri disabled:opacity-60"
         />
         <div className="mt-2 flex justify-end">
           <button
             type="button"
             onClick={saveRules}
             disabled={rulesBusy || rules === savedRules}
-            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
           >
             {saving ? 'Salvando…' : 'Salvar'}
           </button>
         </div>
         <label className="mt-3 block">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Ruleset</span>
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Ruleset</span>
           <select
             value={rulesetId}
             disabled={rulesBusy}
             onChange={(e) => setRulesetId(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600 disabled:opacity-60"
+            className="w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri disabled:opacity-60"
           >
             <option value="">Escolha um ruleset</option>
             {rulesets.map((r) => (
@@ -201,7 +201,7 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
             type="button"
             onClick={() => applyRuleset('replace')}
             disabled={rulesBusy || !rulesetId}
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+            className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-primary hover:bg-surface disabled:opacity-50"
           >
             {applying === 'replace' ? 'Substituindo…' : 'Substituir'}
           </button>
@@ -209,7 +209,7 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
             type="button"
             onClick={() => applyRuleset('append')}
             disabled={rulesBusy || !rulesetId}
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+            className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-primary hover:bg-surface disabled:opacity-50"
           >
             {applying === 'append' ? 'Acrescentando…' : 'Acrescentar'}
           </button>
@@ -218,9 +218,9 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
         {rows.map(([k, v]) => (
-          <div key={k} className="flex justify-between gap-2 border-b border-zinc-800/60 pb-1">
-            <dt className="text-zinc-500">{k}</dt>
-            <dd className="text-right text-zinc-300">{v}</dd>
+          <div key={k} className="flex justify-between gap-2 border-b border-subtle/60 pb-1">
+            <dt className="text-muted">{k}</dt>
+            <dd className="text-right text-secondary">{v}</dd>
           </div>
         ))}
       </dl>
@@ -228,14 +228,14 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
       <button
         onClick={doExport}
         disabled={exporting}
-        className="mt-2 rounded-lg border border-zinc-700 px-4 py-2 text-center text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+        className="mt-2 rounded-lg border border-subtle px-4 py-2 text-center text-sm text-secondary hover:bg-surface disabled:opacity-50"
       >
         {exporting ? 'Exporting…' : '⬇ Export backup (.zip — AI Dungeon format)'}
       </button>
 
       <button
         onClick={logout}
-        className="rounded-lg border border-red-900 px-4 py-2 text-center text-sm text-red-300 hover:bg-red-950/60"
+        className="rounded-lg border border-danger-900 px-4 py-2 text-center text-sm text-danger-300 hover:bg-danger-950/60"
       >
         Sair (encerrar sessão)
       </button>

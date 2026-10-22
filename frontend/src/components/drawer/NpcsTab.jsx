@@ -59,18 +59,18 @@ function PortraitThumb({ card, activeJob }) {
   }, [card.portrait?.id])
 
   return (
-    <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800">
+    <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-subtle bg-surface">
       {url ? (
         <img src={url} alt={card.title || 'NPC portrait'} className="h-full w-full object-cover" />
       ) : (
-        <div className="flex h-full w-full items-center justify-center text-2xl font-semibold text-zinc-600">
+        <div className="flex h-full w-full items-center justify-center text-2xl font-semibold text-muted">
           {initials(card.title)}
         </div>
       )}
       {activeJob && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/60">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-500 border-t-emerald-400" />
-          <span className="text-[10px] font-medium text-zinc-200">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-elevated/60">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-subtle border-t-accent-pri" />
+          <span className="text-[10px] font-medium text-primary">
             {activeJob.status === 'pending' ? 'Queued…' : 'Generating…'}
           </span>
         </div>
@@ -136,7 +136,7 @@ function sheetHasContent(sheet) {
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
 function SheetPanel({ sheet, onChange, onRegenerateField }) {
   const inputCls =
-    'w-full min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs outline-none focus:border-emerald-600'
+    'w-full min-w-0 rounded-md border border-subtle bg-surface px-2 py-1 text-xs outline-none focus:border-accent-pri'
   // Sem as setas nativas: num input estreito elas cobrem o dígito (40 vira "4(").
   const numberCls =
     `${inputCls} px-1 text-center [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`
@@ -153,9 +153,9 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
     })
   }
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
+    <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-elevated/60 p-2">
       <label className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Estado</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Estado</span>
         <select
           value={sheet.status || ''}
           onChange={(e) => set('status', e.target.value)}
@@ -170,7 +170,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
       </label>
       {SHEET_FIELDS.map((key) => (
         <label key={key} className="flex flex-col gap-1">
-          <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted">
             <span>{FIELD_LABELS[key] || key}</span>
             {REGEN_FIELDS.has(key) && (
               <button
@@ -180,7 +180,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
                   e.preventDefault()
                   onRegenerateField?.(key)
                 }}
-                className="rounded border border-zinc-700 px-1 text-[10px] normal-case tracking-normal text-zinc-300 hover:bg-zinc-700"
+                className="rounded border border-subtle px-1 text-[10px] normal-case tracking-normal text-secondary hover:bg-elevated"
               >
                 ↻
               </button>
@@ -196,7 +196,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
       ))}
       <div className="min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Stats</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Stats</span>
           <button
             type="button"
             title="Rolar 4d6, descarta o menor"
@@ -205,7 +205,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
               for (const key of STAT_KEYS) stats[key] = roll4d6DropLowest()
               onChange({ ...sheet, stats })
             }}
-            className="h-7 min-w-7 rounded border border-zinc-700 px-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+            className="h-7 min-w-7 rounded border border-subtle px-1.5 text-xs text-primary hover:bg-elevated"
           >
             🎲
           </button>
@@ -217,18 +217,18 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
             const label = CORE_STATS.find(([k]) => k === key)?.[1] || key
             return (
               <div key={key} className="min-w-0">
-                <span className="truncate text-[10px] uppercase text-zinc-500" title={key}>{label}</span>
+                <span className="truncate text-[10px] uppercase text-muted" title={key}>{label}</span>
                 <div className="flex items-center gap-0.5">
                   <button
                     type="button"
                     aria-label={`Diminuir ${key}`}
                     disabled={shown == null || shown <= 1}
                     onClick={() => setStat(key, String(shown - 1))}
-                    className="h-7 w-7 shrink-0 rounded border border-zinc-700 text-sm leading-none text-zinc-100 hover:bg-zinc-700 disabled:opacity-40"
+                    className="h-7 w-7 shrink-0 rounded border border-subtle text-sm leading-none text-primary hover:bg-elevated disabled:opacity-40"
                   >
                     −
                   </button>
-                  <span className="w-6 shrink-0 text-center text-xs tabular-nums text-zinc-100">
+                  <span className="w-6 shrink-0 text-center text-xs tabular-nums text-primary">
                     {shown ?? '—'}
                   </span>
                   <button
@@ -236,7 +236,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
                     aria-label={`Aumentar ${key}`}
                     disabled={shown != null && shown >= 20}
                     onClick={() => setStat(key, String(shown == null ? 1 : shown + 1))}
-                    className="h-7 w-7 shrink-0 rounded border border-zinc-700 text-sm leading-none text-zinc-100 hover:bg-zinc-700 disabled:opacity-40"
+                    className="h-7 w-7 shrink-0 rounded border border-subtle text-sm leading-none text-primary hover:bg-elevated disabled:opacity-40"
                   >
                     +
                   </button>
@@ -247,14 +247,14 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
         </div>
       </div>
       <div className="min-w-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
           Bonds
         </span>
-        <p className="text-[10px] text-zinc-600">Atualizado a cada turno, a partir do que você faz.</p>
+        <p className="text-[10px] text-muted">Atualizado a cada turno, a partir do que você faz.</p>
         <div className="mt-1 grid grid-cols-1 gap-1">
           {BOND_KEYS.map((key) => (
             <label key={key} className="flex min-w-0 items-center gap-2">
-              <span className="w-16 shrink-0 text-[10px] uppercase text-zinc-500" title={key}>
+              <span className="w-16 shrink-0 text-[10px] uppercase text-muted" title={key}>
                 {BOND_LABELS[key]}
               </span>
               <input
@@ -360,10 +360,10 @@ function NpcRow({
     JSON.stringify(form.sheet) !== JSON.stringify(parseSheet(card.sheet))
 
   const inputCls =
-    'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm outline-none focus:border-emerald-600'
+    'w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm outline-none focus:border-accent-pri'
 
   return (
-    <li className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-800/50 p-3">
+    <li className="min-w-0 rounded-lg border border-subtle bg-surface/50 p-3">
       <div className="flex min-w-0 gap-3">
         <PortraitThumb card={card} activeJob={job && (job.status === 'pending' || job.status === 'running') ? job : null} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -381,13 +381,13 @@ function NpcRow({
             className={`${inputCls} resize-y`}
           />
           <label className="flex flex-col gap-1">
-            <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted">
               <span>Portrait prompt</span>
               <button
                 type="button"
                 title="Regenerate portrait prompt"
                 onClick={() => onRegenerateField?.(card, 'portrait_prompt')}
-                className="rounded border border-zinc-700 px-1 text-[10px] normal-case tracking-normal text-zinc-300 hover:bg-zinc-700"
+                className="rounded border border-subtle px-1 text-[10px] normal-case tracking-normal text-secondary hover:bg-elevated"
               >
                 ↻
               </button>
@@ -400,12 +400,12 @@ function NpcRow({
               className={`${inputCls} resize-y`}
             />
           </label>
-          <label className="flex items-center gap-2 text-sm text-zinc-300">
-            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</span>
+          <label className="flex items-center gap-2 text-sm text-secondary">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">Voice</span>
             <select
               value={form.voice}
               onChange={(e) => setForm({ ...form, voice: e.target.value })}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm outline-none focus:border-emerald-600"
+              className="rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri"
             >
               {VOICES.map((v) => (
                 <option key={v} value={v}>{v === '' ? 'No voice' : v}</option>
@@ -415,19 +415,19 @@ function NpcRow({
               onClick={previewVoice}
               disabled={form.voice === '' || previewing}
               title={form.voice === '' ? 'Pick a voice to preview' : `Preview voice ${form.voice}`}
-              className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
             >
               {previewing ? '⏳' : '▶'}
             </button>
           </label>
           <button
             onClick={() => setSheetOpen((o) => !o)}
-            className="flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-300"
+            className="flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-muted hover:text-secondary"
           >
             <span>{sheetOpen ? '▾' : '▸'}</span>
             <span>Character sheet</span>
             {sheetHasContent(parseSheet(card.sheet)) && (
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="Sheet filled" />
+              <span className="h-1.5 w-1.5 rounded-full bg-accent-500" title="Sheet filled" />
             )}
           </button>
           {sheetOpen && (
@@ -439,8 +439,8 @@ function NpcRow({
           )}
         </div>
       </div>
-      <div className="mt-2 min-w-0 break-words rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 text-xs text-zinc-400">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">State</p>
+      <div className="mt-2 min-w-0 break-words rounded-lg border border-subtle bg-elevated/40 p-2 text-xs text-secondary">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">State</p>
         <p>mood: {life.mood || '—'}</p>
         <p>activity: {life.activity || '—'}</p>
         <p>day: {life.day ?? 0}</p>
@@ -467,7 +467,7 @@ function NpcRow({
         <select
           value={photoMode}
           onChange={(e) => setPhotoMode(e.target.value)}
-          className="max-w-full min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none focus:border-emerald-600"
+          className="max-w-full min-w-0 rounded-md border border-subtle bg-surface px-2 py-1 text-xs text-secondary outline-none focus:border-accent-pri"
         >
           <option value="reference">Referência (NPC fictício)</option>
           <option value="real_person">Pessoa real</option>
@@ -475,21 +475,21 @@ function NpcRow({
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+          className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated"
         >
           Upload photo
         </button>
         <button
           type="button"
           onClick={() => onDeleteReference?.(card)}
-          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+          className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated"
         >
           Remove photo
         </button>
         <button
           type="button"
           onClick={() => onDeletePortrait?.(card)}
-          className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-400 hover:bg-red-950"
+          className="rounded-md border border-danger-900 px-2 py-1 text-xs text-danger-400 hover:bg-danger-950"
         >
           Delete portrait
         </button>
@@ -498,7 +498,7 @@ function NpcRow({
           disabled={!referencePath}
           onClick={() => onPortraitFromPhoto?.(card)}
           title={referencePath ? 'Gerar um retrato novo a partir da foto enviada' : 'Upload a photo first'}
-          className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md border border-accent-800 px-2 py-1 text-xs text-accent-pri hover:bg-accent-950 disabled:cursor-not-allowed disabled:opacity-40"
         >
           New image from photo
         </button>
@@ -507,7 +507,7 @@ function NpcRow({
         <button
           onClick={() => onSave(card, form)}
           disabled={!dirty || saving}
-          className="rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+          className="rounded-md bg-accent-pri px-2 py-1 text-xs font-medium text-white hover:bg-accent-hov disabled:opacity-50"
         >
           {saving ? 'Salvando…' : 'Save'}
         </button>
@@ -515,7 +515,7 @@ function NpcRow({
           onClick={() => onEnrich(card)}
           disabled={enriching || regenerating}
           title="A IA preenche a ficha e um prompt detalhado de retrato a partir da descrição"
-          className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
+          className="rounded-md border border-accent-800 px-2 py-1 text-xs text-accent-pri hover:bg-accent-950 disabled:opacity-50"
         >
           {enriching ? 'Enriching…' : '✨ Enrich'}
         </button>
@@ -523,7 +523,7 @@ function NpcRow({
           onClick={() => onRegenerateAll?.(card)}
           disabled={regenerating}
           title="Overwrite personality, humor, speech, goals, background, lifestyle, habits, likes and sentiments"
-          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+          className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
         >
           {regenerating ? 'Regenerating…' : '🎲 Regenerate all'}
         </button>
@@ -531,13 +531,13 @@ function NpcRow({
           onClick={() => onRegenerate(card)}
           disabled={!!job && (job.status === 'pending' || job.status === 'running')}
           title="Nova imagem deste NPC, a partir do rosto salvo"
-          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+          className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
         >
           Regenerate portrait
         </button>
         <button
           onClick={() => onDelete(card)}
-          className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-400 hover:bg-red-950"
+          className="rounded-md border border-danger-900 px-2 py-1 text-xs text-danger-400 hover:bg-danger-950"
         >
           Apagar
         </button>
@@ -807,7 +807,7 @@ export default function NpcsTab({ adventure }) {
     setDismissed((s) => new Set([...s, jobId]))
   }
 
-  if (cards === null) return <p className="text-sm text-zinc-500">Carregando…</p>
+  if (cards === null) return <p className="text-sm text-muted">Carregando…</p>
 
   return (
     <div>
@@ -818,7 +818,7 @@ export default function NpcsTab({ adventure }) {
             value={npcName}
             onChange={(e) => setNpcName(e.target.value)}
             placeholder="Nome do NPC"
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+            className="rounded-lg border border-subtle bg-surface px-2 py-1 text-sm text-primary outline-none focus:border-accent-pri"
           />
           <div className="flex gap-2">
             <button type="button" className="text-xs underline" onClick={() => addNpc(npcName)}>Confirmar</button>
@@ -827,27 +827,27 @@ export default function NpcsTab({ adventure }) {
         </div>
       )}
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-secondary">
           NPCs ({npcs.length})
         </h3>
         <div className="flex gap-1">
           <button
             onClick={() => { setNpcName(''); setNamingNpc(true) }}
-            className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-600"
+            className="rounded-md bg-accent-pri px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-hov"
           >
             + Adicionar NPC
           </button>
           <button
             onClick={simulateDay}
             title="Invent one off-screen day for every NPC"
-            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+            className="rounded-md border border-subtle px-3 py-1.5 text-sm text-secondary hover:bg-elevated"
           >
             ⏩ Simulate a day
           </button>
           <button
             onClick={generateAll}
             title="Only NPCs that don't have a portrait yet. Saved faces stay."
-            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+            className="rounded-md border border-subtle px-3 py-1.5 text-sm text-secondary hover:bg-elevated"
           >
             Generate missing portraits
           </button>
@@ -866,7 +866,7 @@ export default function NpcsTab({ adventure }) {
 
 
       {npcs.length === 0 && (
-        <p className="rounded-lg border border-dashed border-zinc-700 p-4 text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-subtle p-4 text-sm text-muted">
           No NPCs yet. NPCs are fichas of type "character" — add one and
           generate its portrait.
         </p>
@@ -897,11 +897,11 @@ export default function NpcsTab({ adventure }) {
                 onDelete={remove}
               />
               {showError && (
-                <div className="mt-1 flex items-start justify-between gap-2 rounded-lg border border-red-900 bg-red-950/60 px-3 py-2 text-xs text-red-300">
+                <div className="mt-1 flex items-start justify-between gap-2 rounded-lg border border-danger-900 bg-danger-950/60 px-3 py-2 text-xs text-danger-300">
                   <span className="break-words">Portrait generation failed: {job.error}</span>
                   <button
                     onClick={() => dismissError(job.id)}
-                    className="shrink-0 text-zinc-400 hover:text-zinc-100"
+                    className="shrink-0 text-secondary hover:text-primary"
                     aria-label="Dispensar"
                   >
                     ✕

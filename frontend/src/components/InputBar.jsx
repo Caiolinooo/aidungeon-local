@@ -281,7 +281,7 @@ export default function InputBar({
             aria-label={recording ? 'Parar gravação' : 'Ditar a ação com o microfone'}
             className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
               recording
-                ? 'animate-pulse border-red-500 bg-red-600 text-white hover:bg-red-500'
+                ? 'animate-pulse border-danger-500 bg-danger-600 text-white hover:bg-danger-500'
                 : 'border-subtle bg-elevated hover:bg-surface'
             }`}
           >
@@ -313,7 +313,7 @@ export default function InputBar({
           </div>
         </div>
         {micHint && (
-          <p className="mt-1.5 text-xs text-amber-300/90">{micHint}</p>
+          <p className="mt-1.5 text-xs text-warn-300/90">{micHint}</p>
         )}
       </div>
     </div>

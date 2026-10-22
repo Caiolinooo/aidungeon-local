@@ -100,8 +100,8 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
       {isSee ? (
         <SeeImageCard action={action} />
       ) : isPlayer ? (
-        <blockquote className="border-l-4 border-emerald-700/70 pl-4">
-          <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-emerald-400">
+        <blockquote className="border-l-4 border-accent-pri/70 pl-4">
+          <div className="mb-0.5 text-xs font-bold uppercase tracking-wide text-accent-pri">
             {playerLabel(type, actor)}
           </div>
           <p className="whitespace-pre-wrap font-prose text-primary">
@@ -265,7 +265,7 @@ function NarrateButton({ text, adventureId = '' }) {
       aria-label={state === 'idle' ? 'Narrar em voz alta' : 'Parar narração'}
       className={`absolute right-16 top-2 flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition ${
         state === 'playing'
-          ? 'inline-flex border-amber-500/50 bg-amber-500/15 text-amber-300'
+          ? 'inline-flex border-warn-500/50 bg-warn-500/15 text-warn-300'
           : state === 'loading'
             ? 'inline-flex border-accent-pri/50 bg-accent-pri/15 text-accent-pri'
             : 'border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated max-sm:inline-flex sm:hidden sm:group-hover:inline-flex'
@@ -278,7 +278,7 @@ function NarrateButton({ text, adventureId = '' }) {
         </>
       ) : state === 'playing' ? (
         <>
-          <Square className="w-3 h-3 fill-current text-amber-400" />
+          <Square className="w-3 h-3 fill-current text-warn-400" />
           <span className="text-[10px] font-medium">Speaking</span>
         </>
       ) : (

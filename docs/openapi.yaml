@@ -301,7 +301,7 @@ paths:
         `config/settings.json`), o stream emite **antes** dos tokens:
         ```
         event: action_check
-        data: {"possible": true, "blockers": [], "risks": [], "notes": ""}
+        data: {"possible": true, "blockers": [], "risks": [], "notes": "", "cost": "", "consequence": ""}
         ```
         O veredito também volta em `data.action_check` do evento `done`.
         Quando a checagem não roda (ação curta, tipo `story`, LLM fora do ar),

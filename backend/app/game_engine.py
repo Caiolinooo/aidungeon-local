@@ -22,7 +22,7 @@ Semânticas do contrato:
   choices e summary pendentes, nunca o chronicle.
 
 Eventos emitidos pelo gerador (a rota serializa em SSE):
-    {"event": "action_check", "data": {"possible": bool, "blockers": [], "risks": [], "notes": ""}}
+    {"event": "action_check", "data": {"possible": bool, "blockers": [], "risks": [], "notes": "", "cost": "", "consequence": ""}}
     {"event": "token", "data": {"token": "..."}}
     {"event": "done",  "data": {"player_action"?: Action, "action": Action, "action_check"?: object}}
     {"event": "error", "data": {"message": "..."}}

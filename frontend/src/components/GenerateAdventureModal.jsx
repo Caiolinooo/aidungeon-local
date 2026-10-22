@@ -24,26 +24,54 @@ function characterTitle(name, description) {
   return 'Protagonista'
 }
 
-function explainError(err) {
-  const code = err?.code
-  if (code === 'generation_failed') {
-    return 'A IA devolveu uma resposta que não deu para interpretar. O rascunho foi mantido — tente gerar de novo.'
-  }
-  if (code === 'validation_error') return err.message
-  if (code === 'timeout' || code === 'network_error' || err?.status === 0) {
-    return 'O servidor de IA não respondeu a tempo. O rascunho foi mantido — tente de novo.'
-  }
-  return err?.message || 'Algo deu errado.'
+// config/settings.json → scheduler.timeouts.assistant
+const ASSISTANT_TIMEOUT_S = 180
+const CLIENT_DEADLINE_CAP_S = 240
+
+function clientDeadlineMs(assistantTimeoutS = ASSISTANT_TIMEOUT_S) {
+  const seconds = Number(assistantTimeoutS)
+  const base = Number.isFinite(seconds) && seconds > 0 ? seconds : ASSISTANT_TIMEOUT_S
+  return Math.min(base * 1.2, CLIENT_DEADLINE_CAP_S) * 1000
 }
 
-function stageFor(elapsedSec, webMode) {
+function explainError(err) {
+  if (err?.name === 'AbortError') return 'Tempo limite da criação. O rascunho foi mantido.'
+  const code = err?.code
+  const hint = typeof err?.hint === 'string' ? err.hint.trim() : ''
+  let message
+  if (code === 'generation_failed') {
+    message = 'A IA devolveu uma resposta que não deu para interpretar. O rascunho foi mantido — tente gerar de novo.'
+  } else if (code === 'validation_error') {
+    message = err.message
+  } else if (code === 'llm_timeout') {
+    message = 'O modelo de IA não respondeu a tempo.'
+  } else if (code === 'llm_degraded') {
+    message = 'Servidor de IA instável; tente de novo em 1 min.'
+  } else if (code === 'unreachable') {
+    message = 'Servidor de IA indisponível.'
+  } else if (code === 'auth_error') {
+    message = 'Credencial do modelo inválida.'
+  } else if (code === 'config_error') {
+    message = hint || err?.message || 'Configuração do modelo inválida.'
+  } else if (code === 'error') {
+    message = 'Falha no modelo de IA.'
+  } else if (code === 'timeout' || code === 'network_error' || err?.status === 0) {
+    message = 'O servidor de IA não respondeu a tempo. O rascunho foi mantido — tente de novo.'
+  } else {
+    message = err?.message || 'Algo deu errado.'
+  }
+  if (hint && hint !== message) return `${message}\n${hint}`
+  return message
+}
+
+function stageFor(elapsedSec, webMode, deepCharacters) {
   if (elapsedSec < 4 && webMode !== 'off') return '🌐 Buscando na web…'
-  if (elapsedSec < 25) return '✍️ Escrevendo o cenário…'
+  if (elapsedSec < 25 || !deepCharacters) return '✍️ Escrevendo o cenário…'
   return '🃏 Montando as fichas…'
 }
 
 const miniBtnCls =
-  'shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40'
+  'shrink-0 rounded-md border border-subtle px-2 py-0.5 text-[11px] text-secondary hover:bg-surface hover:text-primary disabled:opacity-40'
 
 export default function GenerateAdventureModal({ onClose }) {
   const toast = useToast()
@@ -80,9 +108,23 @@ export default function GenerateAdventureModal({ onClose }) {
 
   const opRef = useRef(false)
   const timerRef = useRef(null)
+  const abortRef = useRef(null)
+  const abortReasonRef = useRef(null)
+  const mountedRef = useRef(true)
   const language = langChoice || draftLanguage()
 
-  useEffect(() => () => clearInterval(timerRef.current), [])
+  useEffect(() => () => {
+    mountedRef.current = false
+    abortReasonRef.current = abortReasonRef.current || 'unmount'
+    clearInterval(timerRef.current)
+    abortRef.current?.abort()
+  }, [])
+
+  const closeModal = () => {
+    abortReasonRef.current = 'close'
+    abortRef.current?.abort()
+    onClose?.()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -110,10 +152,18 @@ export default function GenerateAdventureModal({ onClose }) {
     setGenerating(true)
     const started = Date.now()
     const webMode = webSearchMode
-    const tick = () => setStage(stageFor((Date.now() - started) / 1000, webMode))
+    const deep = deepCharacters
+    const tick = () => setStage(stageFor((Date.now() - started) / 1000, webMode, deep))
     tick()
     const timer = setInterval(tick, 1000)
     timerRef.current = timer
+    abortReasonRef.current = null
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const deadline = window.setTimeout(() => {
+      abortReasonRef.current = 'timeout'
+      ctrl.abort()
+    }, clientDeadlineMs())
     try {
       const pickedRules = rulesets.find((r) => String(r.id) === String(rulesetId))
       const described = heroMode === 'describe'
@@ -137,6 +187,7 @@ export default function GenerateAdventureModal({ onClose }) {
       }
       const ask = (count) => {
         const withCount = { ...payload, card_count: count }
+        const signal = ctrl.signal
         return deepCharacters
           ? api.assistantGenerate({
             ...withCount,
@@ -150,26 +201,41 @@ export default function GenerateAdventureModal({ onClose }) {
             ruleset_rules: pickedRules ? String(pickedRules.rules || '').slice(0, 900) : '',
             image_style: imageStyle.trim(),
             deep_characters: true,
-          })
-          : api.assistantScenario(withCount)
+          }, { signal })
+          : api.assistantScenario({ ...withCount, signal })
       }
       const count = Number(cardCount) || 5
       try {
         setDraft(await ask(count))
       } catch (err) {
-        const hint = `${err?.hint || ''} ${err?.message || ''}`
-        if (count > 3 && /title/i.test(hint)) setDraft(await ask(3))
+        if (count > 3 && err?.code === 'generation_failed') setDraft(await ask(3))
         else throw err
       }
       setPanelError(null)
     } catch (e) {
-      setPanelError({ message: explainError(e), retry: () => generate() })
+      if (e?.name === 'AbortError') {
+        if (abortReasonRef.current === 'timeout' && mountedRef.current) {
+          const message = 'Tempo limite da criação. O rascunho foi mantido.'
+          toast(message)
+          setPanelError({ message, retry: () => generate() })
+        }
+      } else {
+        abortReasonRef.current = 'failure'
+        ctrl.abort()
+        if (mountedRef.current) {
+          setPanelError({ message: explainError(e), retry: () => generate() })
+        }
+      }
     } finally {
+      clearTimeout(deadline)
       clearInterval(timer)
       timerRef.current = null
+      if (abortRef.current === ctrl) abortRef.current = null
       opRef.current = false
-      setGenerating(false)
-      setStage('')
+      if (mountedRef.current) {
+        setGenerating(false)
+        setStage('')
+      }
     }
   }
 
@@ -354,9 +420,9 @@ export default function GenerateAdventureModal({ onClose }) {
   }
 
   const inputCls =
-    'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600 disabled:opacity-60'
-  const labelCls = 'text-xs font-semibold uppercase tracking-wide text-zinc-500'
-  const hintCls = 'block text-xs text-zinc-600'
+    'w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri disabled:opacity-60'
+  const labelCls = 'text-xs font-semibold uppercase tracking-wide text-muted'
+  const hintCls = 'block text-xs text-muted'
 
   const refineBox = (field, placeholder) => (
     refineField === field ? (
@@ -409,10 +475,10 @@ export default function GenerateAdventureModal({ onClose }) {
   const selectedRules = String(selectedRuleset?.rules || '').slice(0, 4000)
 
   return (
-    <Modal title="Gerar com IA" onClose={busy ? undefined : onClose} wide>
+    <Modal title="Gerar com IA" onClose={closeModal} wide>
       {panelError && (
         <div className="mb-3 rounded-lg border border-danger-800 bg-danger-950/60 p-3 text-sm">
-          <p>{panelError.message}</p>
+          <p className="whitespace-pre-line">{panelError.message}</p>
           {panelError.retry && (
             <button
               type="button"
@@ -454,16 +520,16 @@ export default function GenerateAdventureModal({ onClose }) {
               type="button"
               onClick={() => setRulesPreview((open) => !open)}
               disabled={busy}
-              className="text-xs text-emerald-400 hover:underline disabled:opacity-50"
+              className="text-xs text-accent-pri hover:underline disabled:opacity-50"
             >
               {rulesPreview ? 'Ocultar prévia' : 'Ver prévia'}
             </button>
             {rulesPreview && (
-              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-300">
+              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-subtle bg-canvas/60 p-3 text-xs text-secondary">
                 {selectedRules || '—'}
               </pre>
             )}
-            <p className="mt-1 text-xs text-zinc-600">
+            <p className="mt-1 text-xs text-muted">
               Ao criar, estas regras substituem character_rules ({selectedRules.length}/4000).
             </p>
           </div>
@@ -471,7 +537,7 @@ export default function GenerateAdventureModal({ onClose }) {
       </div>
       {!draft ? (
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-secondary">
             Descreva a aventura em qualquer língua. O rascunho (título, abertura e cards)
             sai nessa língua para você revisar antes de criar. O ruleset e o personagem
             abaixo entram na história e viram a ficha de quem joga.
@@ -488,15 +554,15 @@ export default function GenerateAdventureModal({ onClose }) {
                 className={`${inputCls} resize-y`}
               />
             </label>
-            <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+            <section className="rounded-xl border border-subtle bg-elevated/40 p-3">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <span className={labelCls}>Seu personagem</span>
-                <div className="flex rounded-lg border border-zinc-700 p-0.5 text-xs">
+                <div className="flex rounded-lg border border-subtle p-0.5 text-xs">
                   <button
                     type="button"
                     disabled={generating}
                     onClick={() => setHeroMode('describe')}
-                    className={`rounded-md px-2.5 py-1 ${heroMode === 'describe' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'describe' ? 'bg-accent-pri text-white' : 'text-secondary hover:text-primary'}`}
                   >
                     Descrever
                   </button>
@@ -504,7 +570,7 @@ export default function GenerateAdventureModal({ onClose }) {
                     type="button"
                     disabled={generating}
                     onClick={() => setHeroMode('steps')}
-                    className={`rounded-md px-2.5 py-1 ${heroMode === 'steps' ? 'bg-emerald-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                    className={`rounded-md px-2.5 py-1 ${heroMode === 'steps' ? 'bg-accent-pri text-white' : 'text-secondary hover:text-primary'}`}
                   >
                     Passo a passo
                   </button>
@@ -535,7 +601,7 @@ export default function GenerateAdventureModal({ onClose }) {
                 </div>
               ) : (
                 <div className="flex flex-col gap-3">
-                  <p className="text-xs text-zinc-500">Pergunta {heroStep + 1} de 4. Pode pular.</p>
+                  <p className="text-xs text-muted">Pergunta {heroStep + 1} de 4. Pode pular.</p>
                   {heroStep === 0 && (
                     <label className="block">
                       {paramLabel('Como você se chama?')}
@@ -602,7 +668,7 @@ export default function GenerateAdventureModal({ onClose }) {
                   </div>
                 </div>
               )}
-              <p className="mt-2 text-xs text-zinc-600">
+              <p className="mt-2 text-xs text-muted">
                 Em branco, a ficha fica para o jogo. Com nome, ela já nasce salva.
               </p>
             </section>
@@ -659,12 +725,12 @@ export default function GenerateAdventureModal({ onClose }) {
                   className={inputCls}
                 />
               </label>
-              <label className="flex items-center gap-2 text-sm text-zinc-300 sm:col-span-2">
+              <label className="flex items-center gap-2 text-sm text-secondary sm:col-span-2">
                 <input
                   type="checkbox"
                   checked={deepCharacters}
                   onChange={(e) => setDeepCharacters(e.target.checked)}
-                  className="accent-emerald-600"
+                  className="accent-accent-600"
                 />
                 Fichas profundas (NPCs completos)
               </label>
@@ -679,23 +745,23 @@ export default function GenerateAdventureModal({ onClose }) {
             </div>
           </fieldset>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-zinc-600">
+            <span className="text-xs text-muted">
               {generating
                 ? `${stage || 'Gerando…'} 2 a 6 minutos com o modelo local.`
                 : 'Nada é salvo até você clicar em Criar aventura.'}
             </span>
             <div className="flex gap-2">
               <button
-                onClick={onClose}
-                disabled={generating}
-                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                onClick={closeModal}
+                disabled={creating}
+                className="rounded-lg border border-subtle px-4 py-2 text-sm text-secondary hover:bg-surface disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
                 onClick={generate}
                 disabled={generating || brief.trim().length < 3}
-                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                className="rounded-lg bg-accent-pri px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
               >
                 {generating ? 'Gerando…' : 'Gerar rascunho'}
               </button>
@@ -705,9 +771,9 @@ export default function GenerateAdventureModal({ onClose }) {
       ) : (
         <fieldset disabled={busy} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
           {!!draft.web_sources?.length && (
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                🌐 Sources consulted
+            <div className="rounded-lg border border-subtle bg-elevated/40 px-3 py-2">
+              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+                🌐 Fontes consultadas
               </div>
               <ul className="flex flex-col gap-1 text-sm">
                 {draft.web_sources.map((s, i) => {
@@ -719,12 +785,12 @@ export default function GenerateAdventureModal({ onClose }) {
                           href={s.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="break-words text-emerald-400 hover:underline"
+                          className="break-words text-accent-pri hover:underline"
                         >
                           {s.title || s.url}
                         </a>
                       ) : (
-                        <span className="break-words text-zinc-300">{s.title}</span>
+                        <span className="break-words text-secondary">{s.title}</span>
                       )}
                     </li>
                   )
@@ -743,7 +809,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('description', 'Description')}
+            {fieldHeader('description', 'Descrição')}
             <textarea
               value={draft.description ?? ''}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
@@ -753,7 +819,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('ai_instructions', 'AI Instructions', 'Instruções de estilo para o narrador.')}
+            {fieldHeader('ai_instructions', 'Instruções da IA', 'Instruções de estilo para o narrador.')}
             <textarea
               value={draft.ai_instructions ?? ''}
               onChange={(e) => setDraft({ ...draft, ai_instructions: e.target.value })}
@@ -797,18 +863,18 @@ export default function GenerateAdventureModal({ onClose }) {
             <input
               value={draft.image_style ?? ''}
               onChange={(e) => setDraft({ ...draft, image_style: e.target.value })}
-              placeholder="e.g. dark cinematic photography, neon rain"
+              placeholder="ex.: dark cinematic photography, neon rain"
               className={inputCls}
             />
           </label>
 
           <div className="block">
-            {fieldHeader('tags', 'Tags')}
+            {fieldHeader('tags', 'Etiquetas')}
             <TagInput
               value={draft.tags ?? []}
               onChange={(tags) => setDraft({ ...draft, tags })}
               disabled={busy}
-              placeholder="e.g. fantasy"
+              placeholder="ex.: fantasy"
             />
           </div>
 
@@ -842,7 +908,7 @@ export default function GenerateAdventureModal({ onClose }) {
             <button
               type="button"
               onClick={() => setDraft(null)}
-              className="text-sm text-zinc-500 hover:text-zinc-300"
+              className="text-sm text-muted hover:text-secondary"
             >
               ← Outra ideia
             </button>
@@ -854,7 +920,7 @@ export default function GenerateAdventureModal({ onClose }) {
                 type="button"
                 onClick={create}
                 disabled={busy || !draft.title?.trim()}
-                className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                className="rounded-lg bg-accent-pri px-5 py-2 text-sm font-semibold text-white hover:bg-accent-hov disabled:opacity-50"
               >
                 {creating ? 'Criando…' : 'Criar aventura'}
               </button>

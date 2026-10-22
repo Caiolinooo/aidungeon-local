@@ -17,6 +17,7 @@ Funcionalidades:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -683,25 +684,32 @@ def generate_scenario_draft(
     if card_count:
         budget = max(budget, 1400 + 350 * card_count)
     raw: dict | None = None
-    last_exc: llm_client.LlmError | None = None
-    saw_content = False
     for _attempt in range(2):
         try:
             raw = _chat_object(llm_cfg, system, idea, max_tokens=budget,
                                temperature=cfg["temperature"], transport=transport)
         except llm_client.LlmError as exc:
-            last_exc = exc
-            raw = None
+            # LlmTimeout (inclui LlmQueueTimeout), LlmDegraded, LlmUnreachable
+            # e LlmAuthError não repetem. Parse/JSON (generation_failed,
+            # validation_error) e falha genérica do modelo (code error) repetem.
+            if isinstance(exc, (
+                llm_client.LlmTimeout,
+                llm_client.LlmDegraded,
+                llm_client.LlmUnreachable,
+                llm_client.LlmAuthError,
+            )):
+                raise
+            code = getattr(exc, "code", "") or ""
+            if code not in ("generation_failed", "validation_error", "error"):
+                raise
             log.info("assistant: chamada do rascunho falhou (%s); tentando de novo", exc.message)
+            raw = None
             continue
-        saw_content = True
         if raw and _as_str(raw.get("title")):
             break
         log.info("assistant: rascunho sem título ou JSON inválido; tentando de novo")
         raw = None
     if not raw or not _as_str(raw.get("title")):
-        if last_exc is not None and not saw_content:
-            raise last_exc
         raise _generation_failed("resposta sem 'title'")
 
     draft: dict[str, Any] = {field: _as_str(raw.get(field)) for field in TEXT_FIELDS}
@@ -781,43 +789,64 @@ def _sheet_value_kept(value: Any) -> bool:
     return True
 
 
+async def _deepen_one_card(llm_cfg: dict, card: dict, transport: Any) -> None:
+    existing = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
+    built = await asyncio.to_thread(
+        npc_assets.build_sheet,
+        llm_cfg,
+        title=str(card.get("title") or ""),
+        entry=str(card.get("entry") or ""),
+        sheet=existing or None,
+        transport=transport,
+    )
+    portrait = built.pop("portrait_prompt", None)
+    merged = dict(built)
+    for key, value in existing.items():
+        if _sheet_value_kept(value):
+            merged[key] = value
+    card["sheet"] = npc_assets.ensure_sheet_complete(
+        merged,
+        entry=str(card.get("entry") or ""),
+        card=card,
+    )
+    if portrait and not _sheet_value_kept(card.get("portrait_prompt")):
+        card["portrait_prompt"] = portrait
+
+
+async def _deepen_characters_parallel(
+    llm_cfg: dict, cards: list[dict], transport: Any,
+) -> None:
+    outcomes = await asyncio.gather(
+        *(_deepen_one_card(llm_cfg, card, transport) for card in cards),
+        return_exceptions=True,
+    )
+    for card, outcome in zip(cards, outcomes):
+        if not isinstance(outcome, BaseException):
+            continue
+        log.info(
+            "assistant: deepen de '%s' falhou (%s); fica o deterministico",
+            card.get("title"), getattr(outcome, "message", None) or outcome,
+        )
+        existing = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
+        card["sheet"] = npc_assets.ensure_sheet_complete(
+            existing, entry=str(card.get("entry") or ""), card=card,
+        )
+
+
 def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict:
     """Preenche a ficha de cada personagem. O que o rascunho já tem prevalece.
 
     Um card que falha (LLM ocupado/lento) não derruba a geração: a ficha
     determinística fica e o job card_assets completa os textos vivos depois,
-    na criação da aventura.
+    na criação da aventura. As fichas rodam em paralelo; a ordem dos cards
+    no rascunho não muda.
     """
-    for card in draft.get("story_cards") or []:
-        if not isinstance(card, dict):
-            continue
-        if str(card.get("type") or "").lower() != "character":
-            continue
-        existing = card.get("sheet") if isinstance(card.get("sheet"), dict) else {}
-        try:
-            built = npc_assets.build_sheet(
-                llm_cfg, title=str(card.get("title") or ""),
-                entry=str(card.get("entry") or ""), sheet=existing or None,
-                transport=transport,
-            )
-        except (llm_client.LlmError, GameError, ValueError) as exc:
-            log.info("assistant: deepen de '%s' falhou (%s); fica o deterministico",
-                     card.get("title"), getattr(exc, "message", None) or exc)
-            card["sheet"] = npc_assets.ensure_sheet_complete(
-                existing, entry=str(card.get("entry") or ""), card=card)
-            continue
-        portrait = built.pop("portrait_prompt", None)
-        merged = dict(built)
-        for key, value in existing.items():
-            if _sheet_value_kept(value):
-                merged[key] = value
-        card["sheet"] = npc_assets.ensure_sheet_complete(
-            merged,
-            entry=str(card.get("entry") or ""),
-            card=card,
-        )
-        if portrait and not _sheet_value_kept(card.get("portrait_prompt")):
-            card["portrait_prompt"] = portrait
+    cards = [
+        card for card in (draft.get("story_cards") or [])
+        if isinstance(card, dict) and str(card.get("type") or "").lower() == "character"
+    ]
+    if cards:
+        asyncio.run(_deepen_characters_parallel(llm_cfg, cards, transport))
     return draft
 
 

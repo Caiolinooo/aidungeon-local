@@ -304,6 +304,7 @@ export const api = {
     image_style,
     card_count,
     web_search_mode,
+    signal,
   } = {}) =>
     request('/assistant/scenario', {
       method: 'POST',
@@ -324,9 +325,11 @@ export const api = {
         card_count,
         web_search_mode,
       },
+      signal,
     }),
   // Regenera um campo do rascunho (resposta: {field, value} ou {field, story_cards}).
-  assistantGenerate: (body) => request('/assistant/generate', { method: 'POST', body }),
+  assistantGenerate: (body, { signal } = {}) =>
+    request('/assistant/generate', { method: 'POST', body, signal }),
   assistantField: ({ field, brief, current, draft, language, instruction, web_search } = {}) =>
     request('/assistant/field', {
       method: 'POST',

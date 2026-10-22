@@ -80,11 +80,11 @@ export default function AvatarsTab({ adventure, storyText }) {
     setAutoMood(hit ? hit.emotion : null)
   }, [storyText, followStory, selected, manualUntil])
 
-  if (cards === null) return <p className="text-sm text-zinc-500">Carregando…</p>
+  if (cards === null) return <p className="text-sm text-muted">Carregando…</p>
 
   if (npcs.length === 0) {
     return (
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted">
         No NPCs yet. Create character cards in the NPCs tab to customize their avatars.
       </p>
     )
@@ -131,11 +131,11 @@ export default function AvatarsTab({ adventure, storyText }) {
   const effectiveMood = !manualActive && followStory && autoMood ? autoMood : cfg.mood
 
   const inputCls =
-    'rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm outline-none focus:border-emerald-600'
+    'rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri'
 
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">
+      <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-secondary">
         Avatars ({npcs.length})
       </h3>
 
@@ -147,8 +147,8 @@ export default function AvatarsTab({ adventure, storyText }) {
             onClick={() => pickNpc(c.id)}
             className={`rounded-md px-2 py-1 text-xs font-medium ${
               selected?.id === c.id
-                ? 'bg-emerald-700 text-white'
-                : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                ? 'bg-accent-pri text-white'
+                : 'border border-subtle text-secondary hover:bg-elevated'
             }`}
           >
             {c.title || 'Sem título'}
@@ -169,8 +169,8 @@ export default function AvatarsTab({ adventure, storyText }) {
                 onClick={() => pickModel(key)}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   cfg.model === key
-                    ? 'bg-emerald-700 text-white'
-                    : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                    ? 'bg-accent-pri text-white'
+                    : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
                 {a.label}
@@ -180,8 +180,8 @@ export default function AvatarsTab({ adventure, storyText }) {
               onClick={() => pickModel('custom')}
               className={`rounded-md px-2 py-1 text-xs font-medium ${
                 cfg.model === 'custom'
-                  ? 'bg-emerald-700 text-white'
-                  : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                  ? 'bg-accent-pri text-white'
+                  : 'border border-subtle text-secondary hover:bg-elevated'
               }`}
             >
               Custom URL
@@ -197,7 +197,7 @@ export default function AvatarsTab({ adventure, storyText }) {
                 placeholder="https://…/avatar.glb"
                 className={`${inputCls} w-full`}
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-muted">
                 Ready Player Me GLB com morphTargets=ARKit,Oculus Visemes
               </p>
             </div>
@@ -205,15 +205,15 @@ export default function AvatarsTab({ adventure, storyText }) {
 
           {/* corpo (forma usada pelo TalkingHead p/ poses) */}
           <div className="mt-3 flex items-center gap-2">
-            <span className="text-xs text-zinc-400">Corpo:</span>
+            <span className="text-xs text-secondary">Corpo:</span>
             {['F', 'M'].map((b) => (
               <button
                 key={b}
                 onClick={() => setCfg((c) => ({ ...c, body: b }))}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   cfg.body === b
-                    ? 'bg-emerald-700 text-white'
-                    : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                    ? 'bg-accent-pri text-white'
+                    : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
                 {b}
@@ -229,8 +229,8 @@ export default function AvatarsTab({ adventure, storyText }) {
                 onClick={() => pickMood(m)}
                 className={`rounded-md px-2 py-1 text-xs font-medium ${
                   effectiveMood === m
-                    ? 'bg-emerald-700 text-white'
-                    : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                    ? 'bg-accent-pri text-white'
+                    : 'border border-subtle text-secondary hover:bg-elevated'
                 }`}
               >
                 {MOOD_LABELS[m]}
@@ -238,20 +238,20 @@ export default function AvatarsTab({ adventure, storyText }) {
             ))}
           </div>
 
-          <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+          <label className="mt-3 flex items-center gap-2 text-sm text-secondary">
             <input
               type="checkbox"
               checked={followStory}
               onChange={(e) => setFollowStory(e.target.checked)}
-              className="accent-emerald-600"
+              className="accent-accent-600"
             />
             Follow the story
             {!storyText && (
-              <span className="text-xs text-zinc-500">(aguardando o feed da história)</span>
+              <span className="text-xs text-muted">(aguardando o feed da história)</span>
             )}
           </label>
           {followStory && autoMood && !manualActive && (
-            <p className="mt-1 text-xs text-emerald-400">
+            <p className="mt-1 text-xs text-accent-pri">
               Auto-detected: {MOOD_LABELS[autoMood]}
             </p>
           )}
@@ -260,7 +260,7 @@ export default function AvatarsTab({ adventure, storyText }) {
             <button
               onClick={save}
               disabled={!dirty || saving}
-              className={`${inputCls} bg-emerald-700 font-medium text-white hover:bg-emerald-600 disabled:opacity-50`}
+              className={`${inputCls} bg-accent-pri font-medium text-white hover:bg-accent-hov disabled:opacity-50`}
             >
               {saving ? 'Salvando…' : 'Salvar avatar'}
             </button>

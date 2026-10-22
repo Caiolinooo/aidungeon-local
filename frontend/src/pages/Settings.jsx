@@ -327,8 +327,8 @@ export default function Settings() {
                       </p>
                     </div>
                     {llmHealth && (
-                      <span className="flex items-center gap-1 rounded-full bg-emerald-950/60 border border-emerald-800 px-2.5 py-1 text-[11px] font-mono text-emerald-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="flex items-center gap-1 rounded-full bg-accent-950/60 border border-accent-800 px-2.5 py-1 text-[11px] font-mono text-accent-pri">
+                        <span className="w-1.5 h-1.5 rounded-full bg-accent-500 animate-pulse" />
                         {llmHealth.status === 'ok' ? 'Online' : 'Warning'}
                       </span>
                     )}
@@ -416,7 +416,7 @@ export default function Settings() {
                         onChange={(e) =>
                           setLlmForm({ ...llmForm, context_size: Math.min(contextSizeMax, Number(e.target.value)) })
                         }
-                        className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                        className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                       />
                       <div className="flex justify-between text-[10px] text-muted font-mono mt-1">
                         <span>4.096 mín.</span>
@@ -435,7 +435,7 @@ export default function Settings() {
                           step="16"
                           value={llmForm.max_tokens}
                           onChange={(e) => setLlmForm({ ...llmForm, max_tokens: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                       <div>
@@ -455,7 +455,7 @@ export default function Settings() {
                             type="checkbox"
                             checked={llmForm.streaming}
                             onChange={(e) => setLlmForm({ ...llmForm, streaming: e.target.checked })}
-                            className="accent-emerald-600 rounded"
+                            className="accent-accent-600 rounded"
                           />
                           <span>Transmitir tokens</span>
                         </label>
@@ -464,7 +464,7 @@ export default function Settings() {
                             type="checkbox"
                             checked={llmForm.disable_thinking}
                             onChange={(e) => setLlmForm({ ...llmForm, disable_thinking: e.target.checked })}
-                            className="accent-emerald-600 rounded"
+                            className="accent-accent-600 rounded"
                           />
                           <span>Desligar o raciocínio (Qwen3)</span>
                         </label>
@@ -487,7 +487,7 @@ export default function Settings() {
                           step="0.05"
                           value={llmForm.temperature}
                           onChange={(e) => setLlmForm({ ...llmForm, temperature: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                       <div>
@@ -499,7 +499,7 @@ export default function Settings() {
                           step="0.05"
                           value={llmForm.top_p}
                           onChange={(e) => setLlmForm({ ...llmForm, top_p: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                       <div>
@@ -511,7 +511,7 @@ export default function Settings() {
                           step="0.01"
                           value={llmForm.min_p}
                           onChange={(e) => setLlmForm({ ...llmForm, min_p: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                     </div>
@@ -526,7 +526,7 @@ export default function Settings() {
                           step="0.05"
                           value={llmForm.presence_penalty}
                           onChange={(e) => setLlmForm({ ...llmForm, presence_penalty: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                       <div>
@@ -538,7 +538,7 @@ export default function Settings() {
                           step="0.05"
                           value={llmForm.frequency_penalty}
                           onChange={(e) => setLlmForm({ ...llmForm, frequency_penalty: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                       <div>
@@ -550,7 +550,7 @@ export default function Settings() {
                           step="0.01"
                           value={llmForm.repetition_penalty}
                           onChange={(e) => setLlmForm({ ...llmForm, repetition_penalty: Number(e.target.value) })}
-                          className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
                     </div>
@@ -609,7 +609,7 @@ export default function Settings() {
                           type="checkbox"
                           checked={imageForm.enabled}
                           onChange={(e) => setImageForm({ ...imageForm, enabled: e.target.checked })}
-                          className="accent-emerald-600 rounded"
+                          className="accent-accent-600 rounded"
                         />
                         <span>Ativar geração de imagem (cena e retratos)</span>
                       </label>
@@ -763,7 +763,7 @@ export default function Settings() {
                         type="checkbox"
                         checked={voiceForm.enabled}
                         onChange={(e) => setVoiceForm({ ...voiceForm, enabled: e.target.checked })}
-                        className="accent-emerald-600 rounded"
+                        className="accent-accent-600 rounded"
                       />
                       <span>Ativar o motor de voz</span>
                     </label>
@@ -876,7 +876,7 @@ export default function Settings() {
                         type="checkbox"
                         checked={embeddingsForm.enabled}
                         onChange={(e) => setEmbeddingsForm({ ...embeddingsForm, enabled: e.target.checked })}
-                        className="accent-emerald-600 rounded"
+                        className="accent-accent-600 rounded"
                       />
                       <span>Ativar embeddings vetoriais</span>
                     </label>

@@ -22,6 +22,7 @@ export default {
       ...base,
       zinc: ramp('n'),
       emerald: ramp('accent'),
+      accent: ramp('accent'),
       red: ramp('danger'),
       amber: ramp('warn'),
       // Aliases so the off-ramp replacements (danger/warn) resolve to the same triplets.

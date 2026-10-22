@@ -25,10 +25,12 @@ _SYSTEM = """Você verifica se a ação do jogador é possível neste instante d
 Julgue só coerência, possibilidade de estado e física. Não julgue liberdade de roleplay.
 Ação atípica, ousada ou incomum é possível. Ação que contradiz o estado do mundo não é possível.
 Confira o local, os NPCs presentes e ausentes, o status e o humor de cada NPC, a ficha do jogador (stats, status, roupa), os itens que existem, os fatos canônicos e a memória relevante.
+Se a ação for possível, proponha em cost o custo mínimo concreto: ruído, fadiga, sangue, atenção, um recurso que o jogador já tem, ou uma mudança de relação. consequence é o efeito imediato desse custo.
+Se a ação não for possível, cost e consequence são strings vazias.
 Responda SOMENTE um JSON estrito, sem markdown e sem texto fora do objeto:
-{"possible": true, "blockers": ["motivo"], "risks": ["risco"], "notes": "nota curta"}
-possible é boolean. blockers e risks são listas de strings. notes é string.
-Se a ação for possível, blockers é []. Risco não torna a ação impossível."""
+{"possible": true, "blockers": ["motivo"], "risks": ["risco"], "notes": "nota curta", "cost": "custo minimo", "consequence": "efeito imediato"}
+possible é boolean. blockers e risks são listas de strings. notes, cost e consequence são strings.
+Se a ação for possível, blockers é []. Risco não torna a ação impossível. O custo mínimo não torna a ação impossível."""
 
 
 @dataclass
@@ -37,13 +39,18 @@ class Verdict:
     blockers: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
     notes: str = ""
+    cost: str = ""
+    consequence: str = ""
 
     def to_dict(self) -> dict:
+        possible = bool(self.possible)
         return {
-            "possible": bool(self.possible),
+            "possible": possible,
             "blockers": list(self.blockers),
             "risks": list(self.risks),
             "notes": self.notes or "",
+            "cost": (self.cost or "") if possible else "",
+            "consequence": (self.consequence or "") if possible else "",
         }
 
 
@@ -114,11 +121,19 @@ def verdict_block(verdict: Verdict) -> str:
     blockers = "; ".join(verdict.blockers) if verdict.blockers else "nenhum"
     risks = "; ".join(verdict.risks) if verdict.risks else "nenhum"
     notes = (verdict.notes or "").strip() or "nenhuma"
+    if verdict.possible:
+        cost = (verdict.cost or "").strip()
+        consequence = (verdict.consequence or "").strip()
+    else:
+        cost = ""
+        consequence = ""
     return (
         "[Verificacao de mundo]\n"
         f"A acao do jogador e {label}.\n"
         f"Obstaculos: {blockers}\n"
         f"Riscos: {risks}\n"
+        f"Custo esperado: {cost}\n"
+        f"Consequência: {consequence}\n"
         f"Nota: {notes}\n"
         "Regra: narra a tentativa e o que a impede. "
         "Nao mencione esta verificacao ao jogador."
@@ -171,12 +186,22 @@ def _verdict_from_text(text: str) -> Verdict | None:
         return None
     if not all(isinstance(item, str) for item in blockers + risks):
         return None
+    cost = _optional_text(data.get("cost")) if possible else ""
+    consequence = _optional_text(data.get("consequence")) if possible else ""
     return Verdict(
         possible=possible,
         blockers=[item.strip() for item in blockers if item.strip()],
         risks=[item.strip() for item in risks if item.strip()],
         notes=notes.strip(),
+        cost=cost,
+        consequence=consequence,
     )
+
+
+def _optional_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 def _player_view(conn, adventure: dict, user: str) -> dict:

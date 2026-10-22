@@ -47,8 +47,8 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
                     : 'border-subtle hover:bg-elevated/50 text-secondary'
                 }`}
               >
-                <div className="w-4 h-4 rounded-full bg-zinc-900 border border-emerald-500 mb-1.5 flex items-center justify-center">
-                  {theme === 'obsidian' && <Check className="w-2.5 h-2.5 text-emerald-400" />}
+                <div data-theme="obsidian" className="w-4 h-4 rounded-full bg-elevated border border-accent-500 mb-1.5 flex items-center justify-center">
+                  {theme === 'obsidian' && <Check className="w-2.5 h-2.5 text-accent-pri" />}
                 </div>
                 <span>Obsidian</span>
                 <span className="text-[10px] text-muted">Fantasia escura</span>
@@ -63,8 +63,8 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
                     : 'border-subtle hover:bg-elevated/50 text-secondary'
                 }`}
               >
-                <div className="w-4 h-4 rounded-full bg-[#fbf6ee] border border-amber-700 mb-1.5 flex items-center justify-center">
-                  {theme === 'parchment' && <Check className="w-2.5 h-2.5 text-amber-800" />}
+                <div data-theme="parchment" className="w-4 h-4 rounded-full bg-elevated border border-warn-700 mb-1.5 flex items-center justify-center">
+                  {theme === 'parchment' && <Check className="w-2.5 h-2.5 text-warn-800" />}
                 </div>
                 <span>Parchment</span>
                 <span className="text-[10px] text-muted">Crônica</span>
@@ -149,7 +149,7 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
                 step="1"
                 value={readerPrefs.fontSize}
                 onChange={(e) => setReaderPrefs({ fontSize: Number(e.target.value) })}
-                className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
+                className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
               />
               <span className="text-base font-bold text-muted">A</span>
             </div>

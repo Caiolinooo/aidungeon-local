@@ -249,10 +249,11 @@ def create_adventure_from_draft(
     try:
         with db.session() as conn:
             report = consistency.audit(conn, adventure_id)
+        with db.session() as conn:
+            state = db.adventure_state(conn, adventure_id)
     except Exception as exc:
         log.warning("adventures: auditoria falhou (aventura mantida): %s", exc)
-    with db.session() as conn:
-        state = db.adventure_state(conn, adventure_id)
+        return {"id": adventure_id, "status": "created", "audit": "failed"}
     if state is not None and report is not None:
         state["consistency"] = report
     return state
