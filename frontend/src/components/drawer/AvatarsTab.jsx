@@ -80,7 +80,7 @@ export default function AvatarsTab({ adventure, storyText }) {
     setAutoMood(hit ? hit.emotion : null)
   }, [storyText, followStory, selected, manualUntil])
 
-  if (cards === null) return <p className="text-sm text-zinc-500">Loading…</p>
+  if (cards === null) return <p className="text-sm text-zinc-500">Carregando…</p>
 
   if (npcs.length === 0) {
     return (
@@ -151,7 +151,7 @@ export default function AvatarsTab({ adventure, storyText }) {
                 : 'border border-zinc-700 text-zinc-300 hover:bg-zinc-700'
             }`}
           >
-            {c.title || 'Untitled'}
+            {c.title || 'Sem título'}
           </button>
         ))}
       </div>
@@ -205,7 +205,7 @@ export default function AvatarsTab({ adventure, storyText }) {
 
           {/* corpo (forma usada pelo TalkingHead p/ poses) */}
           <div className="mt-3 flex items-center gap-2">
-            <span className="text-xs text-zinc-400">Body:</span>
+            <span className="text-xs text-zinc-400">Corpo:</span>
             {['F', 'M'].map((b) => (
               <button
                 key={b}
@@ -247,7 +247,7 @@ export default function AvatarsTab({ adventure, storyText }) {
             />
             Follow the story
             {!storyText && (
-              <span className="text-xs text-zinc-500">(waiting for story feed)</span>
+              <span className="text-xs text-zinc-500">(aguardando o feed da história)</span>
             )}
           </label>
           {followStory && autoMood && !manualActive && (
@@ -262,7 +262,7 @@ export default function AvatarsTab({ adventure, storyText }) {
               disabled={!dirty || saving}
               className={`${inputCls} bg-emerald-700 font-medium text-white hover:bg-emerald-600 disabled:opacity-50`}
             >
-              {saving ? 'Saving…' : 'Save avatar'}
+              {saving ? 'Salvando…' : 'Salvar avatar'}
             </button>
           </div>
         </>

@@ -83,8 +83,10 @@ app.add_middleware(
 # ------------------------------------------------------- exception handlers
 @app.exception_handler(GameError)
 def game_error_handler(request: Request, exc: GameError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status,
-                        content={"error": {"code": exc.code, "message": exc.message}})
+    error = {"code": exc.code, "message": exc.message}
+    if exc.hint:
+        error["hint"] = exc.hint
+    return JSONResponse(status_code=exc.status, content={"error": error})
 
 
 @app.exception_handler(RequestValidationError)

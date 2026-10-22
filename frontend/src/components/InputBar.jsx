@@ -3,9 +3,9 @@ import { api } from '../api.js'
 import { useToast } from './Toast.jsx'
 
 const TABS = [
-  { id: 'do', label: 'Do', placeholder: 'What do you do?' },
-  { id: 'say', label: 'Say', placeholder: 'What do you say?' },
-  { id: 'story', label: 'Story', placeholder: 'What happens next?' },
+  { id: 'do', label: 'Ação', placeholder: 'O que você faz?' },
+  { id: 'say', label: 'Fala', placeholder: 'O que você diz?' },
+  { id: 'story', label: 'História', placeholder: 'O que acontece em seguida?' },
 ]
 
 // Mime da gravação. 'audio/webm' pelado faz o Chrome lançar NotSupportedError
@@ -108,13 +108,13 @@ export default function InputBar({
     // http://host:2122 não pede permissão — a gravação morre aqui e o
     // /api/stt nunca é chamado.
     if (!window.isSecureContext) {
-      const msg = 'Microphone needs HTTPS. Open the game with https://, not http://…:2122.'
+      const msg = 'O microfone precisa de HTTPS. Abra o jogo com https://, não com http://…:2122.'
       setMicHint(msg)
       toast(msg)
       return
     }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      const msg = 'Voice recording is not supported in this browser.'
+      const msg = 'Este navegador não grava áudio.'
       setMicHint(msg)
       toast(msg)
       return
@@ -124,8 +124,8 @@ export default function InputBar({
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch (err) {
       const msg = err?.name === 'NotFoundError'
-        ? 'No microphone found on this device.'
-        : 'Microphone access denied — allow the mic for this site and try again.'
+        ? 'Nenhum microfone encontrado neste aparelho.'
+        : 'Acesso ao microfone negado — permita o microfone neste site e tente de novo.'
       setMicHint(msg)
       toast(msg)
       return
@@ -139,7 +139,7 @@ export default function InputBar({
         rec = new MediaRecorder(stream)
       } catch (err) {
         stream.getTracks().forEach((t) => t.stop())
-        const msg = err?.message || 'Could not start the recorder.'
+        const msg = err?.message || 'Não foi possível iniciar a gravação.'
         setMicHint(msg)
         toast(msg)
         return
@@ -157,12 +157,12 @@ export default function InputBar({
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || mime || 'audio/webm' })
       chunksRef.current = []
       if (blob.size < 200) {
-        const msg = 'Recording was empty. Speak, then tap the mic again to stop.'
+        const msg = 'A gravação ficou vazia. Fale e toque no microfone de novo para parar.'
         setMicHint(msg)
         toast(msg)
         return
       }
-      setMicHint('Transcribing…')
+      setMicHint('Transcrevendo…')
       setTranscribing(true)
       try {
         const { text: spoken } = await api.voice.stt(blob)
@@ -175,7 +175,7 @@ export default function InputBar({
             return next
           })
         } else {
-          const msg = 'Nothing recognized — try speaking closer to the mic.'
+          const msg = 'Nada foi reconhecido — fale mais perto do microfone.'
           setMicHint(msg)
           toast(msg)
         }
@@ -193,13 +193,13 @@ export default function InputBar({
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop())
       recorderRef.current = null
-      const msg = err?.message || 'Could not start the recorder.'
+      const msg = err?.message || 'Não foi possível iniciar a gravação.'
       setMicHint(msg)
       toast(msg)
       return
     }
     setRecording(true)
-    setMicHint('Recording… tap the mic again to transcribe.')
+    setMicHint('Gravando… toque no microfone de novo para transcrever.')
   }
 
   // auto-resize da textarea (2..10 linhas)
@@ -230,7 +230,7 @@ export default function InputBar({
             </button>
           ))}
         </div>
-        <div className="flex w-full items-end gap-2">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-end">
           <textarea
             ref={areaRef}
             value={text}
@@ -246,17 +246,18 @@ export default function InputBar({
             }}
             disabled={inputLocked}
             rows={2}
-            placeholder={disabled ? 'AI is writing…' : active.placeholder}
-            aria-label={active.label || 'Story action input'}
+            placeholder={disabled ? 'A IA está escrevendo…' : active.placeholder}
+            aria-label={active.label || 'Ação da história'}
             enterKeyHint="send"
             className="max-h-60 min-w-0 w-full flex-1 resize-none rounded-xl border border-subtle bg-elevated px-3.5 py-2.5 font-prose text-base text-primary outline-none placeholder:text-muted focus:border-accent-pri disabled:opacity-60 sm:text-sm"
           />
+          <div className="flex items-center gap-2 sm:contents">
           {panelAvailable && (
             <button
               onClick={onTogglePanel}
               disabled={inputLocked}
-              title={panelOpen ? 'Hide game controls' : 'Show game controls (dice, stats, inventory…)'}
-              aria-label="Toggle dynamic game controls"
+              title={panelOpen ? 'Esconder controles' : 'Mostrar controles (dados, atributos, inventário…)'}
+              aria-label="Alternar controles do jogo"
               aria-pressed={panelOpen}
               className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 panelOpen
@@ -272,12 +273,12 @@ export default function InputBar({
             disabled={inputLocked || transcribing}
             title={
               transcribing
-                ? 'Transcribing…'
+                ? 'Transcrevendo…'
                 : recording
-                  ? 'Stop recording'
-                  : 'Dictate (speech-to-text)'
+                  ? 'Parar gravação'
+                  : 'Ditar (fala para texto)'
             }
-            aria-label={recording ? 'Stop voice recording' : 'Dictate action with microphone'}
+            aria-label={recording ? 'Parar gravação' : 'Ditar a ação com o microfone'}
             className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
               recording
                 ? 'animate-pulse border-red-500 bg-red-600 text-white hover:bg-red-500'
@@ -290,8 +291,8 @@ export default function InputBar({
             type="button"
             onClick={() => setWebOn((v) => !v)}
             disabled={inputLocked}
-            title="Search the web for grounding (Wikipedia/DuckDuckGo)"
-            aria-label="Search the web for grounding"
+            title="Buscar na web para ancorar a cena (Wikipedia/DuckDuckGo)"
+            aria-label="Buscar na web"
             aria-pressed={webOn}
             className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               webOn
@@ -305,10 +306,11 @@ export default function InputBar({
             onClick={submit}
             disabled={inputLocked || !text.trim()}
             title={disabledTurn ? 'Aguarde a sua vez' : undefined}
-            className="min-h-11 shrink-0 rounded-xl bg-accent-pri px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:px-5"
+            className="min-h-11 flex-1 rounded-xl bg-accent-pri px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none sm:px-5"
           >
-            Send
+            Enviar
           </button>
+          </div>
         </div>
         {micHint && (
           <p className="mt-1.5 text-xs text-amber-300/90">{micHint}</p>

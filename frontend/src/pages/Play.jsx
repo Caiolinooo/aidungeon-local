@@ -110,17 +110,61 @@ function changeLabel(change) {
   return `${who} ${what} ${change?.from}→${change?.to}`.trim()
 }
 
-function RulesNote({ rules }) {
+const INTENT_LABELS = {
+  attack: 'Ataque',
+  skill: 'Perícia',
+  save: 'Salvaguarda',
+  use_item: 'Uso de item',
+  buy: 'Compra',
+  take: 'Pegar',
+  rest: 'Descanso',
+  none: 'Nenhuma',
+}
+
+const FLAG_LABELS = {
+  impersonation: 'escreveu pelo jogador',
+  mechanics_leak: 'vazou a rolagem',
+  language: 'respondeu em inglês',
+}
+
+function RulesNote({ rules, flags }) {
   const steps = Array.isArray(rules?.steps) ? rules.steps : []
   const changes = Array.isArray(rules?.changes) ? rules.changes : []
-  if (steps.length === 0 && changes.length === 0) return null
+  const reactions = Array.isArray(rules?.time?.reactions)
+    ? rules.time.reactions.filter((line) => typeof line === 'string' && line.trim())
+    : []
+  const kind = rules?.intent?.kind
+  const quality = (Array.isArray(flags) ? flags : (rules?.quality_flags || []))
+    .map((flag) => FLAG_LABELS[flag] || flag)
+    .filter(Boolean)
+  const showKind = Boolean(kind && kind !== 'none')
+  if (
+    steps.length === 0 && changes.length === 0 && reactions.length === 0
+    && !showKind && quality.length === 0
+  ) return null
   return (
     <div className="mt-1 flex max-w-full flex-col gap-1 px-4 text-[11px] leading-snug">
+      <p className="font-semibold uppercase tracking-wide text-muted">Resolução do sistema</p>
+      {showKind && (
+        <p className="text-[11px] text-muted">{INTENT_LABELS[kind] || kind}</p>
+      )}
       {steps.map((step, i) => (
-        <p key={i} className="break-words text-sky-300/90">{step?.text || ''}</p>
+        <p key={i} className="break-words text-info">
+          {step?.label ? <span className="font-semibold">{step.label}. </span> : null}
+          {step?.text || ''}
+        </p>
       ))}
       {changes.length > 0 && (
-        <p className="break-words text-zinc-400">{changes.map(changeLabel).join('; ')}</p>
+        <p className="break-words text-secondary">{changes.map(changeLabel).join('; ')}</p>
+      )}
+      {reactions.length > 0 && (
+        <p className="break-words text-warn-200">
+          <span className="font-semibold">Consequências: </span>
+          {reactions.join(' ')}
+        </p>
+      )}
+      {quality.length > 0 && (
+        <p className="break-words text-warn-200">O narrador desviou da regra: {quality.join(', ')}</p>
       )}
     </div>
   )
@@ -177,6 +221,9 @@ export default function Play() {
   const [isInspectorDocked, setIsInspectorDocked] = useState(() => {
     return typeof window !== 'undefined' && window.innerWidth >= 1024
   })
+  const [isWide, setIsWide] = useState(() => {
+    return typeof window !== 'undefined' && window.innerWidth >= 1024
+  })
   const [inspectorTab, setInspectorTab] = useState('cards')
   const [showReaderModal, setShowReaderModal] = useState(false)
 
@@ -225,14 +272,10 @@ export default function Play() {
     adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
   )
 
-  // Handle screen resize for responsive desktop docking
+  // Width only. Hiding the dock is the user's choice and must survive a resize.
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 1024) {
-        setIsInspectorDocked(false)
-      } else {
-        setIsInspectorDocked(true)
-      }
+      setIsWide(window.innerWidth >= 1024)
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
@@ -690,7 +733,7 @@ export default function Play() {
           promptCharacter()
           return
         }
-        const text = typeof msg === 'string' && msg ? msg : (msg?.message || 'Generation failed')
+        const text = typeof msg === 'string' && msg ? msg : (msg?.message || 'A geração falhou')
         if (meta?.code === 'rules_refused') {
           toast(text)
           return
@@ -834,7 +877,7 @@ export default function Play() {
       for (const removedId of removedIds) livePlayerIdsRef.current.delete(removedId)
       setChoices([])
       setWebSources([])
-      toast('Last turn undone.', 'ok')
+      toast('Último turno desfeito.', 'ok')
     } catch (e) {
       toast(e.message)
     }
@@ -858,16 +901,16 @@ export default function Play() {
                 return [...list, action].sort(bySeq)
               })
             }
-            toast('Image generated.', 'ok')
+            toast('Imagem gerada.', 'ok')
             return
           }
           if (job.status === 'error' || job.status === 'canceled') {
-            toast(job.error || 'Could not paint the scene.')
+            toast(job.error || 'Não foi possível pintar a cena.')
             return
           }
           await wait(800)
         }
-        toast('The painting is still running.')
+        toast('A pintura ainda está em andamento.')
       } catch (e) {
         if (seeTokenRef.current === token) toast(e.message)
       } finally {
@@ -887,13 +930,13 @@ export default function Play() {
       if (r?.action) {
         setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
         setSeePrompt('')
-        toast('Image generated.', 'ok')
+        toast('Imagem gerada.', 'ok')
         setSeeing(false)
         return
       }
       if (!r?.job_id) {
         setSeeing(false)
-        toast('Could not start the painting.')
+        toast('Não foi possível iniciar a pintura.')
         return
       }
       setSeePrompt('')
@@ -917,7 +960,7 @@ export default function Play() {
       const updated = await api.patchAction(action.id, text)
       setActions((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
       setEditing(null)
-      toast('Action edited.', 'ok')
+      toast('Ação editada.', 'ok')
     } catch (e) {
       toast(e.message)
     }
@@ -928,7 +971,7 @@ export default function Play() {
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center bg-canvas text-primary">
         <p className="text-red-300">
           {error.status === 0
-            ? 'Cannot reach the backend server (http://127.0.0.1:8000). Is it running?'
+            ? 'Não foi possível falar com o servidor (http://127.0.0.1:8000). Ele está no ar?'
             : error.message}
         </p>
         <div className="flex gap-2">
@@ -937,14 +980,14 @@ export default function Play() {
             className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov transition"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Retry</span>
+            <span>Tentar de novo</span>
           </button>
           <Link
             to="/"
             className="flex items-center gap-1.5 rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Home</span>
+            <span>Voltar ao início</span>
           </Link>
         </div>
       </div>
@@ -952,7 +995,7 @@ export default function Play() {
   }
 
   if (!adventure || actions === null) {
-    return <div className="flex h-full items-center justify-center text-xs text-muted bg-canvas">Loading adventure…</div>
+    return <div className="flex h-full items-center justify-center text-xs text-muted bg-canvas">Carregando a aventura…</div>
   }
 
   const lastAction = actions[actions.length - 1]
@@ -979,7 +1022,7 @@ export default function Play() {
   }[readerPrefs?.columnWidth || 'standard']
 
   const fontFamilyCls = {
-    serif: 'font-serif',
+    serif: 'font-prose',
     sans: 'font-sans',
     mono: 'font-mono',
   }[readerPrefs?.fontFamily || 'serif']
@@ -1032,19 +1075,19 @@ export default function Play() {
             <button
               onClick={() => setDrawerOpen(true)}
               className="lg:hidden min-h-11 min-w-11 flex items-center justify-center rounded-xl p-2 text-secondary hover:bg-elevated hover:text-primary transition"
-              aria-label="Open inspector drawer"
-              title="Cards, NPCs, Memory, Controls"
+              aria-label="Abrir o inspetor"
+              title="Fichas, NPCs, memória, controles"
             >
               <Menu className="w-5 h-5" />
             </button>
 
             <Link
               to="/"
-              title="Return to home"
+              title="Voltar ao início"
               className="min-h-11 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-2.5 py-1.5 text-xs text-secondary hover:text-primary hover:bg-elevated transition"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Home</span>
+              <span className="hidden sm:inline">Início</span>
             </Link>
 
             <div className="min-w-0 flex-1 pl-1">
@@ -1072,10 +1115,10 @@ export default function Play() {
                 <button
                   onClick={stop}
                   className="min-h-11 flex items-center gap-1.5 rounded-xl bg-red-800 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 shadow transition"
-                  title="Stop generation"
+                  title="Parar a geração"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
-                  <span>Stop</span>
+                  <span>Parar</span>
                 </button>
               </>
             ) : (
@@ -1084,34 +1127,34 @@ export default function Play() {
                   <button
                     onClick={doRetry}
                     disabled={!canRetry}
-                    aria-label="Retry last response"
-                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Regenerate the last AI response' : 'Retry is available after an AI response'))}
+                    aria-label="Tentar a última resposta de novo"
+                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Gerar de novo a última resposta' : 'Disponível depois de uma resposta da IA'))}
                     className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Retry</span>
+                    <span className="hidden sm:inline">Tentar de novo</span>
                   </button>
 
                   <button
                     onClick={doUndo}
                     disabled={!canUndo}
-                    aria-label="Undo last turn"
-                    title="Undo the last player and AI action"
+                    aria-label="Desfazer o último turno"
+                    title="Desfaz a última ação sua e a resposta da IA"
                     className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
                     <Undo2 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Undo</span>
+                    <span className="hidden sm:inline">Desfazer</span>
                   </button>
 
                   <button
                     onClick={doContinue}
                     disabled={generating || turnBlocked || needsCharacter}
-                    aria-label="Continue writing"
-                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'Let the AI write the next paragraph')}
+                    aria-label="Continuar a narração"
+                    title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'A IA escreve o próximo parágrafo')}
                     className="min-h-11 flex items-center gap-1 rounded-xl bg-accent-pri px-3.5 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
-                    <span className="hidden sm:inline">Continue</span>
+                    <span className="hidden sm:inline">Continuar</span>
                   </button>
                 </div>
 
@@ -1122,25 +1165,25 @@ export default function Play() {
                   <button
                     onClick={() => canSee && setSeeOpen((o) => !o)}
                     disabled={!canSee}
-                    aria-label={seeing ? 'Generating scene image' : 'Generate scene image'}
-                    title={canSee ? 'Generate an image of the current scene' : 'See is available after the AI writes a response'}
+                    aria-label={seeing ? 'Gerando a imagem da cena' : 'Gerar imagem da cena'}
+                    title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
                     className="min-h-11 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
                     <ImageIcon className="w-3.5 h-3.5 text-accent-pri" />
-                    <span className="hidden sm:inline">{seeing ? 'Painting…' : 'See'}</span>
+                    <span className="hidden sm:inline">{seeing ? 'Pintando…' : 'Ver'}</span>
                   </button>
 
                   {seeOpen && canSee && (
-                    <div className="absolute right-0 top-full z-40 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-subtle bg-surface p-3 shadow-2xl animate-in slide-in-from-top-2">
+                    <div className="absolute right-0 top-full z-40 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-subtle bg-surface p-3 shadow-2xl animate-slide-in-top">
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-                        Visual Detail (optional)
+                        Detalhe visual (opcional)
                       </label>
                       <textarea
                         value={seePrompt}
                         onChange={(e) => setSeePrompt(e.target.value)}
                         rows={2}
                         autoFocus
-                        placeholder='e.g. "at sunset, stormy rain slicked granite"'
+                        placeholder='ex.: "ao pôr do sol, chuva na pedra"'
                         className="w-full resize-y rounded-xl border border-subtle bg-surface-input px-3 py-2 text-xs text-primary outline-none focus:border-accent-pri transition placeholder:text-muted"
                       />
                       <div className="mt-2 flex justify-end gap-2">
@@ -1148,13 +1191,13 @@ export default function Play() {
                           onClick={() => setSeeOpen(false)}
                           className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-secondary hover:bg-elevated transition"
                         >
-                          Cancel
+                          Cancelar
                         </button>
                         <button
                           onClick={doSee}
                           className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
                         >
-                          Paint Scene
+                          Pintar a cena
                         </button>
                       </div>
                     </div>
@@ -1164,7 +1207,7 @@ export default function Play() {
                 {/* Reader Typography Controls Popover */}
                 <button
                   onClick={() => setShowReaderModal(true)}
-                  title="Reader typography & theme preferences"
+                  title="Tipografia e tema da leitura"
                   className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface p-2 text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <BookOpen className="w-4 h-4 text-accent-pri" />
@@ -1173,7 +1216,7 @@ export default function Play() {
                 {/* Global Settings Link */}
                 <Link
                   to="/settings"
-                  title="Global Settings (LLM, Image, Voice, Memory)"
+                  title="Configurações (modelo, imagem, voz, memória)"
                   className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface p-2 text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <SettingsIcon className="w-4 h-4 text-secondary" />
@@ -1182,7 +1225,7 @@ export default function Play() {
                 {/* Desktop Inspector Sidebar Toggle */}
                 <button
                   onClick={() => setIsInspectorDocked(!isInspectorDocked)}
-                  title={isInspectorDocked ? 'Hide side inspector dock' : 'Open docked side inspector'}
+                  title={isInspectorDocked ? 'Esconder o inspetor' : 'Mostrar o inspetor ao lado'}
                   className="hidden lg:flex min-h-11 items-center justify-center rounded-xl border border-subtle bg-surface p-2 text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   {isInspectorDocked ? (
@@ -1233,8 +1276,8 @@ export default function Play() {
             >
               {actions.length === 0 && !generating && (
                 <div className="rounded-2xl border border-dashed border-subtle p-8 text-center text-xs text-muted">
-                  <p className="font-semibold text-primary mb-1">A fresh adventure begins.</p>
-                  <p>Send a <b>Story</b> action below to set the initial scene, or press <b>▶ Continue</b> to let the AI narrate the opening.</p>
+                  <p className="font-semibold text-primary mb-1">Uma aventura nova começa.</p>
+                  <p>Envie uma ação de <b>História</b> abaixo para abrir a cena, ou pressione <b>▶ Continuar</b> para a IA narrar o começo.</p>
                 </div>
               )}
 
@@ -1253,43 +1296,33 @@ export default function Play() {
                       adventureId={id}
                     />
                     {isPlayerAction(a) && check && <ActionCheckNote check={check} />}
-                    {isPlayerAction(a) && rules && <RulesNote rules={rules} />}
+                    {isPlayerAction(a) && (rules || (a.quality_flags || []).length > 0) && (
+                      <RulesNote rules={rules} flags={a.quality_flags} />
+                    )}
                   </div>
                 )
               })}
 
               {/* Streaming Cursor Block */}
               {generating && (
-                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-in fade-in">
+                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-fade-in">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
                     <span className="inline-block h-2 w-2 animate-ping rounded-full bg-accent-pri" />
-                    AI is storytelling…
+                    A IA está narrando…
                   </div>
-                  <p
-                    className={`streaming-cursor whitespace-pre-wrap text-primary ${fontFamilyCls}`}
-                    style={{
-                      fontSize: `${fontSizeValue}px`,
-                      lineHeight: lineHeightValue,
-                    }}
-                  >
+                  <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(gen.text)}
                   </p>
                 </div>
               )}
 
               {!generating && live && (
-                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-in fade-in">
+                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-fade-in">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
                     <span className="inline-block h-2 w-2 animate-ping rounded-full bg-accent-pri" />
-                    AI is storytelling…
+                    A IA está narrando…
                   </div>
-                  <p
-                    className={`streaming-cursor whitespace-pre-wrap text-primary ${fontFamilyCls}`}
-                    style={{
-                      fontSize: `${fontSizeValue}px`,
-                      lineHeight: lineHeightValue,
-                    }}
-                  >
+                  <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(live)}
                   </p>
                 </div>
@@ -1297,13 +1330,13 @@ export default function Play() {
 
               {/* See image generation placeholder */}
               {seeing && (
-                <div className="rounded-xl border border-subtle bg-elevated/60 p-4 animate-in fade-in">
+                <div className="rounded-xl border border-subtle bg-elevated/60 p-4 animate-fade-in">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
                     <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent-pri" />
-                    Generating scene painting… (can take 20–60 seconds)
+                    Gerando a pintura da cena… (pode levar de 20 a 60 segundos)
                   </div>
                   <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-subtle text-xs text-muted">
-                    Painting the scene...
+                    Pintando a cena...
                   </div>
                 </div>
               )}
@@ -1370,8 +1403,8 @@ export default function Play() {
               <button
                 type="button"
                 onClick={() => setWebSources([])}
-                title="Dismiss sources"
-                aria-label="Dismiss sources"
+                title="Dispensar fontes"
+                aria-label="Dispensar fontes"
                 className="min-h-8 shrink-0 rounded-full border border-subtle bg-elevated px-2.5 py-1 text-xs text-muted hover:text-primary transition"
               >
                 ✕
@@ -1431,7 +1464,7 @@ export default function Play() {
       </div>
 
       {/* RIGHT COLUMN: Docked Inspector (Desktop >= 1024px) */}
-      {isInspectorDocked && (
+      {isInspectorDocked && isWide && (
         <div className="hidden lg:flex w-[380px] xl:w-[420px] shrink-0 h-full overflow-hidden border-l border-subtle bg-surface">
           <InspectorPane
             adventure={adventure}
@@ -1516,13 +1549,13 @@ function EditActionModal({ action, onClose, onSave }) {
 
   const actorName = (action.actor || '').trim()
   const label = actorName
-    ? (action.type === 'say' ? `${actorName} says` : actorName)
-    : ({ do: 'You do', say: 'You say', story: 'Story', start: 'Opening', continue: 'AI response' }[
+    ? (action.type === 'say' ? `${actorName} diz` : actorName)
+    : ({ do: 'Você age', say: 'Você diz', story: 'Narração', start: 'Abertura', continue: 'Resposta da IA' }[
         action.type
       ] ?? action.type)
 
   return (
-    <Modal title={`Edit — ${label}`} onClose={onClose} wide>
+    <Modal title={`Editar — ${label}`} onClose={onClose} wide>
       <div className="space-y-4">
         <textarea
           value={text}
@@ -1536,7 +1569,7 @@ function EditActionModal({ action, onClose, onSave }) {
             onClick={onClose}
             className="rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
           >
-            Cancel
+            Cancelar
           </button>
           <button
             onClick={async () => {
@@ -1547,7 +1580,7 @@ function EditActionModal({ action, onClose, onSave }) {
             disabled={saving}
             className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save Changes'}
+            {saving ? 'Salvando…' : 'Salvar'}
           </button>
         </div>
       </div>

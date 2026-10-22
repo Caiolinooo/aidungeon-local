@@ -76,7 +76,7 @@ function DiceWidget({ widget, disabled, onSend, onInsert, adventureId }) {
                 disabled={disabled}
                 className="min-h-11 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
               >
-                Send roll
+                Enviar rolagem
               </button>
               <button
                 onClick={() => onInsert(`rolls a d${result.sides}: ${result.value} — `)}
@@ -117,7 +117,7 @@ function StatsWidget({ widget, values, disabled, onChange }) {
             <button
               onClick={() => bump(stat, -1)}
               disabled={disabled || (stat.min != null && value <= stat.min)}
-              aria-label={`Decrease ${stat.name}`}
+              aria-label={`Diminuir ${stat.name}`}
               className="min-h-11 min-w-11 shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 text-lg font-bold text-zinc-200 hover:bg-zinc-700 active:scale-95 disabled:opacity-30"
             >
               −
@@ -139,7 +139,7 @@ function StatsWidget({ widget, values, disabled, onChange }) {
             <button
               onClick={() => bump(stat, +1)}
               disabled={disabled || (stat.max != null && value >= stat.max)}
-              aria-label={`Increase ${stat.name}`}
+              aria-label={`Aumentar ${stat.name}`}
               className="min-h-11 min-w-11 shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 text-lg font-bold text-zinc-200 hover:bg-zinc-700 active:scale-95 disabled:opacity-30"
             >
               +
@@ -178,7 +178,7 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
   return (
     <div className="flex flex-col gap-2">
       {list.length === 0 && (
-        <p className="text-xs text-zinc-600">Empty — add what you pick up.</p>
+        <p className="text-xs text-zinc-600">Vazio — adicione o que você pegar.</p>
       )}
       <div className="flex flex-wrap gap-1.5">
         {list.map((item, idx) => (
@@ -187,9 +187,9 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
             className="inline-flex min-h-11 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-800 pl-3 pr-1 text-xs text-zinc-200"
           >
             <button
-              onClick={() => onInsert(`use the ${item.name} `)}
+              onClick={() => onInsert(`usa o item ${item.name} `)}
               disabled={disabled}
-              title={`Insert "use the ${item.name}" into the input`}
+              title={`Inserir "usa o item ${item.name}" no campo`}
               className="py-2 hover:text-emerald-300 disabled:opacity-40"
             >
               {item.name}
@@ -198,7 +198,7 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
             <button
               onClick={() => remove(idx)}
               disabled={disabled}
-              aria-label={`Remove ${item.name}`}
+              aria-label={`Remover ${item.name}`}
               className="min-h-11 min-w-11 -my-2 rounded-full text-zinc-500 hover:text-red-400 disabled:opacity-40"
             >
               ×
@@ -211,7 +211,7 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
           value={newItem}
           onChange={(e) => setNewItem(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())}
-          placeholder="Add item…"
+          placeholder="Adicionar item…"
           disabled={disabled}
           className="min-h-11 min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600 disabled:opacity-50"
         />
@@ -220,7 +220,7 @@ function InventoryWidget({ widget, items, disabled, onChange, onInsert }) {
           disabled={disabled || !newItem.trim()}
           className="min-h-11 shrink-0 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
         >
-          + Add
+          + Adicionar
         </button>
       </div>
     </div>
@@ -265,7 +265,7 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
                   setEditing(field.name)
                   setDraft(value)
                 }}
-                title={disabled ? undefined : 'Tap to edit'}
+                title={disabled ? undefined : 'Toque para editar'}
                 className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-zinc-100 ${
                   disabled ? '' : 'cursor-text hover:bg-zinc-800'
                 }`}
@@ -363,7 +363,7 @@ export default function GamePanel({
           <button
             onClick={onRegenerate}
             disabled={disabled || regenerating}
-            title="Ask the AI to redesign these controls"
+            title="Pedir à IA para redesenhar estes controles"
             className="min-h-11 rounded-md px-2 text-xs text-secondary hover:bg-elevated hover:text-primary disabled:opacity-40"
           >
             {regenerating ? '…' : '↻ Redesign'}
@@ -371,7 +371,7 @@ export default function GamePanel({
           {onClose && (
             <button
               onClick={onClose}
-              aria-label="Close panel"
+              aria-label="Fechar painel"
               className="min-h-11 rounded-md px-2 text-secondary hover:bg-elevated hover:text-primary"
             >
               ✕

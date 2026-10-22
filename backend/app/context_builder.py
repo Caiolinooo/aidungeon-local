@@ -220,9 +220,9 @@ def narrative_window(
 
 # Budgets fixos que NÃO são a janela recente nem a reserva (pisos — PLANO §4.2)
 FIXED_BUDGET_KEYS = (
-    "ai_instructions", "plot_essentials", "story_cards", "memory_bank",
-    "story_summary", "authors_note", "last_action", "player_state",
-    "npc_minds",
+    "ai_instructions", "plot_essentials", "character_rules", "story_cards",
+    "memory_bank", "story_summary", "authors_note", "last_action",
+    "player_state", "npc_minds",
 )
 
 
@@ -552,6 +552,10 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
 
     # 1 — narrador + ai_instructions (sem cabeçalho)
     block1 = BASE_SYSTEM_PROMPT
+    if adventure.get("third_person"):
+        block1 += (
+            "\nNarrate in the third person. Refer to the protagonist by name; never as \"you\"."
+        )
     ai = (adventure.get("ai_instructions") or "").strip()
     if ai:
         block1 += "\n\n" + _fit_budget(ai, int(budgets.get("ai_instructions", 700)))
@@ -561,6 +565,13 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     plot = (adventure.get("plot_essentials") or "").strip()
     if plot:
         system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
+
+    # Regras do sistema (tabela do ruleset). Vazio não custa contexto.
+    rules = (adventure.get("character_rules") or "").strip()
+    if rules:
+        fitted = _fit_budget(rules, int(budgets.get("character_rules", 900)))
+        if fitted:
+            system_parts.append("[Rules]\n" + fitted)
 
     # Mesa compartilhada: quem joga e a ficha de cada um. Estável (só muda
     # quando alguém edita o personagem), então fica na system, não no <lore>.

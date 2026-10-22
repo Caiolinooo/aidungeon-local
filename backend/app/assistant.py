@@ -302,8 +302,11 @@ def _normalize_cards(value: Any, max_cards: int = 8) -> list[dict]:
 
 def _generation_failed(detail: str) -> GameError:
     log.warning("assistant: falha ao interpretar resposta do LLM: %s", detail)
-    return GameError(503, "generation_failed",
-                     "LLM returned an unparseable response; try again")
+    return GameError(
+        503, "generation_failed",
+        "LLM returned an unparseable response; try again",
+        hint=detail,
+    )
 
 
 def _chat(llm_cfg: dict, system: str, user: str, *, max_tokens: int,
@@ -711,10 +714,15 @@ def generate_scenario_draft(
     for field in ("opening_text", "description"):
         if not draft[field]:
             log.info("assistant: campo '%s' vazio no rascunho; regenerando", field)
-            draft[field] = regenerate_field(llm_cfg, assistant_cfg, field,
-                                            brief=brief, draft=draft,
-                                            language=language,
-                                            transport=transport)["value"]
+            try:
+                draft[field] = regenerate_field(llm_cfg, assistant_cfg, field,
+                                                brief=brief, draft=draft,
+                                                language=language,
+                                                transport=transport)["value"]
+            except (GameError, ValueError) as exc:
+                log.info("assistant: regenerar '%s' falhou (%s); campo fica vazio",
+                         field, getattr(exc, "message", None) or exc)
+                draft[field] = ""
 
     # card_count pedido e lista curta contam como incompletos: cai no fallback.
     has_card_key = any(k in raw for k in ("story_cards", "cards", "storyCards"))
@@ -722,10 +730,15 @@ def generate_scenario_draft(
     if _card_list_complete(inline_cards, card_count):
         draft["story_cards"] = inline_cards
     else:
-        fallback = _draft_cards(
-            llm_cfg, assistant_cfg, brief=brief, draft=draft, language=language,
-            card_count=card_count, web_context=web_context, transport=transport
-        )
+        try:
+            fallback = _draft_cards(
+                llm_cfg, assistant_cfg, brief=brief, draft=draft, language=language,
+                card_count=card_count, web_context=web_context, transport=transport
+            )
+        except (GameError, llm_client.LlmError, ValueError) as exc:
+            log.info("assistant: cards do rascunho falharam (%s); cenário segue sem fichas novas",
+                     getattr(exc, "message", None) or exc)
+            fallback = []
         draft["story_cards"] = fallback if len(fallback) >= len(inline_cards) else inline_cards
 
     _complete_draft_sheets(draft)
@@ -787,9 +800,9 @@ def deepen_characters(llm_cfg: dict, draft: dict, transport: Any = None) -> dict
                 entry=str(card.get("entry") or ""), sheet=existing or None,
                 transport=transport,
             )
-        except llm_client.LlmError as exc:
+        except (llm_client.LlmError, GameError, ValueError) as exc:
             log.info("assistant: deepen de '%s' falhou (%s); fica o deterministico",
-                     card.get("title"), exc.message)
+                     card.get("title"), getattr(exc, "message", None) or exc)
             card["sheet"] = npc_assets.ensure_sheet_complete(
                 existing, entry=str(card.get("entry") or ""), card=card)
             continue

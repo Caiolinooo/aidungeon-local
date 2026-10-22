@@ -67,7 +67,7 @@ export default function ConfigTab() {
       if (form.api_key) payload.api_key = form.api_key // só envia se digitado
       const s = await api.putLlmSettings(payload)
       setSettings(s)
-      toast('LLM settings saved.', 'ok')
+      toast('Configurações do modelo salvas.', 'ok')
       const h = await api.healthLlm().catch(() => null)
       if (h) setHealth(h)
     } catch (e) {
@@ -87,7 +87,7 @@ export default function ConfigTab() {
     }
   }
 
-  if (settings === null || form === null) return <p className="text-sm text-zinc-500">Loading…</p>
+  if (settings === null || form === null) return <p className="text-sm text-zinc-500">Carregando…</p>
 
   const contextSizeMax = settings.context_size_max ?? 106496
   const inputCls =
@@ -115,18 +115,18 @@ export default function ConfigTab() {
       )}
 
       <label className="block">
-        <span className={labelCls}>Base URL (OpenAI-compatible)</span>
+        <span className={labelCls}>URL base (compatível com OpenAI)</span>
         <input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} className={inputCls} />
       </label>
 
       <label className="block">
-        <span className={labelCls}>Model alias ("auto" = discover via /models)</span>
+        <span className={labelCls}>Apelido do modelo ("auto" = descobrir em /models)</span>
         <input value={form.model_alias} onChange={(e) => setForm({ ...form, model_alias: e.target.value })} className={inputCls} />
       </label>
 
       <label className="block">
         <span className={labelCls}>
-          API key {settings.api_key ? `(current: ${settings.api_key})` : '(none set)'} — write-only
+          API key {settings.api_key ? `(atual: ${settings.api_key})` : '(none set)'} — write-only
         </span>
         <div className="flex gap-2">
           <input
@@ -213,7 +213,7 @@ export default function ConfigTab() {
 
       {/* v2 — subsection Generation: sampler do LLM (settings/llm) */}
       <div className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-800/40 p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Generation</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Geração</h3>
 
         <label className="block">
           <span className={labelCls}>Temperature: {Number(form.temperature).toFixed(2)}</span>
@@ -273,7 +273,7 @@ export default function ConfigTab() {
           disabled={saving}
           className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Save settings'}
+          {saving ? 'Salvando…' : 'Salvar configurações'}
         </button>
       </div>
 
@@ -331,7 +331,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
       }
       if (form.api_key) payload.api_key = form.api_key // só envia se digitado
       setLoaded(await api.voice.putSettings(payload))
-      toast('Voice settings saved.', 'ok')
+      toast('Configurações de voz salvas.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -353,7 +353,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
     return (
       <div className="border-t border-zinc-800 pt-4">
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Voice</h3>
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <p className="text-sm text-zinc-500">Carregando…</p>
       </div>
     )
   }
@@ -373,7 +373,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
           Text-to-speech narration and speech-to-text dictation (OpenAI-compatible provider).
         </p>
         {loaded.drama3_enabled ? (
-          <p className="mt-1 text-xs text-emerald-500">Drama-3 is on. Lines go out with an emotion direction.</p>
+          <p className="mt-1 text-xs text-emerald-500">Drama-3 está ligado. As falas saem com uma direção de emoção.</p>
         ) : (
           <p className="mt-1 text-xs text-zinc-600">
             Drama-3 is off on this machine (not enough free VRAM). Supertonic still speaks, and each line sends an emotion tag.
@@ -392,7 +392,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
       </label>
 
       <label className="block">
-        <span className={labelCls}>Base URL (OpenAI-compatible)</span>
+        <span className={labelCls}>URL base (compatível com OpenAI)</span>
         <input
           value={form.base_url}
           onChange={(e) => setForm({ ...form, base_url: e.target.value })}
@@ -426,7 +426,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className={labelCls}>TTS model</span>
+          <span className={labelCls}>Modelo de voz</span>
           <input
             value={form.tts_model}
             onChange={(e) => setForm({ ...form, tts_model: e.target.value })}
@@ -435,7 +435,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
           />
         </label>
         <label className="block">
-          <span className={labelCls}>STT model</span>
+          <span className={labelCls}>Modelo de transcrição</span>
           <input
             value={form.stt_model}
             onChange={(e) => setForm({ ...form, stt_model: e.target.value })}
@@ -447,7 +447,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className={labelCls}>Narrator voice</span>
+          <span className={labelCls}>Voz do narrador</span>
           <select
             value={form.narrator_voice}
             onChange={(e) => setForm({ ...form, narrator_voice: e.target.value })}
@@ -476,7 +476,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
           disabled={saving}
           className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Save voice settings'}
+          {saving ? 'Salvando…' : 'Salvar voz'}
         </button>
       </div>
     </div>
@@ -538,7 +538,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
       }
       if (form.openai_api_key) payload.openai_api_key = form.openai_api_key // só envia se digitado
       setLoaded(await api.putImageSettings(payload))
-      toast('Image settings saved.', 'ok')
+      toast('Configurações de imagem salvas.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -559,8 +559,8 @@ function ImageSettingsSection({ inputCls, labelCls }) {
   if (loaded === null || form === null) {
     return (
       <div className="border-t border-zinc-800 pt-4">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Images</h3>
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Imagens</h3>
+        <p className="text-sm text-zinc-500">Carregando…</p>
       </div>
     )
   }
@@ -568,7 +568,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
   return (
     <div className="flex flex-col gap-4 border-t border-zinc-800 pt-4">
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Images</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Imagens</h3>
         <p className="mt-0.5 text-xs text-zinc-600">
           Provider used by the "See" action to illustrate the current scene.
         </p>
@@ -687,7 +687,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className={labelCls}>Model</span>
+              <span className={labelCls}>Modelo</span>
               <input
                 value={form.openai_model}
                 onChange={(e) => setForm({ ...form, openai_model: e.target.value })}
@@ -724,7 +724,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
           disabled={saving}
           className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Save image settings'}
+          {saving ? 'Salvando…' : 'Salvar imagem'}
         </button>
       </div>
     </div>

@@ -762,7 +762,7 @@ export default function CharacterModal({
             </label>
 
             <label className="block">
-              <span className={labelCls}>Status</span>
+              <span className={labelCls}>Estado</span>
               <input
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}

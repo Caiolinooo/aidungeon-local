@@ -239,6 +239,15 @@ def set_action_rules(conn: sqlite3.Connection, action_id: int, payload: dict) ->
     )
 
 
+def merge_action_rules(conn: sqlite3.Connection, action_id: int, extra: dict) -> None:
+    """Soma chaves em rules_json sem apagar before/cards/resolution (o undo lê before)."""
+    payload = get_action_rules(conn, action_id)
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.update(extra or {})
+    set_action_rules(conn, action_id, payload)
+
+
 def clear_action_rules(conn: sqlite3.Connection, action_id: int) -> None:
     conn.execute("UPDATE actions SET rules_json='' WHERE id=?", (action_id,))
 
@@ -251,6 +260,16 @@ def get_action_rules(conn: sqlite3.Connection, action_id: int) -> dict | None:
     if not isinstance(payload, dict) or not payload:
         return None
     return payload
+
+
+def _action_quality_flags(row: sqlite3.Row) -> list:
+    if "rules_json" not in row.keys():
+        return []
+    payload = _loads(row["rules_json"], None)
+    if not isinstance(payload, dict):
+        return []
+    flags = payload.get("quality_flags")
+    return list(flags) if isinstance(flags, list) else []
 
 
 def _action_resolution(row: sqlite3.Row) -> dict | None:
@@ -277,6 +296,7 @@ def action_to_dict(row: sqlite3.Row) -> dict:
         "edited_at": row["edited_at"],
         "actor": (row["actor"] if "actor" in row.keys() else "") or "",
         "rules": _action_resolution(row),
+        "quality_flags": _action_quality_flags(row),
         # imagem vinculada (actions type=see) — preenchido por list/get_action
         "image": None,
     }

@@ -234,7 +234,8 @@ def test_assistant_retries_the_card_step_when_the_first_list_is_empty(client):
     assert calls["n"] == 3  # texto, cards vazio, retry dos cards
 
 
-def test_assistant_scenario_without_cards_is_503(client):
+def test_assistant_scenario_without_cards_keeps_the_draft(client):
+    """Falha nas duas tentativas de ficha não apaga o cenário: volta sem cards."""
     core = {k: v for k, v in DRAFT.items() if k != "story_cards"}
     override_transport(client, make_v2_transport(json.dumps(core)))
     try:
@@ -242,8 +243,10 @@ def test_assistant_scenario_without_cards_is_503(client):
                            json={"brief": "steampunk pirate hunting a leviathan"})
     finally:
         client.app.dependency_overrides.clear()
-    assert resp.status_code == 503
-    assert resp.json()["error"]["code"] == "generation_failed"
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["title"]
+    assert body["story_cards"] == []
 
 
 def _scenario_then(card_payloads: list[str]):

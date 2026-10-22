@@ -216,6 +216,37 @@ paths:
                 items:
                   $ref: '#/components/schemas/AdventureSummary'
 
+  /api/adventures/from-draft:
+    post:
+      tags: [adventures]
+      summary: Criar cenário, aventura, ficha e ruleset numa transação
+      operationId: createAdventureFromDraft
+      description: |
+        Grava o cenário e a aventura juntos, com a ação inicial, as fichas do
+        rascunho e, quando vierem, a ficha do protagonista e o ruleset.
+        O cenário nasce referenciado pela aventura (não fica órfão).
+        Jobs de retrato e ficha incompleta rodam depois do commit: falha neles
+        não desfaz a aventura. A resposta é o estado completo, com `consistency`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdventureFromDraft'
+      responses:
+        '201':
+          description: Aventura criada (estado completo).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureState'
+        '401':
+          description: Sem autenticação.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   /api/adventures/{adventureId}:
     get:
       tags: [adventures]
@@ -1314,7 +1345,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ScenarioDraft'
         '503':
-          description: generation_failed
+          description: |
+            generation_failed. `error.hint` traz o detalhe acionável
+            (por exemplo, resposta sem title) sem mudar `error.code` nem `error.message`.
           content:
             application/json:
               schema:
@@ -3417,6 +3450,29 @@ components:
             message:
               type: string
               example: adventure 3f2a... not found
+            hint:
+              type: string
+              description: |
+                Opcional e aditivo. Nas rotas do assistente, o detalhe real da
+                falha de geração (resposta sem title, resposta sem story_cards)
+                vai aqui; `code` e `message` permanecem o contrato estável.
+
+    AdventureFromDraft:
+      type: object
+      required: [draft]
+      description: |
+        POST /api/adventures/from-draft — cenário, aventura, ficha e ruleset
+        numa transação.
+      properties:
+        draft:
+          $ref: '#/components/schemas/ScenarioCreate'
+        character:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/PlayerCharacterUpsert'
+        ruleset_id:
+          type: string
+          nullable: true
 
     CharacterSheet:
       type: object

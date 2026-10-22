@@ -2,56 +2,200 @@
 @tailwind components;
 @tailwind utilities;
 
-/* CSS Variables for 3 Themes */
+/* Theme ramps are RGB triplets so Tailwind opacity modifiers keep working. */
 :root,
 [data-theme="obsidian"],
 .theme-obsidian {
-  --bg-canvas: #09090b;
-  --bg-surface: #141417;
-  --bg-elevated: #1f1f23;
-  --bg-input: #18181b;
-  --border-subtle: #27272a;
-  --border-focus: #10b981;
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --accent-primary: #10b981;
-  --accent-hover: #059669;
-  --accent-gold: #f59e0b;
+  --n-950: 9 9 11;
+  --n-900: 24 24 27;
+  --n-800: 39 39 42;
+  --n-700: 63 63 70;
+  --n-600: 82 82 91;
+  --n-500: 113 113 122;
+  --n-400: 161 161 170;
+  --n-300: 212 212 216;
+  --n-200: 228 228 231;
+  --n-100: 244 244 245;
+
+  --accent-950: 2 44 34;
+  --accent-900: 6 78 59;
+  --accent-800: 6 95 70;
+  --accent-700: 4 120 87;
+  --accent-600: 5 150 105;
+  --accent-500: 16 185 129;
+  --accent-400: 52 211 153;
+  --accent-300: 110 231 183;
+  --accent-200: 167 243 208;
+  --accent-100: 209 250 229;
+  --accent-50: 236 253 245;
+
+  --danger-950: 69 10 10;
+  --danger-900: 127 29 29;
+  --danger-800: 153 27 27;
+  --danger-700: 185 28 28;
+  --danger-600: 220 38 38;
+  --danger-500: 239 68 68;
+  --danger-400: 248 113 113;
+  --danger-300: 252 165 165;
+  --danger-200: 254 202 202;
+  --danger-100: 254 226 226;
+  --danger-50: 254 242 242;
+
+  --warn-950: 69 26 3;
+  --warn-900: 120 53 15;
+  --warn-800: 146 64 14;
+  --warn-700: 180 83 9;
+  --warn-600: 217 119 6;
+  --warn-500: 245 158 11;
+  --warn-400: 251 191 36;
+  --warn-300: 252 211 77;
+  --warn-200: 253 230 138;
+  --warn-100: 254 243 199;
+  --warn-50: 255 251 235;
+
+  --bg-canvas-rgb: var(--n-950);
+  --bg-surface-rgb: var(--n-900);
+  --bg-elevated-rgb: var(--n-800);
+  --bg-input-rgb: var(--n-900);
+  --border-subtle-rgb: var(--n-700);
+  --border-focus-rgb: var(--accent-500);
+  --text-primary-rgb: var(--n-100);
+  --text-secondary-rgb: var(--n-400);
+  --text-muted-rgb: var(--n-500);
+  --accent-primary-rgb: var(--accent-700);
+  --accent-hover-rgb: var(--accent-600);
+  --accent-gold-rgb: var(--warn-500);
+  --info-text-rgb: 125 211 252;
   color-scheme: dark;
 }
 
 [data-theme="parchment"],
 .theme-parchment {
-  --bg-canvas: #fbf6ee;
-  --bg-surface: #f4ebd9;
-  --bg-elevated: #ede0c8;
-  --bg-input: #fffdf9;
-  --border-subtle: #d6c6a5;
-  --border-focus: #b45309;
-  --text-primary: #2c2214;
-  --text-secondary: #5c4b37;
-  --text-muted: #8b775f;
-  --accent-primary: #b45309;
-  --accent-hover: #92400e;
-  --accent-gold: #d97706;
+  --n-950: 244 233 213;
+  --n-900: 250 243 228;
+  --n-800: 255 253 248;
+  --n-700: 216 197 162;
+  --n-600: 160 138 104;
+  --n-500: 138 118 89;
+  --n-400: 107 90 67;
+  --n-300: 84 69 47;
+  --n-200: 59 47 30;
+  --n-100: 42 33 20;
+
+  --accent-50: 236 253 245;
+  --accent-100: 2 44 34;
+  --accent-200: 6 78 59;
+  --accent-300: 6 95 70;
+  --accent-400: 4 120 87;
+  --accent-500: 5 150 105;
+  --accent-600: 6 95 70;
+  --accent-700: 4 120 87;
+  --accent-800: 6 78 59;
+  --accent-900: 209 250 229;
+  --accent-950: 236 253 245;
+
+  --danger-50: 255 247 247;
+  --danger-100: 127 29 29;
+  --danger-200: 153 27 27;
+  --danger-300: 185 28 28;
+  --danger-400: 192 37 37;
+  --danger-500: 220 38 38;
+  --danger-600: 185 28 28;
+  --danger-700: 185 28 28;
+  --danger-800: 159 18 57;
+  --danger-900: 136 19 55;
+  --danger-950: 255 241 242;
+
+  --warn-50: 255 251 235;
+  --warn-100: 120 53 15;
+  --warn-200: 146 64 14;
+  --warn-300: 180 83 9;
+  --warn-400: 194 65 12;
+  --warn-500: 180 83 9;
+  --warn-600: 146 64 14;
+  --warn-700: 180 83 9;
+  --warn-800: 146 64 14;
+  --warn-900: 253 246 227;
+  --warn-950: 254 243 199;
+
+  --bg-canvas-rgb: var(--n-950);
+  --bg-surface-rgb: var(--n-900);
+  --bg-elevated-rgb: var(--n-800);
+  --bg-input-rgb: var(--n-900);
+  --border-subtle-rgb: var(--n-700);
+  --border-focus-rgb: var(--accent-700);
+  --text-primary-rgb: var(--n-100);
+  --text-secondary-rgb: var(--n-400);
+  --text-muted-rgb: var(--n-500);
+  --accent-primary-rgb: var(--accent-700);
+  --accent-hover-rgb: var(--accent-600);
+  --accent-gold-rgb: var(--warn-500);
+  --info-text-rgb: 3 105 161;
   color-scheme: light;
 }
 
 [data-theme="oled"],
 .theme-oled {
-  --bg-canvas: #000000;
-  --bg-surface: #0a0a0a;
-  --bg-elevated: #141414;
-  --bg-input: #0f0f0f;
-  --border-subtle: #262626;
-  --border-focus: #38bdf8;
-  --text-primary: #ffffff;
-  --text-secondary: #d4d4d8;
-  --text-muted: #a1a1aa;
-  --accent-primary: #38bdf8;
-  --accent-hover: #0284c7;
-  --accent-gold: #f59e0b;
+  --n-950: 0 0 0;
+  --n-900: 10 10 10;
+  --n-800: 18 18 18;
+  --n-700: 38 38 38;
+  --n-600: 107 107 116;
+  --n-500: 139 139 148;
+  --n-400: 163 163 163;
+  --n-300: 196 196 196;
+  --n-200: 224 224 224;
+  --n-100: 245 245 245;
+
+  --accent-950: 2 44 34;
+  --accent-900: 6 78 59;
+  --accent-800: 6 95 70;
+  --accent-700: 4 120 87;
+  --accent-600: 5 150 105;
+  --accent-500: 16 185 129;
+  --accent-400: 52 211 153;
+  --accent-300: 110 231 183;
+  --accent-200: 167 243 208;
+  --accent-100: 209 250 229;
+  --accent-50: 236 253 245;
+
+  --danger-950: 69 10 10;
+  --danger-900: 127 29 29;
+  --danger-800: 153 27 27;
+  --danger-700: 185 28 28;
+  --danger-600: 220 38 38;
+  --danger-500: 239 68 68;
+  --danger-400: 248 113 113;
+  --danger-300: 252 165 165;
+  --danger-200: 254 202 202;
+  --danger-100: 254 226 226;
+  --danger-50: 254 242 242;
+
+  --warn-950: 69 26 3;
+  --warn-900: 120 53 15;
+  --warn-800: 146 64 14;
+  --warn-700: 180 83 9;
+  --warn-600: 217 119 6;
+  --warn-500: 245 158 11;
+  --warn-400: 251 191 36;
+  --warn-300: 252 211 77;
+  --warn-200: 253 230 138;
+  --warn-100: 254 243 199;
+  --warn-50: 255 251 235;
+
+  --bg-canvas-rgb: var(--n-950);
+  --bg-surface-rgb: var(--n-900);
+  --bg-elevated-rgb: var(--n-800);
+  --bg-input-rgb: var(--n-900);
+  --border-subtle-rgb: var(--n-700);
+  --border-focus-rgb: var(--accent-500);
+  --text-primary-rgb: var(--n-100);
+  --text-secondary-rgb: var(--n-400);
+  --text-muted-rgb: var(--n-500);
+  --accent-primary-rgb: var(--accent-700);
+  --accent-hover-rgb: var(--accent-600);
+  --accent-gold-rgb: var(--warn-500);
+  --info-text-rgb: 125 211 252;
   color-scheme: dark;
 }
 
@@ -60,15 +204,15 @@ body,
 #root {
   height: var(--app-height, 100dvh);
   overflow: hidden;
-  background-color: var(--bg-canvas);
-  color: var(--text-primary);
+  background-color: rgb(var(--bg-canvas-rgb));
+  color: rgb(var(--text-primary-rgb));
 }
 
 body {
   overscroll-behavior: none;
-  background-color: var(--bg-canvas);
-  color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: rgb(var(--bg-canvas-rgb));
+  color: rgb(var(--text-primary-rgb));
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -91,7 +235,7 @@ a,
 /* Streaming cursor */
 .streaming-cursor::after {
   content: '▍';
-  color: var(--accent-primary);
+  color: rgb(var(--accent-primary-rgb));
   animation: blink 1s steps(1) infinite;
 }
 
@@ -99,6 +243,16 @@ a,
   50% {
     opacity: 0;
   }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in-top {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes scene-flash {
@@ -127,7 +281,7 @@ a,
 }
 ::-webkit-scrollbar-thumb {
   border-radius: 9999px;
-  background: var(--border-subtle);
+  background: rgb(var(--border-subtle-rgb));
 }
 ::-webkit-scrollbar-track {
   background: transparent;

@@ -162,7 +162,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                 <span>PV {hp}/{hpMax}</span>
                 {actor.ac != null && <span>CA {actor.ac}</span>}
               </div>
-              <Bar value={hp || 0} max={hpMax} tone={actor.down ? 'bg-rose-600' : 'bg-emerald-600'} />
+              <Bar value={hp || 0} max={hpMax} tone={actor.down ? 'bg-danger-600' : 'bg-emerald-600'} />
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">
@@ -178,7 +178,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               </div>
             )}
           </div>
-          {actor.down && <p className="text-[11px] text-rose-300">Condição: caído</p>}
+          {actor.down && <p className="text-[11px] text-danger-300">Condição: caído</p>}
 
           <div>
             <div className="mb-1 text-[11px] text-muted">Inventário</div>
@@ -198,7 +198,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                     <button
                       type="button"
                       disabled={busy}
-                      className="text-[11px] text-rose-300 hover:underline disabled:opacity-40"
+                      className="text-[11px] text-danger-300 hover:underline disabled:opacity-40"
                       onClick={() => save({
                         inventory: inventory
                           .map((item) => item.name === row.name ? { ...item, qty: item.qty - 1 } : item)
@@ -285,7 +285,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               <div className="text-[11px] text-muted">Humor {moodOf(needs)}</div>
               {NEED_ORDER.map((key) => {
                 const value = needs[key] ?? 0
-                const tone = value < 15 ? 'bg-rose-600' : value < 25 ? 'bg-amber-500' : 'bg-accent-pri'
+                const tone = value < 15 ? 'bg-danger-600' : value < 25 ? 'bg-warn-500' : 'bg-accent-pri'
                 return (
                   <div key={key}>
                     <div className="mb-0.5 flex justify-between text-[11px] text-muted">
@@ -363,7 +363,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
                   type="button"
                   disabled={busy}
                   onClick={() => act({ kind: 'attack', target: foe.name, weapon: weapon.trim(), hostile: true })}
-                  className="rounded-lg bg-rose-700/80 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-600 disabled:opacity-40"
+                  className="rounded-lg bg-danger-700/80 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-danger-600 disabled:opacity-40"
                 >
                   Atacar
                 </button>
@@ -433,7 +433,7 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
           {resolution && (
             <div className="flex flex-col gap-0.5 rounded-lg bg-elevated p-2 text-[11px]">
               {(resolution.steps || []).map((step, index) => (
-                <div key={index} className="text-sky-300">{step.text}</div>
+                <div key={index} className="text-info">{step.text}</div>
               ))}
               {(resolution.changes || []).map((row, index) => (
                 <div key={`c${index}`} className="text-zinc-400">

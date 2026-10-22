@@ -17,19 +17,29 @@ function draftLanguage() {
 }
 
 function characterTitle(name, description) {
-  const named = name.trim()
-  if (named) return named.slice(0, 80)
-  const line = description.trim().split('\n')[0].trim()
-  if (!line || line.length > 40 || /[,.:;]/.test(line)) return ''
-  const words = line.split(/\s+/).filter(Boolean)
-  if (words.length >= 1 && words.length <= 3) return line
-  return ''
+  const n = (name || '').trim()
+  if (n) return n.slice(0, 80)
+  const first = (description || '').split('\n')[0].trim()
+  if (first && first.length <= 60 && !/[,.;:!?]/.test(first)) return first.slice(0, 80)
+  return 'Protagonista'
+}
+
+function explainError(err) {
+  const code = err?.code
+  if (code === 'generation_failed') {
+    return 'A IA devolveu uma resposta que não deu para interpretar. O rascunho foi mantido — tente gerar de novo.'
+  }
+  if (code === 'validation_error') return err.message
+  if (code === 'timeout' || code === 'network_error' || err?.status === 0) {
+    return 'O servidor de IA não respondeu a tempo. O rascunho foi mantido — tente de novo.'
+  }
+  return err?.message || 'Algo deu errado.'
 }
 
 function stageFor(elapsedSec, webMode) {
-  if (elapsedSec < 4 && webMode !== 'off') return '🌐 Searching the web…'
-  if (elapsedSec < 25) return '✍️ Writing scenario…'
-  return '🃏 Building story cards…'
+  if (elapsedSec < 4 && webMode !== 'off') return '🌐 Buscando na web…'
+  if (elapsedSec < 25) return '✍️ Escrevendo o cenário…'
+  return '🃏 Montando as fichas…'
 }
 
 const miniBtnCls =
@@ -64,6 +74,9 @@ export default function GenerateAdventureModal({ onClose }) {
   const [rulesets, setRulesets] = useState([])
   const [rulesetId, setRulesetId] = useState('')
   const [rulesPreview, setRulesPreview] = useState(false)
+  const [panelError, setPanelError] = useState(null)
+  const [refineField, setRefineField] = useState(null)
+  const [refineText, setRefineText] = useState('')
 
   const opRef = useRef(false)
   const timerRef = useRef(null)
@@ -82,14 +95,14 @@ export default function GenerateAdventureModal({ onClose }) {
   const busy = generating || creating || regen !== null
 
   const noteWeb = (sources) => {
-    if (sources?.length) toast(`Enriched with ${sources.length} web sources.`, 'ok')
+    if (sources?.length) toast(`Enriquecido com ${sources.length} fontes da web.`, 'ok')
   }
 
   // ---------------------------------------------------- passo 1: gerar draft
   const generate = async () => {
     const b = brief.trim()
     if (b.length < 3) {
-      toast('Describe your idea first (min. 3 characters).')
+      toast('Descreva a ideia primeiro (mínimo de 3 caracteres).')
       return
     }
     if (opRef.current) return
@@ -122,21 +135,35 @@ export default function GenerateAdventureModal({ onClose }) {
         card_count: Number(cardCount) || 5,
         web_search_mode: webMode,
       }
-      setDraft(await (deepCharacters ? api.assistantGenerate({
-        ...payload,
-        genre: genre.trim(),
-        tone: tone.trim(),
-        protagonist_name: protagonistName.trim(),
-        protagonist_role: protagonistRole.trim(),
-        protagonist_appearance: protagonistAppearance.trim(),
-        protagonist_description: described,
-        ruleset_name: pickedRules?.name || '',
-        ruleset_rules: pickedRules ? String(pickedRules.rules || '').slice(0, 900) : '',
-        image_style: imageStyle.trim(),
-        deep_characters: true,
-      }) : api.assistantScenario(payload)))
+      const ask = (count) => {
+        const withCount = { ...payload, card_count: count }
+        return deepCharacters
+          ? api.assistantGenerate({
+            ...withCount,
+            genre: genre.trim(),
+            tone: tone.trim(),
+            protagonist_name: protagonistName.trim(),
+            protagonist_role: protagonistRole.trim(),
+            protagonist_appearance: protagonistAppearance.trim(),
+            protagonist_description: described,
+            ruleset_name: pickedRules?.name || '',
+            ruleset_rules: pickedRules ? String(pickedRules.rules || '').slice(0, 900) : '',
+            image_style: imageStyle.trim(),
+            deep_characters: true,
+          })
+          : api.assistantScenario(withCount)
+      }
+      const count = Number(cardCount) || 5
+      try {
+        setDraft(await ask(count))
+      } catch (err) {
+        const hint = `${err?.hint || ''} ${err?.message || ''}`
+        if (count > 3 && /title/i.test(hint)) setDraft(await ask(3))
+        else throw err
+      }
+      setPanelError(null)
     } catch (e) {
-      toast(e.message)
+      setPanelError({ message: explainError(e), retry: () => generate() })
     } finally {
       clearInterval(timer)
       timerRef.current = null
@@ -147,13 +174,16 @@ export default function GenerateAdventureModal({ onClose }) {
   }
 
   // --------------------------------------------- passo 2: regenerar 1 campo
-  const regenerate = async (field) => {
+  const openRefine = (field) => {
+    setRefineField(field)
+    setRefineText('')
+  }
+
+  const regenerate = async (field, instruction = '') => {
     if (!draft || opRef.current) return
-    const typed = window.prompt('Refinement instruction (optional):')
-    if (typed === null || opRef.current) return
-    const instruction = typed.trim()
     opRef.current = true
     setRegen(field)
+    setRefineField(null)
     try {
       const current =
         field === 'tags' ? (draft.tags ?? []).join(', ')
@@ -165,7 +195,7 @@ export default function GenerateAdventureModal({ onClose }) {
         current,
         draft,
         language,
-        instruction: instruction || undefined,
+        instruction: String(instruction || '').trim() || undefined,
         web_search: webOnRefine,
       })
       setDraft((d) => {
@@ -182,38 +212,37 @@ export default function GenerateAdventureModal({ onClose }) {
       })
       noteWeb(r?.web_sources)
     } catch (e) {
-      toast(e.message)
+      setPanelError({ message: explainError(e), retry: () => regenerate(field, instruction) })
     } finally {
       opRef.current = false
       setRegen(null)
     }
   }
 
-  const enrichCard = async (index) => {
+  const enrichCard = async (index, instruction = '') => {
     if (!draft || opRef.current) return
     const card = (draft.story_cards ?? [])[index]
     if (!card) return
-    const typed = window.prompt('Instruction for this card (optional)')
-    if (typed === null || opRef.current) return
     const concept = String(card.title ?? '').trim()
     if (concept.length < 2) {
-      toast('Card title must be at least 2 characters before AI enrich.')
+      setPanelError({ message: 'O título da ficha precisa de pelo menos 2 caracteres antes de refinar.', retry: null })
       return
     }
     opRef.current = true
     setRegen(`card-${index}`)
+    setRefineField(null)
     try {
       const r = await api.assistantCard({
         concept,
         card_type: card.type || 'character',
         draft,
         current_card: card,
-        instruction: typed.trim() || undefined,
+        instruction: String(instruction || '').trim() || undefined,
         web_search: webOnRefine,
         language,
       })
       if (!r?.card) {
-        toast('The assistant returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       setDraft((d) => ({
@@ -223,24 +252,23 @@ export default function GenerateAdventureModal({ onClose }) {
       }))
       noteWeb(r.web_sources)
     } catch (e) {
-      toast(e.message)
+      setPanelError({ message: explainError(e), retry: () => enrichCard(index, instruction) })
     } finally {
       opRef.current = false
       setRegen(null)
     }
   }
 
-  const addCardWithAi = async () => {
+  const addCardWithAi = async (conceptText = '') => {
     if (!draft || opRef.current) return
-    const typed = window.prompt('Card name or concept')
-    if (typed === null || opRef.current) return
-    const concept = typed.trim()
+    const concept = String(conceptText || '').trim()
     if (concept.length < 2) {
-      toast('Enter a card name or concept (min. 2 characters).')
+      setPanelError({ message: 'Escreva um nome ou conceito para a ficha (mínimo de 2 caracteres).', retry: null })
       return
     }
     opRef.current = true
     setRegen('card-new')
+    setRefineField(null)
     try {
       const r = await api.assistantCard({
         concept,
@@ -250,7 +278,7 @@ export default function GenerateAdventureModal({ onClose }) {
         language,
       })
       if (!r?.card) {
-        toast('The assistant returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       setDraft((d) => ({
@@ -260,58 +288,66 @@ export default function GenerateAdventureModal({ onClose }) {
       }))
       noteWeb(r.web_sources)
     } catch (e) {
-      toast(e.message)
+      setPanelError({ message: explainError(e), retry: () => addCardWithAi(concept) })
     } finally {
       opRef.current = false
       setRegen(null)
     }
   }
 
+  const confirmRefine = () => {
+    if (!refineField) return
+    if (refineField === 'card-new') {
+      addCardWithAi(refineText)
+      return
+    }
+    if (refineField.startsWith('card-')) {
+      enrichCard(Number(refineField.slice(5)), refineText)
+      return
+    }
+    regenerate(refineField, refineText)
+  }
+
   // ------------------------------------------------------ persistir e jogar
   const create = async () => {
     if (!draft?.title?.trim()) {
-      toast('Title is required.')
+      setPanelError({ message: 'O título é obrigatório para criar a aventura.', retry: null })
       return
     }
     if (opRef.current) return
     opRef.current = true
     setCreating(true)
+    setPanelError(null)
     try {
-      const scenario = await api.createScenario({
-        title: draft.title.trim(),
-        description: draft.description ?? '',
-        ai_instructions: draft.ai_instructions ?? '',
-        plot_essentials: draft.plot_essentials ?? '',
-        authors_note: draft.authors_note ?? '',
-        opening_text: draft.opening_text ?? '',
-        image_style: draft.image_style ?? '',
-        tags: draft.tags ?? [],
-        story_cards: draft.story_cards ?? [],
-        third_person: !!draft.third_person,
-      })
       const picked = rulesets.find((r) => String(r.id) === String(rulesetId))
       const described = heroMode === 'describe' ? heroText.trim() : heroGoal.trim()
       const title = characterTitle(protagonistName, heroMode === 'describe' ? heroText : '')
-      const adv = await api.createAdventure({ scenario_id: scenario.id })
-      try {
-        if (title) {
-          await api.saveCharacter(adv.id, {
-            title,
-            sheet: {
-              appearance: protagonistAppearance.trim(),
-              class: protagonistRole.trim(),
-              notes: described,
-              status: 'alive',
-            },
-          })
-        }
-        if (picked) await api.applyRuleset(adv.id, String(picked.id))
-      } catch (e) {
-        toast(`Aventura criada. A ficha ou o sistema não entrou: ${e.message}`)
-      }
+      const adv = await api.createAdventureFromDraft({
+        draft: {
+          title: draft.title.trim(),
+          description: draft.description ?? '',
+          ai_instructions: draft.ai_instructions ?? '',
+          plot_essentials: draft.plot_essentials ?? '',
+          authors_note: draft.authors_note ?? '',
+          opening_text: draft.opening_text ?? '',
+          image_style: draft.image_style ?? '',
+          tags: draft.tags ?? [],
+          story_cards: draft.story_cards ?? [],
+          third_person: !!draft.third_person,
+        },
+        character: {
+          title,
+          sheet: {
+            appearance: protagonistAppearance.trim(),
+            class: protagonistRole.trim(),
+            notes: described,
+          },
+        },
+        ruleset_id: picked ? String(picked.id) : null,
+      })
       navigate(`/play/${adv.id}`)
     } catch (e) {
-      toast(e.message)
+      setPanelError({ message: explainError(e), retry: () => create() })
       opRef.current = false
       setCreating(false)
     }
@@ -322,25 +358,49 @@ export default function GenerateAdventureModal({ onClose }) {
   const labelCls = 'text-xs font-semibold uppercase tracking-wide text-zinc-500'
   const hintCls = 'block text-xs text-zinc-600'
 
+  const refineBox = (field, placeholder) => (
+    refineField === field ? (
+      <span className="mt-1 flex flex-col gap-1">
+        <input
+          value={refineText}
+          onChange={(e) => setRefineText(e.target.value)}
+          placeholder={placeholder}
+          className={inputCls}
+        />
+        <span className="flex gap-2">
+          <button type="button" onClick={confirmRefine} disabled={busy} className={miniBtnCls}>
+            Confirmar
+          </button>
+          <button type="button" onClick={() => setRefineField(null)} className={miniBtnCls}>
+            Cancelar
+          </button>
+        </span>
+      </span>
+    ) : null
+  )
+
   const regenBtn = (field) => (
     <button
       type="button"
-      onClick={() => regenerate(field)}
+      onClick={() => openRefine(field)}
       disabled={busy}
-      title="Regenerate this field keeping coherence with the rest of the draft"
+      title="Refinar este campo sem perder o resto do rascunho"
       className={miniBtnCls}
     >
-      {regen === field ? '… generating' : '↻ Regenerate'}
+      {regen === field ? '… gerando' : '↻ Refinar'}
     </button>
   )
 
   const fieldHeader = (field, label, hint) => (
-    <span className="mb-1 flex items-center justify-between gap-2">
-      <span>
-        <span className={labelCls}>{label}</span>
-        {hint && <span className={hintCls}>{hint}</span>}
+    <span className="mb-1 flex flex-col gap-1">
+      <span className="flex items-center justify-between gap-2">
+        <span>
+          <span className={labelCls}>{label}</span>
+          {hint && <span className={hintCls}>{hint}</span>}
+        </span>
+        {regenBtn(field)}
       </span>
-      {regenBtn(field)}
+      {refineBox(field, 'Instrução de refinamento (opcional)')}
     </span>
   )
 
@@ -350,6 +410,24 @@ export default function GenerateAdventureModal({ onClose }) {
 
   return (
     <Modal title="Gerar com IA" onClose={busy ? undefined : onClose} wide>
+      {panelError && (
+        <div className="mb-3 rounded-lg border border-danger-800 bg-danger-950/60 p-3 text-sm">
+          <p>{panelError.message}</p>
+          {panelError.retry && (
+            <button
+              type="button"
+              onClick={() => {
+                const go = panelError.retry
+                setPanelError(null)
+                go()
+              }}
+              className="mt-2 text-sm font-semibold underline"
+            >
+              Tentar de novo
+            </button>
+          )}
+        </div>
+      )}
       <div className="mb-4">
         <label className="block">
           {paramLabel('Sistema de regras (opcional)')}
@@ -603,7 +681,7 @@ export default function GenerateAdventureModal({ onClose }) {
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600">
               {generating
-                ? `${stage || 'Gerando…'} Isso costuma levar cerca de um minuto.`
+                ? `${stage || 'Gerando…'} 2 a 6 minutos com o modelo local.`
                 : 'Nada é salvo até você clicar em Criar aventura.'}
             </span>
             <div className="flex gap-2">
@@ -656,7 +734,7 @@ export default function GenerateAdventureModal({ onClose }) {
           )}
 
           <label className="block">
-            {fieldHeader('title', 'Title *')}
+            {fieldHeader('title', 'Título *')}
             <input
               value={draft.title ?? ''}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
@@ -675,7 +753,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('ai_instructions', 'AI Instructions', 'Style/system prompt for the narrator.')}
+            {fieldHeader('ai_instructions', 'AI Instructions', 'Instruções de estilo para o narrador.')}
             <textarea
               value={draft.ai_instructions ?? ''}
               onChange={(e) => setDraft({ ...draft, ai_instructions: e.target.value })}
@@ -685,7 +763,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('plot_essentials', 'Plot Essentials (Memory)', 'Fixed block: who you are, the world, the rules.')}
+            {fieldHeader('plot_essentials', 'Essenciais da trama (Memória)', 'Bloco fixo: quem você é, o mundo, as regras.')}
             <textarea
               value={draft.plot_essentials ?? ''}
               onChange={(e) => setDraft({ ...draft, plot_essentials: e.target.value })}
@@ -695,7 +773,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('authors_note', "Author's Note", 'Tone note injected near the end of the context.')}
+            {fieldHeader('authors_note', "Author's Note", 'Nota de tom injetada perto do fim do contexto.')}
             <textarea
               value={draft.authors_note ?? ''}
               onChange={(e) => setDraft({ ...draft, authors_note: e.target.value })}
@@ -705,7 +783,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('opening_text', 'Opening Text', "The story's first block (becomes the start action).")}
+            {fieldHeader('opening_text', 'Texto de abertura', "O primeiro bloco da história (vira a ação inicial).")}
             <textarea
               value={draft.opening_text ?? ''}
               onChange={(e) => setDraft({ ...draft, opening_text: e.target.value })}
@@ -715,7 +793,7 @@ export default function GenerateAdventureModal({ onClose }) {
           </label>
 
           <label className="block">
-            {fieldHeader('image_style', 'Visual Style (image generation)')}
+            {fieldHeader('image_style', 'Estilo visual (geração de imagem)')}
             <input
               value={draft.image_style ?? ''}
               onChange={(e) => setDraft({ ...draft, image_style: e.target.value })}
@@ -736,19 +814,25 @@ export default function GenerateAdventureModal({ onClose }) {
 
           <div className="block">
             <div className="mb-1">
-              <div className={labelCls}>Story Cards ({(draft.story_cards ?? []).length})</div>
-              <div className={hintCls}>NPCs, places, factions — injected when a trigger word appears.</div>
+              <div className={labelCls}>Fichas ({(draft.story_cards ?? []).length})</div>
+              <div className={hintCls}>NPCs, lugares, facções — entram no contexto quando uma palavra-gatilho aparece.</div>
             </div>
+            {refineBox(
+              refineField && String(refineField).startsWith('card-') ? refineField : '',
+              refineField === 'card-new'
+                ? 'Nome ou conceito da ficha'
+                : 'Instrução para esta ficha (opcional)',
+            )}
             <StoryCardsEditor
               cards={draft.story_cards ?? []}
               onChange={(story_cards) => setDraft((d) => ({ ...d, story_cards }))}
               busy={busy}
-              onAiCard={enrichCard}
+              onAiCard={(index) => openRefine(`card-${index}`)}
               webOn={webOnRefine}
               onToggleWeb={setWebOnRefine}
             >
-              <button type="button" onClick={addCardWithAi} disabled={busy} className={miniBtnCls}>
-                + Add story card with AI
+              <button type="button" onClick={() => openRefine('card-new')} disabled={busy} className={miniBtnCls}>
+                + Ficha com IA
               </button>
               {regenBtn('story_cards')}
             </StoryCardsEditor>
@@ -762,14 +846,19 @@ export default function GenerateAdventureModal({ onClose }) {
             >
               ← Outra ideia
             </button>
-            <button
-              type="button"
-              onClick={create}
-              disabled={busy}
-              className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
-            >
-              {creating ? 'Criando…' : 'Criar aventura'}
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              {!draft.title?.trim() && (
+                <p className="text-xs text-warn-200">O título é obrigatório para criar a aventura.</p>
+              )}
+              <button
+                type="button"
+                onClick={create}
+                disabled={busy || !draft.title?.trim()}
+                className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {creating ? 'Criando…' : 'Criar aventura'}
+              </button>
+            </div>
           </div>
         </fieldset>
       )}

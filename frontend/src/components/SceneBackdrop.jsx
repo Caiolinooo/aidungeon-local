@@ -14,10 +14,10 @@ import { playerDisplayText } from '../utils.js'
 
 const MOOD_RING = {
   happy: 'border-amber-300',
-  sad: 'border-sky-400',
+  sad: 'border-info',
   angry: 'border-red-500',
-  fear: 'border-violet-400',
-  love: 'border-rose-400',
+  fear: 'border-accent-pri',
+  love: 'border-accent-gld',
 }
 
 const ATMOSPHERE_FILTER = {
@@ -180,7 +180,7 @@ export default function SceneBackdrop({
               {place ? (
                 <div className="uppercase">
                   {place}
-                  {scene.backdrop?.status === 'pending' ? ' · painting…' : ''}
+                  {scene.backdrop?.status === 'pending' ? ' · pintando…' : ''}
                 </div>
               ) : null}
               {scene.notice ? (

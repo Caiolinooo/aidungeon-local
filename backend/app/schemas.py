@@ -140,6 +140,13 @@ class PlayerCharacterUpsert(BaseModel):
     portrait_prompt: str | None = None
 
 
+class AdventureFromDraft(BaseModel):
+    """POST /adventures/from-draft — cenário, aventura, ficha e ruleset numa transação."""
+    draft: ScenarioCreate
+    character: PlayerCharacterUpsert | None = None
+    ruleset_id: str | None = None
+
+
 class AdventureShareCreate(BaseModel):
     """POST /adventures/{id}/sharing — inclui um jogador na aventura."""
     username: str = Field(min_length=1, max_length=32)

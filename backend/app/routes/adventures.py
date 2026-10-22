@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import urllib.parse
 from datetime import datetime, timezone
@@ -14,8 +15,12 @@ from app import (auth, consistency, db, events, game_engine, jobs, npc_assets,
                  stats as stats_mod)
 from app.errors import GameError
 from app.schemas import (
-    AdventureCreate, AdventureShareCreate, AdventureUpdate, PlayerCharacterUpsert,
+    AdventureCreate, AdventureFromDraft, AdventureShareCreate, AdventureUpdate,
+    PlayerCharacterUpsert,
 )
+
+log = logging.getLogger("app.adventures")
+_RULES_CAP = 4000
 from app.users import get_user, is_admin
 
 router = APIRouter()
@@ -83,17 +88,68 @@ def _complete_npc_sheets(conn, adventure_id: str) -> int:
     return filled
 
 
+def _copy_scenario_cards(conn, adventure_id: str, cards: list) -> None:
+    for card in cards or []:
+        if not isinstance(card, dict):
+            continue
+        db.insert_card(
+            conn, adventure_id,
+            title=card.get("title") or "", type=card.get("type") or "other",
+            triggers=card.get("triggers") or [], entry=card.get("entry") or "",
+            pinned=bool(card.get("pinned")),
+            use_for_character_creation=bool(card.get("use_for_character_creation")),
+            portrait_prompt=card.get("portrait_prompt") or "",
+            sheet=(json.dumps(card["sheet"], ensure_ascii=False)
+                   if isinstance(card.get("sheet"), dict) else ""),
+        )
+
+
+def _enqueue_creation_jobs(adventure_id: str) -> None:
+    """Retratos e fichas incompletas. Falha aqui não desfaz a aventura já commitada."""
+    try:
+        with db.session() as conn:
+            jobs.enqueue_all_portraits(conn, adventure_id)
+            _complete_npc_sheets(conn, adventure_id)
+            jobs.enqueue_incomplete_sheets(conn, adventure_id)
+    except Exception as exc:
+        log.warning("adventures: jobs de criação falharam (aventura mantida): %s", exc)
+
+
+def _bind_ruleset(conn, adventure_id: str, ruleset_id: str, username: str) -> None:
+    """Mesma cópia de regras que POST /adventures/{id}/rulesets/apply (mode=replace)."""
+    ruleset = db.get_ruleset(conn, ruleset_id)
+    if ruleset is None:
+        raise GameError.not_found(f"ruleset {ruleset_id} not found")
+    incoming = ruleset.get("rules") or ""
+    updated = db.update_adventure(
+        conn, adventure_id, character_rules=incoming[:_RULES_CAP])
+    if updated is None:
+        raise GameError.not_found(f"adventure {adventure_id} not found")
+    from app.sim import packs, rules as sim_rules, state as sim_state
+    pack_id = packs.pack_for_ruleset(ruleset_id)
+    sim = sim_state.load(updated)
+    sim["pack"] = pack_id
+    if pack_id:
+        card = db.player_character(conn, adventure_id, username)
+        sheet = npc_assets.parse_sheet((card or {}).get("sheet") or "")
+        title = ((card or {}).get("title") or "").strip() or username or "Jogador"
+        sim_rules.ensure_actor(
+            sim, packs.load_pack(pack_id), username, title,
+            sheet.get("stats") if isinstance(sheet.get("stats"), dict) else None,
+        )
+    db.set_sim_state(conn, adventure_id, sim)
+
+
 @router.post("", status_code=201)
 def create_adventure(body: AdventureCreate,
                      info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     """Nova aventura a partir de scenario (herda campos + action start) ou vazia."""
+    report = None
     with db.session() as conn:
         if body.scenario_id:
             sc = db.get_scenario(conn, body.scenario_id)
             if not sc:
                 raise GameError.not_found(f"scenario {body.scenario_id} not found")
-            # Sem coluna nova no scenario: herda se o dict já trouxer a chave
-            # (banco futuro ou JSON). O POST também manda a string direto.
             rules = body.character_rules
             if rules is None:
                 rules = sc.get("character_rules") or ""
@@ -111,29 +167,7 @@ def create_adventure(body: AdventureCreate,
                 source="new",
             )
             db.insert_action(conn, adv["id"], 0, "start", sc["opening_text"])
-            # v2: cards do rascunho do assistente trilham scenario → aventura
-            for card in sc["story_cards"]:
-                if not isinstance(card, dict):
-                    continue
-                db.insert_card(
-                    conn, adv["id"],
-                    title=card.get("title") or "", type=card.get("type") or "other",
-                    triggers=card.get("triggers") or [], entry=card.get("entry") or "",
-                    pinned=bool(card.get("pinned")),
-                    use_for_character_creation=bool(card.get("use_for_character_creation")),
-                    portrait_prompt=card.get("portrait_prompt") or "",
-                    # v0.5.0: ficha estruturada trilha scenario → aventura
-                    sheet=(json.dumps(card["sheet"], ensure_ascii=False)
-                           if isinstance(card.get("sheet"), dict) else ""),
-                )
-            # v0.3.0: pipeline assíncrono — retratos dos NPCs começam a gerar
-            # em background; a UI aplica cada um quando o job conclui.
-            jobs.enqueue_all_portraits(conn, adv["id"])
-            # Todo NPC nasce com status, classe e atributos; os textos vivos
-            # (humor, laços, goals) saem do LLM em background (job card_assets).
-            _complete_npc_sheets(conn, adv["id"])
-            jobs.enqueue_incomplete_sheets(conn, adv["id"])
-            report = consistency.audit(conn, adv["id"])
+            _copy_scenario_cards(conn, adv["id"], sc["story_cards"])
         else:
             adv = db.insert_adventure(
                 conn, owner=info.user,
@@ -147,11 +181,81 @@ def create_adventure(body: AdventureCreate,
                 character_rules=body.character_rules or "",
                 source="new",
             )
-            report = None
-        state = db.adventure_state(conn, adv["id"])
-        if report is not None:
-            state["consistency"] = report
-        return state
+        adventure_id = adv["id"]
+    if body.scenario_id:
+        _enqueue_creation_jobs(adventure_id)
+        try:
+            with db.session() as conn:
+                report = consistency.audit(conn, adventure_id)
+        except Exception as exc:
+            log.warning("adventures: auditoria falhou (aventura mantida): %s", exc)
+    with db.session() as conn:
+        state = db.adventure_state(conn, adventure_id)
+    if state is not None and report is not None:
+        state["consistency"] = report
+    return state
+
+
+@router.post("/from-draft", status_code=201)
+def create_adventure_from_draft(
+    body: AdventureFromDraft,
+    info: auth.AuthInfo = Depends(auth.require_auth),
+) -> dict:
+    """Cenário, aventura, ficha e ruleset na mesma transação. Jobs ficam fora dela."""
+    draft = body.draft
+    report = None
+    with db.session() as conn:
+        scenario = db.insert_scenario(
+            conn,
+            title=draft.title,
+            description=draft.description,
+            ai_instructions=draft.ai_instructions,
+            plot_essentials=draft.plot_essentials,
+            authors_note=draft.authors_note,
+            opening_text=draft.opening_text,
+            image_style=draft.image_style,
+            tags=draft.tags,
+            story_cards=[c.model_dump(exclude_none=True) for c in draft.story_cards],
+            third_person=draft.third_person,
+        )
+        adv = db.insert_adventure(
+            conn, scenario_id=scenario["id"], owner=info.user,
+            title=scenario["title"],
+            description=scenario["description"],
+            ai_instructions=scenario["ai_instructions"],
+            plot_essentials=scenario["plot_essentials"],
+            authors_note=scenario["authors_note"],
+            image_style=scenario.get("image_style") or "",
+            tags=scenario["tags"],
+            third_person=bool(scenario["third_person"]),
+            source="new",
+        )
+        db.insert_action(conn, adv["id"], 0, "start", scenario["opening_text"])
+        _copy_scenario_cards(conn, adv["id"], scenario["story_cards"])
+        if body.character is not None:
+            title = body.character.title.strip()
+            sheet = json.dumps(
+                _complete_player_sheet(body.character.sheet.model_dump(by_alias=True)),
+                ensure_ascii=False,
+            )
+            db.upsert_player_character(
+                conn, adv["id"], info.user,
+                title=title, sheet=sheet, portrait_prompt=body.character.portrait_prompt,
+            )
+        if body.ruleset_id:
+            _bind_ruleset(conn, adv["id"], body.ruleset_id, info.user)
+        adventure_id = adv["id"]
+    _enqueue_creation_jobs(adventure_id)
+    try:
+        with db.session() as conn:
+            report = consistency.audit(conn, adventure_id)
+    except Exception as exc:
+        log.warning("adventures: auditoria falhou (aventura mantida): %s", exc)
+    with db.session() as conn:
+        state = db.adventure_state(conn, adventure_id)
+    if state is not None and report is not None:
+        state["consistency"] = report
+    return state
 
 
 @router.get("")

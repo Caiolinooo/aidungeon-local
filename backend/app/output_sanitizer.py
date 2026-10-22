@@ -90,3 +90,41 @@ def clean_narration(text: str, truncated: bool) -> str:
     if not any(char.isalnum() for char in text):
         return ""
     return text
+
+
+IMPERSONATION_RE = re.compile(
+    r"\b(you|voc[êe])\s+(decide|say|reach|step|draw|choose|open|close|move|walk|run|grab|point|think|feel)\b",
+    re.IGNORECASE,
+)
+MECHANICS_RE = re.compile(
+    r"\b(d20|d100|ACERTO|ERRO|CR[IÍ]TICO|you rolled|rolled a|dice roll|vs CA \d|damage roll)\b",
+    re.IGNORECASE,
+)
+PT_MARKERS = ("que", "não", "você", "com", "para", "uma", "dos", "está", "olha")
+EN_MARKERS = (" the ", " you ", " with ", " door ", " and ", " looks ")
+
+
+def _has_word(text: str, word: str) -> bool:
+    return re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE) is not None
+
+
+def looks_portuguese(text: str) -> bool:
+    return any(_has_word(text or "", marker) for marker in PT_MARKERS)
+
+
+def quality_flags(text: str, *, expected_language: str = "") -> list[str]:
+    """Violações do turno: impersonation, mechanics_leak, language."""
+    body = text or ""
+    flags: list[str] = []
+    if IMPERSONATION_RE.search(body):
+        flags.append("impersonation")
+    if MECHANICS_RE.search(body):
+        flags.append("mechanics_leak")
+    if expected_language == "pt":
+        alnum = sum(1 for char in body if char.isalnum())
+        padded = f" {body.casefold()} "
+        pt_hits = sum(1 for marker in PT_MARKERS if _has_word(body, marker))
+        en_hits = sum(1 for marker in EN_MARKERS if marker.casefold() in padded)
+        if alnum >= 40 and pt_hits == 0 and en_hits >= 2:
+            flags.append("language")
+    return flags

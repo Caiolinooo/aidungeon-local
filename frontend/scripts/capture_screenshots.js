@@ -255,6 +255,11 @@ const server = http.createServer((req, res) => {
     if (reqPath.endsWith('/ui-state')) return sendJson(res, 200, { state: mockAdventure.ui_state });
     if (reqPath.endsWith('/scene')) return sendJson(res, 200, mockAdventure.scene);
     if (reqPath.endsWith('/jobs')) return sendJson(res, 200, []);
+    if (reqPath.endsWith('/events')) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.end('retry: 60000\n\n');
+      return;
+    }
     if (reqPath.startsWith('/api/adventures/')) return sendJson(res, 200, mockAdventure);
     if (reqPath === '/api/adventures') return sendJson(res, 200, mockAdventuresList);
     if (reqPath.startsWith('/api/scenarios/')) return sendJson(res, 200, mockScenariosList[0]);
@@ -300,13 +305,14 @@ async function captureScreen(url, filename, viewport, options = {}) {
   });
   page.on('pageerror', (err) => console.log(`[PAGE ERROR ${filename}]`, err.message));
 
-  await page.evaluateOnNewDocument((unauth) => {
+  await page.evaluateOnNewDocument((unauth, theme) => {
     if (unauth) {
       localStorage.removeItem('aidl_token');
     } else {
       localStorage.setItem('aidl_token', 'mock_jwt_token_for_screenshots');
     }
-  }, Boolean(options.unauth));
+    if (theme) localStorage.setItem('aidl_theme', theme);
+  }, Boolean(options.unauth), options.theme || '');
 
   await page.goto(url, { waitUntil: 'networkidle0' });
   await new Promise((r) => setTimeout(r, 800));
@@ -359,7 +365,7 @@ try {
     { width: 390, height: 844 },
     {
       actions: async (page) => {
-        const drawerBtn = await page.$('header button[aria-label="Open inspector drawer"]');
+        const drawerBtn = await page.$('header button[aria-label="Abrir o inspetor"]');
         if (drawerBtn) await drawerBtn.click();
       }
     }
@@ -383,11 +389,23 @@ try {
     { width: 1440, height: 900 },
     {
       actions: async (page) => {
-        const readerBtn = await page.$('button[title*="Reader typography"]');
+        const readerBtn = await page.$('button[title*="Tipografia"]');
         if (readerBtn) await readerBtn.click();
       }
     }
   );
+
+  const playId = 'efab03aeeadc41d2953dc2da6a81d63d';
+  for (const theme of ['obsidian', 'parchment', 'oled']) {
+    console.log(`Capturing theme ${theme}...`);
+    await captureScreen(`${base}/`, `home_${theme}_1440x900.png`, { width: 1440, height: 900 }, { theme });
+    await captureScreen(
+      `${base}/play/${playId}`,
+      `play_${theme}_1440x900.png`,
+      { width: 1440, height: 900 },
+      { theme },
+    );
+  }
 
   console.log('All after screenshots captured successfully!');
 } catch (err) {

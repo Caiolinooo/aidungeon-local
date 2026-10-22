@@ -1,6 +1,6 @@
 import TagInput from './TagInput.jsx'
 
-// Lista de story cards compartilhada pelo modal "Generate with AI" e pelo
+// Lista de fichas compartilhada pelo modal "Generate with AI" e pelo
 // ScenarioEditor. `children` entra na barra do cabeçalho, ao lado do 🌐 web.
 const inputCls =
   'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-600 disabled:opacity-60'
@@ -31,7 +31,7 @@ export default function StoryCardsEditor({
           {typeof onToggleWeb === 'function' && (
             <label
               className="flex items-center gap-1.5 text-[11px] text-zinc-400"
-              title="Search the web when refining with AI"
+              title="Buscar na web ao refinar com a IA"
             >
               <input
                 type="checkbox"
@@ -60,7 +60,7 @@ export default function StoryCardsEditor({
             <input
               value={card.type ?? ''}
               onChange={(e) => patch(i, { type: e.target.value })}
-              placeholder="Type (character, location…)"
+              placeholder="Tipo (personagem, lugar…)"
               disabled={busy}
               className={`${inputCls} w-full sm:w-44`}
             />
@@ -69,7 +69,7 @@ export default function StoryCardsEditor({
                 type="button"
                 onClick={() => onAiCard(i)}
                 disabled={busy}
-                title="Enrich this card with AI"
+                title="Enriquecer esta ficha com a IA"
                 className="shrink-0 rounded-lg border border-zinc-700 px-3 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
               >
                 ✨ AI
@@ -79,10 +79,10 @@ export default function StoryCardsEditor({
               type="button"
               onClick={() => onChange(list.filter((_, j) => j !== i))}
               disabled={busy}
-              title="Remove card"
+              title="Remover ficha"
               className="shrink-0 rounded-lg border border-red-900 px-3 text-xs text-red-400 hover:bg-red-950 disabled:opacity-40"
             >
-              Remove
+              Remover
             </button>
           </div>
           <div className="mt-2">
@@ -90,7 +90,7 @@ export default function StoryCardsEditor({
               value={card.triggers ?? []}
               onChange={(triggers) => patch(i, { triggers })}
               disabled={busy}
-              placeholder="Trigger words (Enter to add)"
+              placeholder="Palavras-gatilho (Enter para adicionar)"
             />
           </div>
           <textarea
@@ -98,7 +98,7 @@ export default function StoryCardsEditor({
             onChange={(e) => patch(i, { entry: e.target.value })}
             rows={3}
             disabled={busy}
-            placeholder="Card text injected into the AI context"
+            placeholder="Texto da ficha injetado no contexto da IA"
             className={`${inputCls} mt-2 resize-y`}
           />
         </div>
@@ -110,7 +110,7 @@ export default function StoryCardsEditor({
         disabled={busy}
         className="rounded-lg border border-dashed border-zinc-700 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
       >
-        + Add story card
+        + Adicionar ficha
       </button>
     </div>
   )

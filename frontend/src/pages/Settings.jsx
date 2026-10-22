@@ -22,10 +22,10 @@ import {
 } from 'lucide-react'
 
 const TABS = [
-  { id: 'llm', label: 'LLM & Samplers', icon: Cpu },
-  { id: 'image', label: 'Image Generation', icon: ImageIcon },
-  { id: 'voice', label: 'Voice & Speech', icon: Volume2 },
-  { id: 'memory', label: 'Memory & Scripting', icon: Brain },
+  { id: 'llm', label: 'Modelo e amostragem', icon: Cpu },
+  { id: 'image', label: 'Geração de imagem', icon: ImageIcon },
+  { id: 'voice', label: 'Voz e fala', icon: Volume2 },
+  { id: 'memory', label: 'Memória e scripts', icon: Brain },
 ]
 
 export default function Settings() {
@@ -139,7 +139,7 @@ export default function Settings() {
         if (scr && Object.keys(scr).length) setScriptingForm((prev) => ({ ...prev, ...scr }))
         if (health) setLlmHealth(health)
       } catch (e) {
-        toast('Failed loading some settings: ' + e.message)
+        toast('Falha ao carregar algumas configurações: ' + e.message)
       } finally {
         setLoading(false)
       }
@@ -176,7 +176,7 @@ export default function Settings() {
           ...updated,
           context_size: Math.min(updated.context_size_max ?? contextSizeMax, updated.context_size),
         }))
-        toast('LLM & Sampler settings saved.', 'ok')
+        toast('Configurações do modelo salvas.', 'ok')
       } else if (activeTab === 'image') {
         const payload = {
           ...imageForm,
@@ -186,7 +186,7 @@ export default function Settings() {
         }
         const updated = await api.putImageSettings(payload)
         setImageForm((prev) => ({ ...prev, ...updated }))
-        toast('Image generation settings saved.', 'ok')
+        toast('Configurações de imagem salvas.', 'ok')
       } else if (activeTab === 'voice') {
         const payload = {
           ...voiceForm,
@@ -194,7 +194,7 @@ export default function Settings() {
         }
         const updated = await api.putVoiceSettings(payload)
         setVoiceForm((prev) => ({ ...prev, ...updated }))
-        toast('Voice & Speech settings saved.', 'ok')
+        toast('Configurações de voz salvas.', 'ok')
       } else if (activeTab === 'memory') {
         const embPayload = {
           ...embeddingsForm,
@@ -204,10 +204,10 @@ export default function Settings() {
           api.putEmbeddingsSettings(embPayload),
           api.putScriptingSettings(scriptingForm),
         ])
-        toast('Memory & Scripting settings saved.', 'ok')
+        toast('Configurações de memória salvas.', 'ok')
       }
     } catch (e) {
-      toast('Save failed: ' + e.message)
+      toast('Falha ao salvar: ' + e.message)
     } finally {
       setSaving(false)
     }
@@ -217,7 +217,7 @@ export default function Settings() {
   const handlePreviewVoice = async (voiceKey) => {
     setPreviewingVoice(voiceKey)
     try {
-      const sampleText = `Hello adventurer! This is voice preview ${voiceKey}. Ready to explore?`
+      const sampleText = `Olá, aventureiro! Esta é a prévia da voz ${voiceKey}. Pronto para explorar?`
       const blob = await api.voice.tts(sampleText, voiceKey)
       const audioUrl = URL.createObjectURL(blob)
       const audio = new Audio(audioUrl)
@@ -228,12 +228,12 @@ export default function Settings() {
       audio.onerror = () => {
         setPreviewingVoice(null)
         URL.revokeObjectURL(audioUrl)
-        toast('Could not play voice preview.')
+        toast('Não foi possível ouvir a prévia da voz.')
       }
       await audio.play()
     } catch (e) {
       setPreviewingVoice(null)
-      toast('Voice preview error: ' + e.message)
+      toast('Erro na prévia da voz: ' + e.message)
     }
   }
 
@@ -248,7 +248,7 @@ export default function Settings() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate(-1)}
-            aria-label="Go back"
+            aria-label="Voltar"
             className="rounded-xl border border-subtle p-2 text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -256,7 +256,7 @@ export default function Settings() {
           <div>
             <h1 className="text-base font-bold tracking-tight text-primary flex items-center gap-2">
               <Sliders className="w-4 h-4 text-accent-pri" />
-              <span>Global Settings</span>
+              <span>Configurações</span>
             </h1>
           </div>
         </div>
@@ -264,11 +264,11 @@ export default function Settings() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowReaderModal(true)}
-            title="Reader preferences & theme"
+            title="Preferências de leitura e tema"
             className="flex items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-primary transition"
           >
             <BookOpen className="w-3.5 h-3.5 text-accent-pri" />
-            <span className="hidden sm:inline">Theme / Typography</span>
+            <span className="hidden sm:inline">Tema / tipografia</span>
           </button>
 
           <button
@@ -277,7 +277,7 @@ export default function Settings() {
             className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>{saving ? 'Saving…' : 'Save Changes'}</span>
+            <span>{saving ? 'Salvando…' : 'Salvar'}</span>
           </button>
         </div>
       </header>
@@ -310,7 +310,7 @@ export default function Settings() {
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-4xl">
           {loading ? (
             <div className="flex h-64 items-center justify-center text-xs text-muted">
-              Loading settings…
+              Carregando configurações…
             </div>
           ) : (
             <>
@@ -320,10 +320,10 @@ export default function Settings() {
                   <div className="border-b border-subtle pb-3 flex items-center justify-between">
                     <div>
                       <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-                        LLM Engine & Samplers
+                        Modelo e amostragem
                       </h2>
                       <p className="text-xs text-secondary mt-0.5">
-                        Configure model backend, inference budgets, and generation sampling parameters.
+                        Servidor do modelo, orçamento de contexto e parâmetros da geração.
                       </p>
                     </div>
                     {llmHealth && (
@@ -351,24 +351,24 @@ export default function Settings() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>Model Alias</label>
+                        <label className={labelCls}>Apelido do modelo</label>
                         <input
                           type="text"
                           value={llmForm.model_alias}
                           onChange={(e) => setLlmForm({ ...llmForm, model_alias: e.target.value })}
-                          placeholder="auto (or exact model name)"
+                          placeholder="auto (ou o nome exato do modelo)"
                           className={inputCls}
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className={labelCls}>API Key (Optional / masked)</label>
+                      <label className={labelCls}>Chave da API (opcional / oculta)</label>
                       <input
                         type="password"
                         value={llmForm.api_key || ''}
                         onChange={(e) => setLlmForm({ ...llmForm, api_key: e.target.value })}
-                        placeholder="Leave blank to use current key or .env"
+                        placeholder="Deixe em branco para usar a chave atual ou o .env"
                         className={inputCls}
                       />
                     </div>
@@ -379,10 +379,10 @@ export default function Settings() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-                          Long-Horizon Context Window & Turn Length (Up to {contextSizeMax.toLocaleString()} Tokens)
+                          Janela de contexto (até {contextSizeMax.toLocaleString()} tokens)
                         </h3>
                         <p className="text-[11px] text-secondary mt-0.5">
-                          Dynamic canon scaling & anti-hallucination continuity anchors keep 64k–104k campaigns coherent.
+                          A escala do cânone e a âncora de continuidade mantêm campanhas longas coerentes.
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -419,15 +419,15 @@ export default function Settings() {
                         className="w-full accent-emerald-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
                       />
                       <div className="flex justify-between text-[10px] text-muted font-mono mt-1">
-                        <span>4,096 min</span>
-                        <span>65,536 (64k default)</span>
-                        <span className="font-semibold text-accent-pri">{contextSizeMax.toLocaleString()} max (per slot)</span>
+                        <span>4.096 mín.</span>
+                        <span>65.536 (padrão 64k)</span>
+                        <span className="font-semibold text-accent-pri">{contextSizeMax.toLocaleString()} máx. por slot</span>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
                       <div>
-                        <label className={labelCls}>Max New Tokens / Turn ({llmForm.max_tokens})</label>
+                        <label className={labelCls}>Máximo de tokens por turno ({llmForm.max_tokens})</label>
                         <input
                           type="range"
                           min="100"
@@ -439,7 +439,7 @@ export default function Settings() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>Timeout (seconds)</label>
+                        <label className={labelCls}>Tempo limite (segundos)</label>
                         <input
                           type="number"
                           min="10"
@@ -457,7 +457,7 @@ export default function Settings() {
                             onChange={(e) => setLlmForm({ ...llmForm, streaming: e.target.checked })}
                             className="accent-emerald-600 rounded"
                           />
-                          <span>Stream tokens via SSE</span>
+                          <span>Transmitir tokens</span>
                         </label>
                         <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                           <input
@@ -466,7 +466,7 @@ export default function Settings() {
                             onChange={(e) => setLlmForm({ ...llmForm, disable_thinking: e.target.checked })}
                             className="accent-emerald-600 rounded"
                           />
-                          <span>Disable Thinking (Qwen3 hybrid)</span>
+                          <span>Desligar o raciocínio (Qwen3)</span>
                         </label>
                       </div>
                     </div>
@@ -595,10 +595,10 @@ export default function Settings() {
                 <div className="space-y-6">
                   <div className="border-b border-subtle pb-3">
                     <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-                      Image Generation Pipeline
+                      Geração de imagem
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Configure SDXL WebUI or OpenAI-compatible image synthesis for scene paintings and character portraits.
+                      SDXL WebUI ou um endpoint compatível com OpenAI, para pinturas de cena e retratos.
                     </p>
                   </div>
 
@@ -611,7 +611,7 @@ export default function Settings() {
                           onChange={(e) => setImageForm({ ...imageForm, enabled: e.target.checked })}
                           className="accent-emerald-600 rounded"
                         />
-                        <span>Enable Image Generation (Scene & NPC Portraits)</span>
+                        <span>Ativar geração de imagem (cena e retratos)</span>
                       </label>
 
                       <div className="flex rounded-lg border border-subtle overflow-hidden p-0.5 bg-elevated">
@@ -640,7 +640,7 @@ export default function Settings() {
                       <div className="space-y-4 pt-2">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
-                            <label className={labelCls}>SD WebUI Base URL</label>
+                            <label className={labelCls}>URL base do SD WebUI</label>
                             <input
                               type="text"
                               value={imageForm.sdwebui_base_url}
@@ -650,7 +650,7 @@ export default function Settings() {
                             />
                           </div>
                           <div>
-                            <label className={labelCls}>Inference Steps (30 recommended)</label>
+                            <label className={labelCls}>Passos de inferência (30 recomendado)</label>
                             <input
                               type="number"
                               min="10"
@@ -664,7 +664,7 @@ export default function Settings() {
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
-                            <label className={labelCls}>Resolution Width (1024)</label>
+                            <label className={labelCls}>Largura (1024)</label>
                             <input
                               type="number"
                               value={imageForm.sdwebui_width}
@@ -673,7 +673,7 @@ export default function Settings() {
                             />
                           </div>
                           <div>
-                            <label className={labelCls}>Resolution Height (1024)</label>
+                            <label className={labelCls}>Altura (1024)</label>
                             <input
                               type="number"
                               value={imageForm.sdwebui_height}
@@ -684,7 +684,7 @@ export default function Settings() {
                         </div>
 
                         <div>
-                          <label className={labelCls}>Default Negative Prompt</label>
+                          <label className={labelCls}>Prompt negativo padrão</label>
                           <textarea
                             rows={3}
                             value={imageForm.negative_prompt}
@@ -695,7 +695,7 @@ export default function Settings() {
                         </div>
 
                         <div>
-                          <label className={labelCls}>Style Suffix</label>
+                          <label className={labelCls}>Sufixo de estilo</label>
                           <input
                             type="text"
                             value={imageForm.style_suffix || ''}
@@ -709,7 +709,7 @@ export default function Settings() {
                       <div className="space-y-4 pt-2">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
-                            <label className={labelCls}>OpenAI Endpoint</label>
+                            <label className={labelCls}>Endpoint OpenAI</label>
                             <input
                               type="text"
                               value={imageForm.openai_base_url}
@@ -719,7 +719,7 @@ export default function Settings() {
                             />
                           </div>
                           <div>
-                            <label className={labelCls}>Model</label>
+                            <label className={labelCls}>Modelo</label>
                             <input
                               type="text"
                               value={imageForm.openai_model}
@@ -730,7 +730,7 @@ export default function Settings() {
                           </div>
                         </div>
                         <div>
-                          <label className={labelCls}>OpenAI API Key</label>
+                          <label className={labelCls}>Chave da API OpenAI</label>
                           <input
                             type="password"
                             value={imageForm.openai_api_key}
@@ -750,10 +750,10 @@ export default function Settings() {
                 <div className="space-y-6">
                   <div className="border-b border-subtle pb-3">
                     <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-                      Voice & Speech Stack
+                      Voz e fala
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Configure Text-to-Speech (Supertonic / TTS) and Speech-to-Text (Whisper STT).
+                      Fala (Supertonic / TTS) e transcrição (Whisper).
                     </p>
                   </div>
 
@@ -765,12 +765,12 @@ export default function Settings() {
                         onChange={(e) => setVoiceForm({ ...voiceForm, enabled: e.target.checked })}
                         className="accent-emerald-600 rounded"
                       />
-                      <span>Enable Voice Engine</span>
+                      <span>Ativar o motor de voz</span>
                     </label>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className={labelCls}>Voice Service Base URL</label>
+                        <label className={labelCls}>URL base do serviço de voz</label>
                         <input
                           type="text"
                           value={voiceForm.base_url}
@@ -780,7 +780,7 @@ export default function Settings() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>Narrator Default Voice</label>
+                        <label className={labelCls}>Voz padrão do narrador</label>
                         <select
                           value={voiceForm.narrator_voice}
                           onChange={(e) => setVoiceForm({ ...voiceForm, narrator_voice: e.target.value })}
@@ -797,7 +797,7 @@ export default function Settings() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className={labelCls}>TTS Model</label>
+                        <label className={labelCls}>Modelo de voz</label>
                         <input
                           type="text"
                           value={voiceForm.tts_model}
@@ -806,7 +806,7 @@ export default function Settings() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>STT Model (Whisper)</label>
+                        <label className={labelCls}>Modelo de transcrição (Whisper)</label>
                         <input
                           type="text"
                           value={voiceForm.stt_model}
@@ -818,7 +818,7 @@ export default function Settings() {
 
                     {/* Interactive Voice Audition Picker */}
                     <div className="pt-3 border-t border-subtle">
-                      <label className={labelCls}>Voice Preview & Audition</label>
+                      <label className={labelCls}>Prévia da voz</label>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 mt-2">
                         {(voiceForm.voices || ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']).map((voiceKey) => {
                           const isPreviewing = previewingVoice === voiceKey
@@ -859,10 +859,10 @@ export default function Settings() {
                 <div className="space-y-6">
                   <div className="border-b border-subtle pb-3">
                     <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-                      Memory Embeddings & Sandboxed Scripting
+                      Embeddings de memória e scripts isolados
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Configure hybrid vector retrieval and custom AST-sandboxed Python scripting hooks.
+                      Busca vetorial e ganchos de script Python isolados.
                     </p>
                   </div>
 
@@ -878,12 +878,12 @@ export default function Settings() {
                         onChange={(e) => setEmbeddingsForm({ ...embeddingsForm, enabled: e.target.checked })}
                         className="accent-emerald-600 rounded"
                       />
-                      <span>Enable Vector Embeddings</span>
+                      <span>Ativar embeddings vetoriais</span>
                     </label>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className={labelCls}>Embeddings Base URL</label>
+                        <label className={labelCls}>URL base dos embeddings</label>
                         <input
                           type="text"
                           value={embeddingsForm.base_url}
@@ -893,7 +893,7 @@ export default function Settings() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>Embedding Model</label>
+                        <label className={labelCls}>Modelo de embedding</label>
                         <input
                           type="text"
                           value={embeddingsForm.model}
@@ -910,17 +910,17 @@ export default function Settings() {
                     <div>
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-2">
                         <Code2 className="w-4 h-4 text-accent-pri" />
-                        <span>Sandboxed Python Scripting Hooks</span>
+                        <span>Ganchos de script Python isolados</span>
                       </h3>
                       <p className="text-[11px] text-secondary mt-1">
-                        Executes in a sterile AST-inspected sub-process with strict 1.0s timeout and fail-safe fallback.
+                        Roda num processo isolado, com inspeção da árvore, limite de 1 segundo e recuo seguro se falhar.
                       </p>
                     </div>
 
                     <div className="space-y-4">
                       <div>
                         <label className={labelCls}>
-                          Input Modifier (modify player action before game engine)
+                          Modificador de entrada (altera a ação do jogador antes do motor)
                         </label>
                         <textarea
                           rows={4}
@@ -935,7 +935,7 @@ export default function Settings() {
 
                       <div>
                         <label className={labelCls}>
-                          Context Modifier (modify prompt messages before LLM dispatch)
+                          Modificador de contexto (altera as mensagens antes de enviar ao modelo)
                         </label>
                         <textarea
                           rows={4}
@@ -950,7 +950,7 @@ export default function Settings() {
 
                       <div>
                         <label className={labelCls}>
-                          Output Modifier (modify AI generation before persisting turn)
+                          Modificador de saída (altera a geração antes de gravar o turno)
                         </label>
                         <textarea
                           rows={4}

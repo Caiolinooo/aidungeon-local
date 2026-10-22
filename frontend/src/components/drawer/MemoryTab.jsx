@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
+import { useConfirm } from '../../confirm.jsx'
 import { useToast } from '../Toast.jsx'
 import Modal from '../Modal.jsx'
 import {
@@ -18,6 +19,7 @@ import {
 
 export default function MemoryTab({ adventure }) {
   const toast = useToast()
+  const { ask, bar } = useConfirm()
   const [mem, setMem] = useState(null)
   const [plot, setPlot] = useState('')
   const [note, setNote] = useState('')
@@ -58,7 +60,7 @@ export default function MemoryTab({ adventure }) {
     try {
       const m = await api.putMemory(adventure.id, { plot_essentials: plot, authors_note: note })
       setMem(m)
-      toast('Memory metadata saved.', 'ok')
+      toast('Metadados da memória salvos.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -84,7 +86,7 @@ export default function MemoryTab({ adventure }) {
 
   // Regenerate Memory Bank
   const handleRegenerate = async () => {
-    if (!window.confirm('Regenerate memory bank? This will recompute summaries and embedding vectors for all story actions.')) return
+    if (!ask('regen-memory', 'Regenerar o banco de memória? Os resumos e os vetores de todas as ações são refeitos.')) return
     setRegenerating(true)
     try {
       const res = await api.regenerateMemories(adventure.id)
@@ -115,7 +117,7 @@ export default function MemoryTab({ adventure }) {
   // Save memory item (create or patch)
   const saveMemoryItem = async () => {
     if (!memoryForm.text.trim()) {
-      toast('Memory text cannot be empty.')
+      toast('O texto da memória não pode ficar vazio.')
       return
     }
     setMemorySaving(true)
@@ -127,10 +129,10 @@ export default function MemoryTab({ adventure }) {
       }
       if (editingMemory === 'new') {
         await api.createMemory(adventure.id, payload)
-        toast('Memory added.', 'ok')
+        toast('Memória adicionada.', 'ok')
       } else {
         await api.patchMemory(adventure.id, editingMemory.id, payload)
-        toast('Memory updated.', 'ok')
+        toast('Memória atualizada.', 'ok')
       }
       setEditingMemory(null)
       load()
@@ -141,28 +143,29 @@ export default function MemoryTab({ adventure }) {
     }
   }
 
-  // Delete memory item
+  // Apagar memória item
   const deleteMemoryItem = async (item) => {
-    if (!window.confirm('Delete this memory permanently?')) return
+    if (!ask(`memory-${item.id}`, 'Apagar esta memória de vez?')) return
     try {
       await api.deleteMemory(adventure.id, item.id)
-      toast('Memory deleted.', 'ok')
+      toast('Memória apagada.', 'ok')
       load()
     } catch (e) {
       toast(e.message)
     }
   }
 
-  if (mem === null) return <p className="text-sm text-muted">Loading memory bank…</p>
+  if (mem === null) return <p className="text-sm text-muted">Carregando a memória…</p>
 
   return (
     <div className="space-y-6 text-primary">
-      {/* Plot Essentials (Memory) */}
+      {bar}
+      {/* Essenciais da trama (Memória) */}
       <div className="rounded-xl border border-subtle bg-surface p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
           <div>
             <span className="block text-xs font-semibold uppercase tracking-wider text-muted">
-              Plot Essentials (Memory)
+              Essenciais da trama (Memória)
             </span>
             <span className="block text-xs text-secondary mt-0.5">
               Fixed context block near top of AI prompt: who you are, world lore, main objective.
@@ -175,14 +178,14 @@ export default function MemoryTab({ adventure }) {
             className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent-pri/20 border border-accent-pri/40 px-3 py-1 text-xs font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : 'hidden'}`} />
-            <span>{syncing ? 'Syncing…' : '✨ Sync Plot with AI'}</span>
+            <span>{syncing ? 'Syncing…' : '✨ Sincronizar a trama com a IA'}</span>
           </button>
         </div>
         <textarea
           value={plot}
           onChange={(e) => setPlot(e.target.value)}
           rows={6}
-          placeholder="e.g. You are Gareth, a rogue seeking the Sunstone of Alden..."
+          placeholder="ex.: Você é Gareth, um ladino em busca da Pedra do Sol de Alden..."
           className="w-full resize-y rounded-xl border border-subtle bg-surface-input px-3 py-2 text-xs text-primary outline-none focus:border-accent-pri transition font-sans leading-relaxed"
         />
 
@@ -210,7 +213,7 @@ export default function MemoryTab({ adventure }) {
             className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white shadow hover:bg-accent-hov transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>{saving ? 'Saving…' : 'Save Essentials & Note'}</span>
+            <span>{saving ? 'Salvando…' : 'Salvar essenciais e nota'}</span>
           </button>
         </div>
       </div>
@@ -221,7 +224,7 @@ export default function MemoryTab({ adventure }) {
           Story Summary (Rolling Overview)
         </span>
         <p className="whitespace-pre-wrap rounded-lg border border-subtle bg-elevated/40 p-3 text-xs text-secondary leading-relaxed font-serif">
-          {mem.story_summary || 'No summary generated yet — automatically maintained as your adventure progresses.'}
+          {mem.story_summary || 'Ainda não há resumo — ele é mantido sozinho conforme a aventura avança.'}
         </p>
       </div>
 
@@ -248,7 +251,7 @@ export default function MemoryTab({ adventure }) {
             <button
               onClick={handleRegenerate}
               disabled={regenerating}
-              title="Re-run automatic memory extraction and vector embeddings across all turns"
+              title="Rodar de novo a extração de memória e os embeddings em todos os turnos"
               className="flex items-center gap-1.5 rounded-lg bg-accent-pri/20 border border-accent-pri/40 px-3 py-1 text-xs font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${regenerating ? 'animate-spin' : ''}`} />
@@ -288,14 +291,14 @@ export default function MemoryTab({ adventure }) {
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           onClick={() => openEditModal(m)}
-                          title="Edit memory"
+                          title="Editar memória"
                           className="rounded-lg p-1 text-secondary hover:text-primary hover:bg-surface transition"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => deleteMemoryItem(m)}
-                          title="Delete memory"
+                          title="Apagar memória"
                           className="rounded-lg p-1 text-red-400 hover:text-red-300 hover:bg-red-950/40 transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -317,7 +320,7 @@ export default function MemoryTab({ adventure }) {
       {/* Edit / Add Memory Modal */}
       {editingMemory && (
         <Modal
-          title={editingMemory === 'new' ? 'Add Memory Entry' : 'Edit Memory Entry'}
+          title={editingMemory === 'new' ? 'Nova memória' : 'Editar memória'}
           onClose={() => setEditingMemory(null)}
         >
           <div className="space-y-4 text-primary">
@@ -329,7 +332,7 @@ export default function MemoryTab({ adventure }) {
                 value={memoryForm.text}
                 onChange={(e) => setMemoryForm({ ...memoryForm, text: e.target.value })}
                 rows={5}
-                placeholder="Key event, revealed secret, or lasting story development..."
+                placeholder="Evento-chave, segredo revelado ou mudança duradoura da história..."
                 className="w-full resize-y rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-primary outline-none focus:border-accent-pri transition leading-relaxed"
               />
             </label>
@@ -370,7 +373,7 @@ export default function MemoryTab({ adventure }) {
                 onClick={() => setEditingMemory(null)}
                 className="rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 type="button"
@@ -378,7 +381,7 @@ export default function MemoryTab({ adventure }) {
                 disabled={memorySaving}
                 className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
               >
-                {memorySaving ? 'Saving…' : 'Save Memory'}
+                {memorySaving ? 'Salvando…' : 'Salvar memória'}
               </button>
             </div>
           </div>

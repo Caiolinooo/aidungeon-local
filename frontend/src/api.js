@@ -16,11 +16,12 @@ import { clearToken, getToken } from './auth.js'
 export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, hint = '') {
     super(message)
     this.name = 'ApiError'
     this.status = status // 0 = backend fora do ar / falha de rede
     this.code = code
+    this.hint = hint
   }
 }
 
@@ -52,12 +53,14 @@ function qs(params) {
 async function parseError(res) {
   let code = 'http_error'
   let message = `Request failed (${res.status})`
+  let hint = ''
   try {
     const data = await res.json()
     if (data?.error?.code) code = data.error.code
     if (data?.error?.message) message = data.error.message
+    if (data?.error?.hint) hint = data.error.hint
   } catch { /* resposta não-JSON: mantém mensagem padrão */ }
-  return new ApiError(res.status, code, message)
+  return new ApiError(res.status, code, message, hint)
 }
 
 async function request(path, { method = 'GET', body, signal, headers } = {}) {
@@ -156,6 +159,8 @@ export const api = {
   listAdventures: () => request('/adventures'),
   getAdventure: (id) => request(`/adventures/${id}`),
   createAdventure: (payload) => request('/adventures', { method: 'POST', body: payload }),
+  createAdventureFromDraft: (payload) =>
+    request('/adventures/from-draft', { method: 'POST', body: payload }),
   updateAdventure: (id, payload) => request(`/adventures/${id}`, { method: 'PATCH', body: payload }),
   // Compartilhamento + jogo por turno. POST/DELETE devolvem o mesmo dict de getSharing.
   getSharing: (id) => request(`/adventures/${id}/sharing`),

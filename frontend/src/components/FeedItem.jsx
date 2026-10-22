@@ -30,11 +30,12 @@ async function getNarratorVoice() {
 
 function playerLabel(type, actor) {
   const name = (actor || '').trim()
-  if (!name) return `You ${type}`
-  if (type === 'say') {
-    const pt = typeof navigator !== 'undefined' && /^pt\b/i.test(navigator.language || '')
-    return pt ? `${name} diz` : `${name} says`
+  if (!name) {
+    if (type === 'say') return 'Você diz'
+    if (type === 'story') return 'Narração'
+    return 'Você age'
   }
+  if (type === 'say') return `${name} diz`
   return name
 }
 
@@ -79,18 +80,18 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
       {isLatest && (
         <div className="mb-1.5 flex items-center gap-2">
           <span className="inline-flex items-center rounded bg-accent-pri px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-sm">
-            New
+            Novo
           </span>
         </div>
       )}
       <button
         onClick={() => onEdit(action)}
         disabled={disabled}
-        title="Edit action"
+        title="Editar ação"
         className="absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-40 max-sm:inline-flex sm:hidden sm:group-hover:inline-flex"
       >
         <Edit2 className="w-3 h-3" />
-        <span>Edit</span>
+        <span>Editar</span>
       </button>
 
       {!isPlayer && !isSee && <NarrateButton text={display} adventureId={adventureId} />}
@@ -109,7 +110,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
         </blockquote>
       ) : (
         <p
-          className={`whitespace-pre-wrap font-prose text-[1.05rem] leading-8 ${
+          className={`whitespace-pre-wrap font-prose ${
             type === 'story' ? 'italic text-secondary' : 'text-primary'
           }`}
         >
@@ -190,7 +191,7 @@ function NarrateButton({ text, adventureId = '' }) {
       audio.onended = () => audioDoneRef.current?.()
       audio.onerror = () => {
         audioDoneRef.current = null
-        reject(new Error('Could not play narration audio.'))
+        reject(new Error('Não foi possível reproduzir a narração.'))
       }
       audio.play().catch((err) => {
         audioDoneRef.current = null
@@ -260,8 +261,8 @@ function NarrateButton({ text, adventureId = '' }) {
   return (
     <button
       onClick={state === 'idle' ? play : stop}
-      title={state === 'idle' ? 'Narrate (text-to-speech)' : 'Stop narration'}
-      aria-label={state === 'idle' ? 'Narrate text-to-speech' : 'Stop narration'}
+      title={state === 'idle' ? 'Narrar em voz alta' : 'Parar narração'}
+      aria-label={state === 'idle' ? 'Narrar em voz alta' : 'Parar narração'}
       className={`absolute right-16 top-2 flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition ${
         state === 'playing'
           ? 'inline-flex border-amber-500/50 bg-amber-500/15 text-amber-300'
@@ -311,7 +312,7 @@ function SeeImageCard({ action }) {
   const [objUrl, setObjUrl] = useState(null)
   const [failed, setFailed] = useState(false)
   const [fullOpen, setFullOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopiado] = useState(false)
   const [concealed, setConcealed] = useState(false)
   const holderRef = useRef(null)
 
@@ -376,11 +377,11 @@ function SeeImageCard({ action }) {
     if (!rawPrompt) return
     try {
       await navigator.clipboard.writeText(rawPrompt)
-      setCopied(true)
-      toast('Image prompt copied to clipboard.', 'ok')
-      setTimeout(() => setCopied(false), 2000)
+      setCopiado(true)
+      toast('Prompt da imagem copiado.', 'ok')
+      setTimeout(() => setCopiado(false), 2000)
     } catch {
-      toast('Could not copy prompt.')
+      toast('Não foi possível copiar o prompt.')
     }
   }
 
@@ -394,14 +395,14 @@ function SeeImageCard({ action }) {
             <button
               type="button"
               onClick={() => objUrl && setFullOpen(true)}
-              title={objUrl ? 'Open full size' : undefined}
+              title={objUrl ? 'Abrir em tamanho cheio' : undefined}
               className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
             >
               {objUrl ? (
-                <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
+                <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
               ) : (
                 <div className="flex h-48 items-center justify-center text-sm text-muted">
-                  {failed || !image?.id ? 'Could not load the image.' : 'Loading scene illustration…'}
+                  {failed || !image?.id ? 'Não foi possível carregar a imagem.' : 'Carregando a ilustração…'}
                 </div>
               )}
             </button>
@@ -430,7 +431,7 @@ function SeeImageCard({ action }) {
               onClick={copyPrompt}
               className="rounded-md border border-subtle bg-elevated px-2 py-1 text-[10px] font-medium text-secondary hover:text-primary transition"
             >
-              {copied ? 'Copied' : 'Copy prompt'}
+              {copied ? 'Copiado' : 'Copiar prompt'}
             </button>
           )}
           {objUrl && (
@@ -446,12 +447,12 @@ function SeeImageCard({ action }) {
       </div>
 
       {fullOpen && objUrl && (
-        <Modal title="See — Scene Illustration" onClose={() => setFullOpen(false)} wide>
+        <Modal title="Ver — ilustração da cena" onClose={() => setFullOpen(false)} wide>
           {concealed ? (
             <HiddenImageNotice onShow={() => setConcealed(false)} tall />
           ) : (
             <div className="relative">
-              <img src={objUrl} alt={displayCaption || 'Scene illustration'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+              <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
               <button
                 type="button"
                 onClick={() => setConcealed(true)}
@@ -471,7 +472,7 @@ function SeeImageCard({ action }) {
                 onClick={copyPrompt}
                 className="shrink-0 rounded-lg border border-subtle bg-surface px-2.5 py-1 text-xs font-medium text-primary hover:bg-elevated"
               >
-                {copied ? 'Copied' : 'Copy prompt'}
+                {copied ? 'Copiado' : 'Copiar prompt'}
               </button>
             </div>
           )}

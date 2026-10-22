@@ -12,11 +12,12 @@ from __future__ import annotations
 class GameError(Exception):
     """Erro de domínio com status HTTP e código estável."""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, hint: str | None = None):
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.hint = hint or ""
 
     # --- atalhos semânticos -------------------------------------------------
     @classmethod

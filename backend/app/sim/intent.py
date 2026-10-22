@@ -22,7 +22,7 @@ _ADV = ("adv", "dis", "")
 
 _SYSTEM = """Classifique a ação do jogador em JSON estrito, sem markdown e sem texto fora do objeto.
 Chaves obrigatórias:
-{"kind":"attack|skill|save|use_item|buy|take|rest|none","ability":"str|dex|con|int|wis|cha|","skill":"","target":"","toughness":"weak|normal|tough|boss","hostile":false,"weapon":"","item":"","gold":0,"difficulty":"trivial|easy|medium|hard|very_hard","advantage":"adv|dis|","minutes":5,"activity":"eat|sleep|rest|wash|social|fun|work|bladder|other","shock":"none|minor|major|severe","heal":false}
+{"kind":"attack|skill|save|use_item|buy|take|rest|none","ability":"str|dex|con|int|wis|cha|","skill":"","target":"","toughness":"weak|normal|tough|boss","hostile":false,"weapon":"","item":"","gold":0,"difficulty":"trivial|easy|medium|hard|very_hard","advantage":"adv|dis|","minutes":30,"activity":"eat|sleep|rest|wash|social|fun|work|bladder|other","shock":"none|minor|major|severe","heal":false}
 Regras:
 - kind "none" para fala, exploração sem risco ou ação sem resultado incerto.
 - minutes é o tempo realista da ação, inteiro de 1 a 720.
@@ -67,7 +67,7 @@ def normalize(raw: dict | None) -> dict:
     shock = data.get("shock") if data.get("shock") in SHOCKS else "none"
     hostile = data.get("hostile") is True
     heal = data.get("heal") is True
-    minutes = _as_int(data.get("minutes"), 5)
+    minutes = _as_int(data.get("minutes"), 30)
     minutes = max(1, min(720, minutes))
     gold = _as_int(data.get("gold"), 0)
     gold = max(0, min(100000, gold))

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { emotionForLine } from '../../ttsText.js'
 import { useToast } from '../Toast.jsx'
+import { useConfirm } from '../../confirm.jsx'
 import { CORE_STATS, roll4d6DropLowest } from '../../utils.js'
 
 const VOICES = ['', 'M1', 'M2', 'M3', 'F1', 'F2', 'F3']
@@ -154,17 +155,17 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
       <label className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Status</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Estado</span>
         <select
           value={sheet.status || ''}
           onChange={(e) => set('status', e.target.value)}
           className={inputCls}
         >
-          <option value="">unknown</option>
-          <option value="alive">alive</option>
-          <option value="injured">injured</option>
-          <option value="missing">missing</option>
-          <option value="dead">dead</option>
+          <option value="">desconhecido</option>
+          <option value="alive">vivo</option>
+          <option value="injured">ferido</option>
+          <option value="missing">desaparecido</option>
+          <option value="dead">morto</option>
         </select>
       </label>
       {SHEET_FIELDS.map((key) => (
@@ -249,7 +250,7 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
         <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
           Bonds
         </span>
-        <p className="text-[10px] text-zinc-600">Updated each turn from what you do.</p>
+        <p className="text-[10px] text-zinc-600">Atualizado a cada turno, a partir do que você faz.</p>
         <div className="mt-1 grid grid-cols-1 gap-1">
           {BOND_KEYS.map((key) => (
             <label key={key} className="flex min-w-0 items-center gap-2">
@@ -395,7 +396,7 @@ function NpcRow({
               value={form.portrait_prompt}
               onChange={(e) => setForm({ ...form, portrait_prompt: e.target.value })}
               rows={2}
-              placeholder="leave empty and the AI writes one from the description"
+              placeholder="deixe vazio e a IA escreve um a partir da descrição"
               className={`${inputCls} resize-y`}
             />
           </label>
@@ -468,8 +469,8 @@ function NpcRow({
           onChange={(e) => setPhotoMode(e.target.value)}
           className="max-w-full min-w-0 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none focus:border-emerald-600"
         >
-          <option value="reference">Reference (fictional NPC)</option>
-          <option value="real_person">Real person</option>
+          <option value="reference">Referência (NPC fictício)</option>
+          <option value="real_person">Pessoa real</option>
         </select>
         <button
           type="button"
@@ -496,7 +497,7 @@ function NpcRow({
           type="button"
           disabled={!referencePath}
           onClick={() => onPortraitFromPhoto?.(card)}
-          title={referencePath ? 'Generate a new portrait from the uploaded photo' : 'Upload a photo first'}
+          title={referencePath ? 'Gerar um retrato novo a partir da foto enviada' : 'Upload a photo first'}
           className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-40"
         >
           New image from photo
@@ -508,12 +509,12 @@ function NpcRow({
           disabled={!dirty || saving}
           className="rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Salvando…' : 'Save'}
         </button>
         <button
           onClick={() => onEnrich(card)}
           disabled={enriching || regenerating}
-          title="AI fills the character sheet and a detailed portrait prompt from the description"
+          title="A IA preenche a ficha e um prompt detalhado de retrato a partir da descrição"
           className="rounded-md border border-emerald-800 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
         >
           {enriching ? 'Enriching…' : '✨ Enrich'}
@@ -529,7 +530,7 @@ function NpcRow({
         <button
           onClick={() => onRegenerate(card)}
           disabled={!!job && (job.status === 'pending' || job.status === 'running')}
-          title="New picture of this NPC, starting from the saved face"
+          title="Nova imagem deste NPC, a partir do rosto salvo"
           className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
         >
           Regenerate portrait
@@ -538,7 +539,7 @@ function NpcRow({
           onClick={() => onDelete(card)}
           className="rounded-md border border-red-900 px-2 py-1 text-xs text-red-400 hover:bg-red-950"
         >
-          Delete
+          Apagar
         </button>
       </div>
     </li>
@@ -549,6 +550,9 @@ function NpcRow({
 // gerados pela fila assíncrona de jobs (v0.3.0).
 export default function NpcsTab({ adventure }) {
   const toast = useToast()
+  const { ask, bar } = useConfirm()
+  const [npcName, setNpcName] = useState('')
+  const [namingNpc, setNamingNpc] = useState(false)
   const [cards, setCards] = useState(null)
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
@@ -635,11 +639,12 @@ export default function NpcsTab({ adventure }) {
     return best
   }
 
-  const addNpc = async () => {
-    const name = window.prompt('NPC name?')
-    if (name === null) return
+  const addNpc = async (name) => {
+    const title = String(name || '').trim()
+    if (!title) return
+    setNamingNpc(false)
     try {
-      await api.createCard(adventure.id, { ...EMPTY_CARD, title: name })
+      await api.createCard(adventure.id, { ...EMPTY_CARD, title })
       toast('NPC created.', 'ok')
       reload()
     } catch (e) {
@@ -723,12 +728,12 @@ export default function NpcsTab({ adventure }) {
   }
 
   const regenerateAll = async (card) => {
-    if (!window.confirm('Regenerate all character fields? This overwrites the current values.')) return
+    if (!ask(`regen-all-${card.id}`, 'Regenerar todos os campos deste personagem? Os valores atuais são substituídos.')) return
     setRegeneratingId(card.id)
     try {
       const data = await api.regenerateCard(adventure.id, card.id, { scope: 'all', overwrite: true })
       applyRegenerated(card.id, data)
-      toast('Character fields regenerated.', 'ok')
+      toast('Campos do personagem regenerados.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -767,7 +772,7 @@ export default function NpcsTab({ adventure }) {
   }
 
   const deletePortrait = async (card) => {
-    if (!window.confirm('Delete this portrait?')) return
+    if (!ask(`portrait-${card.id}`, 'Apagar este retrato?')) return
     try {
       await api.deletePortrait(adventure.id, card.id)
       toast('Portrait deleted.', 'ok')
@@ -788,7 +793,7 @@ export default function NpcsTab({ adventure }) {
   }
 
   const remove = async (card) => {
-    if (!window.confirm(`Delete NPC "${card.title || 'Untitled'}"?`)) return
+    if (!ask(`npc-${card.id}`, `Apagar o NPC "${card.title || 'Sem título'}"?`)) return
     try {
       await api.deleteCard(adventure.id, card.id)
       toast('NPC deleted.', 'ok')
@@ -802,20 +807,35 @@ export default function NpcsTab({ adventure }) {
     setDismissed((s) => new Set([...s, jobId]))
   }
 
-  if (cards === null) return <p className="text-sm text-zinc-500">Loading…</p>
+  if (cards === null) return <p className="text-sm text-zinc-500">Carregando…</p>
 
   return (
     <div>
+      {bar}
+      {namingNpc && (
+        <div className="mb-2 flex flex-col gap-1">
+          <input
+            value={npcName}
+            onChange={(e) => setNpcName(e.target.value)}
+            placeholder="Nome do NPC"
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-emerald-600"
+          />
+          <div className="flex gap-2">
+            <button type="button" className="text-xs underline" onClick={() => addNpc(npcName)}>Confirmar</button>
+            <button type="button" className="text-xs underline" onClick={() => setNamingNpc(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
           NPCs ({npcs.length})
         </h3>
         <div className="flex gap-1">
           <button
-            onClick={addNpc}
+            onClick={() => { setNpcName(''); setNamingNpc(true) }}
             className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-600"
           >
-            + Add NPC
+            + Adicionar NPC
           </button>
           <button
             onClick={simulateDay}
@@ -839,7 +859,7 @@ export default function NpcsTab({ adventure }) {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search NPCs by name or description…"
+          placeholder="Buscar NPCs por nome ou descrição…"
           className="w-full rounded-xl border border-subtle bg-surface px-3 py-1.5 text-xs text-primary placeholder-muted outline-none focus:border-accent-pri transition"
         />
       </div>
@@ -847,7 +867,7 @@ export default function NpcsTab({ adventure }) {
 
       {npcs.length === 0 && (
         <p className="rounded-lg border border-dashed border-zinc-700 p-4 text-sm text-zinc-500">
-          No NPCs yet. NPCs are story cards of type "character" — add one and
+          No NPCs yet. NPCs are fichas of type "character" — add one and
           generate its portrait.
         </p>
       )}
@@ -882,7 +902,7 @@ export default function NpcsTab({ adventure }) {
                   <button
                     onClick={() => dismissError(job.id)}
                     className="shrink-0 text-zinc-400 hover:text-zinc-100"
-                    aria-label="Dismiss"
+                    aria-label="Dispensar"
                   >
                     ✕
                   </button>

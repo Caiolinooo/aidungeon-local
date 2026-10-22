@@ -57,7 +57,7 @@ export default function Modal({
                   <Minus className="h-5 w-5" aria-hidden="true" />
                 </button>
               )}
-              <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-100" aria-label="Close">
+              <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-100" aria-label="Fechar">
                 ✕
               </button>
             </div>

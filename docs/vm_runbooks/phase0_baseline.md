@@ -191,3 +191,13 @@ When live data is captured, fill in and commit this table into `docs/vm_runbooks
 - **Generation Time**: [e.g. 14.8 s]
 - **Peak VRAM Surge**: [e.g. +4,300 MiB]
 ```
+
+## Pendência: modelo do LLM
+
+A troca do modelo fica fora do plano de interface e de peso de jogo. O registro abaixo é o estado verificado, para quando a troca for feita.
+
+- Estado verificado em 2026-10-21: `GET http://vm.groupabz.com:1234/v1/models` responde 200 sem autenticação e devolve `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf`, `ftype "IQ2_M - 2.7 bpw"`, `n_ctx 262144`, `n_params 34660610888`.
+- Consequência: quantização de 2 bits + fine-tune de RP degradam a aderência a JSON e a qualidade narrativa — é a causa primária de "a IA é imprecisa".
+- O backend não lê `config/models.json`; o modelo efetivo vem de `llm.model_alias` (`"auto"`) → `GET {base_url}/models` (`backend/app/llm_client.py:261-275`).
+- O `POST /v1/chat/completions` do servidor exige `LLM_API_KEY` (401 "Invalid API Key" sem ela); a chave vive no `.env` da VM (`deploy/vm/aidungeon-backend.service`, `.env.example`).
+- Recomendação para quando a troca for feita: modelo de instrução com ≥ 14B em Q4_K_M ou melhor, com `response_format`/`grammar` JSON habilitado no llama-server (o `llm_client.chat_completion` ainda não envia `response_format` — `backend/app/llm_client.py:855-899`).

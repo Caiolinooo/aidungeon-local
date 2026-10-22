@@ -35,7 +35,8 @@ Given the recent scene, output STRICT JSON: an array of exactly {count} options,
 - "do": a physical action ("draw your sword")
 - "say": something to speak ("ask the innkeeper about the missing caravan")
 - "story": a narrative beat the player injects ("a storm rolls in")
-Texts in English, concise (under 120 chars), varied.
+Write every option in the same language as the scene excerpt. Keep each text concise (under 120 chars) and varied.
+The three options must differ in risk: one safe, one bold, one that carries a real cost or consequence. Never offer an action the Facts block says is impossible.
 Do not suggest a place, an item, or NPC compliance that the Facts block says is missing.
 A do or say is an attempt. Prefer what a person in this place would actually accept.
 Use the character block to make each option specific to who is present.

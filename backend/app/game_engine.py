@@ -348,6 +348,51 @@ def _apply_action_check(built, text: str, type_: str, state: dict | None,
     return verdict
 
 
+def _correct_narration(text: str, *, player_text: str, retry_of, built,
+                       llm_cfg: dict, sampler: dict, transport,
+                       out_script: str | None) -> tuple[str, list[str]]:
+    """Um retry silencioso quando a prosa viola as regras. Empate fica com a segunda."""
+    expected = "pt" if output_sanitizer.looks_portuguese(player_text) else ""
+    flags = output_sanitizer.quality_flags(text, expected_language=expected)
+    if not flags or retry_of is not None:
+        return text, flags
+    log.info("narrator quality flags %s — one corrective retry", flags)
+    retry_messages = [dict(message) for message in built.messages]
+    note = (
+        "Your previous attempt broke these rules: "
+        + ", ".join(flags)
+        + ". Rewrite the same beat, obeying them."
+    )
+    if retry_messages:
+        last = retry_messages[-1]
+        retry_messages[-1] = {
+            "role": last["role"],
+            "content": (last.get("content") or "") + "\n" + note,
+        }
+    retry_sampler = dict(sampler)
+    retry_sampler["temperature"] = round(
+        min(1.0, float(sampler.get("temperature", 0.85)) + 0.1), 4)
+    parts: list[str] = []
+    try:
+        for token in llm_client.stream_chat_completion(
+                llm_cfg, retry_messages, sampler=retry_sampler,
+                stop=built.stop_sequences, transport=transport):
+            parts.append(token)
+    except llm_client.LlmError:
+        log.warning("corrective retry failed; keeping the first narration")
+        return text, flags
+    alt = output_sanitizer.clean_narration("".join(parts), False)
+    alt = npc_bonds.strip_leaked(alt)
+    if out_script:
+        alt = scripting.run_output_modifier(out_script, alt)
+    if not alt.strip():
+        return text, flags
+    alt_flags = output_sanitizer.quality_flags(alt, expected_language=expected)
+    if len(alt_flags) <= len(flags):
+        return alt, alt_flags
+    return text, flags
+
+
 def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        retry_of: dict | None,
                        retry_count: int = 0,
@@ -475,6 +520,12 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             out_script = scripting.get_adventure_script(adventure_id, "output_modifier")
             if out_script:
                 text = scripting.run_output_modifier(out_script, text)
+            player_text = (player_action or {}).get("text") or raw_query_text or ""
+            text, quality = _correct_narration(
+                text, player_text=player_text, retry_of=retry_of, built=built,
+                llm_cfg=llm_cfg, sampler=sampler, transport=transport,
+                out_script=out_script,
+            )
             if not text.strip():
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.
@@ -492,6 +543,13 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     db.touch_adventure(conn, adventure_id)
                 else:
                     action = append_action(conn, adventure_id, "continue", text)
+                if quality:
+                    db.merge_action_rules(conn, action["id"], {"quality_flags": quality})
+                    action["quality_flags"] = quality
+                    if player_action is not None:
+                        db.merge_action_rules(
+                            conn, player_action["id"], {"quality_flags": quality})
+                        player_action["quality_flags"] = quality
                 _publish_live(adventure_id, "action", action)
                 # Pesos no mesmo commit da prosa: o turno seguinte já lê
                 # os números novos. Falha aqui não apaga a narração.

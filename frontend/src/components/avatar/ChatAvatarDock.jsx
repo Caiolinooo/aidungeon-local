@@ -75,7 +75,7 @@ function DockAvatar({ card, avatarRef }) {
         )}
       </div>
       <span className="max-w-full truncate text-[10px] font-semibold text-primary" title={card.title}>
-        {card.title || 'Untitled'}
+        {card.title || 'Sem título'}
       </span>
       {marked && (
         <span className="text-[9px] uppercase tracking-wide text-red-400">{status}</span>
@@ -133,7 +133,7 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
     <div className="absolute bottom-2 left-2 right-2 z-20 flex flex-row items-end gap-1 sm:bottom-auto sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end">
       <button
         onClick={() => setCollapsed((c) => !c)}
-        title={collapsed ? 'Show NPC avatars' : 'Hide NPC avatars'}
+        title={collapsed ? 'Mostrar avatares dos NPCs' : 'Esconder avatares dos NPCs'}
         className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
       >
         {collapsed ? `NPCs (${present.length})` : 'Hide'}

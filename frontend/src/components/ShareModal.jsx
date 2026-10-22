@@ -12,7 +12,7 @@ const SHARE_ERRORS = {
 function shareErrorText(e) {
   const fallback = SHARE_ERRORS[e?.code]
   const msg = e?.message || ''
-  if (fallback && (!msg || msg === e.code || msg.startsWith('Request failed'))) return fallback
+  if (fallback && (!msg || msg === e.code || msg.startsWith('A requisição falhou'))) return fallback
   return msg || fallback || 'Não foi possível compartilhar'
 }
 

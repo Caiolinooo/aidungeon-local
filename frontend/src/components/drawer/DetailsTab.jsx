@@ -54,7 +54,7 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
   const rows = [
     ['Source', adventure.source === 'import' ? 'Imported backup' : 'New'],
     ['Actions', adventure.actions?.length ?? '—'],
-    ['Story cards', adventure.story_cards?.length ?? '—'],
+    ['Fichas', adventure.story_cards?.length ?? '—'],
     ['Memories', adventure.memories?.length ?? '—'],
     ['Third person', adventure.third_person ? 'Yes' : 'No (2nd person)'],
     ['Created', fmtDate(adventure.created_at)],
@@ -134,7 +134,7 @@ export default function DetailsTab({ adventure, onAdventureChange }) {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Title</span>
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Título</span>
         <p className="text-lg font-semibold text-zinc-100">{adventure.title}</p>
       </div>
 

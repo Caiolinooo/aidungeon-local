@@ -55,7 +55,11 @@ def post_assistant_scenario(body: AssistantScenarioRequest,
             web_search_mode=body.web_search_mode,
         )
     except llm_client.LlmError as exc:
-        raise GameError(503, exc.code, exc.message) from exc
+        err = GameError(503, exc.code, exc.message)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            err.hint = hint
+        raise err from exc
 
 
 @router.post("/assistant/generate")
@@ -88,7 +92,11 @@ def post_assistant_generate(body: AssistantGenerateRequest,
             draft = assistant.deepen_characters(llm_cfg, draft, transport)
         return draft
     except llm_client.LlmError as exc:
-        raise GameError(503, exc.code, exc.message) from exc
+        err = GameError(503, exc.code, exc.message)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            err.hint = hint
+        raise err from exc
 
 
 @router.post("/assistant/field")
@@ -109,7 +117,11 @@ def post_assistant_field(body: AssistantFieldRequest,
             transport=transport,
         )
     except llm_client.LlmError as exc:
-        raise GameError(503, exc.code, exc.message) from exc
+        err = GameError(503, exc.code, exc.message)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            err.hint = hint
+        raise err from exc
 
 
 @router.post("/assistant/card")
@@ -149,7 +161,11 @@ def post_assistant_card(body: AssistantCardRequest, request: Request,
             transport=transport,
         )
     except llm_client.LlmError as exc:
-        raise GameError(503, exc.code, exc.message) from exc
+        err = GameError(503, exc.code, exc.message)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            err.hint = hint
+        raise err from exc
 
 
 @router.post("/assistant/sync-plot")
@@ -173,7 +189,11 @@ def post_assistant_sync_plot(body: AssistantSyncPlotRequest, request: Request,
             transport=transport,
         )
     except llm_client.LlmError as exc:
-        raise GameError(503, exc.code, exc.message) from exc
+        err = GameError(503, exc.code, exc.message)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            err.hint = hint
+        raise err from exc
 
 
 @router.post("/assistant/web-search")

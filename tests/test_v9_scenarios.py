@@ -84,3 +84,12 @@ def test_delete_scenario_unlinks_adventure(client):
     assert body["title"] == "Harbor Draft"
     assert body["actions"][0]["type"] == "start"
     assert body["actions"][0]["text"] == "The tide is out."
+
+
+def test_create_scenario_requires_auth(tmp_db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as raw:
+        res = raw.post("/api/scenarios", json=_scenario_body())
+    assert res.status_code == 401

@@ -59,7 +59,7 @@ export default function OfflineBanner() {
       className="bg-amber-500/90 text-zinc-950 px-4 py-2 text-xs font-semibold flex items-center justify-center gap-2 shadow-md relative z-50 backdrop-blur"
     >
       {isOffline ? <WifiOff className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
-      <span>Backend unreachable — running in offline mode. Changes cannot be synchronized.</span>
+      <span>Servidor fora do ar — modo offline. As mudanças não são sincronizadas.</span>
     </div>
   );
 }

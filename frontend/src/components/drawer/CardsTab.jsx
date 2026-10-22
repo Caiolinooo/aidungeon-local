@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useMemo } from 'react'
+import { useConfirm } from '../../confirm.jsx'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
 import Modal from '../Modal.jsx'
@@ -39,7 +40,7 @@ const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
 const STATUS_STYLE = {
   dead: 'bg-red-950/80 text-red-300 border border-red-800',
   missing: 'bg-amber-950/80 text-amber-200 border border-amber-800',
-  injured: 'bg-orange-950/80 text-orange-200 border border-orange-800',
+  injured: 'bg-warn-950/80 text-warn-200 border border-warn-800',
   alive: 'bg-emerald-950/80 text-emerald-300 border border-emerald-800',
 }
 
@@ -74,6 +75,9 @@ export default function CardsTab({ adventure }) {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkType, setBulkType] = useState('concept')
   const [bulkLoading, setBulkLoading] = useState(false)
+  const [aiBox, setAiBox] = useState('')
+  const [aiText, setAiText] = useState('')
+  const { ask, bar } = useConfirm()
 
   const reload = useCallback(async () => {
     try {
@@ -146,7 +150,7 @@ export default function CardsTab({ adventure }) {
   const handleBulkDelete = async () => {
     const count = selectedIds.size
     if (!count) return
-    if (!window.confirm(`Delete ${count} selected story card${count > 1 ? 's' : ''}? This cannot be undone.`)) return
+    if (!ask('bulk-delete', `Apagar ${count} ficha${count > 1 ? 's' : ''} selecionada${count > 1 ? 's' : ''}? Isso não volta.`)) return
     setBulkLoading(true)
     try {
       await api.bulkCards(adventure.id, {
@@ -244,7 +248,7 @@ export default function CardsTab({ adventure }) {
       if (editing === 'new') await api.createCard(adventure.id, payload)
       else await api.updateCard(adventure.id, editing.id, payload)
       setEditing(null)
-      toast('Story card saved.', 'ok')
+      toast('Ficha salva.', 'ok')
       reload()
     } catch (e) {
       toast(e.message)
@@ -253,9 +257,8 @@ export default function CardsTab({ adventure }) {
     }
   }
 
-  const enrichWithAi = async () => {
-    const instruction = window.prompt('Instruction (optional)')
-    if (instruction === null) return
+  const enrichWithAi = async (instruction = '') => {
+    setAiBox('')
     setEnriching(true)
     try {
       const r = await api.assistantCard({
@@ -263,13 +266,13 @@ export default function CardsTab({ adventure }) {
         card_type: form.type,
         adventure_id: adventure.id,
         current_card: form,
-        instruction: instruction.trim() || undefined,
+        instruction: String(instruction || '').trim() || undefined,
         web_search: webOn,
         language: draftLanguage(),
       })
       const card = r?.card
       if (!card) {
-        toast('AI returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       setForm((prev) => ({
@@ -281,8 +284,8 @@ export default function CardsTab({ adventure }) {
         ...(card.sheet && typeof card.sheet === 'object' ? { sheet: card.sheet } : {}),
         ...(card.portrait_prompt ? { portrait_prompt: card.portrait_prompt } : {}),
       }))
-      if (r.web_sources?.length) toast(`Enriched with ${r.web_sources.length} web sources.`, 'ok')
-      else toast('Card enriched. Review and save.', 'ok')
+      if (r.web_sources?.length) toast(`Enriquecido com ${r.web_sources.length} fontes da web.`, 'ok')
+      else toast('Ficha enriquecida. Revise e salve.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -290,12 +293,11 @@ export default function CardsTab({ adventure }) {
     }
   }
 
-  const createWithAi = async () => {
-    const concept = window.prompt('Card name or concept')
-    if (concept === null) return
-    const name = concept.trim()
+  const createWithAi = async (concept = '') => {
+    setAiBox('')
+    const name = String(concept || '').trim()
     if (!name) {
-      toast('Card name or concept is required.')
+      toast('O nome ou o conceito da ficha é obrigatório.')
       return
     }
     setAiCreating(true)
@@ -308,14 +310,14 @@ export default function CardsTab({ adventure }) {
         language: draftLanguage(),
       })
       if (!r?.card) {
-        toast('AI returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       const card = { ...r.card }
       delete card.web_sources
       await api.createCard(adventure.id, card)
-      if (r.web_sources?.length) toast(`Enriched with ${r.web_sources.length} web sources.`, 'ok')
-      else toast('Story card created.', 'ok')
+      if (r.web_sources?.length) toast(`Enriquecido com ${r.web_sources.length} fontes da web.`, 'ok')
+      else toast('Ficha criada.', 'ok')
       reload()
     } catch (e) {
       toast(e.message)
@@ -325,43 +327,58 @@ export default function CardsTab({ adventure }) {
   }
 
   const remove = async (card) => {
-    if (!window.confirm(`Delete story card "${card.title || 'Untitled'}"?`)) return
+    if (!ask(`delete-${card.id}`, `Apagar a ficha "${card.title || 'Sem título'}"?`)) return
     try {
       await api.deleteCard(adventure.id, card.id)
-      toast('Story card deleted.', 'ok')
+      toast('Ficha apagada.', 'ok')
       reload()
     } catch (e) {
       toast(e.message)
     }
   }
 
-  if (cards === null) return <p className="text-sm text-muted">Loading cards…</p>
+  if (cards === null) return <p className="text-sm text-muted">Carregando fichas…</p>
 
   const isAllSelected = filteredCards.length > 0 && selectedIds.size === filteredCards.length
 
   return (
     <div className="space-y-4">
+      {bar}
+      {aiBox === 'new' && (
+        <div className="flex flex-col gap-1">
+          <input
+            value={aiText}
+            onChange={(e) => setAiText(e.target.value)}
+            placeholder="Nome ou conceito da ficha"
+            className="w-full rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-primary outline-none focus:border-accent-pri"
+          />
+          <div className="flex gap-2">
+            <button type="button" className="text-xs underline" onClick={() => createWithAi(aiText)}>Confirmar</button>
+            <button type="button" className="text-xs underline" onClick={() => setAiBox('')}>Cancelar</button>
+          </div>
+        </div>
+      )}
       {/* Top Header */}
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-          Story Cards ({cards.length})
+          Fichas ({cards.length})
         </h3>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={createWithAi}
+            onClick={() => { setAiText(''); setAiBox('new') }}
             disabled={aiCreating}
             className="flex items-center gap-1.5 rounded-lg border border-subtle bg-surface px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${aiCreating ? 'animate-spin' : 'hidden'}`} />
-            <span>{aiCreating ? 'Creating…' : '🌐 AI Card'}</span>
+            <span>{aiCreating ? 'Criando…' : '🌐 Ficha com IA'}</span>
           </button>
           <button
             onClick={() => openEditor(null)}
             className="flex items-center gap-1.5 rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-accent-hov transition"
           >
             <Plus className="w-4 h-4" />
-            <span>New Card</span>
+            <span>Nova ficha</span>
           </button>
         </div>
       </div>
@@ -373,7 +390,7 @@ export default function CardsTab({ adventure }) {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search cards by name, entry, triggers…"
+          placeholder="Buscar fichas por nome, texto ou gatilhos…"
           className="w-full rounded-xl border border-subtle bg-surface pl-9 pr-8 py-2 text-xs text-primary placeholder-muted outline-none focus:border-accent-pri transition"
         />
         {searchQuery && (
@@ -411,13 +428,13 @@ export default function CardsTab({ adventure }) {
           }`}
         >
           <Pin className="w-3 h-3" />
-          <span>Pinned</span>
+          <span>Fixadas</span>
         </button>
       </div>
 
       {/* Bulk Action Toolbar */}
       {selectedIds.size > 0 && (
-        <div className="rounded-xl border border-accent-pri/50 bg-elevated p-3 shadow-md animate-in slide-in-from-top-2">
+        <div className="rounded-xl border border-accent-pri/50 bg-elevated p-3 shadow-md animate-slide-in-top">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-primary">
@@ -427,7 +444,7 @@ export default function CardsTab({ adventure }) {
                 onClick={toggleSelectAll}
                 className="text-[11px] text-accent-pri hover:underline"
               >
-                {isAllSelected ? 'Deselect all' : 'Select all'}
+                {isAllSelected ? 'Deselect all' : 'Selecionar todas'}
               </button>
             </div>
 
@@ -435,21 +452,21 @@ export default function CardsTab({ adventure }) {
               <button
                 onClick={() => handleBulkPin(true)}
                 disabled={bulkLoading}
-                title="Pin selected cards"
+                title="Fixar fichas selecionadas"
                 className="flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
               >
                 <Pin className="w-3.5 h-3.5 text-amber-500" />
-                <span>Pin</span>
+                <span>Fixar</span>
               </button>
 
               <button
                 onClick={() => handleBulkPin(false)}
                 disabled={bulkLoading}
-                title="Unpin selected cards"
+                title="Desafixar fichas selecionadas"
                 className="flex items-center gap-1 rounded-lg border border-subtle bg-surface px-2.5 py-1 text-xs text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
               >
                 <PinOff className="w-3.5 h-3.5 text-muted" />
-                <span>Unpin</span>
+                <span>Desafixar</span>
               </button>
 
               {/* Retype Dropdown */}
@@ -477,11 +494,11 @@ export default function CardsTab({ adventure }) {
               <button
                 onClick={handleBulkDelete}
                 disabled={bulkLoading}
-                title="Delete selected cards"
+                title="Apagar fichas selecionadas"
                 className="flex items-center gap-1 rounded-lg border border-red-900/60 bg-red-950/40 px-2.5 py-1 text-xs text-red-400 hover:bg-red-900/60 transition disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
+                <span>Apagar</span>
               </button>
             </div>
           </div>
@@ -492,10 +509,10 @@ export default function CardsTab({ adventure }) {
       {filteredCards.length === 0 && (
         <div className="rounded-xl border border-dashed border-subtle p-6 text-center text-xs text-muted">
           {searchQuery || typeFilter !== 'all' || pinnedOnly ? (
-            <p>No cards match the active search or filters.</p>
+            <p>Nenhuma ficha corresponde à busca ou aos filtros.</p>
           ) : (
             <p>
-              No story cards yet. Characters, locations, and lore encountered in your adventure will be saved here.
+              No fichas yet. Characters, locations, and lore encountered in your adventure will be saved here.
             </p>
           )}
         </div>
@@ -524,7 +541,7 @@ export default function CardsTab({ adventure }) {
                 <button
                   type="button"
                   onClick={() => toggleSelectCard(c.id)}
-                  aria-label={isSelected ? 'Deselect card' : 'Select card'}
+                  aria-label={isSelected ? 'Desmarcar ficha' : 'Marcar ficha'}
                   className="mt-0.5 text-secondary hover:text-accent-pri transition shrink-0"
                 >
                   {isSelected ? (
@@ -538,7 +555,7 @@ export default function CardsTab({ adventure }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-semibold text-primary text-sm">
-                      {c.title || 'Untitled'}
+                      {c.title || 'Sem título'}
                     </span>
                     {c.pinned && (
                       <span title="Pinned — always included in LLM context" className="text-amber-500">
@@ -584,14 +601,14 @@ export default function CardsTab({ adventure }) {
                 <div className="flex shrink-0 items-center gap-1">
                   <button
                     onClick={() => openEditor(c)}
-                    title="Edit card"
+                    title="Editar ficha"
                     className="rounded-lg border border-subtle p-1.5 text-secondary hover:text-primary hover:bg-elevated transition"
                   >
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => remove(c)}
-                    title="Delete card"
+                    title="Apagar ficha"
                     className="rounded-lg border border-red-900/60 p-1.5 text-red-400 hover:bg-red-950 transition"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -606,14 +623,14 @@ export default function CardsTab({ adventure }) {
       {/* Edit / Create Modal */}
       {editing && (
         <Modal
-          title={editing === 'new' ? 'New Story Card' : `Edit: ${editing.title || 'Untitled'}`}
+          title={editing === 'new' ? 'Nova ficha' : `Edit: ${editing.title || 'Sem título'}`}
           onClose={() => setEditing(null)}
           wide
         >
           <div className="flex flex-col gap-4 text-primary">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-                Title
+                Título
               </span>
               <input
                 value={form.title}
@@ -649,7 +666,7 @@ export default function CardsTab({ adventure }) {
                     onChange={(e) => setForm({ ...form, pinned: e.target.checked })}
                     className="accent-emerald-600 rounded"
                   />
-                  <span>Pinned (always in LLM context)</span>
+                  <span>Fixada (sempre no contexto da IA)</span>
                 </label>
                 <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                   <input
@@ -658,7 +675,7 @@ export default function CardsTab({ adventure }) {
                     onChange={(e) => setForm({ ...form, use_for_character_creation: e.target.checked })}
                     className="accent-emerald-600 rounded"
                   />
-                  <span>Use for character creation</span>
+                  <span>Usar na criação de personagem</span>
                 </label>
               </div>
             </div>
@@ -691,12 +708,12 @@ export default function CardsTab({ adventure }) {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={enrichWithAi}
+                  onClick={() => { setAiText(''); setAiBox(aiBox === 'enrich' ? '' : 'enrich') }}
                   disabled={enriching || saving}
                   className="flex items-center gap-1.5 rounded-xl border border-accent-pri/40 bg-accent-pri/20 px-3 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${enriching ? 'animate-spin' : 'hidden'}`} />
-                  <span>{enriching ? 'Enriching…' : '✨ Enrich with AI'}</span>
+                  <span>{enriching ? 'Enriching…' : '✨ Enriquecer com IA'}</span>
                 </button>
                 <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer">
                   <input
@@ -708,6 +725,17 @@ export default function CardsTab({ adventure }) {
                   />
                   <span>🌐 web</span>
                 </label>
+                {aiBox === 'enrich' && (
+                  <span className="flex items-center gap-1">
+                    <input
+                      value={aiText}
+                      onChange={(e) => setAiText(e.target.value)}
+                      placeholder="Instrução (opcional)"
+                      className="rounded-lg border border-subtle bg-surface px-2 py-1 text-xs text-primary outline-none focus:border-accent-pri"
+                    />
+                    <button type="button" className="text-xs underline" onClick={() => enrichWithAi(aiText)}>Confirmar</button>
+                  </span>
+                )}
               </div>
               <div className="flex gap-2">
                 <button
@@ -715,7 +743,7 @@ export default function CardsTab({ adventure }) {
                   onClick={() => setEditing(null)}
                   className="rounded-xl border border-subtle px-4 py-2 text-xs text-secondary hover:bg-elevated transition"
                 >
-                  Cancel
+                  Cancelar
                 </button>
                 <button
                   type="button"
@@ -723,7 +751,7 @@ export default function CardsTab({ adventure }) {
                   disabled={saving || enriching}
                   className="rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-50"
                 >
-                  {saving ? 'Saving…' : 'Save Card'}
+                  {saving ? 'Salvando…' : 'Salvar ficha'}
                 </button>
               </div>
             </div>

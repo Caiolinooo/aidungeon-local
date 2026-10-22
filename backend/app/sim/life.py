@@ -12,6 +12,15 @@ NEED_LABELS_LOW = {
     "diversao": "entediado",
     "bexiga": "apertado",
 }
+# ok ≥ 60, mid ≥ 25, low < 25. A faixa baixa reusa NEED_LABELS_LOW.
+NEED_BANDS = {
+    "fome": ("saciado", "com fome", "faminto"),
+    "energia": ("descansado", "cansado", "exausto"),
+    "higiene": ("limpo", "sujo", "imundo"),
+    "social": ("em companhia", "isolado", "sozinho"),
+    "diversao": ("entretido", "entediado", "aburrido"),
+    "bexiga": ("confortável", "apertado", "urgente"),
+}
 NEED_NAMES = {
     "fome": "fome",
     "energia": "energia",
@@ -365,17 +374,22 @@ def _relations(life: dict, npcs: dict, slice_min: int, chance: float, rng) -> No
                 per_day[key] = added + gain
 
 
+def _need_band(key: str, value: int) -> str:
+    ok, mid, _low = NEED_BANDS[key]
+    if value >= 60:
+        return ok
+    if value >= 25:
+        return mid
+    return NEED_LABELS_LOW[key]
+
+
 def _need_bits(needs: dict, only_low: bool = False) -> str:
     bits = []
     for key in NEEDS:
         value = int(needs.get(key, 0) or 0)
-        label = NEED_LABELS_LOW[key] if value < 25 else ""
-        if only_low and not label:
+        if only_low and value >= 25:
             continue
-        shown = f"{NEED_NAMES[key]} {value}"
-        if label:
-            shown += f" ({label})"
-        bits.append(shown)
+        bits.append(f"{NEED_NAMES[key]} {value} ({_need_band(key, value)})")
     return ", ".join(bits)
 
 

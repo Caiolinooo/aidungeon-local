@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import TagInput from '../components/TagInput.jsx'
 import StoryCardsEditor from '../components/StoryCardsEditor.jsx'
+import { useConfirm } from '../confirm.jsx'
 
 // Editor de Scenario.
 //  - /scenarios/new      → POST /api/scenarios
@@ -35,6 +36,9 @@ export default function ScenarioEditor() {
   const isEdit = !!id
   const toast = useToast()
   const navigate = useNavigate()
+  const { ask, bar } = useConfirm()
+  const [refineField, setRefineField] = useState(null)
+  const [refineText, setRefineText] = useState('')
 
   const [form, setForm] = useState(EMPTY)
   const [loading, setLoading] = useState(isEdit)
@@ -87,7 +91,7 @@ export default function ScenarioEditor() {
   const regenerateEverything = async () => {
     const brief = (form.description || form.title || '').trim()
     if (brief.length < 3) {
-      toast('Description needs at least 3 characters.')
+      toast('A descrição precisa de pelo menos 3 caracteres.')
       return
     }
     if (opRef.current) return
@@ -127,16 +131,14 @@ export default function ScenarioEditor() {
   }
 
   const noteWeb = (sources) => {
-    if (sources?.length) toast(`Enriched with ${sources.length} web sources.`, 'ok')
+    if (sources?.length) toast(`Enriquecido com ${sources.length} fontes da web.`, 'ok')
   }
 
-  const refine = async (field) => {
+  const refine = async (field, instruction = '') => {
     if (opRef.current) return
-    const typed = window.prompt('Refinement instruction (optional):')
-    if (typed === null || opRef.current) return
-    const instruction = typed.trim()
     opRef.current = true
     setRegen(field)
+    setRefineField(null)
     try {
       const current =
         field === 'tags' ? (form.tags ?? []).join(', ')
@@ -146,7 +148,7 @@ export default function ScenarioEditor() {
         field,
         current,
         draft: form,
-        instruction: instruction || undefined,
+        instruction: String(instruction || '').trim() || undefined,
         web_search: webOn,
         language: draftLanguage(),
       })
@@ -170,15 +172,14 @@ export default function ScenarioEditor() {
     }
   }
 
-  const enrichCard = async (index) => {
+  const enrichCard = async (index, instruction = '') => {
     if (opRef.current) return
     const card = (form.story_cards ?? [])[index]
     if (!card) return
-    const typed = window.prompt('Instruction for this card (optional)')
-    if (typed === null || opRef.current) return
+    setRefineField(null)
     const concept = String(card.title ?? '').trim()
     if (concept.length < 2) {
-      toast('Card title must be at least 2 characters before AI enrich.')
+      toast('O título da ficha precisa de pelo menos 2 caracteres antes de enriquecer.')
       return
     }
     opRef.current = true
@@ -189,12 +190,12 @@ export default function ScenarioEditor() {
         card_type: card.type || 'character',
         draft: form,
         current_card: card,
-        instruction: typed.trim() || undefined,
+        instruction: String(instruction || '').trim() || undefined,
         web_search: webOn,
         language: draftLanguage(),
       })
       if (!r?.card) {
-        toast('The assistant returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       setForm((f) => ({
@@ -210,13 +211,12 @@ export default function ScenarioEditor() {
     }
   }
 
-  const addCardWithAi = async () => {
+  const addCardWithAi = async (conceptText = '') => {
     if (opRef.current) return
-    const typed = window.prompt('Card name or concept')
-    if (typed === null || opRef.current) return
-    const concept = typed.trim()
+    setRefineField(null)
+    const concept = String(conceptText || '').trim()
     if (concept.length < 2) {
-      toast('Enter a card name or concept (min. 2 characters).')
+      toast('Digite um nome ou conceito (mínimo de 2 caracteres).')
       return
     }
     opRef.current = true
@@ -230,7 +230,7 @@ export default function ScenarioEditor() {
         language: draftLanguage(),
       })
       if (!r?.card) {
-        toast('The assistant returned no card.')
+        toast('A IA não devolveu a ficha.')
         return
       }
       setForm((f) => ({ ...f, story_cards: [...(f.story_cards ?? []), r.card] }))
@@ -245,7 +245,7 @@ export default function ScenarioEditor() {
 
   const save = async () => {
     if (!form.title.trim()) {
-      toast('Title is required.')
+      toast('O título é obrigatório.')
       return
     }
     if (opRef.current) return
@@ -271,7 +271,7 @@ export default function ScenarioEditor() {
 
   const duplicate = async () => {
     if (!form.title.trim()) {
-      toast('Title is required.')
+      toast('O título é obrigatório.')
       return
     }
     if (opRef.current) return
@@ -289,8 +289,8 @@ export default function ScenarioEditor() {
   }
 
   const remove = async () => {
-    const title = form.title.trim() || 'this scenario'
-    if (!window.confirm(`Delete scenario "${title}"? Adventures that started from it keep running.`)) return
+    const title = form.title.trim() || 'este cenário'
+    if (!ask('delete-scenario', `Apagar o cenário "${title}"? As aventuras que nasceram dele continuam.`)) return
     if (opRef.current) return
     opRef.current = true
     setPending('delete')
@@ -309,42 +309,70 @@ export default function ScenarioEditor() {
   const labelCls = 'text-xs font-semibold uppercase tracking-wide text-zinc-500'
   const hintCls = 'block text-xs text-zinc-600'
 
+  const openRefine = (field) => {
+    setRefineField(field)
+    setRefineText('')
+  }
+
+  const confirmRefine = () => {
+    if (!refineField) return
+    if (refineField === 'card-new') addCardWithAi(refineText)
+    else if (String(refineField).startsWith('card-')) enrichCard(Number(String(refineField).slice(5)), refineText)
+    else refine(refineField, refineText)
+  }
+
   const regenBtn = (field) => (
     <button
       type="button"
-      onClick={() => refine(field)}
+      onClick={() => openRefine(field)}
       disabled={busy}
-      title="Regenerate this field keeping coherence with the rest of the scenario"
+      title="Regerar este campo sem perder a coerência com o resto do cenário"
       className={miniBtnCls}
     >
-      {regen === field ? '… generating' : '↻ Regenerate'}
+      {regen === field ? '… gerando' : '↻ Regenerate'}
     </button>
   )
 
   const fieldHeader = (field, label, hint) => (
-    <span className="mb-1 flex items-center justify-between gap-2">
-      <span>
-        <span className={labelCls}>{label}</span>
-        {hint && <span className={hintCls}>{hint}</span>}
+    <span className="mb-1 flex flex-col gap-1">
+      <span className="flex items-center justify-between gap-2">
+        <span>
+          <span className={labelCls}>{label}</span>
+          {hint && <span className={hintCls}>{hint}</span>}
+        </span>
+        {regenBtn(field)}
       </span>
-      {regenBtn(field)}
+      {refineField === field && (
+        <span className="flex flex-col gap-1">
+          <input
+            value={refineText}
+            onChange={(e) => setRefineText(e.target.value)}
+            placeholder="Instrução de refinamento (opcional)"
+            className={inputCls}
+          />
+          <span className="flex gap-2">
+            <button type="button" onClick={confirmRefine} className={miniBtnCls}>Confirmar</button>
+            <button type="button" onClick={() => setRefineField(null)} className={miniBtnCls}>Cancelar</button>
+          </span>
+        </span>
+      )}
     </span>
   )
 
-  if (loading) return <div className="flex h-full items-center justify-center text-zinc-500">Loading…</div>
+  if (loading) return <div className="flex h-full items-center justify-center text-zinc-500">Carregando…</div>
 
   if (error) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
         <p className="text-red-300">
-          {error.status === 0 ? 'Cannot reach the backend server. Is it running?' : error.message}
+          {error.status === 0 ? 'Não foi possível falar com o servidor. Is it running?' : error.message}
         </p>
         <div className="flex gap-2">
           <button onClick={load} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600">
-            ↻ Retry
+            ↻ Tentar de novo
           </button>
           <Link to="/" className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-            ← Back to home
+            ← Voltar ao início
           </Link>
         </div>
       </div>
@@ -353,13 +381,14 @@ export default function ScenarioEditor() {
 
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto px-4 py-8">
+      {bar}
       <header className="mb-6">
         <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300">
           ← Home
         </Link>
         <div className="mt-1 flex items-center justify-between gap-3">
           <h1 className="text-2xl font-bold text-zinc-100">
-            {isEdit ? (form.title || 'Edit Scenario') : 'New Scenario'}
+            {isEdit ? (form.title || 'Editar cenário') : 'Novo cenário'}
           </h1>
           <button
             type="button"
@@ -367,14 +396,14 @@ export default function ScenarioEditor() {
             disabled={busy}
             className="shrink-0 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
           >
-            {pending === 'all' ? '… generating' : '🎲 Regenerate everything'}
+            {pending === 'all' ? '… gerando' : '🎲 Regenerate everything'}
           </button>
         </div>
       </header>
 
       <fieldset disabled={busy} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
         <label className="block">
-          {fieldHeader('title', 'Title *')}
+          {fieldHeader('title', 'Título *')}
           <input
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -393,7 +422,7 @@ export default function ScenarioEditor() {
         </label>
 
         <label className="block">
-          {fieldHeader('ai_instructions', 'AI Instructions', 'Style/system prompt for the narrator (top of the context).')}
+          {fieldHeader('ai_instructions', 'AI Instructions', 'Instruções de estilo para o narrador (topo do contexto).')}
           <textarea
             value={form.ai_instructions}
             onChange={(e) => setForm((f) => ({ ...f, ai_instructions: e.target.value }))}
@@ -403,7 +432,7 @@ export default function ScenarioEditor() {
         </label>
 
         <label className="block">
-          {fieldHeader('plot_essentials', 'Plot Essentials (Memory)', 'Fixed block: who you are, the world, the rules.')}
+          {fieldHeader('plot_essentials', 'Essenciais da trama (Memória)', 'Bloco fixo: quem você é, o mundo, as regras.')}
           <textarea
             value={form.plot_essentials}
             onChange={(e) => setForm((f) => ({ ...f, plot_essentials: e.target.value }))}
@@ -413,7 +442,7 @@ export default function ScenarioEditor() {
         </label>
 
         <label className="block">
-          {fieldHeader('authors_note', "Author's Note", 'Tone note injected near the end of the context.')}
+          {fieldHeader('authors_note', "Author's Note", 'Nota de tom injetada perto do fim do contexto.')}
           <textarea
             value={form.authors_note}
             onChange={(e) => setForm((f) => ({ ...f, authors_note: e.target.value }))}
@@ -423,7 +452,7 @@ export default function ScenarioEditor() {
         </label>
 
         <label className="block">
-          {fieldHeader('opening_text', 'Opening Text', "The story's first block (becomes the start action of new adventures).")}
+          {fieldHeader('opening_text', 'Texto de abertura', "O primeiro bloco da história (vira a ação inicial das aventuras novas).")}
           <textarea
             value={form.opening_text}
             onChange={(e) => setForm((f) => ({ ...f, opening_text: e.target.value }))}
@@ -433,7 +462,7 @@ export default function ScenarioEditor() {
         </label>
 
         <label className="block">
-          {fieldHeader('image_style', 'Visual Style (image generation)')}
+          {fieldHeader('image_style', 'Estilo visual (geração de imagem)')}
           <input
             value={form.image_style}
             onChange={(e) => setForm((f) => ({ ...f, image_style: e.target.value }))}
@@ -454,19 +483,33 @@ export default function ScenarioEditor() {
 
         <div className="block">
           <div className="mb-1">
-            <div className={labelCls}>Story Cards ({(form.story_cards ?? []).length})</div>
-            <div className={hintCls}>NPCs, places, factions — injected when a trigger word appears.</div>
+            <div className={labelCls}>Fichas ({(form.story_cards ?? []).length})</div>
+            <div className={hintCls}>NPCs, lugares, facções — entram no contexto quando uma palavra-gatilho aparece.</div>
           </div>
+          {String(refineField || '').startsWith('card-') && (
+            <div className="mb-2 flex flex-col gap-1">
+              <input
+                value={refineText}
+                onChange={(e) => setRefineText(e.target.value)}
+                placeholder={refineField === 'card-new' ? 'Nome ou conceito da ficha' : 'Instrução para esta ficha (opcional)'}
+                className={inputCls}
+              />
+              <div className="flex gap-2">
+                <button type="button" onClick={confirmRefine} className={miniBtnCls}>Confirmar</button>
+                <button type="button" onClick={() => setRefineField(null)} className={miniBtnCls}>Cancelar</button>
+              </div>
+            </div>
+          )}
           <StoryCardsEditor
             cards={form.story_cards}
             onChange={(story_cards) => setForm((f) => ({ ...f, story_cards }))}
             busy={busy}
-            onAiCard={enrichCard}
+            onAiCard={(index) => openRefine(`card-${index}`)}
             webOn={webOn}
             onToggleWeb={setWebOn}
           >
-            <button type="button" onClick={addCardWithAi} disabled={busy} className={miniBtnCls}>
-              + Add story card with AI
+            <button type="button" onClick={() => openRefine('card-new')} disabled={busy} className={miniBtnCls}>
+              + Ficha com IA
             </button>
             {regenBtn('story_cards')}
           </StoryCardsEditor>
@@ -491,7 +534,7 @@ export default function ScenarioEditor() {
             disabled={busy}
             className="rounded-lg border border-red-900 px-4 py-2 text-sm text-red-400 hover:bg-red-950 disabled:opacity-50"
           >
-            {pending === 'delete' ? 'Deleting…' : 'Delete'}
+            {pending === 'delete' ? 'Apagando…' : 'Delete'}
           </button>
           <button
             type="button"
@@ -507,20 +550,20 @@ export default function ScenarioEditor() {
             disabled={busy}
             className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
           >
-            {pending === 'save' ? 'Saving…' : 'Save changes'}
+            {pending === 'save' ? 'Salvando…' : 'Salvar'}
           </button>
         </div>
       ) : (
         <div className="mt-6 flex justify-end gap-2">
           <Link to="/" className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-            Cancel
+            Cancelar
           </Link>
           <button
             onClick={save}
             disabled={busy}
             className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
           >
-            {pending === 'save' ? 'Creating…' : 'Create scenario'}
+            {pending === 'save' ? 'Criando…' : 'Criar cenário'}
           </button>
         </div>
       )}

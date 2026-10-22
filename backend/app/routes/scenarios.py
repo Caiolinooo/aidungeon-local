@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import logging
 
-from app import db
+from fastapi import APIRouter, Depends
+
+from app import auth, db
 from app.errors import GameError
 from app.schemas import ScenarioCreate, ScenarioUpdate
+
+log = logging.getLogger("app.scenarios")
 
 router = APIRouter()
 
 
 @router.post("", status_code=201)
-def create_scenario(body: ScenarioCreate) -> dict:
+def create_scenario(body: ScenarioCreate,
+                    info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    log.info("scenarios: %s criou o cenário %r", info.user, body.title)
     with db.session() as conn:
         return db.insert_scenario(
             conn,

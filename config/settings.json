@@ -42,10 +42,11 @@
     "budgets": {
       "ai_instructions": 700,
       "plot_essentials": 1600,
+      "character_rules": 900,
       "story_cards": 1600,
       "memory_bank": 800,
       "story_summary": 800,
-      "recent_window": 57892,
+      "recent_window": 56992,
       "authors_note": 300,
       "last_action": 200,
       "player_state": 320,

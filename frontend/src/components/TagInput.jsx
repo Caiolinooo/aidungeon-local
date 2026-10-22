@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 // Input de "chips" para tags e triggers: Enter/vírgula adiciona, ✕ remove.
-export default function TagInput({ value = [], onChange, placeholder = 'Type and press Enter', disabled = false }) {
+export default function TagInput({ value = [], onChange, placeholder = 'Digite e pressione Enter', disabled = false }) {
   const [draft, setDraft] = useState('')
 
   const add = () => {
@@ -27,7 +27,7 @@ export default function TagInput({ value = [], onChange, placeholder = 'Type and
               type="button"
               onClick={() => onChange(value.filter((t) => t !== tag))}
               className="text-zinc-400 hover:text-zinc-100"
-              aria-label={`Remove ${tag}`}
+              aria-label={`Remover ${tag}`}
             >
               ✕
             </button>

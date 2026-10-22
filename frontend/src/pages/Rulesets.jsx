@@ -109,7 +109,7 @@ export default function Rulesets() {
     <div className="mx-auto flex h-full max-w-2xl flex-col gap-6 overflow-y-auto px-4 py-8 text-zinc-100">
       <div>
         <Link to="/" className="text-sm text-emerald-400 hover:underline">← Aventuras</Link>
-        <h1 className="mt-2 text-2xl font-bold">Rulesets</h1>
+        <h1 className="mt-2 text-2xl font-bold">Regras</h1>
         {me && (
           <p className="text-sm text-zinc-500">
             Conjuntos de regras de personagem. Entrou como {me.user} · admin

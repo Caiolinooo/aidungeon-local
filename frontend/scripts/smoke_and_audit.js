@@ -163,6 +163,11 @@ const server = http.createServer((req, res) => {
     if (reqPath.endsWith('/ui-state')) return sendJson(res, 200, { state: mockAdventure.ui_state });
     if (reqPath.endsWith('/scene')) return sendJson(res, 200, mockAdventure.scene);
     if (reqPath.endsWith('/jobs')) return sendJson(res, 200, []);
+    if (reqPath.endsWith('/events')) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.end('retry: 60000\n\n');
+      return;
+    }
     if (reqPath.startsWith('/api/adventures/')) return sendJson(res, 200, mockAdventure);
     if (reqPath === '/api/adventures') return sendJson(res, 200, [mockAdventure]);
     if (reqPath === '/api/scenarios') return sendJson(res, 200, [{ id: 's1', title: 'The Forgotten Catacombs', description: 'Dungeon crawl', prompt: 'Opening', tags: ['fantasy'] }]);
@@ -275,7 +280,7 @@ async function runViewportSmoke(viewport) {
 
   // Open & close Generate with AI modal
   const genBtn = await page.evaluateHandle(() =>
-    [...document.querySelectorAll('button')].find((b) => b.innerText.includes('Generate with AI'))
+    [...document.querySelectorAll('button')].find((b) => b.innerText.includes('Gerar com IA'))
   );
   if (genBtn.asElement()) {
     await genBtn.asElement().click();
@@ -286,14 +291,14 @@ async function runViewportSmoke(viewport) {
   // 3. Scenario Editor
   await page.goto(`${base}/scenarios/new`, { waitUntil: 'networkidle0' });
   const scenText = await page.evaluate(() => document.body.innerText);
-  if (!scenText.toLowerCase().includes('scenario')) {
+  if (!scenText.toLowerCase().includes('cenário') && !scenText.toLowerCase().includes('cenario')) {
     throw new Error(`[${label}] Scenario Editor did not render`);
   }
 
   // 4. Settings Page
   await page.goto(`${base}/settings`, { waitUntil: 'networkidle0' });
   const settingsText = await page.evaluate(() => document.body.innerText);
-  if (!settingsText.includes('40,960')) {
+  if (!settingsText.includes('40,960') && !settingsText.includes('40.960')) {
     throw new Error(`[${label}] Settings page missing 40,960 context cap`);
   }
 
@@ -311,7 +316,7 @@ async function runViewportSmoke(viewport) {
   // Exercise Inspector / Drawer tabs: Cards, NPCs, Memory, Controls, Avatars, Config, Details
   if (isMobile) {
     const opened = await page.evaluate(() => {
-      const btn = document.querySelector('header button[aria-label="Open inspector drawer"]');
+      const btn = document.querySelector('header button[aria-label="Abrir o inspetor"]');
       if (btn) {
         btn.click();
         return true;
@@ -322,7 +327,7 @@ async function runViewportSmoke(viewport) {
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  const expectedTabs = ['Cards', 'NPCs', 'Memory', 'Controls', 'Avatars', 'Config', 'Details'];
+  const expectedTabs = ['Fichas', 'NPCs', 'Memória', 'Controles', 'Avatares', 'Configurações', 'Detalhes'];
   for (const tabLabel of expectedTabs) {
     const clicked = await page.evaluate((lbl) => {
       const btn = [...document.querySelectorAll('aside button')].find((b) => b.innerText.trim() === lbl);

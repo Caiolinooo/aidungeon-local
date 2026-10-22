@@ -156,3 +156,29 @@ def test_import_multi_partial_failure_still_imports_valid(client):
     assert any("error" in r for r in report["results"])
     assert any(a["title"] == "Good One" and a["id"] != adv["id"]
                for a in client.get("/api/adventures").json())
+
+
+def test_create_survives_portrait_job_failure(client, monkeypatch):
+    """Um job de retrato que levanta não pode apagar a aventura já gravada."""
+    created = client.post("/api/scenarios", json={
+        "title": "Harbor Draft",
+        "opening_text": "The tide is out.",
+        "story_cards": [{
+            "title": "Harbor",
+            "type": "location",
+            "triggers": ["harbor"],
+            "entry": "Wet stone.",
+        }],
+    })
+    assert created.status_code == 201, created.text
+
+    def boom(conn, adventure_id):
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr("app.routes.adventures.jobs.enqueue_all_portraits", boom)
+    made = client.post("/api/adventures", json={"scenario_id": created.json()["id"]})
+    assert made.status_code == 201, made.text
+    adventure_id = made.json()["id"]
+    got = client.get(f"/api/adventures/{adventure_id}")
+    assert got.status_code == 200, got.text
+    assert got.json()["title"] == "Harbor Draft"

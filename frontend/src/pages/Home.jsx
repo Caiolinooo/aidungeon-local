@@ -7,6 +7,7 @@ import Modal from '../components/Modal.jsx'
 import GenerateAdventureModal from '../components/GenerateAdventureModal.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { fmtDate } from '../utils.js'
+import { useConfirm } from '../confirm.jsx'
 import {
   Upload,
   Download,
@@ -23,8 +24,8 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 
-// Tela 1 — Home (PLANO.md §4.5): grid "Your Adventures" + "New Adventure"
-// (escolher scenario existente ou em branco) + "Import AI Dungeon backup".
+// Tela 1 — Home (PLANO.md §4.5): grid "Suas aventuras" + "Nova aventura"
+// (escolher scenario existente ou em branco) + "Importar backup do AI Dungeon".
 
 // Slug seguro p/ nome de arquivo: "My Story!" → "my-story".
 function slugify(title) {
@@ -103,7 +104,7 @@ export default function Home() {
           <h1 className="text-3xl font-extrabold tracking-tight text-primary flex items-center gap-2">
             AI Dungeon <span className="text-accent-pri">Local</span>
           </h1>
-          <p className="mt-1 text-xs text-muted">Self-hosted interactive storytelling — 100% private, local LLM.</p>
+          <p className="mt-1 text-xs text-muted">Contos interativos no seu servidor — 100% privado, modelo local.</p>
         </div>
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 items-center">
           <button
@@ -116,7 +117,7 @@ export default function Home() {
           </button>
           <Link
             to="/users"
-            title="Accounts and password"
+            title="Contas e senha"
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <UsersIcon className="w-4 h-4 text-secondary" />
@@ -134,7 +135,7 @@ export default function Home() {
           )}
           <Link
             to="/settings"
-            title="Global Settings (LLM, Image, Voice, Memory)"
+            title="Configurações (modelo, imagem, voz, memória)"
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <SettingsIcon className="w-4 h-4 text-secondary" />
@@ -150,7 +151,7 @@ export default function Home() {
           <button
             onClick={backupAll}
             disabled={backingUp}
-            title="Download a .zip backup with ALL adventures"
+            title="Baixar um .zip com TODAS as aventuras"
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
           >
             <Download className="w-4 h-4 text-muted" />
@@ -158,7 +159,7 @@ export default function Home() {
           </button>
           <button
             onClick={() => setShowGenerate(true)}
-            title="Describe an idea and let the AI draft a full scenario for you"
+            title="Descreva uma ideia e deixe a IA rascunhar o cenário"
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-accent-pri/50 bg-elevated px-3.5 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/20 transition"
           >
             <Sparkles className="w-4 h-4" />
@@ -169,7 +170,7 @@ export default function Home() {
             className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
           >
             <Plus className="w-4 h-4" />
-            <span>New Adventure</span>
+            <span>Nova aventura</span>
           </button>
           <button
             onClick={logout}
@@ -192,23 +193,23 @@ export default function Home() {
         <div className="mb-6 flex items-center justify-between rounded-lg border border-red-900 bg-red-950/60 px-4 py-3 text-sm text-red-200">
           <span>
             {error.status === 0
-              ? 'Cannot reach the backend server (http://127.0.0.1:8000). Is it running?'
+              ? 'Não foi possível falar com o servidor (http://127.0.0.1:8000). Ele está no ar?'
               : error.message}
           </span>
           <button
             onClick={load}
             className="rounded-md border border-red-800 px-3 py-1 text-xs font-semibold hover:bg-red-900"
           >
-            ↻ Retry
+            ↻ Tentar de novo
           </button>
         </div>
       )}
 
       {adventures === null ? (
-        <p className="text-zinc-500">Loading…</p>
+        <p className="text-zinc-500">Carregando…</p>
       ) : adventures.length === 0 && !error ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 p-16 text-center">
-          <p className="text-lg text-zinc-400">No adventures yet.</p>
+          <p className="text-lg text-zinc-400">Nenhuma aventura ainda.</p>
           <p className="max-w-md text-sm text-zinc-600">
             Start a new adventure from a scenario, or import your AI Dungeon backup (.zip) to
             continue an existing story from the exact point where you stopped.
@@ -216,7 +217,7 @@ export default function Home() {
         </div>
       ) : (
         <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Your Adventures</h2>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">Suas aventuras</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {adventures.map((a) => (
               <Link
@@ -303,11 +304,12 @@ export default function Home() {
 }
 
 // ---------------------------------------------------------------------------
-// Modal "New Adventure": escolher um scenario existente (GET /api/scenarios)
+// Modal "Nova aventura": escolher um scenario existente (GET /api/scenarios)
 // ou começar em branco → POST /api/adventures → navega p/ /play/:id.
 function NewAdventureModal({ onClose, onDeleted }) {
   const toast = useToast()
   const navigate = useNavigate()
+  const { ask, bar } = useConfirm()
   const [scenarios, setScenarios] = useState(null)
   const [stories, setStories] = useState([])
   const [pendingDelete, setPendingDelete] = useState(null)
@@ -362,7 +364,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
   const deleteScenario = async (e, s) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!window.confirm(`Delete scenario "${s.title}"? Adventures that started from it keep running.`)) return
+    if (!ask(`scenario-${s.id}`, `Apagar o cenário "${s.title}"? As aventuras que nasceram dele continuam.`)) return
     try {
       await api.deleteScenario(s.id)
       setScenarios((list) => list.filter((x) => x.id !== s.id))
@@ -374,9 +376,10 @@ function NewAdventureModal({ onClose, onDeleted }) {
   }
 
   return (
-    <Modal title="New Adventure" onClose={onClose} wide>
+    <Modal title="Nova aventura" onClose={onClose} wide>
+      {bar}
       {scenarios === null ? (
-        <p className="text-sm text-zinc-500">Loading scenarios…</p>
+        <p className="text-sm text-zinc-500">Carregando cenários…</p>
       ) : (
         <div className="flex flex-col gap-2">
           {stories.length > 0 && (
@@ -393,7 +396,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                       onClick={() => setPendingDelete(story)}
                       className="shrink-0 rounded px-2 py-1 text-xs text-red-300 hover:bg-red-950"
                     >
-                      Delete
+                      Apagar
                     </button>
                   </li>
                 ))}
@@ -407,7 +410,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                       onClick={() => setPendingDelete(null)}
                       className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300"
                     >
-                      Cancel
+                      Cancelar
                     </button>
                     <button
                       type="button"
@@ -415,7 +418,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
                       disabled={deleting}
                       className="rounded bg-red-700 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
                     >
-                      {deleting ? 'Deleting…' : 'Delete'}
+                      {deleting ? 'Apagando…' : 'Delete'}
                     </button>
                   </div>
                 </div>
@@ -429,8 +432,8 @@ function NewAdventureModal({ onClose, onDeleted }) {
           >
             <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => setSelected('blank')} className="mt-1 accent-emerald-600" />
             <div>
-              <div className="font-semibold text-zinc-100">Blank adventure</div>
-              <div className="text-sm text-zinc-500">Start with an empty story — you set the scene.</div>
+              <div className="font-semibold text-zinc-100">Aventura em branco</div>
+              <div className="text-sm text-zinc-500">Começa com a história vazia — você define a cena.</div>
             </div>
           </label>
 
@@ -458,8 +461,8 @@ function NewAdventureModal({ onClose, onDeleted }) {
               <div className="flex shrink-0 gap-1">
                 <button
                   type="button"
-                  title="Edit scenario"
-                  aria-label={`Edit “${s.title}”`}
+                  title="Editar cenário"
+                  aria-label={`Editar “${s.title}”`}
                   onClick={(e) => editScenario(e, s)}
                   className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
                 >
@@ -467,8 +470,8 @@ function NewAdventureModal({ onClose, onDeleted }) {
                 </button>
                 <button
                   type="button"
-                  title="Delete scenario"
-                  aria-label={`Delete “${s.title}”`}
+                  title="Apagar cenário"
+                  aria-label={`Apagar “${s.title}”`}
                   onClick={(e) => deleteScenario(e, s)}
                   className="rounded-lg border border-zinc-700 px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
                 >
@@ -487,7 +490,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
               disabled={creating}
               className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
             >
-              {creating ? 'Creating…' : 'Start adventure'}
+              {creating ? 'Criando…' : 'Começar aventura'}
             </button>
           </div>
         </div>
@@ -497,7 +500,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
 }
 
 // ---------------------------------------------------------------------------
-// Modal "Import AI Dungeon backup": upload do .zip (multipart) → ImportReport
+// Modal "Importar backup do AI Dungeon": upload do .zip (multipart) → ImportReport
 // (actions/cards/memories importados + warnings) → botão p/ abrir a aventura.
 function ImportModal({ onClose, onImported }) {
   const toast = useToast()
@@ -522,14 +525,14 @@ function ImportModal({ onClose, onImported }) {
   }
 
   return (
-    <Modal title="Import AI Dungeon backup" onClose={onClose}>
+    <Modal title="Importar backup do AI Dungeon" onClose={onClose}>
       {!report ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-zinc-400">
-            Select the <code className="text-zinc-300">.zip</code> exported from AI Dungeon
-            (contains <code className="text-zinc-300">metadata.json</code> +{' '}
-            <code className="text-zinc-300">actions-*.json</code>). The story continues from the
-            exact point where it stopped.
+            Escolha o <code className="text-zinc-300">.zip</code> exportado do AI Dungeon
+            (contém <code className="text-zinc-300">metadata.json</code> +{' '}
+            <code className="text-zinc-300">actions-*.json</code>). A história continua do
+            ponto exato em que parou.
           </p>
           <button
             onClick={() => fileRef.current?.click()}
@@ -540,7 +543,7 @@ function ImportModal({ onClose, onImported }) {
                 📦 {file.name} <span className="text-zinc-500">({(file.size / 1024).toFixed(0)} KB)</span>
               </span>
             ) : (
-              'Click to choose the .zip file'
+              'Clique para escolher o arquivo .zip'
             )}
           </button>
           <input
@@ -552,7 +555,7 @@ function ImportModal({ onClose, onImported }) {
           />
           <div className="flex justify-end gap-2">
             <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-              Cancel
+              Cancelar
             </button>
             <button
               onClick={doImport}
@@ -616,15 +619,15 @@ function ImportModal({ onClose, onImported }) {
             <ul className="mt-2 grid grid-cols-3 gap-2 text-center text-sm">
               <li className="rounded bg-zinc-800/60 p-2">
                 <div className="text-xl font-bold text-zinc-100">{report.actions_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">actions</div>
+                <div className="text-xs text-zinc-500">ações</div>
               </li>
               <li className="rounded bg-zinc-800/60 p-2">
                 <div className="text-xl font-bold text-zinc-100">{report.cards_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">story cards</div>
+                <div className="text-xs text-zinc-500">fichas</div>
               </li>
               <li className="rounded bg-zinc-800/60 p-2">
                 <div className="text-xl font-bold text-zinc-100">{report.memories_imported ?? 0}</div>
-                <div className="text-xs text-zinc-500">memories</div>
+                <div className="text-xs text-zinc-500">memórias</div>
               </li>
             </ul>
           </div>
@@ -644,7 +647,7 @@ function ImportModal({ onClose, onImported }) {
 
           <div className="flex justify-end gap-2">
             <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-              Close
+              Fechar
             </button>
             <button
               onClick={() => navigate(`/play/${report.adventure_id}`)}
@@ -708,8 +711,8 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
     <div ref={rootRef} className="relative" onClick={guard}>
       <button
         onClick={onToggle}
-        aria-label={`Manage “${adventure.title}”`}
-        title="Manage adventure"
+        aria-label={`Gerir “${adventure.title}”`}
+        title="Gerir aventura"
         className="rounded-lg p-1.5 text-muted hover:bg-elevated hover:text-primary transition"
       >
         <MoreVertical className="w-4 h-4" />
@@ -724,14 +727,14 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
             }}
           >
             <Edit2 className="w-3.5 h-3.5" />
-            <span>Rename</span>
+            <span>Renomear</span>
           </button>
           <button
             className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-secondary hover:bg-elevated hover:text-primary transition"
             onClick={exportZip}
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Export .zip</span>
+            <span>Exportar .zip</span>
           </button>
           <button
             className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs text-red-400 hover:bg-red-950/40 hover:text-red-300 transition"
@@ -741,7 +744,7 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
             }}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete</span>
+            <span>Apagar</span>
           </button>
         </div>
       )}
@@ -751,7 +754,7 @@ function AdventureMenu({ adventure, open, onToggle, onClose, onRename, onDelete,
 }
 
 // ---------------------------------------------------------------------------
-// Modal "Rename adventure": edita título (+ descrição opcional) → PATCH
+// Modal "Renomear aventura": edita título (+ descrição opcional) → PATCH
 // /api/adventures/:id → atualiza a lista local com a resposta.
 function RenameModal({ adventure, onClose, onRenamed }) {
   const toast = useToast()
@@ -776,10 +779,10 @@ function RenameModal({ adventure, onClose, onRenamed }) {
   }
 
   return (
-    <Modal title="Rename adventure" onClose={onClose}>
+    <Modal title="Renomear aventura" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1">
-          <span className="text-sm font-medium text-zinc-300">Title</span>
+          <span className="text-sm font-medium text-zinc-300">Título</span>
           <input
             autoFocus
             value={title}
@@ -792,7 +795,7 @@ function RenameModal({ adventure, onClose, onRenamed }) {
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-sm font-medium text-zinc-300">
-            Description <span className="text-zinc-500">(optional)</span>
+            Descrição <span className="text-zinc-500">(opcional)</span>
           </span>
           <textarea
             value={description}
@@ -803,14 +806,14 @@ function RenameModal({ adventure, onClose, onRenamed }) {
         </label>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-            Cancel
+            Cancelar
           </button>
           <button
             onClick={save}
             disabled={saving || !title.trim()}
             className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Salvando…' : 'Salvar'}
           </button>
         </div>
       </div>
@@ -838,25 +841,25 @@ function DeleteModal({ adventure, onClose, onDeleted }) {
   }
 
   return (
-    <Modal title="Delete adventure" onClose={onClose}>
+    <Modal title="Apagar aventura" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <p className="text-sm text-zinc-300">
           Delete <span className="font-semibold text-zinc-100">“{adventure.title}”</span>?
         </p>
         <p className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">
-          This permanently removes the story, its actions, story cards and memories. This action
+          This permanently removes the story, its actions, fichas and memories. This action
           cannot be undone.
         </p>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-            Cancel
+            Cancelar
           </button>
           <button
             onClick={confirm}
             disabled={busy}
             className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-50"
           >
-            {busy ? 'Deleting…' : 'Delete permanently'}
+            {busy ? 'Apagando…' : 'Apagar de vez'}
           </button>
         </div>
       </div>

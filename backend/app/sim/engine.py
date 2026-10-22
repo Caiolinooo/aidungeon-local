@@ -106,7 +106,7 @@ def run_turn(adventure_id: str, adventure: dict, player_action: dict,
     time_info = None
     if life_on:
         time_info = life.advance(
-            loaded, int(classified.get("minutes") or 5), classified.get("activity") or "other",
+            loaded, int(classified.get("minutes") or 30), classified.get("activity") or "other",
             key, cards, rng, settings["npc_colocation_chance"],
         )
     block = rules.build_block(resolution.steps, resolution.changes, time_info, None)

@@ -24,14 +24,14 @@ import {
 const AvatarsTab = lazy(() => import('./drawer/AvatarsTab.jsx'))
 
 export const INSPECTOR_TABS = [
-  { id: 'cards', label: 'Cards', icon: BookOpen },
+  { id: 'cards', label: 'Fichas', icon: BookOpen },
   { id: 'npcs', label: 'NPCs', icon: Users },
-  { id: 'memory', label: 'Memory', icon: Brain },
-  { id: 'controls', label: 'Controls', icon: Sliders },
-  { id: 'avatars', label: 'Avatars', icon: Sparkles },
-  { id: 'consistency', label: 'Check', icon: ShieldCheck },
-  { id: 'config', label: 'Config', icon: Settings },
-  { id: 'details', label: 'Details', icon: Info },
+  { id: 'memory', label: 'Memória', icon: Brain },
+  { id: 'controls', label: 'Controles', icon: Sliders },
+  { id: 'avatars', label: 'Avatares', icon: Sparkles },
+  { id: 'consistency', label: 'Checagem', icon: ShieldCheck },
+  { id: 'config', label: 'Configurações', icon: Settings },
+  { id: 'details', label: 'Detalhes', icon: Info },
   { id: 'sim', label: 'Vida/Regras', icon: Dices },
 ]
 
@@ -62,7 +62,7 @@ export function InspectorPane({
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`min-h-9 shrink-0 flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-[11px] font-medium transition ${
+                className={`min-h-11 shrink-0 flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-[11px] font-medium transition ${
                   active
                     ? 'bg-accent-pri text-white shadow-sm font-semibold'
                     : 'text-secondary hover:text-primary hover:bg-elevated'
@@ -79,7 +79,7 @@ export function InspectorPane({
           <button
             onClick={onClose}
             className="shrink-0 rounded-xl p-2 text-secondary hover:bg-elevated hover:text-primary transition"
-            aria-label="Close panel"
+            aria-label="Fechar painel"
           >
             <X className="w-4 h-4" />
           </button>
@@ -103,7 +103,7 @@ export function InspectorPane({
           </div>
         )}
         {tab === 'avatars' && (
-          <Suspense fallback={<p className="py-8 text-center text-xs text-muted">Loading 3D viewer…</p>}>
+          <Suspense fallback={<p className="py-8 text-center text-xs text-muted">Carregando o visualizador 3D…</p>}>
             <AvatarsTab adventure={adventure} storyText={storyText} />
           </Suspense>
         )}
@@ -138,7 +138,7 @@ export default function Drawer({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-xs animate-in fade-in"
+      className="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-sm animate-fade-in"
       onPointerDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <InspectorPane
