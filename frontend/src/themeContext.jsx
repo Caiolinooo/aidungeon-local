@@ -4,7 +4,7 @@ const THEME_KEY = 'aidl_theme';
 const PREFS_KEY = 'aidl_reader_prefs';
 
 const DEFAULT_PREFS = {
-  fontSize: 17, // 14 to 22
+  fontSize: 19, // 14 to 22
   fontFamily: 'serif', // serif | sans | mono
   lineHeight: 'relaxed', // normal (1.5) | relaxed (1.75) | loose (2.0)
   columnWidth: 'standard', // compact (560px) | standard (720px) | wide (880px) | full (100%)

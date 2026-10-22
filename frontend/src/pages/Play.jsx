@@ -1084,10 +1084,9 @@ export default function Play() {
             <Link
               to="/"
               title="Voltar ao início"
-              className="min-h-11 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-2.5 py-1.5 text-xs text-secondary hover:text-primary hover:bg-elevated transition"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Início</span>
+              <ArrowLeft className="w-4 h-4" />
             </Link>
 
             <div className="min-w-0 flex-1 pl-1">
@@ -1101,7 +1100,7 @@ export default function Play() {
               onClick={openCharacter}
               aria-label="Personagem"
               title="Seu personagem"
-              className="min-h-11 shrink-0 flex items-center justify-center rounded-xl border border-subtle bg-surface px-3 py-2 text-sm text-secondary hover:text-primary hover:bg-elevated transition"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-base text-secondary hover:text-primary hover:bg-elevated transition"
             >
               🧙
             </button>
@@ -1114,7 +1113,7 @@ export default function Play() {
                 {shareButton}
                 <button
                   onClick={stop}
-                  className="min-h-11 flex items-center gap-1.5 rounded-xl bg-danger-800 px-4 py-2 text-xs font-semibold text-white hover:bg-danger-700 shadow transition"
+                  className="flex h-10 items-center gap-1.5 rounded-full bg-danger-800 px-4 text-xs font-semibold text-white hover:bg-danger-700 shadow transition"
                   title="Parar a geração"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
@@ -1129,10 +1128,9 @@ export default function Play() {
                     disabled={!canRetry}
                     aria-label="Tentar a última resposta de novo"
                     title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Gerar de novo a última resposta' : 'Disponível depois de uma resposta da IA'))}
-                    className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Tentar de novo</span>
+                    <RotateCcw className="w-4 h-4" />
                   </button>
 
                   <button
@@ -1140,10 +1138,9 @@ export default function Play() {
                     disabled={!canUndo}
                     aria-label="Desfazer o último turno"
                     title="Desfaz a última ação sua e a resposta da IA"
-                    className="min-h-11 flex items-center gap-1 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
-                    <Undo2 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Desfazer</span>
+                    <Undo2 className="w-4 h-4" />
                   </button>
 
                   <button
@@ -1151,7 +1148,7 @@ export default function Play() {
                     disabled={generating || turnBlocked || needsCharacter}
                     aria-label="Continuar a narração"
                     title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'A IA escreve o próximo parágrafo')}
-                    className="min-h-11 flex items-center gap-1 rounded-xl bg-accent-pri px-3.5 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
+                    className="flex h-10 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-white hover:bg-accent-hov shadow transition disabled:opacity-40"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
                     <span className="hidden sm:inline">Continuar</span>
@@ -1167,10 +1164,9 @@ export default function Play() {
                     disabled={!canSee}
                     aria-label={seeing ? 'Gerando a imagem da cena' : 'Gerar imagem da cena'}
                     title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
-                    className="min-h-11 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
                   >
-                    <ImageIcon className="w-3.5 h-3.5 text-accent-pri" />
-                    <span className="hidden sm:inline">{seeing ? 'Pintando…' : 'Ver'}</span>
+                    <ImageIcon className="w-4 h-4 text-accent-pri" />
                   </button>
 
                   {seeOpen && canSee && (
@@ -1208,7 +1204,7 @@ export default function Play() {
                 <button
                   onClick={() => setShowReaderModal(true)}
                   title="Tipografia e tema da leitura"
-                  className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface p-2 text-secondary hover:text-primary hover:bg-elevated transition"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <BookOpen className="w-4 h-4 text-accent-pri" />
                 </button>
@@ -1217,7 +1213,7 @@ export default function Play() {
                 <Link
                   to="/settings"
                   title="Configurações (modelo, imagem, voz, memória)"
-                  className="min-h-11 flex items-center justify-center rounded-xl border border-subtle bg-surface p-2 text-secondary hover:text-primary hover:bg-elevated transition"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <SettingsIcon className="w-4 h-4 text-secondary" />
                 </Link>
@@ -1305,10 +1301,10 @@ export default function Play() {
 
               {/* Streaming Cursor Block */}
               {generating && (
-                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-fade-in">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
-                    <span className="inline-block h-2 w-2 animate-ping rounded-full bg-accent-pri" />
-                    A IA está narrando…
+                <div className="animate-fade-in border-l-2 border-accent-pri/70 pl-4">
+                  <div className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-pri">
+                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-pri" />
+                    Narrando
                   </div>
                   <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(gen.text)}
@@ -1317,10 +1313,10 @@ export default function Play() {
               )}
 
               {!generating && live && (
-                <div className="rounded-xl border border-accent-pri/40 bg-elevated/80 p-4 shadow-sm animate-fade-in">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-pri">
-                    <span className="inline-block h-2 w-2 animate-ping rounded-full bg-accent-pri" />
-                    A IA está narrando…
+                <div className="animate-fade-in border-l-2 border-accent-pri/70 pl-4">
+                  <div className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-pri">
+                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-pri" />
+                    Narrando
                   </div>
                   <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(live)}

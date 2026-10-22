@@ -69,9 +69,8 @@ def _ui_cfg() -> dict:
 _SYSTEM = """You design the control panel for an interactive fiction game.
 Given the adventure setup, output STRICT JSON: {"tabs": [...], "widgets": [...]}.
 
-"tabs": the 3 input modes, always with ids "do", "say", "story" — only adapt
-"label" (≤12 chars) and "placeholder" (≤60 chars) to the genre. Examples: a
-mystery game could use "Investigate"; a chat story could use "Reply".
+"tabs": always the 3 ids "do", "say", "story". The labels are fixed by the
+app, so echo the ids only; do not translate or rename them.
 
 "widgets": game mechanics the player needs beyond text. Allowed types:
 - {"type": "dice", "label": "...", "dice": [4,6,8,10,12,20,100]} — for games
@@ -99,26 +98,27 @@ def _clean_str(value: Any, limit: int) -> str:
     return str(value or "").strip()[:limit]
 
 
+# O app é PT-BR: label e placeholder das três abas são fixos. O perfil da IA
+# só escolhe os widgets — antes ele devolvia "Investigate"/"What do you do?"
+# e a barra de entrada saía em inglês para toda aventura.
+_TAB_TEXT = {
+    "do": ("Ação", "O que você faz?"),
+    "say": ("Fala", "O que você diz?"),
+    "story": ("História", "O que acontece em seguida?"),
+}
+
+
 def _normalize_tabs(raw: Any) -> list[dict]:
-    """Tabs válidas: ids do/say/story (constraint do banco), labels livres."""
-    by_id: dict[str, dict] = {}
-    if isinstance(raw, list):
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            id_ = str(item.get("id") or "")
-            if id_ not in _TAB_IDS:
-                continue
-            by_id[id_] = {
-                "id": id_,
-                "label": _clean_str(item.get("label"), 12) or id_.capitalize(),
-                "placeholder": _clean_str(item.get("placeholder"), 60),
-            }
-    defaults = {"do": "What do you do?", "say": "What do you say?",
-                "story": "What happens next?"}
-    return [by_id.get(id_) or {"id": id_, "label": id_.capitalize(),
-                               "placeholder": defaults[id_]}
-            for id_ in _TAB_IDS]
+    """Ids do/say/story com o texto fixo em PT-BR; a ordem é sempre a canônica.
+
+    O manifesto da IA só escolhe widgets. As três abas existem sempre — a
+    InputBar depende das três para renderizar, e um id fora da lista ou uma
+    lista vazia não pode encolher o painel.
+    """
+    return [
+        {"id": id_, "label": _TAB_TEXT[id_][0], "placeholder": _TAB_TEXT[id_][1]}
+        for id_ in _TAB_IDS
+    ]
 
 
 def _normalize_widgets(raw: Any) -> list[dict]:
@@ -213,7 +213,14 @@ def get_ui_profile(adventure_id: str) -> dict:
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
             raise GameError.not_found(f"adventure {adventure_id} not found")
-        return {"profile": adv["ui_profile"], "state": adv["ui_state"]}
+        # Perfis antigos gravaram abas em inglês; normalizar na leitura corrige
+        # o que já está no banco sem migration.
+        stored = adv["ui_profile"] if isinstance(adv["ui_profile"], dict) else None
+        profile = None
+        if stored is not None:
+            profile = {"tabs": _normalize_tabs(stored.get("tabs")),
+                       "widgets": stored.get("widgets") or []}
+        return {"profile": profile, "state": adv["ui_state"]}
 
 
 @router.put("/{adventure_id}/ui-state")

@@ -161,7 +161,7 @@ export default function SceneBackdrop({
 
   return (
     <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
-      scene.notice ? 'min-h-36' : 'h-28 sm:h-32'
+      scene.notice ? 'min-h-48' : 'h-40 sm:h-52'
     }`}>
       {backdropUrl && (
         <div
@@ -171,27 +171,29 @@ export default function SceneBackdrop({
           style={{ backgroundImage: `url("${backdropUrl}")` }}
         />
       )}
-      <div className="absolute inset-0 bg-gradient-to-t from-canvas via-canvas/55 to-canvas/35" />
+      <div className="absolute inset-0 bg-gradient-to-t from-canvas via-canvas/60 to-canvas/10" />
 
-      <div className="relative flex h-full flex-col justify-between px-3 py-2">
+      <div className="relative flex h-full flex-col justify-between px-4 py-3">
         <div className="flex items-start justify-between gap-2">
           {place || scene.notice ? (
-            <div className="max-w-[75%] rounded-md border border-subtle bg-canvas/55 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-primary">
+            <div className="max-w-[75%]">
               {place ? (
-                <div className="uppercase">
+                <h2 className="border-b border-primary/15 pb-1 font-prose text-[13px] font-semibold uppercase tracking-[0.22em] text-primary drop-shadow-sm">
                   {place}
-                  {scene.backdrop?.status === 'pending' ? ' · pintando…' : ''}
-                </div>
+                  {scene.backdrop?.status === 'pending' ? (
+                    <span className="ml-2 text-[10px] font-medium normal-case tracking-normal text-muted">· pintando…</span>
+                  ) : ''}
+                </h2>
               ) : null}
               {scene.notice ? (
-                <div className="mt-0.5 font-medium normal-case text-warn-100">{scene.notice}</div>
+                <div className="mt-1.5 inline-block rounded-md border border-warn-800 bg-canvas/90 px-2 py-1 text-[10px] font-medium text-warn-200">{scene.notice}</div>
               ) : null}
             </div>
           ) : <span />}
           {scene.backdrop?.status === 'error' && (
             <button
               onClick={retry}
-              className="rounded-md border border-warn-800 bg-canvas/90 px-2 py-1 text-[10px] text-warn-200"
+              className="rounded-full border border-warn-800 bg-canvas/90 px-2.5 py-1 text-[10px] text-warn-200 hover:bg-warn-950/60 transition"
             >
               Cenário falhou — repetir
             </button>
@@ -199,29 +201,29 @@ export default function SceneBackdrop({
         </div>
 
         {scene.cast?.length > 0 && (
-          <div className="flex justify-center gap-3">
+          <div className="flex justify-center gap-4">
             {scene.cast.map((npc) => {
               const src = urls[npc.portrait?.id]
               const stepped = reacting && namedIn(playerText, npc.title)
               return (
                 <figure
                   key={npc.id}
-                  className={`flex w-12 shrink-0 flex-col items-center sm:w-14 ${stepped ? 'npc-react' : ''}`}
+                  className={`flex w-14 shrink-0 flex-col items-center sm:w-16 ${stepped ? 'npc-react' : ''}`}
                 >
                   {src ? (
                     <img
                       src={src}
                       alt=""
-                      className={`h-10 w-10 rounded-full border-2 object-cover shadow-lg shadow-canvas/50 sm:h-12 sm:w-12 ${
+                      className={`h-12 w-12 rounded-full border-2 object-cover shadow-lg shadow-canvas/60 sm:h-14 sm:w-14 ${
                         MOOD_RING[npc.mood] || 'border-primary/70'
                       }`}
                     />
                   ) : (
-                    <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-subtle bg-elevated/80 text-xs font-semibold text-primary sm:h-12 sm:w-12">
+                    <div className="grid h-12 w-12 place-items-center rounded-full border-2 border-subtle bg-elevated/80 text-sm font-semibold text-primary sm:h-14 sm:w-14">
                       {initials(npc.title)}
                     </div>
                   )}
-                  <figcaption className="mt-0.5 max-w-full truncate text-[9px] font-medium text-primary drop-shadow">
+                  <figcaption className="mt-1 max-w-full truncate text-[10px] font-medium text-primary drop-shadow">
                     {npc.title}
                   </figcaption>
                 </figure>
@@ -230,7 +232,7 @@ export default function SceneBackdrop({
           </div>
         )}
 
-        <p className={`truncate text-center text-[11px] text-primary ${line ? '' : 'invisible'}`}>
+        <p className={`truncate text-center text-[11px] leading-tight text-secondary ${line ? '' : 'invisible'}`}>
           {line || '·'}
         </p>
       </div>

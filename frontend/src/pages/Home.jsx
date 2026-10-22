@@ -109,76 +109,74 @@ export default function Home() {
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 items-center">
           <button
             onClick={() => setShowReaderModal(true)}
-            title="Theme & Reader options"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+            title="Tema e tipografia da leitura"
+            aria-label="Tema e tipografia da leitura"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <BookOpen className="w-4 h-4 text-accent-pri" />
-            <span className="hidden md:inline">Theme</span>
           </button>
           <Link
             to="/users"
             title="Contas e senha"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <UsersIcon className="w-4 h-4 text-secondary" />
-            <span>Users</span>
           </Link>
           {session?.admin && (
             <Link
               to="/rulesets"
               title="Rulesets de personagem"
-              className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
             >
               <ShieldCheck className="w-4 h-4 text-secondary" />
-              <span>Regras</span>
             </Link>
           )}
           <Link
             to="/settings"
             title="Configurações (modelo, imagem, voz, memória)"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <SettingsIcon className="w-4 h-4 text-secondary" />
-            <span>Settings</span>
           </Link>
           <button
             onClick={() => setShowImport(true)}
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition"
+            title="Importar backup do AI Dungeon (.zip)"
+            aria-label="Importar backup do AI Dungeon"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <Upload className="w-4 h-4 text-muted" />
-            <span>Import</span>
           </button>
           <button
             onClick={backupAll}
             disabled={backingUp}
-            title="Baixar um .zip com TODAS as aventuras"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3.5 py-2 text-xs font-medium text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
+            title={backingUp ? 'Exportando…' : 'Baixar um .zip com todas as aventuras'}
+            aria-label="Baixar um .zip com todas as aventuras"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
           >
             <Download className="w-4 h-4 text-muted" />
-            <span>{backingUp ? 'Exporting…' : 'Backup all'}</span>
           </button>
           <button
             onClick={() => setShowGenerate(true)}
             title="Descreva uma ideia e deixe a IA rascunhar o cenário"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-accent-pri/50 bg-elevated px-3.5 py-2 text-xs font-semibold text-accent-pri hover:bg-accent-pri/20 transition"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-accent-pri/50 bg-elevated px-4 text-xs font-semibold text-accent-pri hover:bg-accent-pri/20 transition"
           >
             <Sparkles className="w-4 h-4" />
             <span>Gerar com IA</span>
           </button>
           <button
             onClick={() => setShowNew(true)}
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-white hover:bg-accent-hov shadow transition"
           >
             <Plus className="w-4 h-4" />
             <span>Nova aventura</span>
           </button>
           <button
             onClick={logout}
-            title="Sign out and return to login"
-            className="min-h-11 shrink-0 flex items-center gap-1.5 rounded-xl border border-subtle bg-surface px-3 py-2 text-xs font-medium text-muted hover:text-danger-400 hover:bg-elevated transition"
+            title="Sair e voltar para o login"
+            aria-label="Sair"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-muted hover:text-danger-400 hover:bg-elevated transition"
           >
             <LogOut className="w-4 h-4" />
-            <span>Log out</span>
           </button>
         </div>
       </header>
@@ -211,8 +209,8 @@ export default function Home() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-subtle p-16 text-center">
           <p className="text-lg text-secondary">Nenhuma aventura ainda.</p>
           <p className="max-w-md text-sm text-muted">
-            Start a new adventure from a scenario, or import your AI Dungeon backup (.zip) to
-            continue an existing story from the exact point where you stopped.
+            Comece uma aventura nova a partir de um cenário, ou importe o backup do
+            AI Dungeon (.zip) para continuar uma história exatamente de onde parou.
           </p>
         </div>
       ) : (
@@ -223,10 +221,10 @@ export default function Home() {
               <Link
                 key={a.id}
                 to={`/play/${a.id}`}
-                className="flex h-full flex-col rounded-xl border border-subtle bg-elevated p-4 transition-colors hover:border-accent-pri hover:bg-elevated/80"
+                className="group flex h-full flex-col rounded-2xl border border-subtle bg-elevated p-5 transition-all hover:-translate-y-0.5 hover:border-accent-pri/60 hover:shadow-lg hover:shadow-canvas/40"
               >
-                <div className="mb-1 flex items-start justify-between gap-2">
-                  <h3 className="font-semibold text-primary">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <h3 className="font-prose text-lg font-semibold leading-snug text-primary group-hover:text-accent-pri transition-colors">
                     {a.title}
                     {session?.admin && a.owner ? (
                       <span className="ml-2 text-[10px] font-normal uppercase text-muted">{a.owner}</span>

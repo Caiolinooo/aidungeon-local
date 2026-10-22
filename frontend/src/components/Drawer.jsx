@@ -54,7 +54,7 @@ export function InspectorPane({
     >
       {/* Inspector Header with Tab Navigation */}
       <div className="flex items-start justify-between gap-1.5 border-b border-subtle px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] bg-surface/90">
-        <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+        <div className="grid min-w-0 flex-1 grid-cols-3 gap-1">
           {INSPECTOR_TABS.map((t) => {
             const Icon = t.icon
             const active = tab === t.id
@@ -62,14 +62,14 @@ export function InspectorPane({
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`min-h-11 shrink-0 flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-[11px] font-medium transition ${
+                className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border px-1 py-1.5 text-[10px] font-medium leading-tight transition ${
                   active
-                    ? 'bg-accent-pri text-white shadow-sm font-semibold'
-                    : 'text-secondary hover:text-primary hover:bg-elevated'
+                    ? 'border-accent-pri bg-accent-pri/15 text-accent-pri'
+                    : 'border-subtle bg-elevated/40 text-secondary hover:bg-elevated hover:text-primary'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{t.label}</span>
+                <Icon className="h-4 w-4" />
+                <span className="max-w-full truncate">{t.label}</span>
               </button>
             )
           })}

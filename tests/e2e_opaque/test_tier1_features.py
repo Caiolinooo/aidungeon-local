@@ -499,7 +499,7 @@ class TestTier1UIProfile:
         resp = e2e_client.post(f"/api/adventures/{adv['id']}/ui-profile")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["profile"]["tabs"][0]["label"] == "Act"
+        assert data["profile"]["tabs"][0]["label"] == "Ação"
         assert len(data["profile"]["widgets"]) == 2
 
     def test_t1_ui_03_initial_state_seeding(self, e2e_client):

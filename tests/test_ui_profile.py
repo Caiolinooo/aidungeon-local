@@ -39,9 +39,11 @@ def test_parse_profile_dnd_full():
     profile = ui_profile._parse_profile(content)
     # tabs: sempre as 3 canônicas, na ordem fixa, com default p/ as ausentes
     assert [t["id"] for t in profile["tabs"]] == ["do", "say", "story"]
-    assert profile["tabs"][0]["label"] == "Act"
-    assert profile["tabs"][1]["placeholder"] == ""      # LLM omitiu
-    assert profile["tabs"][2]["label"] == "Story"       # default
+    # rótulos e placeholders são fixos no app (PT-BR); o texto do LLM é ignorado
+    assert profile["tabs"][0]["label"] == "Ação"
+    assert profile["tabs"][0]["placeholder"] == "O que você faz?"
+    assert profile["tabs"][1]["label"] == "Fala"
+    assert profile["tabs"][2]["label"] == "História"
     widgets = {w["type"]: w for w in profile["widgets"]}
     assert set(widgets) == {"dice", "stats", "inventory", "character"}
     assert widgets["dice"]["dice"] == [6, 12, 20]       # filtrados + ordenados
@@ -159,7 +161,7 @@ def test_ui_profile_generate_and_get(client):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["profile"]["tabs"][0]["label"] == "Act"
+    assert body["profile"]["tabs"][0]["label"] == "Ação"
     assert [w["type"] for w in body["profile"]["widgets"]] == ["dice", "stats", "inventory"]
     # estado semeado a partir do manifesto
     assert body["state"]["stats"] == {"HP": 20}

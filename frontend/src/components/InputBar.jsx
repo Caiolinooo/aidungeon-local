@@ -213,17 +213,17 @@ export default function InputBar({
   return (
     <div className="w-full border-t border-subtle bg-surface/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur">
       <div className="mx-auto w-full max-w-4xl">
-        <div className="mb-2 flex items-center gap-1.5 overflow-x-auto">
+        <div className="mb-2.5 flex w-full items-center gap-1 rounded-full border border-subtle bg-elevated p-1 sm:w-auto sm:self-start">
           {normTabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               disabled={inputLocked}
               title={t.placeholder || t.label}
-              className={`min-h-11 shrink-0 flex-1 whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-semibold uppercase tracking-wider transition-colors sm:flex-none sm:px-4 ${
+              className={`min-h-9 flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-all sm:flex-none ${
                 tab === t.id
                   ? 'bg-accent-pri text-white shadow-sm'
-                  : 'border border-subtle bg-elevated text-secondary hover:text-primary'
+                  : 'text-muted hover:bg-surface hover:text-primary'
               } disabled:opacity-50`}
             >
               {t.label}
@@ -249,7 +249,7 @@ export default function InputBar({
             placeholder={disabled ? 'A IA está escrevendo…' : active.placeholder}
             aria-label={active.label || 'Ação da história'}
             enterKeyHint="send"
-            className="max-h-60 min-w-0 w-full flex-1 resize-none rounded-xl border border-subtle bg-elevated px-3.5 py-2.5 font-prose text-base text-primary outline-none placeholder:text-muted focus:border-accent-pri disabled:opacity-60 sm:text-sm"
+            className="max-h-60 min-w-0 w-full flex-1 resize-none rounded-2xl border border-subtle bg-elevated px-4 py-3 font-prose text-[15px] leading-relaxed text-primary outline-none placeholder:text-muted focus:border-accent-pri disabled:opacity-60"
           />
           <div className="flex items-center gap-2 sm:contents">
           {panelAvailable && (
@@ -259,7 +259,7 @@ export default function InputBar({
               title={panelOpen ? 'Esconder controles' : 'Mostrar controles (dados, atributos, inventário…)'}
               aria-label="Alternar controles do jogo"
               aria-pressed={panelOpen}
-              className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`h-11 w-11 shrink-0 rounded-full border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 panelOpen
                   ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
                   : 'border-subtle bg-elevated text-secondary hover:text-primary'
@@ -279,7 +279,7 @@ export default function InputBar({
                   : 'Ditar (fala para texto)'
             }
             aria-label={recording ? 'Parar gravação' : 'Ditar a ação com o microfone'}
-            className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`h-11 w-11 shrink-0 rounded-full border font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
               recording
                 ? 'animate-pulse border-danger-500 bg-danger-600 text-white hover:bg-danger-500'
                 : 'border-subtle bg-elevated hover:bg-surface'
@@ -294,7 +294,7 @@ export default function InputBar({
             title="Buscar na web para ancorar a cena (Wikipedia/DuckDuckGo)"
             aria-label="Buscar na web"
             aria-pressed={webOn}
-            className={`min-h-11 min-w-11 shrink-0 rounded-xl border px-3 py-2.5 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`h-11 w-11 shrink-0 rounded-full border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               webOn
                 ? 'border-accent-pri bg-accent-pri text-white hover:bg-accent-hov'
                 : 'border-subtle bg-elevated text-secondary hover:text-primary'
@@ -306,7 +306,7 @@ export default function InputBar({
             onClick={submit}
             disabled={inputLocked || !text.trim()}
             title={disabledTurn ? 'Aguarde a sua vez' : undefined}
-            className="min-h-11 flex-1 rounded-xl bg-accent-pri px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none sm:px-5"
+            className="h-11 flex-1 rounded-full bg-accent-pri px-5 text-sm font-semibold text-white shadow-sm hover:bg-accent-hov disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none"
           >
             Enviar
           </button>
