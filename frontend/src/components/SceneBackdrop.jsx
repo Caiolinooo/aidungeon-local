@@ -12,6 +12,14 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { playerDisplayText } from '../utils.js'
 
+const STANCE_LABEL = {
+  resist: 'recua',
+  flirt: 'se aproxima',
+  help: 'ajuda',
+  flee: 'foge',
+  attack: 'parte pra cima',
+}
+
 const MOOD_RING = {
   happy: 'border-warn-300',
   sad: 'border-info',
@@ -223,8 +231,13 @@ export default function SceneBackdrop({
                       {initials(npc.title)}
                     </div>
                   )}
-                  <figcaption className="mt-1 max-w-full truncate text-[10px] font-medium text-primary drop-shadow">
-                    {npc.title}
+                  <figcaption className="mt-1 max-w-full text-center text-[10px] font-medium leading-tight text-primary drop-shadow">
+                    <span className="block truncate">{npc.title}</span>
+                    {STANCE_LABEL[npc.stance] ? (
+                      <span className="block text-[9px] font-normal uppercase tracking-wider text-accent-pri">
+                        {STANCE_LABEL[npc.stance]}
+                      </span>
+                    ) : null}
                   </figcaption>
                 </figure>
               )

@@ -62,17 +62,27 @@ _ITEM_RE = re.compile(
 
 _NAME_AFTER_RE = re.compile(
     r"(?i)\b(?:levar|levo|leva|arrastar|arrasta|take|bring|drag|escort|"
-    r"beijar|beija|kiss\w*|undress\w*|despir|dispir|strip)\s+"
+    r"beijar|beija|beijo|kiss\w*|undress\w*|despir|dispir|dispo|strip|"
+    r"agarro|agarra|agarrar|abra[cç]o|abra[cç]ar|puxo|puxa|puxar)\s+"
     r"(?:a\s+|o\s+|the\s+)?([A-Za-zÀ-ÿ][\wÀ-ÿ'’-]{2,})"
 )
 
 _COMMAND_RE = re.compile(
-    r"(?i)\b(?:levar|levo|leva|arrastar|arrasta|drag|escort|"
-    r"mandar|manda|ordenar|ordena|"
-    r"despir|dispir|undress\w*|strip\w*|beijar|beija|kiss\w*|"
+    r"(?i)(?:"
+    r"\b(?:levar|levo|leva|arrastar|arrasta|drag|escort|"
+    r"mandar|manda|mando|ordenar|ordena|ordeno|"
+    r"despir|dispir|dispo|undress\w*|strip\w*|"
+    r"beijar|beija|beijo|kiss\w*|"
+    r"agarr\w*|abra[cç]\w*|pux\w*|"
     r"vem comigo|venha comigo|come with me|follow me|"
     r"siga-me|siga me|ajoelh\w*|kneel|"
-    r"naked|nude|nua|nuas|pelad[oa]s?|sex|sexo|fuck\w*|foder|transar)\b"
+    r"naked|nude|nua|nuas|pelad[oa]s?|sex|sexo|fuck\w*|foder|transar|transo|"
+    r"cascud\w*|soc[oa]\w*|chut\w*|esfaque\w*|estrangul\w*|"
+    r"defec\w*|mij\w*|cusp\w*|matar|mato|kill\w*|punch\w*|"
+    r"cala a boca|cale a boca|cale-se|shut up)\b"
+    r"|deit\w* com|tir\w* a roupa|pass\w* a m[aã]o|jog\w* na cama|coloc\w* na cama|"
+    r"em cima (?:da|do|de)\s+(?:a\s+|o\s+)?[A-Za-zÀ-ÿ]"
+    r")"
 )
 
 _POWER_RE = re.compile(
@@ -94,9 +104,12 @@ _YIELD_RE = re.compile(
 _FAKE_OBEY_RE = re.compile(
     r"(?i)(?:"
     r"follows you|goes with you|comes with you|"
-    r"acompanha voc[eê]|vai com voc[eê]|te segue|"
+    r"acompanha voc[eê]|vai com voc[eê]|te segue|segue voc[eê]|"
     r"\bobeys\b|\bobedece\b|"
-    r"undresses|se despe|te beija|kisses you"
+    r"undresses|se despe|tira a roupa|deixa a roupa|"
+    r"te beija|beija voc[eê]|kisses you|"
+    r"deixa voc[eê]|permite que voc[eê]|cede a voc[eê]|"
+    r"se entrega|se deita com voc[eê]"
     r")"
 )
 
@@ -353,6 +366,34 @@ def _fake_comply(text: str) -> bool:
             continue
         return True
     return False
+
+
+_REFUSAL_BEAT = re.compile(
+    r"(?i)\b(recus\w*|refus\w*|afast\w*|desvi\w*|revid\w*|contra-atac\w*|"
+    r"n[aã]o deixa|n[aã]o cede|n[aã]o obedece|n[aã]o acerta|erra o|"
+    r"te empurr\w*|empurr\w* voc[eê]|segura (?:o|seu|sua)|"
+    r"d[aá] um passo para tr[aá]s|segura o pr[oó]prio espa[cç]o)\b"
+)
+
+
+def narration_complies(text: str) -> bool:
+    """A prosa entregou a obediência que o mundo já tinha barrado."""
+    return _fake_comply(text)
+
+
+def narration_lacks_refusal(text: str) -> bool:
+    """O turno não mostra a pessoa parando a tentativa."""
+    return _REFUSAL_BEAT.search(text or "") is None
+
+
+def refusal_prose(names: list[str]) -> str:
+    """Piso do turno quando o narrador escreve sucesso numa recusa."""
+    who = (names[0] if names else "A pessoa à frente").strip() or "A pessoa à frente"
+    return (
+        f"{who} não cede. Dá um passo para trás, afasta o contato e segura o próprio espaço. "
+        f"A tentativa para no meio. {who} não obedece, não se despe e não sai do lugar. "
+        f"O olhar cobra a sua resposta, e a cena continua aberta."
+    )
 
 
 def _place_leaked(phrase: str, text: str, before: str, cards: list[dict]) -> bool:

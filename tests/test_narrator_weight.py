@@ -47,6 +47,7 @@ def test_empty_rules_and_second_person_stay_quiet(tmp_db):
     system = built.messages[0]["content"]
     assert "[Rules]" not in system
     assert "third person" not in system
+    assert "one visible action" in system
 
 
 def test_merge_action_rules_keeps_resolution(tmp_db):

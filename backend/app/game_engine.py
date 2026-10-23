@@ -348,12 +348,41 @@ def _apply_action_check(built, text: str, type_: str, state: dict | None,
     return verdict
 
 
+def _compliance_flag(verdict, text: str) -> list[str]:
+    """O narrador escreveu obediência numa ação que o mundo já recusou."""
+    if verdict is None or getattr(verdict, "possible", True):
+        return []
+    blockers = getattr(verdict, "blockers", None) or []
+    if not any("recusa" in (item or "").casefold() for item in blockers):
+        return []
+    from app import world_facts
+    if world_facts.narration_lacks_refusal(text):
+        return ["compliance"]
+    return []
+
+
+def _refusal_names(verdict) -> list[str]:
+    names: list[str] = []
+    for item in getattr(verdict, "blockers", None) or []:
+        folded = (item or "").casefold()
+        if "recusa" not in folded:
+            continue
+        head = (item or "").split(" recusa")[0].split(" Recusa")[0].strip(" .")
+        if head and head not in names:
+            names.append(head)
+    return names
+
+
 def _correct_narration(text: str, *, player_text: str, retry_of, built,
                        llm_cfg: dict, sampler: dict, transport,
-                       out_script: str | None) -> tuple[str, list[str]]:
+                       out_script: str | None,
+                       extra_flags: list[str] | None = None) -> tuple[str, list[str]]:
     """Um retry silencioso quando a prosa viola as regras. Empate fica com a segunda."""
     expected = "pt" if output_sanitizer.looks_portuguese(player_text) else ""
     flags = output_sanitizer.quality_flags(text, expected_language=expected)
+    for flag in extra_flags or []:
+        if flag not in flags:
+            flags.append(flag)
     if not flags or retry_of is not None:
         return text, flags
     log.info("narrator quality flags %s — one corrective retry", flags)
@@ -363,6 +392,13 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
         + ", ".join(flags)
         + ". Rewrite the same beat, obeying them."
     )
+    if "compliance" in flags:
+        note += (
+            " compliance means the NPC already refused. "
+            "Rewrite the beat as that refusal: they take one visible action "
+            "and the attempt does not succeed. Do not write them obeying, "
+            "undressing, kissing back, or leaving with the player."
+        )
     if retry_messages:
         last = retry_messages[-1]
         retry_messages[-1] = {
@@ -521,11 +557,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             if out_script:
                 text = scripting.run_output_modifier(out_script, text)
             player_text = (player_action or {}).get("text") or raw_query_text or ""
+            compliance = _compliance_flag(verdict, text)
             text, quality = _correct_narration(
                 text, player_text=player_text, retry_of=retry_of, built=built,
                 llm_cfg=llm_cfg, sampler=sampler, transport=transport,
                 out_script=out_script,
+                extra_flags=compliance,
             )
+            if "compliance" in quality:
+                from app import world_facts
+                text = world_facts.refusal_prose(_refusal_names(verdict))
+                quality = [flag for flag in quality if flag != "compliance"]
             if not text.strip():
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.

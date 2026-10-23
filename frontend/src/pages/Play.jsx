@@ -125,6 +125,7 @@ const FLAG_LABELS = {
   impersonation: 'escreveu pelo jogador',
   mechanics_leak: 'vazou a rolagem',
   language: 'respondeu em inglês',
+  compliance: 'obedeceu no lugar de recusar',
 }
 
 function RulesNote({ rules, flags }) {
@@ -173,10 +174,14 @@ function RulesNote({ rules, flags }) {
 function ActionCheckNote({ check }) {
   if (!check) return null
   if (check.possible) {
+    const cost = (check.cost || '').trim()
+    const consequence = (check.consequence || '').trim()
     return (
-      <p className="mt-1 px-4 text-[11px] leading-snug text-accent-pri/90">
-        Ação verificada: possível
-      </p>
+      <div className="mt-1 px-4 text-[11px] leading-snug text-accent-pri/90">
+        <p>Ação verificada: possível</p>
+        {cost ? <p className="text-secondary">Custo: {cost}</p> : null}
+        {consequence ? <p className="text-secondary">Consequência: {consequence}</p> : null}
+      </div>
     )
   }
   const blockers = Array.isArray(check.blockers) ? check.blockers : []
@@ -920,13 +925,15 @@ export default function Play() {
   }
 
   const doSee = async () => {
-    const last = actions?.[actions.length - 1]
-    if (!last || seeing || generating) return
+    const target = [...(actions || [])].reverse().find(
+      (a) => a.type === 'continue' || a.type === 'start' || a.type === 'story',
+    )
+    if (!target || seeing || generating) return
     setSeeing(true)
     setSeeOpen(false)
     try {
       const extra = seePrompt.trim()
-      const r = await api.see(id, { action_seq: last.seq, extra_prompt: extra || undefined })
+      const r = await api.see(id, { action_seq: target.seq, extra_prompt: extra || undefined })
       if (r?.action) {
         setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
         setSeePrompt('')
@@ -1069,7 +1076,7 @@ export default function Play() {
       {/* LEFT COLUMN: Main Story Pane */}
       <div className="flex flex-1 min-w-0 flex-col h-full overflow-hidden relative">
         {/* Header + Action Bar */}
-        <header className="flex shrink-0 flex-col gap-2 border-b border-subtle/70 bg-canvas/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        <header className="relative z-30 flex shrink-0 flex-col gap-2 border-b border-subtle/70 bg-canvas/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2">
             {/* Mobile Drawer Button */}
             <button
@@ -1157,48 +1164,23 @@ export default function Play() {
 
                 {shareButton}
 
-                {/* See Image Button & Popover */}
-                <div className="relative">
-                  <button
-                    onClick={() => canSee && setSeeOpen((o) => !o)}
-                    disabled={!canSee}
-                    aria-label={seeing ? 'Gerando a imagem da cena' : 'Gerar imagem da cena'}
-                    title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
-                  >
-                    <ImageIcon className="w-4 h-4 text-accent-pri" />
-                  </button>
-
-                  {seeOpen && canSee && (
-                    <div className="absolute right-0 top-full z-40 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-subtle bg-surface p-3 shadow-2xl animate-slide-in-top">
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
-                        Detalhe visual (opcional)
-                      </label>
-                      <textarea
-                        value={seePrompt}
-                        onChange={(e) => setSeePrompt(e.target.value)}
-                        rows={2}
-                        autoFocus
-                        placeholder='ex.: "ao pôr do sol, chuva na pedra"'
-                        className="w-full resize-y rounded-xl border border-subtle bg-surface-input px-3 py-2 text-xs text-primary outline-none focus:border-accent-pri transition placeholder:text-muted"
-                      />
-                      <div className="mt-2 flex justify-end gap-2">
-                        <button
-                          onClick={() => setSeeOpen(false)}
-                          className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-secondary hover:bg-elevated transition"
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          onClick={doSee}
-                          className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition"
-                        >
-                          Pintar a cena
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <button
+                  onClick={() => {
+                    if (!canSee) {
+                      toast(seeing
+                        ? 'A imagem ainda está sendo pintada.'
+                        : 'Disponível depois que a IA escreve uma resposta')
+                      return
+                    }
+                    setSeeOpen(true)
+                  }}
+                  disabled={seeing || generating}
+                  aria-label={seeing ? 'Gerando a imagem da cena' : 'Gerar imagem da cena'}
+                  title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                >
+                  <ImageIcon className="w-4 h-4 text-accent-pri" />
+                </button>
 
                 {/* Reader Typography Controls Popover */}
                 <button
@@ -1499,6 +1481,38 @@ export default function Play() {
           onClose={() => setEditing(null)}
           onSave={saveEdit}
         />
+      )}
+
+      {seeOpen && (
+        <Modal title="Pintar a cena" onClose={() => setSeeOpen(false)}>
+          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
+            Detalhe visual (opcional)
+          </label>
+          <textarea
+            value={seePrompt}
+            onChange={(e) => setSeePrompt(e.target.value)}
+            rows={3}
+            autoFocus
+            placeholder='ex.: "ao pôr do sol, chuva na pedra"'
+            className="w-full resize-y rounded-xl border border-subtle bg-surface-input px-3 py-2 text-sm text-primary outline-none focus:border-accent-pri transition placeholder:text-muted"
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSeeOpen(false)}
+              className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-secondary hover:bg-elevated transition"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={doSee}
+              className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition"
+            >
+              Pintar a cena
+            </button>
+          </div>
+        </Modal>
       )}
 
       {/* Reader Typography Modal */}

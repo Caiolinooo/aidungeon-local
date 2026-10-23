@@ -171,6 +171,41 @@ def test_item_card_and_yield_allow_the_attempt(tmp_db):
     assert found.resisted == []
 
 
+def test_first_person_kiss_and_grab_are_resisted(tmp_db):
+    adv = make_adventure()
+    cards = [{
+        "type": "character", "title": "Elara", "triggers": ["Elara"],
+        "entry": "A stranger.", "sheet": "",
+    }]
+    kiss = [
+        {"seq": 0, "type": "start", "text": "You stand in the yard. Elara watches you."},
+        {"seq": 1, "type": "do", "text": "\n> You beijo Elara\n"},
+    ]
+    found = world_facts.assess(adv, kiss, cards, [])
+    assert found.resisted == ["Elara"]
+    grab = [
+        {"seq": 0, "type": "start", "text": "You stand in the yard. Elara watches you."},
+        {"seq": 1, "type": "do", "text": "\n> You agarro ela\n"},
+    ]
+    found = world_facts.assess(adv, grab, cards, [])
+    assert found.resisted == ["Elara"]
+    assert world_facts.narration_complies("Elara te beija e se despe.")
+    assert not world_facts.narration_complies("Elara não te beija. Ela recusa.")
+    prose = world_facts.refusal_prose(["Elara"])
+    assert prose.startswith("Elara não cede.")
+    assert "não obedece" in prose
+    hit = [
+        {"seq": 0, "type": "start", "text": "You stand in the yard. Elara watches you."},
+        {"seq": 1, "type": "do", "text": "\n> You dar um cascudo na Elara\n"},
+    ]
+    found = world_facts.assess(adv, hit, cards, [])
+    assert found.resisted == ["Elara"]
+    assert world_facts.narration_lacks_refusal(
+        "O crânio de Elara encontra a neve e ela se cala.")
+    assert not world_facts.narration_lacks_refusal(
+        "Elara desvia e dá um passo para trás.")
+
+
 def test_pronoun_order_uses_the_person_already_in_the_scene(tmp_db):
     adv = make_adventure()
     cards = [{

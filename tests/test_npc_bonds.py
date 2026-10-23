@@ -54,6 +54,29 @@ def test_only_the_named_npc_changes(tmp_db):
     assert "bonds" not in tom_sheet
 
 
+def test_a_refused_kiss_costs_trust_instead_of_desire(tmp_db):
+    adv = make_adventure(title="Recusa")
+    with db.session() as conn:
+        card = db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            triggers=["Elara"], entry="Uma mulher.")
+        npc_bonds.apply_turn(
+            conn, adv["id"], "Eu beijo Elara",
+            "Elara recusa e dá um passo para trás.")
+        sheet = npc_assets.parse_sheet(db.get_card(conn, adv["id"], card["id"])["sheet"])
+    assert sheet["bonds"]["desire"] < npc_bonds.DEFAULTS["desire"]
+    assert sheet["bonds"]["fear"] > npc_bonds.DEFAULTS["fear"]
+    assert sheet["bonds"]["trust"] < npc_bonds.DEFAULTS["trust"]
+
+
+def test_moment_demands_a_visible_action():
+    card = {"type": "character", "title": "Elara", "triggers": ["Elara"], "sheet": ""}
+    block = npc_bonds.format_moment([card], "Elara está na pista.")
+    assert "visible action" in block
+    assert "stance resist" in block
+    assert "do not instantly undress" in block
+
+
 def test_stance_follows_the_numbers():
     def bonds(**over):
         data = dict(npc_bonds.DEFAULTS)

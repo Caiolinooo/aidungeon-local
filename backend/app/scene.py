@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, likeness, npc_assets, settings_store, world_facts
+from app import db, jobs, likeness, npc_assets, npc_bonds, settings_store, world_facts
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -382,11 +382,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     for card in cast_cards:
         if not card.get("portrait") and img_cfg.get("enabled"):
             jobs.enqueue_portrait(conn, adventure_id, card["id"])
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
         cast.append({
             "id": card["id"],
             "title": card.get("title") or "",
             "portrait": card.get("portrait"),
             "mood": _mood_near(text, card.get("title") or ""),
+            "stance": npc_bonds.stance_of(npc_bonds.read_bonds(sheet)),
         })
 
     return {

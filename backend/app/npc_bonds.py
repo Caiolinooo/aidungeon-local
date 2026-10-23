@@ -58,10 +58,36 @@ RULES: tuple[tuple[str, tuple[str, ...], dict[str, int]], ...] = (
     ("insult", (
         "insult*", "idiota", "stupid", "shut up", "cala a boca", "imbecil",
     ), {"relationship": -8, "trust": -6, "boldness": 4, "fear": 2}),
+    ("assault", (
+        "cascud*", "soco", "socar", "soca", "chute", "chutar", "chuto",
+        "esfaque*", "estrangul*", "matar", "mato", "kill*", "punch*",
+        "defec*", "cagar", "cago", "mij*", "cuspir", "cuspo",
+    ), {"fear": 22, "trust": -16, "relationship": -14, "boldness": 8}),
 )
 
 MOMENT_MARKER = "[NPC moment]"
 _SCENE_LIMIT = 4
+_MOMENT_CUE = (
+    "Private cue: follow it, do not quote it. "
+    "Each living person takes one visible action this beat "
+    "(a step, a hand, a refusal, a demand) besides any spoken line. "
+    "stance resist, flee or attack: an attempt to grab, move, undress, kiss or command them fails, "
+    "and they stop it with their body. "
+    "stance flirt: they choose the next move and do not instantly undress, leave or submit. "
+    "stance help: they help the task, not surrender. "
+    "Narrate the cost and the consequence. The scene must change."
+)
+_TURNED_DOWN = re.compile(
+    r"(?i)\b(recus\w*|refus\w*|afast\w*|n[aã]o deixa|n[aã]o cede|n[aã]o obedece|"
+    r"segura o pr[oó]prio espa[cç]o|d[aá] um passo para tr[aá]s)\b"
+)
+REFUSAL_DELTA = {
+    "trust": -6,
+    "relationship": -4,
+    "fear": 6,
+    "desire": -8,
+    "boldness": 2,
+}
 
 
 def clamp(value: int) -> int:
@@ -259,6 +285,10 @@ def apply_turn(conn, adventure_id: str, player_text: str, narration: str) -> int
     player_delta = deltas_for(player_text)
     source = player_text if player_delta else narration
     delta = player_delta or deltas_for(narration)
+    # Um beijo recusado não pode subir desejo: a tentativa falhou.
+    # Medo e queda de confiança de uma agressão ficam.
+    if player_delta and delta.get("desire", 0) > 0 and _TURNED_DOWN.search(narration or ""):
+        delta = dict(REFUSAL_DELTA)
     if not delta:
         return 0
     cards = db.list_cards(conn, adventure_id)
@@ -307,7 +337,7 @@ def format_moment(cards: list[dict], scene_text: str) -> str:
     present = characters_in_text(cards, scene_text)[:_SCENE_LIMIT]
     if not present:
         return ""
-    lines = [f"{MOMENT_MARKER} Private cue: follow it, do not quote it."]
+    lines = [f"{MOMENT_MARKER} {_MOMENT_CUE}"]
     lines.extend(_moment_line(card, scene_text) for card in present)
     return "\n".join(lines)
 
