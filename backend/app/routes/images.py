@@ -549,6 +549,8 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
         "negative_extra": negative_extra,
         "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
         "caption": caption,
+        "cache_key": image_client.request_key(
+            img_cfg, prompt, negative_extra=negative_extra),
     }
 
 
@@ -579,6 +581,23 @@ def post_see(adventure_id: str, body: SeeRequest,
                             headers={"Preference-Applied": "respond-async"})
 
     plan = _plan_see(adventure_id, body, transport)
+    with db.session() as conn:
+        cached = db.find_cached_image(
+            conn, adventure_id, kind="scene", ref_id="",
+            cache_key=plan["cache_key"],
+        )
+    if cached:
+        image_id = db.new_id()
+        result = {
+            "file_path": cached["file_path"], "provider": cached["provider"],
+            "width": cached["width"], "height": cached["height"],
+        }
+        image = jobs.store_see(
+            adventure_id, plan["caption"], result, image_id=image_id,
+            prompt=plan["prompt"], negative_prompt=plan["negative_prompt"],
+            cache_key=plan["cache_key"], reused_from=cached["id"])
+        log.info("see: imagem %s reusada para aventura %s", cached["id"], adventure_id)
+        return image
     image_id = db.new_id()
     try:
         result = image_client.generate_image(
@@ -587,7 +606,8 @@ def post_see(adventure_id: str, body: SeeRequest,
     except image_client.ImageError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     image = jobs.store_see(adventure_id, plan["caption"], result, image_id=image_id,
-                           prompt=plan["prompt"], negative_prompt=plan["negative_prompt"])
+                           prompt=plan["prompt"], negative_prompt=plan["negative_prompt"],
+                           cache_key=plan["cache_key"])
     log.info("see: imagem %s gerada para aventura %s (%s)",
              image_id, adventure_id, result["provider"])
     return image

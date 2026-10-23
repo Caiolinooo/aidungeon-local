@@ -189,11 +189,6 @@ def test_first_person_kiss_and_grab_are_resisted(tmp_db):
     ]
     found = world_facts.assess(adv, grab, cards, [])
     assert found.resisted == ["Elara"]
-    assert world_facts.narration_complies("Elara te beija e se despe.")
-    assert not world_facts.narration_complies("Elara não te beija. Ela recusa.")
-    prose = world_facts.refusal_prose(["Elara"])
-    assert prose.startswith("Elara não cede.")
-    assert "não obedece" in prose
     hit = [
         {"seq": 0, "type": "start", "text": "You stand in the yard. Elara watches you."},
         {"seq": 1, "type": "do", "text": "\n> You dar um cascudo na Elara\n"},

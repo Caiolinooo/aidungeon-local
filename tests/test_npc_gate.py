@@ -1,0 +1,177 @@
+"""O adjudicador é uma chamada LLM separada e sem pisos/frases prontas."""
+
+from __future__ import annotations
+
+import json
+
+from app import db, npc_assets, npc_gate
+
+
+def _card(title, sheet, entry=""):
+    return {
+        "type": "character",
+        "title": title,
+        "entry": entry,
+        "sheet": json.dumps(sheet),
+    }
+
+
+def _capture(monkeypatch, response: str):
+    calls = []
+
+    def fake(cfg, messages, **kwargs):
+        calls.append((cfg, messages, kwargs))
+        return response
+
+    monkeypatch.setattr("app.llm_client.chat_completion", fake)
+    return calls
+
+
+def test_ensure_saved_is_idempotent_and_creates_body_state(tmp_db):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Adjudicação")
+    with db.session() as conn:
+        elara = db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            entry="Uma inimiga antiga, desconfiada de todos.",
+        )
+        first = npc_gate.ensure_saved(conn, adv["id"])
+        again = npc_gate.ensure_saved(conn, adv["id"])
+        sheet = npc_assets.parse_sheet(
+            db.get_card(conn, adv["id"], elara["id"])["sheet"])
+    assert first == 1
+    assert again == 0
+    assert sheet["alignment"] == "oposto"
+    assert sheet["body_state"]["pain"] == 0
+    assert sheet["body_state"]["conditions"] == []
+
+
+def test_decide_sends_every_person_body_and_memories(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Adjudicação")
+        elara = db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            entry="Guarda ferida na clareira.",
+            sheet=json.dumps({
+                "alignment": "desconfiado",
+                "body_state": {"v": 1, "pain": 6, "conditions": [{
+                    "id": "c1", "kind": "cut", "location": "left cheek",
+                    "severity": 3, "description": "corte no rosto",
+                    "visual_en": "small cut on the left cheek", "active": True,
+                    "portrait_visible": True, "scene_visible": True,
+                }]},
+                "expression": "guarded",
+            }),
+        )
+        db.insert_card(
+            conn, adv["id"], title="Bram", type="character",
+            entry="Mercador que observa.",
+        )
+        db.insert_action(conn, adv["id"], 0, "start", "Elara segura a faca.")
+        npc_life = __import__("app.npc_life", fromlist=["add_memory"])
+        npc_life.add_memory(conn, adv["id"], elara["id"], "event",
+                            "O jogador já tentou passar por ela.")
+    calls = _capture(monkeypatch, json.dumps({
+        "decision": "partial",
+        "outcome": "Elara barra a passagem, mas deixa o jogador falar.",
+        "reactions": [{"npc": "Elara", "card_id": elara["id"],
+                       "reaction": "Ela ergue a faca.", "line": "Fale rápido."}],
+        "initiative": None,
+        "cue": "Mostre a guarda ferida e desconfiada.",
+    }))
+    result = npc_gate.decide(
+        adv["id"], "Eu empurro Elara e passo.", {}, None,
+        world_check={"possible": False, "blockers": ["parede"]})
+    assert result["decision"] == "partial"
+    assert result["reactions"][0]["npc"] == "Elara"
+    assert result["cue"]
+    payload = json.loads(calls[0][1][1]["content"])
+    assert payload["action"] == "Eu empurro Elara e passo."
+    assert payload["world_check"]["possible"] is False
+    people = {item["name"]: item for item in payload["people"]}
+    assert set(people) == {"Elara", "Bram"}
+    assert people["Elara"]["body"]["pain"] == 6
+    assert "small cut" in people["Elara"]["body"]["visual_portrait"]
+    assert people["Elara"]["memories"]
+
+
+def test_no_floor_model_may_allow_a_harm_attempt(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Sem piso")
+        db.insert_card(conn, adv["id"], title="Elara", type="character",
+                       entry="Uma criança frágil.")
+        db.insert_action(conn, adv["id"], 0, "start", "Elara está aqui.")
+    _capture(monkeypatch, json.dumps({
+        "decision": "allow",
+        "outcome": "Elara cambaleia e cai.",
+        "reactions": [{"npc": "Elara", "card_id": "", "reaction": "Ela cai."}],
+        "cue": "Ela cai, ferida.",
+    }))
+    result = npc_gate.decide(adv["id"], "Eu bato nela.", {}, None)
+    assert result["decision"] == "allow"
+    assert result["outcome"] == "Elara cambaleia e cai."
+    assert "não deixa" not in result["cue"]
+
+
+def test_llm_failure_returns_none_without_canned_text(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Falha")
+        db.insert_card(conn, adv["id"], title="Elara", type="character",
+                       entry="Guarda.")
+        db.insert_action(conn, adv["id"], 0, "start", "Elara está aqui.")
+
+    def down(*args, **kwargs):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr("app.llm_client.chat_completion", down)
+    assert npc_gate.decide(adv["id"], "Eu passo.", {}, None) is None
+
+
+def test_own_beat_uses_llm_and_returns_initiative(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Iniciativa")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda inquieta.")
+        db.insert_action(conn, adv["id"], 0, "start", "Elara está aqui.")
+    _capture(monkeypatch, json.dumps({
+        "decision": "own_beat",
+        "outcome": "Elara decide falar.",
+        "reactions": [],
+        "initiative": {"npc": "Elara", "card_id": elara["id"],
+                       "line": "Elara bate a lança no chão."},
+        "cue": "Deixe Elara agir.",
+    }))
+    result = npc_gate.own_beat(adv["id"], {}, None)
+    assert result["decision"] == "own_beat"
+    assert result["initiative"]["npc"] == "Elara"
+
+
+def test_remember_stores_only_ai_reactions(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Memória")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda.")
+    result = {
+        "decision": "refuse",
+        "reactions": [{"npc": "Elara", "card_id": elara["id"],
+                       "reaction": "Ela não abaixa a lança.", "line": ""}],
+    }
+    with db.session() as conn:
+        saved = npc_gate.remember(conn, adv["id"], result)
+        memories = __import__("app.npc_life", fromlist=["list_memories"]).list_memories(
+            conn, adv["id"], elara["id"])
+    assert saved == 1
+    assert memories[0]["text"] == "Ela não abaixa a lança."
+
+
+def test_cue_block_never_invents_player_prose():
+    cue = npc_gate.cue_block({
+        "decision": "refuse",
+        "outcome": "Elara não deixa passar.",
+        "reactions": [{"npc": "Elara", "reaction": "Ela ergue a lança.", "line": "Volte."}],
+        "initiative": None,
+        "cue": "Mostre a recusa.",
+    })
+    assert "Elara não deixa passar." in cue
+    assert "NÃO tem o efeito" in cue or "NÃO" in cue
+    assert "Fale" not in cue or "Fala possível" in cue

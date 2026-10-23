@@ -286,9 +286,15 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
 
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
-                    include_people: bool = False, explicit: bool = False) -> dict:
+                    include_people: bool = False, explicit: bool = False,
+                    cache_key: str = "") -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
+    if not current and cache_key:
+        current = db.find_cached_image(
+            conn, adventure_id, kind="backdrop", ref_id=ref,
+            cache_key=cache_key,
+        )
     fallback = current or db.latest_image(conn, adventure_id, "backdrop")
     image = db.image_ref(fallback) if fallback else None
 
@@ -358,24 +364,22 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     explicit = False if decision.refusal else (
         decision.allow_explicit and is_explicit(moment)
     )
-    clause = _visual_clause(paint_cast, explicit=explicit)
-    signature = f"{_slug(title)}|{atmosphere}"
-    if clause:
-        # O fundo antigo (pessoa errada) não serve quando o rosto do card entra.
-        signature = f"{signature}|{_slug(clause)[:48]}"
-    if explicit:
-        signature = f"{signature}|explicit"
-    ref = f"{adventure_id}:{signature}"
     img_cfg = settings_store.effective_image_settings(conn)
     prompt, include_people = _prompt(
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
         paint_text,
     )
+    # Hash do prompt FINAL + config: lugar, clima, elenco, roupa, feridas,
+    # estilo e explicit mudam a assinatura; nada disso fica de fora.
+    cache_key = jobs.backdrop_cache_key(
+        img_cfg, prompt, include_people=include_people, explicit=explicit)
+    signature = cache_key[:40]
+    ref = f"{adventure_id}:{signature}"
     backdrop = _backdrop_state(
         conn, adventure_id, ref,
         enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
         include_people=include_people,
-        explicit=explicit,
+        explicit=explicit, cache_key=cache_key,
     )
 
     cast = []

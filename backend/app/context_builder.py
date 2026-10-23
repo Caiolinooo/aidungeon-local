@@ -100,8 +100,13 @@ BASE_SYSTEM_PROMPT = (
     "- Never narrate the player's inner thoughts, decisions, or next move.\n"
     "  Never write dialogue for the player.\n\n"
     "NPC agency (same priority as pacing):\n"
+    "- Each named person is a different individual, and so is the player. Never swap\n"
+    "  voice, body, memory, mana, or power between them.\n"
     "- Each named person takes one visible action this beat: a step, a hand,\n"
     "  a refusal, a demand, or a change to the room. A spoken reply alone is not a turn.\n"
+    "- A person may act from their own profile and alignment, with no player order.\n"
+    "- Mana and power are real weights. If the target outclasses the actor, the\n"
+    "  attempt does not land. A critical is only a tickle, not a victory.\n"
     "- If their stance is resist, flee, or attack, an attempt to grab, move, undress,\n"
     "  kiss, or command them fails. They stop it with their body. Do not write success.\n"
     "- If their stance is flirt, they may come closer, but they choose the next move.\n"
@@ -110,7 +115,8 @@ BASE_SYSTEM_PROMPT = (
     "- Narrate the cost and the consequence from the verification. The attempt\n"
     "  changes the scene even when it fails.\n\n"
     "Readability (always — do not copy clipped or run-on prose from earlier turns):\n"
-    "- Write at least 3 sentences per beat.\n"
+    "- Write at least 3 sentences per beat. A refused or limited NPC decision\n"
+    "  is the exception: at most two sentences, and the attempt does not succeed.\n"
     "- Write complete sentences in the story's language. Keep articles and\n"
     "  prepositions (the, a, an, of, in, to, and their equivalents).\n"
     "- Every sentence has a subject and a verb and ends with . ? or !\n"
@@ -342,7 +348,7 @@ def _select_cards(conn: sqlite3.Connection, adventure_id: str, recent_text: str,
 def _minds_block(conn: sqlite3.Connection, adventure_id: str, cards: list[dict],
                  budget_tokens: int) -> str:
     """Humor e memórias de quem já entrou no bloco de cards."""
-    from app import npc_assets, npc_life
+    from app import body_state, npc_assets, npc_life
     lines: list[str] = []
     present = [card for card in cards if (card.get("type") or "") == "character"]
     if not present:
@@ -360,6 +366,14 @@ def _minds_block(conn: sqlite3.Connection, adventure_id: str, cards: list[dict],
             " ".join(str(life.get(key) or "").split())
             for key in ("mood", "activity")
         ]
+        state = body_state.body_state_of(sheet)
+        if state.get("pain"):
+            bits.append(f"pain {state['pain']}/10")
+        if sheet.get("expression"):
+            bits.append(f"expression {sheet['expression']}")
+        condition_text = body_state.condition_context(state, limit=4)
+        if condition_text:
+            bits.append(condition_text.replace("\n", " | "))
         bits = [bit for bit in bits if bit]
         name = " ".join(str(card.get("title") or "").split()) or "NPC"
         head = f"{name} — {'; '.join(bits)}" if bits else name
@@ -420,7 +434,7 @@ def _is_multiplayer(conn: sqlite3.Connection, adventure: dict) -> bool:
 
 def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
     """Uma linha por participante: nome = título + resumo curto da ficha."""
-    from app import db, npc_assets
+    from app import body_state, db, npc_assets
     lines: list[str] = []
     cards = {
         card["player_username"]: card
@@ -452,11 +466,42 @@ def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
         notes = " ".join(str(sheet.get("notes") or "").split())
         if notes:
             bits.append(notes[:180])
+        state = body_state.body_state_of(sheet)
+        if state.get("pain"):
+            bits.append(f"pain {state['pain']}/10")
+        if sheet.get("expression"):
+            bits.append(f"expression {sheet['expression']}")
+        condition_text = body_state.condition_context(state, limit=5)
+        if condition_text:
+            bits.append(condition_text.replace("\n", " | "))
         stats = sheet.get("stats")
         if isinstance(stats, dict) and stats:
             bits.append(" ".join(f"{key} {stats[key]}" for key in stats))
         extra = "; ".join(bits)
         lines.append(f"{username} = {title}" + (f" — {extra}" if extra else ""))
+    return "\n".join(lines)
+
+
+def player_body_block(conn: sqlite3.Connection, adventure: dict) -> str:
+    """Corpo/dor/expressão dos personagens-jogador, sempre presente."""
+    from app import body_state, db, npc_assets
+    lines: list[str] = []
+    for card in db.list_player_characters(conn, adventure["id"]):
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        state = body_state.body_state_of(sheet)
+        name = card.get("title") or card.get("player_username") or "Jogador"
+        bits = []
+        if state.get("pain"):
+            bits.append(f"pain {state['pain']}/10")
+        if sheet.get("expression"):
+            bits.append(f"expression {sheet['expression']}")
+        if sheet.get("current_outfit"):
+            bits.append(f"wearing {sheet['current_outfit']}")
+        conditions = body_state.condition_context(state, limit=8)
+        if conditions:
+            bits.append(conditions.replace("\n", " | "))
+        if bits:
+            lines.append(f"{name}: " + "; ".join(bits))
     return "\n".join(lines)
 
 
@@ -668,6 +713,10 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # jogador edita nos widgets. Entra sempre no <lore>, mesmo com pack de
     # regras: o narrador precisa saber o que a ação pode custar. O bloco do
     # motor vem em seguida e não substitui este.
+    player_body = player_body_block(conn, adventure)
+    if player_body:
+        volatile_parts.append("[Player body]\n" + _fit_budget(
+            player_body, int(budgets.get("player_state", 320))))
     player_state = render_player_state(adventure.get("ui_state") or {})
     if player_state:
         volatile_parts.append("[Player state]\n" + _fit_budget(

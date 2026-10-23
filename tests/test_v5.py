@@ -75,7 +75,9 @@ def test_sheet_roundtrip_via_api(client):
     resp = client.patch(f"/api/adventures/{adv['id']}/cards/{card['id']}",
                         json={"sheet": new_sheet})
     assert resp.status_code == 200, resp.text
-    assert json.loads(resp.json()["sheet"]) == new_sheet
+    updated = json.loads(resp.json()["sheet"])
+    assert updated.items() >= new_sheet.items()
+    assert updated["portrait_state_key"]
 
     listed = client.get(f"/api/adventures/{adv['id']}/cards").json()
     assert json.loads(listed[0]["sheet"])["notes"].endswith("paperwork")
@@ -83,7 +85,7 @@ def test_sheet_roundtrip_via_api(client):
     # PATCH sem sheet preserva a ficha existente
     resp = client.patch(f"/api/adventures/{adv['id']}/cards/{card['id']}",
                         json={"entry": "Sky captain of the Kestrel."})
-    assert json.loads(resp.json()["sheet"]) == new_sheet
+    assert json.loads(resp.json()["sheet"]).items() >= new_sheet.items()
 
 
 def test_adventure_from_scenario_preserves_sheet(client):

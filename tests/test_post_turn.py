@@ -22,6 +22,11 @@ CHOICES = [{"type": "do", "text": "knock"}, {"type": "say", "text": "hello"},
            {"type": "story", "text": "rain"}]
 
 
+def _choice_calls(llama):
+    return [call for call in llama.aux_calls
+            if "next actions" in call["messages"][0]["content"].casefold()]
+
+
 class _Llama:
     """llama-server fake: narrativa em SSE, auxiliares em JSON. `gate` segura
     as auxiliares até ser setado."""
@@ -179,9 +184,9 @@ def test_choices_are_pregenerated_and_served_from_cache(client, pipeline):
     resp = client.post(f"/api/adventures/{adv['id']}/choices")
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"choices": CHOICES}
-    assert len(llama.aux_calls) == 1
-    assert llama.aux_calls[0]["id_slot"] == 1
-    assert llama.aux_calls[0]["cache_prompt"] is False
+    assert len(_choice_calls(llama)) == 1
+    assert _choice_calls(llama)[0]["id_slot"] == 1
+    assert _choice_calls(llama)[0]["cache_prompt"] is False
     pipeline.wait_idle(adv["id"], calls=2)
 
 
@@ -203,7 +208,7 @@ def test_choices_wait_is_bounded_and_the_result_still_arrives(client, monkeypatc
     assert ready.data["choices"] == CHOICES
     resp = client.post(f"/api/adventures/{adv['id']}/choices")
     assert resp.json() == {"choices": CHOICES}
-    assert len(llama.aux_calls) == 1
+    assert len(_choice_calls(llama)) == 1
 
 
 def test_failed_generation_is_published_and_retried_on_demand(client):
@@ -258,19 +263,19 @@ def test_retry_undo_and_edit_never_reuse_old_choices(client):
     _play(adv["id"], transport)
     assert client.post(url).status_code == 200
     assert client.post(url).status_code == 200
-    assert len(llama.aux_calls) == 1
+    assert len(_choice_calls(llama)) == 1
     out = list(game_engine.handle_retry(adv["id"], transport=transport))
     assert out[-1]["event"] == "done"
     assert client.post(url).status_code == 200
-    assert len(llama.aux_calls) == 2
+    assert len(_choice_calls(llama)) == 2
     edited = out[-1]["data"]["action"]
     assert client.patch(f"/api/actions/{edited['id']}", json={"text": "The gate creaks."}) \
         .status_code == 200
     assert client.post(url).status_code == 200
-    assert len(llama.aux_calls) == 3
+    assert len(_choice_calls(llama)) == 3
     assert client.post(f"/api/adventures/{adv['id']}/undo").status_code == 200
     assert client.post(url).status_code == 200
-    assert len(llama.aux_calls) == 4
+    assert len(_choice_calls(llama)) == 4
 
 
 def test_choices_disabled_skip_pregeneration(pipeline, monkeypatch):
@@ -280,7 +285,7 @@ def test_choices_disabled_skip_pregeneration(pipeline, monkeypatch):
     llama = _Llama()
     _play(adv["id"], llama.transport())
     pipeline.wait_idle(adv["id"], calls=2)
-    assert llama.aux_calls == []
+    assert _choice_calls(llama) == []
     assert choices_service.start(adv["id"]) is None
 
 

@@ -376,24 +376,9 @@ _REFUSAL_BEAT = re.compile(
 )
 
 
-def narration_complies(text: str) -> bool:
-    """A prosa entregou a obediência que o mundo já tinha barrado."""
-    return _fake_comply(text)
-
-
 def narration_lacks_refusal(text: str) -> bool:
     """O turno não mostra a pessoa parando a tentativa."""
     return _REFUSAL_BEAT.search(text or "") is None
-
-
-def refusal_prose(names: list[str]) -> str:
-    """Piso do turno quando o narrador escreve sucesso numa recusa."""
-    who = (names[0] if names else "A pessoa à frente").strip() or "A pessoa à frente"
-    return (
-        f"{who} não cede. Dá um passo para trás, afasta o contato e segura o próprio espaço. "
-        f"A tentativa para no meio. {who} não obedece, não se despe e não sai do lugar. "
-        f"O olhar cobra a sua resposta, e a cena continua aberta."
-    )
 
 
 def _place_leaked(phrase: str, text: str, before: str, cards: list[dict]) -> bool:

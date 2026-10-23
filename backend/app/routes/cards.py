@@ -97,10 +97,19 @@ def get_card(adventure_id: str, card_id: str) -> dict:
 @router.patch("/{adventure_id}/cards/{card_id}")
 def update_card(adventure_id: str, card_id: str, body: StoryCardUpsert) -> dict:
     fields = body.model_dump(exclude_unset=True)
-    if "sheet" in fields:
-        fields["sheet"] = _sheet_str(fields["sheet"])
     with db.session() as conn:
+        current = db.get_card(conn, adventure_id, card_id)
+        if current and "sheet" in fields:
+            fields["sheet"] = db._merge_player_sheet(
+                current.get("sheet") or "", _sheet_str(fields["sheet"]))
         card = db.update_card(conn, adventure_id, card_id, fields)
+        if card and "sheet" in fields:
+            try:
+                from app import portrait_sync
+                portrait_sync.sync_card(conn, adventure_id, card_id)
+                card = db.get_card(conn, adventure_id, card_id)
+            except Exception:
+                pass
         if card:
             db.attach_portrait(conn, card)
     if not card:

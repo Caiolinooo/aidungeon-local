@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any
 
-from app import db, jobs, likeness, llm_client, npc_assets, settings_store, world_facts
+from app import body_state, db, jobs, likeness, llm_client, npc_assets, settings_store, world_facts
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -43,6 +43,24 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
       "stat_delta": {"str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0}
     }
   ],
+  "bodies": [
+    {
+      "target": "player or exact character name",
+      "card_id": "exact id when known, else empty",
+      "pain": 0,
+      "expression": "short English expression, or empty",
+      "current_outfit": "what they are wearing now, or empty",
+      "conditions": [
+        {"op": "add|update|heal|remove", "id": "existing condition id, or empty for new",
+         "kind": "wound|cut|bruise|burn|fracture|scar|amputation|tattoo|mark|illness|other",
+         "location": "left cheek", "severity": 1,
+         "description": "one short sentence in the language of the story",
+         "visual_en": "short English visual phrase for image prompts",
+         "permanent": false, "visibility": "portrait|scene|hidden",
+         "portrait_visible": false, "scene_visible": true}
+      ]
+    }
+  ],
   "places": [{"name": "place", "aliases": ["short name"], "existing_title": "", "summary": "what the passage established", "facts": ["one new fact"]}],
   "factions": [{"name": "group", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}],
   "items": [{"name": "item", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}]
@@ -64,6 +82,27 @@ Rules:
 - facts are short and new. Do not repeat a fact already on the card.
 - real is true only when the passage treats them as a living public figure who is themselves, never for a fictional character.
 - If nobody qualifies, return empty arrays.
+- bodies is the ONLY authority on injuries, pain and expression. Read the canon
+  passage and decide whether each person's body changed. Do not add pain or a
+  wound only because someone was attacked; only if the passage shows it landed.
+- `target` may be "player" or the exact card title. The player card is not in
+  `characters`; use `bodies` for the player.
+- pain is 0-10. Keep old pain unless the passage changes it; no automatic decay.
+- conditions are persistent: add a new one, update an existing id, or heal/remove.
+  Never duplicate a wound that already exists in the roster. Use the roster's
+  condition ids when updating/healing.
+- portrait_visible is true only when the injury/change is visible in a bust or
+  upper-body portrait (face, neck, hands, exposed chest/arms). A wound under
+  armor stays scene_visible=true and portrait_visible=false.
+- scene_visible is true when a full-body/scene image would show it.
+- visibility hidden means neither image shows it.
+- visual_en must be a concise English phrase for the image model, e.g.
+  "small fresh cut on the left cheek", "bruised knuckles", "bandaged right forearm".
+- expression is a short English phrase for the face, e.g. "guarded", "furious",
+  "relieved"; use it only when the passage justifies it.
+- current_outfit is what they are wearing NOW after the passage, only if it
+  changed. Otherwise empty; the sheet keeps the previous outfit.
+- If nobody's body/expression/outfit changed, return an empty bodies array.
 Output ONLY the JSON object."""
 
 _WORLD_KEYS = (
@@ -289,6 +328,7 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     if appearance and (look_changed or not locked):
         sheet["appearance"] = appearance[:500]
     if clothing and (look_changed or not locked):
+        sheet["current_outfit"] = clothing[:240]
         sheet["clothing"] = clothing[:300]
     portrait_prompt = ""
     if look_changed and (sheet.get("appearance") or sheet.get("clothing")):
@@ -327,6 +367,12 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
         card.update(updated)
     if not card.get("portrait_image_id") and npc_assets.has_visual(updated or card):
         jobs.enqueue_portrait(conn, adventure_id, card["id"])
+    elif updated:
+        try:
+            from app import portrait_sync
+            portrait_sync.sync_card(conn, adventure_id, card["id"])
+        except Exception:
+            log.warning("npc_chronicle: variante de retrato falhou", exc_info=True)
     return "updated"
 
 
@@ -382,10 +428,62 @@ def _incoming_plot(payload: dict, plot: str) -> str:
     return line[:800] if len(line) >= 12 else ""
 
 
-def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str) -> dict:
+def _snapshot_for_undo(conn, source_action_id: int | None, snapshots: dict[str, dict]) -> None:
+    if not source_action_id or not snapshots:
+        return
+    current = db.get_action_rules(conn, source_action_id) or {}
+    merged = current.get("body_before") if isinstance(current.get("body_before"), dict) else {}
+    for card_id, snap in snapshots.items():
+        merged.setdefault(card_id, snap)
+    db.merge_action_rules(conn, source_action_id, {"body_before": merged})
+
+
+def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, source_seq) -> int:
+    items = payload.get("bodies")
+    if not isinstance(items, list):
+        return 0
+    cards = db.list_cards(conn, adventure_id)
+    by_id = {card.get("id"): card for card in cards}
+    by_name = {(card.get("title") or "").casefold(): card for card in cards if card.get("title")}
+    player_cards = [card for card in cards if card.get("player_username")]
+    snapshots: dict[str, dict] = {}
+    changed = 0
+    for raw in items[:24]:
+        if not isinstance(raw, dict):
+            continue
+        target = " ".join(str(raw.get("target") or "").split())
+        card = by_id.get(raw.get("card_id")) or by_name.get(target.casefold())
+        if card is None and target.casefold() in ("player", "jogador", "you"):
+            card = player_cards[0] if len(player_cards) == 1 else None
+        if card is None:
+            continue
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        before = body_state.snapshot(sheet)
+        updated = body_state.apply_to_sheet(
+            sheet, raw, source_action_id=source_action_id, source_seq=source_seq)
+        if updated == sheet:
+            continue
+        if card["id"] not in snapshots:
+            snapshots[card["id"]] = before
+        db.update_card(conn, adventure_id, card["id"], {
+            "sheet": json.dumps(updated, ensure_ascii=False),
+        })
+        changed += 1
+        try:
+            from app import portrait_sync
+            portrait_sync.sync_card(conn, adventure_id, card["id"])
+        except Exception:
+            log.warning("npc_chronicle: retrato não sincronizado", exc_info=True)
+    _snapshot_for_undo(conn, source_action_id, snapshots)
+    return changed
+
+
+def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str, *,
+                    source_action_id: int | None = None,
+                    source_seq: int | None = None) -> dict:
     """Aplica o JSON do passe. Não chama o LLM."""
     if not isinstance(payload, dict):
-        return {"created": 0, "updated": 0}
+        return {"created": 0, "updated": 0, "bodies": 0}
     incoming = _incoming_plot(payload, plot)
     protagonists = protagonist_names(plot) | protagonist_names(incoming)
     all_cards = db.list_cards(conn, adventure_id)
@@ -413,9 +511,13 @@ def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str) -> dict:
             elif kind == "updated":
                 updated += 1
 
+    body_count = _apply_bodies(
+        conn, adventure_id, payload,
+        source_action_id=source_action_id, source_seq=source_seq,
+    )
     if incoming:
         db.update_adventure_memory(conn, adventure_id, plot_essentials=incoming)
-    return {"created": created, "updated": updated}
+    return {"created": created, "updated": updated, "bodies": body_count}
 
 
 def _turn_has_entity_signal(recent_text: str, cards: list[dict], plot: str) -> bool:
@@ -465,25 +567,49 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     roster = []
     for card in cards:
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        state = body_state.body_state_of(sheet)
         roster.append({
+            "card_id": card.get("id") or "",
             "title": card.get("title") or "",
             "entry": (card.get("entry") or "")[:300],
             "status": sheet.get("status") or "",
             "appearance": (sheet.get("appearance") or "")[:200],
+            "current_outfit": (sheet.get("current_outfit") or sheet.get("clothing") or "")[:160],
+            "expression": (sheet.get("expression") or "")[:80],
+            "pain": state.get("pain"),
+            "conditions": state.get("conditions") or [],
             "notes": (sheet.get("notes") or "")[:240],
             "stats": sheet.get("stats") or {},
         })
+    players = []
+    for card in all_cards:
+        if not card.get("player_username"):
+            continue
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        state = body_state.body_state_of(sheet)
+        players.append({
+            "card_id": card.get("id") or "",
+            "title": card.get("title") or card.get("player_username") or "Jogador",
+            "player_username": card.get("player_username") or "",
+            "current_outfit": (sheet.get("current_outfit") or sheet.get("clothing") or "")[:160],
+            "expression": (sheet.get("expression") or "")[:80],
+            "pain": state.get("pain"),
+            "conditions": state.get("conditions") or [],
+        })
     user = (
         f"{assessment.facts_line}\n\n"
-        f"Protagonist (do not create a card): {plot[:500]}\n\n"
-        f"Existing characters:\n{json.dumps(roster, ensure_ascii=False)[:4000]}\n\n"
+        f"Protagonist (do not create a card): {plot[:800]}\n\n"
+        f"Existing characters (roster — use these exact card ids/condition ids):\n"
+        f"{json.dumps(roster, ensure_ascii=False)[:7000]}\n\n"
+        f"Player characters (use bodies target='player' or exact title):\n"
+        f"{json.dumps(players, ensure_ascii=False)[:2500]}\n\n"
         f"Canon passage (only this establishes facts):\n{text or '(none)'}\n\n"
         f"Player attempt (NOT canon):\n{attempt or '(none)'}"
     )
     content = llm_client.chat_completion(
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        role="chronicle", temperature=0.2, max_tokens=550, transport=transport,
+        role="chronicle", temperature=0.2, max_tokens=1600, transport=transport,
     )
     try:
         payload = npc_assets._extract_json(content)
@@ -492,8 +618,13 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         return {"created": 0, "updated": 0}
     payload = world_facts.filter_chronicle_payload(payload, assessment)
     _confirm_real_people(payload, transport)
+    latest = next((action for action in reversed(actions) if action.get("type") == "continue"), None)
     with db.session() as conn:
-        result = apply_chronicle(conn, adventure_id, payload, plot)
+        result = apply_chronicle(
+            conn, adventure_id, payload, plot,
+            source_action_id=(latest or {}).get("id"),
+            source_seq=(latest or {}).get("seq"),
+        )
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)
     return result
 

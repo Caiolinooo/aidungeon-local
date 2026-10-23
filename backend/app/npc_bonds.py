@@ -4,7 +4,7 @@ Não é um segundo motor de regras. Cinco inteiros na ficha (0–100) mudam
 com a ação do jogador, por regras fixas, e o turno seguinte mostra o
 resultado só na user final — o prefixo cacheado da janela não se mexe.
 
-Pesos: relationship, trust, fear, desire, boldness.
+Pesos: relationship, trust, distrust, fear, desire, boldness.
 Postura: help, resist, flirt, flee, attack.
 """
 
@@ -16,10 +16,11 @@ import re
 from app import db, npc_assets
 from app.voice_emotion import emotion_from_text
 
-BOND_KEYS = ("relationship", "trust", "fear", "desire", "boldness")
+BOND_KEYS = ("relationship", "trust", "distrust", "fear", "desire", "boldness")
 DEFAULTS = {
     "relationship": 40,
     "trust": 40,
+    "distrust": 30,
     "fear": 15,
     "desire": 15,
     "boldness": 40,
@@ -43,26 +44,26 @@ RULES: tuple[tuple[str, tuple[str, ...], dict[str, int]], ...] = (
     ("kindness", (
         "thank", "thanks", "obrigad*", "agradec*", "gentil", "comfort*",
         "heal", "heals", "healed", "protege*", "protect*", "kindness", "acolh*",
-    ), {"trust": 8, "relationship": 5, "fear": -4}),
+    ), {"trust": 8, "relationship": 5, "fear": -4, "distrust": -6}),
     ("threat", (
         "threat*", "kill*", "matar", "attack*", "atacar", "ataco",
         "ataca", "atacou", "soco", "punch*", "ameac*",
-    ), {"fear": 18, "trust": -10, "relationship": -6}),
+    ), {"fear": 18, "trust": -10, "relationship": -6, "distrust": 10}),
     ("gift", (
         "gift", "presente", "moeda", "moedas", "recompensa",
         "give you", "gives you", "gave you", "te dou", "lhe dou",
-    ), {"desire": 6, "relationship": 8, "trust": 3}),
+    ), {"desire": 6, "relationship": 8, "trust": 3, "distrust": -4}),
     ("flirt", (
         "flirt*", "kiss*", "beij*", "seduc*", "te amo", "love you",
     ), {"desire": 10, "relationship": 4, "boldness": 2}),
     ("insult", (
         "insult*", "idiota", "stupid", "shut up", "cala a boca", "imbecil",
-    ), {"relationship": -8, "trust": -6, "boldness": 4, "fear": 2}),
+    ), {"relationship": -8, "trust": -6, "boldness": 4, "fear": 2, "distrust": 8}),
     ("assault", (
         "cascud*", "soco", "socar", "soca", "chute", "chutar", "chuto",
         "esfaque*", "estrangul*", "matar", "mato", "kill*", "punch*",
         "defec*", "cagar", "cago", "mij*", "cuspir", "cuspo",
-    ), {"fear": 22, "trust": -16, "relationship": -14, "boldness": 8}),
+    ), {"fear": 22, "trust": -16, "relationship": -14, "boldness": 8, "distrust": 14}),
 )
 
 MOMENT_MARKER = "[NPC moment]"
@@ -87,6 +88,7 @@ REFUSAL_DELTA = {
     "fear": 6,
     "desire": -8,
     "boldness": 2,
+    "distrust": 8,
 }
 
 
@@ -163,6 +165,8 @@ def stance_of(bonds: dict[str, int]) -> str:
         return "flee"
     if trust <= 25 and boldness >= 60 and relationship <= 35:
         return "attack"
+    if bonds.get("distrust", 0) >= 60:
+        return "resist"
     if desire >= 65 and trust >= 35 and fear < 50:
         return "flirt"
     if trust >= 55 and relationship >= 50 and fear < 45:
@@ -329,7 +333,9 @@ def _moment_line(card: dict, text: str) -> str:
         stance = stance_of(bonds)
         want = _WANTS[stance]
     numbers = " ".join(f"{key} {bonds[key]}" for key in BOND_KEYS)
-    return f"{name}: emotion {emotion}; wants {want}; stance {stance}; {numbers}"
+    alignment = str(sheet.get("alignment") or "").strip()
+    align = f"; alignment {alignment}" if alignment in ("aliado", "neutro", "desconfiado", "oposto") else ""
+    return f"{name}: emotion {emotion}; wants {want}; stance {stance}{align}; {numbers}"
 
 
 def format_moment(cards: list[dict], scene_text: str) -> str:

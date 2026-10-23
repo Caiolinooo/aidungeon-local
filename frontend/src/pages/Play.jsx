@@ -173,33 +173,14 @@ function RulesNote({ rules, flags }) {
 
 function ActionCheckNote({ check }) {
   if (!check) return null
-  if (check.possible) {
-    const cost = (check.cost || '').trim()
-    const consequence = (check.consequence || '').trim()
-    return (
-      <div className="mt-1 px-4 text-[11px] leading-snug text-accent-pri/90">
-        <p>Ação verificada: possível</p>
-        {cost ? <p className="text-secondary">Custo: {cost}</p> : null}
-        {consequence ? <p className="text-secondary">Consequência: {consequence}</p> : null}
-      </div>
-    )
-  }
-  const blockers = Array.isArray(check.blockers) ? check.blockers : []
-  const shown = blockers.slice(0, 3)
-  const rest = blockers.length - shown.length
+  const line = check.possible
+    ? (check.consequence || '').trim()
+    : ((Array.isArray(check.blockers) ? check.blockers[0] : '') || '').trim()
+  if (!line) return null
   return (
-    <div className="mt-1 max-w-full px-4 text-[11px] leading-snug text-warn-200/95">
-      {shown.length === 0 ? (
-        <p>Ação verificada: não é possível</p>
-      ) : (
-        <ul className="list-disc pl-4">
-          {shown.map((line, i) => (
-            <li key={i} className="break-words">{line}</li>
-          ))}
-          {rest > 0 && <li>…</li>}
-        </ul>
-      )}
-    </div>
+    <p className={`mt-1 px-4 text-[11px] leading-snug ${check.possible ? 'text-secondary' : 'text-warn-200/95'}`}>
+      {line}
+    </p>
   )
 }
 

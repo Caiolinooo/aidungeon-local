@@ -83,6 +83,10 @@ ALTER TABLE story_cards ADD COLUMN portrait_anchor_id TEXT;
 ALTER TABLE images ADD COLUMN kind TEXT DEFAULT 'scene';
 ALTER TABLE images ADD COLUMN ref_id TEXT DEFAULT '';
 
+-- Cache por conteúdo: a mesma cena/retrato reusa o arquivo em vez de regerar.
+ALTER TABLE images ADD COLUMN cache_key TEXT DEFAULT '';
+ALTER TABLE images ADD COLUMN reused_from TEXT DEFAULT '';
+
 -- v0.3.0: fila do pipeline assíncrono de assets (worker em app/jobs.py)
 CREATE TABLE jobs(
   id TEXT PRIMARY KEY,

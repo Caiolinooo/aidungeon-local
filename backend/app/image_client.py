@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -236,6 +238,47 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
     except (ValueError, AttributeError):
         pass
     return content, width, height
+
+
+def request_key(cfg: dict, prompt: str, *, width: int | None = None,
+                height: int | None = None, init_image: bytes | None = None,
+                denoising_strength: float | None = None,
+                negative_extra: str = "") -> str:
+    """Hash estável do pedido final. Não inclui api_key e nunca vai para prompt."""
+    provider = cfg.get("provider") or "sdwebui"
+    negative = _merged_negative({
+        **cfg,
+        "negative_prompt": ", ".join(
+            part for part in ((cfg.get("negative_prompt") or ""), negative_extra) if part
+        ),
+    })
+    if provider == "sdwebui":
+        model = cfg.get("sd_model_checkpoint") or ""
+        size = [int(width or cfg.get("sdwebui_width") or 0),
+                int(height or cfg.get("sdwebui_height") or 0)]
+        extra = {
+            "steps": cfg.get("sdwebui_steps"),
+            "sampler": "DPM++ 2M",
+            "scheduler": "Karras",
+            "cfg_scale": 5,
+            "denoise": None if denoising_strength is None else round(float(denoising_strength), 4),
+        }
+    else:
+        model = cfg.get("openai_model") or ""
+        size = cfg.get("openai_size") or ""
+        extra = {}
+    payload = {
+        "v": 1,
+        "provider": provider,
+        "model": model,
+        "prompt": prompt,
+        "negative": negative,
+        "size": size,
+        "extra": extra,
+        "init": hashlib.sha256(init_image).hexdigest() if init_image is not None else "",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 # ------------------------------------------------------------------ público

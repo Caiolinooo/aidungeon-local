@@ -130,7 +130,9 @@ function parseSheet(raw) {
 function sheetHasContent(sheet) {
   return SHEET_FIELDS.some((k) => (sheet[k] || '').trim()) ||
     Object.keys(sheet.stats || {}).length > 0 ||
-    Object.keys(sheet.bonds || {}).length > 0
+    Object.keys(sheet.bonds || {}).length > 0 ||
+    Object.keys(sheet.body_state || {}).length > 0 ||
+    Boolean(sheet.expression)
 }
 
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
@@ -152,6 +154,13 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
       bonds: { ...BOND_DEFAULTS, ...(sheet.bonds || {}), [key]: n },
     })
   }
+  const body = sheet.body_state && typeof sheet.body_state === 'object'
+    ? sheet.body_state : {}
+  const conditions = Array.isArray(body.conditions) ? body.conditions : []
+  const setPain = (value) => {
+    const n = Math.max(0, Math.min(10, Number.parseInt(value, 10) || 0))
+    onChange({ ...sheet, body_state: { ...body, v: body.v || 1, pain: n, conditions } })
+  }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-subtle bg-elevated/60 p-2">
       <label className="flex items-center gap-2">
@@ -168,6 +177,49 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
           <option value="dead">morto</option>
         </select>
       </label>
+      <div className="rounded-md border border-subtle bg-surface/60 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Corpo e dor
+          </span>
+          <label className="flex items-center gap-1 text-[10px] text-muted">
+            Dor
+            <input
+              type="number" inputMode="numeric" min={0} max={10} size={2}
+              value={body.pain ?? 0}
+              onChange={(e) => setPain(e.target.value)}
+              className={numberCls}
+            />
+            /10
+          </label>
+        </div>
+        {sheet.expression && (
+          <p className="mt-1 text-[11px] text-secondary">Expressão: {sheet.expression}</p>
+        )}
+        {conditions.length === 0 ? (
+          <p className="mt-1 text-[11px] text-muted">Sem ferimentos registrados.</p>
+        ) : (
+          <ul className="mt-1 flex flex-col gap-1">
+            {conditions.map((condition, index) => (
+              <li key={condition.id || index} className="rounded border border-subtle/70 px-1.5 py-1 text-[11px] text-secondary">
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="font-medium text-primary">
+                    {condition.kind || 'condição'}
+                  </span>
+                  {condition.location ? <span>· {condition.location}</span> : null}
+                  <span>· sev {condition.severity ?? '?'}</span>
+                  {condition.permanent ? <span className="text-accent-pri">· permanente</span> : null}
+                  {condition.active === false ? <span className="text-muted">· curada</span> : null}
+                  {condition.portrait_visible ? <span className="text-accent-pri">· retrato</span> : null}
+                  {condition.scene_visible && !condition.portrait_visible
+                    ? <span className="text-muted">· cena</span> : null}
+                </div>
+                {condition.description ? <p>{condition.description}</p> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       {SHEET_FIELDS.map((key) => (
         <label key={key} className="flex flex-col gap-1">
           <span className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -444,6 +496,8 @@ function NpcRow({
         <p>mood: {life.mood || '—'}</p>
         <p>activity: {life.activity || '—'}</p>
         <p>day: {life.day ?? 0}</p>
+        <p>pain: {form.sheet?.body_state?.pain ?? 0}/10</p>
+        {form.sheet?.expression ? <p>expression: {form.sheet.expression}</p> : null}
         {memories.length > 0 && (
           <ul className="mt-1 list-disc pl-4">
             {memories.map((memory) => (

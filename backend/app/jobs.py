@@ -194,7 +194,8 @@ def cuda_oom_hold(conn, type_: str, ref_id: str, *, explicit: bool = False,
 def enqueue_portrait(conn, adventure_id: str, card_id: str,
                      *, replace: bool = False,
                      priority: int = PRIORITY_PRESENT_PORTRAIT,
-                     force_reference: bool = False) -> dict | None:
+                     force_reference: bool = False,
+                     variant_key: str = "") -> dict | None:
     """Enfileira retrato do card (dedupe: reaproveita job ativo, que passa à
     frente se o pedido novo for mais urgente).
 
@@ -204,18 +205,31 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
     o botão, passado o prazo, ainda tenta. A cena, no teto, para.
     """
     card = db.get_card(conn, adventure_id, card_id)
-    if card and card.get("portrait_image_id") and not replace:
+    if card and card.get("portrait_image_id") and not replace and not variant_key:
         return None
     active = db.find_active_job(conn, "character_portrait", card_id)
     if active:
-        return db.raise_job_priority(conn, active["id"], priority)
+        active_key = str((active.get("payload") or {}).get("state_key") or "")
+        if variant_key and active_key and active_key != variant_key \
+                and active.get("status") in ("preparing", "pending"):
+            db.cancel_job(conn, active["id"])
+        else:
+            return db.raise_job_priority(conn, active["id"], priority)
     held = cuda_oom_hold(conn, "character_portrait", card_id, explicit=replace)
     if held:
         if replace:
             raise GameError(429, "cuda_oom_backoff", held)
         return None
     payload: dict = {}
-    if replace or force_reference:
+    if variant_key:
+        payload["replace"] = True
+        payload["state_key"] = variant_key
+        anchor = ""
+        if card:
+            anchor = card.get("portrait_anchor_id") or card.get("portrait_image_id") or ""
+        if anchor:
+            payload["init_image_id"] = anchor
+    elif replace or force_reference:
         payload["replace"] = True
         anchor = ""
         if card and not force_reference:
@@ -410,7 +424,11 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             if not anchor:
                 raise GameError(503, "generation_failed",
                                 "canonical portrait image is missing")
-    prompt = _build_portrait_prompt(adv, card, llm_cfg, transport)
+    state_key = str(payload.get("state_key") or "")
+    if state_key:
+        prompt = npc_assets.portrait_variant_prompt(card)
+    else:
+        prompt = _build_portrait_prompt(adv, card, llm_cfg, transport)
     final = " ".join(p for p in (adv.get("image_style") or "",
                                  prompt,
                                  img_cfg["style_suffix"] or "") if p).strip()
@@ -433,7 +451,35 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     )
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
+    cache_key = state_key or image_client.request_key(
+        img_cfg, final, width=init_width, height=init_height,
+        init_image=init_bytes, denoising_strength=denoise,
+    )
+    with db.session() as conn:
+        cached = db.find_cached_image(
+            conn, adv["id"], kind="portrait", ref_id=card["id"],
+            cache_key=cache_key,
+        )
+        if cached:
+            current = db.get_card(conn, adv["id"], card["id"])
+            desired = str(npc_assets.parse_sheet(
+                (current or {}).get("sheet") or "").get("portrait_state_key") or "")
+            cached_stale = bool(state_key and desired and desired != state_key)
+            if not cached_stale:
+                db.set_card_portrait(conn, card["id"], cached["id"],
+                                     anchor_id=anchor_id or cached["id"])
+                _set_portrait_state(conn, adv["id"], card["id"], state_key, "")
+            return {"image": db.image_ref(cached), "card_id": card["id"],
+                    "prompt": prompt, "reused": True, "stale": cached_stale}
     image_id = db.new_id()
+    stale = False
+    stored_key = state_key
+    if not stored_key:
+        stored_key = npc_assets.portrait_state_key({
+            **card,
+            "portrait_image_id": image_id,
+            "portrait_anchor_id": anchor_id or image_id,
+        })
     meta = image_client.generate_image(
         img_cfg, final, adventure_id=adv["id"],
         image_id=image_id, transport=transport,
@@ -449,14 +495,37 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                 negative_prompt=img_cfg["negative_prompt"],
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
                 image_id=image_id, kind="portrait", ref_id=card["id"],
+                cache_key=stored_key,
             )
-            db.set_card_portrait(conn, card["id"], image["id"],
-                                 anchor_id=anchor_id or image["id"])
+            current = db.get_card(conn, adv["id"], card["id"])
+            desired = str(npc_assets.parse_sheet(
+                (current or {}).get("sheet") or "").get("portrait_state_key") or "")
+            stale = bool(state_key and desired and desired != state_key)
+            if not stale:
+                db.set_card_portrait(conn, card["id"], image["id"],
+                                     anchor_id=anchor_id or image["id"])
+                _set_portrait_state(conn, adv["id"], card["id"], stored_key, "")
     except sqlite3.IntegrityError:
         _raise_if_gone(adv["id"], meta["file_path"])
         raise
     return {"image": db.image_ref(image), "card_id": card["id"],
-            "prompt": prompt}
+            "prompt": prompt, "stale": stale}
+
+
+def _set_portrait_state(conn, adventure_id: str, card_id: str, state_key: str,
+                        job_id: str) -> None:
+    """Grava a chave desejada do retrato sem tocar no resto da ficha."""
+    card = db.get_card(conn, adventure_id, card_id)
+    if not card:
+        return
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    if state_key:
+        sheet["portrait_state_key"] = state_key
+    if "portrait_job_id" in sheet or job_id:
+        sheet["portrait_job_id"] = job_id
+    db.update_card(conn, adventure_id, card_id, {
+        "sheet": json.dumps(sheet, ensure_ascii=False),
+    })
 
 
 def _execute_card_assets(job: dict, transport: Any) -> dict:
@@ -505,18 +574,43 @@ _BACKDROP_WIDTH = 1344
 _BACKDROP_HEIGHT = 768
 
 
+def backdrop_negative(img_cfg: dict, *, include_people: bool, explicit: bool) -> str:
+    if explicit:
+        ban = _CAST_NEGATIVE_EXPLICIT
+    elif include_people:
+        ban = _CAST_NEGATIVE
+    else:
+        ban = _BACKDROP_NEGATIVE
+    return ", ".join(part for part in (img_cfg["negative_prompt"], ban) if part)
+
+
+def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
+                       explicit: bool) -> str:
+    ban = ""
+    if explicit:
+        ban = _CAST_NEGATIVE_EXPLICIT
+    elif include_people:
+        ban = _CAST_NEGATIVE
+    else:
+        ban = _BACKDROP_NEGATIVE
+    return image_client.request_key(
+        img_cfg, prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
+        negative_extra=ban,
+    )
+
+
 def _execute_backdrop(job: dict, transport: Any) -> dict:
     """Executa um job scene_backdrop; devolve o result (ou levanta)."""
     prompt = str((job.get("payload") or {}).get("prompt") or "").strip()
     if not prompt:
         raise GameError(500, "generation_failed", "scene backdrop job has no prompt")
+    payload = job.get("payload") or {}
     with db.session() as conn:
         img_cfg = settings_store.effective_image_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled",
                         "Image generation is disabled in settings")
-    image_id = db.new_id()
-    payload = job.get("payload") or {}
+    ban = ""
     if payload.get("explicit"):
         ban = _CAST_NEGATIVE_EXPLICIT
     elif payload.get("include_people"):
@@ -526,6 +620,19 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     negative = ", ".join(
         part for part in (img_cfg["negative_prompt"], ban) if part
     )
+    cache_key = image_client.request_key(
+        img_cfg, prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
+        negative_extra=ban,
+    )
+    with db.session() as conn:
+        cached = db.find_cached_image(
+            conn, job["adventure_id"], kind="backdrop",
+            ref_id=job["ref_id"] or "", cache_key=cache_key,
+        )
+        if cached:
+            return {"image": db.image_ref(cached), "ref_id": job["ref_id"],
+                    "reused": True}
+    image_id = db.new_id()
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"],
         image_id=image_id, transport=transport,
@@ -540,6 +647,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
                 negative_prompt=negative,
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
                 image_id=image_id, kind="backdrop", ref_id=job["ref_id"] or "",
+                cache_key=cache_key,
             )
     except sqlite3.IntegrityError:
         _raise_if_gone(job["adventure_id"], meta["file_path"])
@@ -548,7 +656,8 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
 
 
 def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
-              prompt: str, negative_prompt: str) -> dict:
+              prompt: str, negative_prompt: str, cache_key: str = "",
+              reused_from: str = "") -> dict:
     """Grava a action `see` no fim da aventura e a imagem no mesmo seq (rota
     síncrona e job). Devolve o ImageResult."""
     try:
@@ -558,7 +667,8 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
                             prompt=prompt, negative_prompt=negative_prompt,
                             file_path=meta["file_path"], provider=meta["provider"],
                             width=meta["width"], height=meta["height"],
-                            image_id=image_id)
+                            image_id=image_id, cache_key=cache_key,
+                            reused_from=reused_from)
             action = db.get_action(conn, action["id"])
     except sqlite3.IntegrityError:
         _raise_if_gone(adventure_id, meta["file_path"])
@@ -594,13 +704,34 @@ def _execute_see(job: dict, transport: Any) -> dict:
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
+    negative_extra = str(payload.get("negative_extra") or "")
+    cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
+        img_cfg, prompt, negative_extra=negative_extra)
+    with db.session() as conn:
+        cached = db.find_cached_image(
+            conn, job["adventure_id"], kind="scene", ref_id="",
+            cache_key=cache_key,
+        )
+    if cached:
+        meta = {
+            "file_path": cached["file_path"], "provider": cached["provider"],
+            "width": cached["width"], "height": cached["height"],
+        }
+        image = store_see(
+            job["adventure_id"], str(payload.get("caption") or ""), meta,
+            image_id=db.new_id(), prompt=prompt,
+            negative_prompt=str(payload.get("negative_prompt") or ""),
+            cache_key=cache_key, reused_from=cached["id"],
+        )
+        return {"image": image, "reused": True}
     image_id = db.new_id()
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
-        transport=transport, negative_extra=str(payload.get("negative_extra") or ""))
+        transport=transport, negative_extra=negative_extra)
     image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                       image_id=image_id, prompt=prompt,
-                      negative_prompt=str(payload.get("negative_prompt") or ""))
+                      negative_prompt=str(payload.get("negative_prompt") or ""),
+                      cache_key=cache_key)
     return {"image": image}
 
 

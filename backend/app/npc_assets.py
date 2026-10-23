@@ -20,7 +20,7 @@ import re
 import unicodedata
 from typing import Any
 
-from app import db, llm_client, stats as stats_mod
+from app import body_state, db, llm_client, stats as stats_mod
 from app.errors import GameError
 
 log = logging.getLogger("aidungeon.npc_assets")
@@ -105,9 +105,18 @@ def _field_text(key: str, value: str) -> str:
 
 
 def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
-    """Recorta o JSON do LLM para o contrato da ficha (campos desconhecidos
-    fora; stats coagidos a int 1-20)."""
+    """Recorta o JSON do LLM para o contrato da ficha, preservando estado vivo."""
+    known = set(SHEET_TEXT_FIELDS) | {
+        "status", "stats", "bonds", "alignment", "relations", "conduct",
+        "profile", "identity", "mana", "power", "poder", "real_person",
+        "real_name", "wiki_title", "likeness", "minor", "age", "life",
+        "reference",
+    }
     sheet: dict[str, Any] = {}
+    if isinstance(previous, dict):
+        for key, value in previous.items():
+            if key not in known:
+                sheet[key] = value
     for key in (*SHEET_TEXT_FIELDS, "status"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
@@ -143,6 +152,15 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
         # o que o turno gravou continua na ficha.
         if isinstance(previous.get("bonds"), dict):
             sheet["bonds"] = previous["bonds"]
+        if isinstance(previous.get("alignment"), str) and previous["alignment"].strip():
+            sheet["alignment"] = previous["alignment"]
+        if isinstance(previous.get("relations"), dict):
+            sheet["relations"] = previous["relations"]
+        if isinstance(previous.get("conduct"), dict):
+            sheet["conduct"] = previous["conduct"]
+        for key in ("profile", "identity", "mana", "power", "poder"):
+            if key in previous and key not in sheet:
+                sheet[key] = previous[key]
         # Pessoa real, referência e menor não saem quando a ficha é reescrita.
         for key in ("real_person", "real_name", "wiki_title", "likeness", "minor", "age",
                     "life", "reference"):
@@ -496,6 +514,13 @@ def sheet_context(raw_sheet: str) -> str:
         return ""
     parts = [f"{key}: {sheet[key]}" for key in
              ("appearance", "body", "clothing") if sheet.get(key)]
+    if sheet.get("current_outfit"):
+        parts.append(f"current outfit: {sheet['current_outfit']}")
+    if sheet.get("expression"):
+        parts.append(f"expression: {sheet['expression']}")
+    wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=True)
+    if wounds:
+        parts.append(f"current visible condition: {wounds}")
     return "\n".join(parts)
 
 
@@ -817,23 +842,85 @@ def likeness_clause(cards: list[dict], *, explicit: bool = False) -> str:
     return "exact likeness, " + ", ".join(lines)
 
 
+def current_visual(card: dict) -> list[str]:
+    """Estado que muda por turno: roupa atual, expressão e feridas visíveis."""
+    sheet = parse_sheet(card.get("sheet") or "")
+    bits: list[str] = []
+    outfit = " ".join(str(sheet.get("current_outfit") or "").split())
+    if outfit:
+        bits.append("currently wearing " + outfit)
+    expression = " ".join(str(sheet.get("expression") or "").split())
+    if expression:
+        bits.append(expression + " expression")
+    wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=False)
+    if wounds:
+        bits.append(wounds)
+    return bits
+
+
 def visual_bits(card: dict) -> list[str]:
     """O visual que a pintura tem de obedecer.
 
-    O retrato já aceito (portrait_prompt) vence a ficha e a prosa. A ficha
-    só descreve o corpo quando ainda não existe retrato — senão um turno que
-    veste a princesa de outro jeito troca o rosto da cena.
+    O rosto do retrato aceito é a âncora; roupa atual, expressão e feridas
+    visíveis são aplicados por cima, senão o See congela o primeiro turno.
     """
     prompt = " ".join(str(card.get("portrait_prompt") or "").split())
     if prompt:
-        return [prompt]
+        return [prompt, *current_visual(card)]
     sheet = parse_sheet(card.get("sheet") or "")
     bits = []
     for key in ("appearance", "body", "clothing"):
         value = sheet.get(key)
         if isinstance(value, str) and value.strip():
             bits.append(value.strip())
+    bits.extend(current_visual(card))
     return bits
+
+
+def portrait_variant_prompt(card: dict) -> str:
+    """Prompt do retrato do estado atual, mantendo o enquadramento original."""
+    base = " ".join(str(card.get("portrait_prompt") or "").split())
+    sheet = parse_sheet(card.get("sheet") or "")
+    bits: list[str] = []
+    if not base:
+        for key in ("appearance", "body", "clothing"):
+            value = sheet.get(key)
+            if isinstance(value, str) and value.strip():
+                bits.append(value.strip())
+        if not bits:
+            bits.append("bust portrait, upper body")
+    outfit = " ".join(str(sheet.get("current_outfit") or "").split())
+    if outfit:
+        bits.append("currently wearing " + outfit)
+    expression = " ".join(str(sheet.get("expression") or "").split())
+    if expression:
+        bits.append(expression + " expression")
+    wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=True)
+    if wounds:
+        bits.append(wounds + ", visible in portrait")
+    if not bits:
+        return base
+    return (base + ", current state overrides the base: " + "; ".join(bits)).strip(" ,;")
+
+
+def portrait_state_key(card: dict) -> str:
+    import hashlib
+    payload = "\n".join((
+        portrait_variant_prompt(card),
+        str(card.get("portrait_anchor_id") or card.get("portrait_image_id") or ""),
+    ))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def portrait_image_for(card: dict, conn) -> dict | None:
+    """Imagem de retrato que casa com o estado atual da ficha, se já existir."""
+    key = str(card.get("portrait_state_key") or "")
+    image_id = card.get("portrait_image_id")
+    if key and image_id:
+        image = db.get_image(conn, image_id)
+        if image and image.get("cache_key") == key:
+            return image
+    return None
 
 
 def ensure_portrait_prompt(conn, card: dict) -> dict:
@@ -891,6 +978,18 @@ def card_canon_text(card: dict) -> str:
     activity = life.get("activity")
     if isinstance(activity, str) and activity.strip():
         first.append(f"Doing: {activity.strip()}")
+    state = body_state.body_state_of(sheet)
+    if state.get("pain"):
+        first.append(f"Pain: {state['pain']}/10")
+    expression = sheet.get("expression")
+    if isinstance(expression, str) and expression.strip():
+        first.append(f"Expression: {expression.strip()}")
+    condition_text = body_state.condition_context(state, limit=6)
+    if condition_text:
+        first.append("Conditions: " + condition_text.replace("\n", " | "))
+    current_outfit = sheet.get("current_outfit")
+    if isinstance(current_outfit, str) and current_outfit.strip():
+        first.append(f"Current outfit: {current_outfit.strip()}")
     for key, label in (
         ("appearance", "Appearance"),
         ("body", "Body"),

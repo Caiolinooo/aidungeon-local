@@ -52,7 +52,7 @@ def test_chronicle_creates_and_updates_without_replacing_the_face(tmp_db):
         cards = {card["title"]: card for card in db.list_cards(conn, adv["id"])}
         jobs = db.list_jobs(conn, adv["id"])
 
-    assert result == {"created": 1, "updated": 1}
+    assert result == {"created": 1, "updated": 1, "bodies": 0}
     assert "Caio" not in cards
     princess = npc_assets.parse_sheet(cards["Princess Alusair"]["sheet"])
     assert princess["appearance"] == "long red hair, green eyes"
@@ -311,7 +311,7 @@ def test_portrait_blocks_a_new_outfit_and_the_dead_stay_dead(tmp_db):
         }, adv["plot_essentials"])
         card = next(c for c in db.list_cards(conn, adv["id"]) if c["title"] == "Princess Alusair")
         sheet = npc_assets.parse_sheet(card["sheet"])
-        assert kept == {"created": 0, "updated": 1}
+        assert kept == {"created": 0, "updated": 1, "bodies": 0}
         assert "gown" not in json.dumps(sheet).lower()
         assert sheet["status"] == "dead"
         assert "mentioned in the hall" in sheet["notes"]
@@ -375,7 +375,7 @@ def test_blank_adventure_grows_place_character_and_plot(tmp_db):
     assert cards["Sealed Scroll"]["type"] == "item"
     assert cards["Sealed Scroll"]["sheet"] == ""
     assert "Caio" in plot
-    assert kept == {"created": 0, "updated": 1}
+    assert kept == {"created": 0, "updated": 1, "bodies": 0}
     assert "Banners" in hall["entry"]
     assert plot_after == plot
 
@@ -581,3 +581,61 @@ def test_portrait_prompt_is_not_narrator_appearance():
     assert "Bust portrait" not in rendered
     assert rendered == "Alex: Ex-firefighter."
 
+
+
+def test_bodies_update_player_and_npc_and_snapshot_for_undo(tmp_db):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        player = db.insert_card(
+            conn, adv["id"], title="Caio", type="character",
+            player_username="hero", entry="O protagonista.",
+            sheet=json.dumps({"body_state": {"v": 1, "pain": 0, "conditions": []}}),
+        )
+        elara = db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            entry="Guarda.", sheet=json.dumps({"expression": "wary"}),
+        )
+        action = db.insert_action(conn, adv["id"], 1, "continue", "Elara ataca.")
+        result = npc_chronicle.apply_chronicle(conn, adv["id"], {
+            "bodies": [
+                {
+                    "target": "player", "card_id": player["id"],
+                    "pain": 4, "expression": "hurt",
+                    "current_outfit": "rasgada",
+                    "conditions": [{
+                        "op": "add", "kind": "cut", "location": "left cheek",
+                        "severity": 3, "description": "corte no rosto",
+                        "visual_en": "small cut on the left cheek",
+                        "visibility": "portrait",
+                    }],
+                },
+                {
+                    "target": "Elara", "card_id": elara["id"],
+                    "expression": "furious",
+                    "conditions": [{
+                        "op": "add", "kind": "bruise", "location": "arm",
+                        "visibility": "scene", "description": "hematoma no braço",
+                    }],
+                },
+            ],
+        }, adv["plot_essentials"],
+            source_action_id=action["id"], source_seq=1)
+        assert result["bodies"] == 2
+        player_sheet = npc_assets.parse_sheet(db.get_card(conn, adv["id"], player["id"])["sheet"])
+        elara_sheet = npc_assets.parse_sheet(db.get_card(conn, adv["id"], elara["id"])["sheet"])
+        assert player_sheet["body_state"]["pain"] == 4
+        assert player_sheet["expression"] == "hurt"
+        assert player_sheet["current_outfit"] == "rasgada"
+        cut = player_sheet["body_state"]["conditions"][0]
+        assert cut["source_seq"] == 1
+        assert cut["portrait_visible"] is True
+        assert elara_sheet["expression"] == "furious"
+        assert elara_sheet["body_state"]["conditions"][0]["scene_visible"] is True
+        before = db.get_action_rules(conn, action["id"])["body_before"]
+        assert set(before) == {player["id"], elara["id"]}
+
+        from app import game_engine
+        assert game_engine._restore_body_from_action(conn, adv["id"], action) == 2
+        player_sheet = npc_assets.parse_sheet(db.get_card(conn, adv["id"], player["id"])["sheet"])
+        assert player_sheet["body_state"]["pain"] == 0
+        assert player_sheet["body_state"]["conditions"] == []

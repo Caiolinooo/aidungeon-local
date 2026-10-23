@@ -466,6 +466,7 @@ export default function CharacterModal({
       const saved = await api.saveCharacter(adventureId, {
         title: name,
         sheet: {
+          ...parseSheet(card?.sheet),
           appearance: appearance.trim(),
           body: body.trim(),
           clothing: clothing.trim(),
@@ -497,6 +498,15 @@ export default function CharacterModal({
   const busy = saving || loading
   const rulesText = (rules || '').trim()
   const formReady = !loading && applied === (card ?? null)
+  const storedSheet = parseSheet(card?.sheet)
+  const bodyState = storedSheet.body_state && typeof storedSheet.body_state === 'object'
+    ? storedSheet.body_state
+    : {}
+  const pain = Number(bodyState.pain) || 0
+  const conditions = Array.isArray(bodyState.conditions)
+    ? bodyState.conditions.filter((item) => item && item.active !== false)
+    : []
+  const expression = String(storedSheet.expression || '').trim()
   const spent = pointsSpent(core)
   const remaining = POINT_BUDGET - spent
   const selectedPreset = CHARACTER_PRESETS.find((preset) => preset.id === presetId) || null
@@ -662,6 +672,9 @@ export default function CharacterModal({
                       ['Corpo', body],
                       ['Roupas', clothing],
                       ['Status', status],
+                      ['Expressão', expression],
+                      ['Dor', `${pain}/10`],
+                      ['Condições', conditions.map((item) => item.description || item.kind).join(' · ')],
                       ['Notas', notes],
                       ['Retrato', portrait],
                     ].map(([label, value]) => (
@@ -771,6 +784,31 @@ export default function CharacterModal({
                 className={inputCls}
               />
             </label>
+
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className={labelCls}>Corpo e dor</span>
+                <span className="font-mono text-xs text-zinc-300">dor {pain}/10</span>
+              </div>
+              <p className="mt-1 text-xs text-zinc-400">
+                {expression ? `Expressão: ${expression}` : 'Sem expressão registrada.'}
+              </p>
+              {conditions.length ? (
+                <ul className="mt-2 flex flex-wrap gap-1.5">
+                  {conditions.map((item, index) => (
+                    <li
+                      key={item.id || index}
+                      className="rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-200"
+                    >
+                      {item.description || item.kind}
+                      {item.portrait_visible ? ' · visível no retrato' : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs text-zinc-500">Nenhuma condição ativa.</p>
+              )}
+            </div>
 
             <label className="block">
               <span className={labelCls}>Notas / Background</span>

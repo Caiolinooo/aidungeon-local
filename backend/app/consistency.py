@@ -178,6 +178,13 @@ def _check_portraits(conn: sqlite3.Connection, adv: dict, cards: list[dict]) -> 
             continue
         image = db.get_image(conn, image_id)
         image_prompt = (image or {}).get("prompt") or ""
+        state_key = str(sheet.get("portrait_state_key") or "")
+        if state_key and image and image.get("cache_key") and \
+                image.get("cache_key") != state_key and \
+                not db.find_active_job(conn, "character_portrait", card["id"]):
+            items.append({"card_id": card.get("id"), "title": card.get("title"),
+                          "issue": "retrato exibido não corresponde ao estado atual da ficha",
+                          "fix": "regenerate_portrait"})
         if clothing and image_prompt and not _CLOTHING.search(image_prompt):
             items.append({"card_id": card.get("id"), "title": card.get("title"),
                           "issue": "retrato gerado de outra ficha (sem roupa no prompt)",

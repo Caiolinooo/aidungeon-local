@@ -69,8 +69,9 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
                                    capture=captured)
     _collect(game_engine.handle_action(adventure["id"], "do", "wait",
                                        transport=transport))
-    assert len(captured) == 1
-    payload = captured[0]
+    streams = [call for call in captured if call.get("stream")]
+    assert len(streams) == 1
+    payload = streams[0]
     assert payload["model"] == "gguf-mock"                 # descoberto via /models
     assert payload["stream"] is True
     assert payload["stop"] == ["\n> You", "\n> you", "\nPlayer:", "\nUser:",
@@ -343,7 +344,7 @@ def test_web_research_goes_inside_the_lore(adventure, monkeypatch):
     events = _collect(game_engine.handle_action(
         adventure["id"], "do", "inspect the gate", transport=transport, web_search=True))
     assert _done(events)["web_sources"] == [{"title": "Gate"}]
-    final = captured[0]["messages"][-1]["content"]
+    final = next(call for call in captured if call.get("stream"))["messages"][-1]["content"]
     assert final.startswith(f"<lore>\n{block}\n</lore>\n")
     from app.world_facts import ATTEMPT_RULE
     assert final.endswith(

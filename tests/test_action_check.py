@@ -128,10 +128,12 @@ def test_settings_block_stays_out_of_runtime_config(tmp_db):
     }
 
 
-def test_world_facts_block_does_not_call_the_llm(tmp_db):
+def test_world_facts_block_calls_only_the_adjudicator(tmp_db):
     narrator = _Narrator()
     events = _play(_yard()["id"], narrator, "draw your sword and conjure a bedroom")
-    assert narrator.aux_calls() == []
+    aux = narrator.aux_calls()
+    assert len(aux) == 1
+    assert "adjudicator" in aux[0]["messages"][0]["content"].casefold()
     checks = [event for event in events if event["event"] == "action_check"]
     assert len(checks) == 1
     data = checks[0]["data"]
@@ -160,9 +162,10 @@ def test_valid_llm_verdict_reaches_the_narrator_and_the_event(tmp_db):
     narrator = _Narrator()
     events = _play(_rich()["id"], narrator, "wait quietly by the gate", user="hero")
     aux = narrator.aux_calls()
-    assert len(aux) == 1
+    checks = [call for call in aux if call.get("max_tokens") == 300]
+    assert len(checks) == 1
+    aux = checks
     assert aux[0]["temperature"] == 0.15
-    assert aux[0]["max_tokens"] == 300
     assert aux[0]["id_slot"] == 3
     portrait = aux[0]["messages"][-1]["content"]
     for piece in ("Mira", "wary", "spare key", "ladino", "scar over the brow",
@@ -211,7 +214,7 @@ def test_disabled_check_makes_no_call(tmp_db, monkeypatch):
     })
     narrator = _Narrator()
     events = _play(_yard()["id"], narrator, "draw your sword and conjure a bedroom")
-    assert narrator.aux_calls() == []
+    assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in events if event["event"] == "action_check"] == []
     assert events[-1]["event"] == "done"
     assert "[Verificacao de mundo]" not in narrator.narrator()["messages"][-1]["content"]
@@ -221,7 +224,7 @@ def test_short_story_and_continue_are_not_checked(tmp_db):
     adv = _yard()
     narrator = _Narrator()
     short = _play(adv["id"], narrator, "knock")
-    assert narrator.aux_calls() == []
+    assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in short if event["event"] == "action_check"] == []
 
     narrator.calls.clear()
@@ -234,7 +237,7 @@ def test_short_story_and_continue_are_not_checked(tmp_db):
 
     narrator.calls.clear()
     continued = list(game_engine.handle_continue(adv["id"], transport=narrator.transport()))
-    assert narrator.aux_calls() == []
+    assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in continued if event["event"] == "action_check"] == []
 
 
@@ -246,7 +249,7 @@ def test_collect_failure_still_narrates(tmp_db, monkeypatch):
     narrator = _Narrator()
     events = _play(_yard()["id"], narrator, "wait quietly by the gate")
     assert events[-1]["event"] == "done"
-    assert narrator.aux_calls() == []
+    assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in events if event["event"] == "action_check"] == []
 
 

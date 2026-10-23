@@ -11,6 +11,29 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.10.0)
+
+- **Corpo, dor e expressão canônicos**: cada ficha ganha `body_state`
+  (`pain` 0–10 + condições com visibilidade para retrato/cena) e `expression`.
+  O passe de crônica recebe `bodies[]` e decide ferimentos, cura e roupa atual;
+  o narrador recebe `[Player body]` e o cânone de cada NPC com dor/condições.
+  Undo/retry restauram o estado anterior gravado em `body_before`.
+- **Adjudicador IA separado**: uma chamada LLM própria decide o resultado da
+  ação, a reação de cada pessoa presente (ficha, vínculos, memórias, corpo) e
+  iniciativas. Sem piso, crítico, muro de poder ou frase pronta; a checagem
+  física do mundo entra como `world_check`. Recusas/parciais viram memória do
+  NPC, e a prosa é corrigida se contradizer o fato decidido.
+- **Retratos por estado**: roupa atual, expressão e ferimentos visíveis geram
+  variantes img2img a partir da âncora do rosto. `portrait_state_key` e
+  `portrait_job_id` trocam para a variante em cache e impedem que um job antigo
+  sobrescreva o estado novo; ferimentos entram no busto só quando visíveis.
+- **Cache de imagens por aventura**: See reusa a mesma cena/config e grava uma
+  nova action com `reused_from`; o fundo usa hash do prompt final + elenco +
+  estilo; apagar uma imagem só remove o PNG quando nenhuma outra linha o usa.
+  Migration `027_image_cache.sql`.
+- **UI**: aba NPCs mostra “Corpo e dor” com dor editável e condições; o modal
+  do personagem exibe expressão/dor/condições e preserva a ficha completa.
+
 ## Funcionalidades (v0.9.0)
 
 - **Modo Turbo**: toda chamada manda `cache_prompt: true`. `id_slot` só entra

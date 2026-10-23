@@ -31,6 +31,7 @@ Antes do `done`, `turn_done {action_id, seq}` sai em `events` (C2).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -361,22 +362,11 @@ def _compliance_flag(verdict, text: str) -> list[str]:
     return []
 
 
-def _refusal_names(verdict) -> list[str]:
-    names: list[str] = []
-    for item in getattr(verdict, "blockers", None) or []:
-        folded = (item or "").casefold()
-        if "recusa" not in folded:
-            continue
-        head = (item or "").split(" recusa")[0].split(" Recusa")[0].strip(" .")
-        if head and head not in names:
-            names.append(head)
-    return names
-
-
 def _correct_narration(text: str, *, player_text: str, retry_of, built,
                        llm_cfg: dict, sampler: dict, transport,
                        out_script: str | None,
-                       extra_flags: list[str] | None = None) -> tuple[str, list[str]]:
+                       extra_flags: list[str] | None = None,
+                       adjudication: dict | None = None) -> tuple[str, list[str]]:
     """Um retry silencioso quando a prosa viola as regras. Empate fica com a segunda."""
     expected = "pt" if output_sanitizer.looks_portuguese(player_text) else ""
     flags = output_sanitizer.quality_flags(text, expected_language=expected)
@@ -392,12 +382,15 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
         + ", ".join(flags)
         + ". Rewrite the same beat, obeying them."
     )
+    if adjudication:
+        decided = (adjudication.get("outcome") or adjudication.get("cue") or "").strip()
+        if decided:
+            note += " O GM já decidiu o fato: " + decided[:500]
     if "compliance" in flags:
         note += (
-            " compliance means the NPC already refused. "
-            "Rewrite the beat as that refusal: they take one visible action "
-            "and the attempt does not succeed. Do not write them obeying, "
-            "undressing, kissing back, or leaving with the player."
+            " The action was refused: do not write the NPC obeying, "
+            "undressing, kissing back, or leaving with the player. "
+            "Show their own refusal/reaction instead."
         )
     if retry_messages:
         last = retry_messages[-1]
@@ -445,6 +438,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
         new_turn: str | None = None
         try:
             verdict = None
+            adjudication = None
             check_state = None
             check_cfg: dict = {}
             check_text = ""
@@ -541,6 +535,34 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     live["seq"] = player_action.get("seq")
                 _publish_live(adventure_id, "action_check", live)
 
+            if retry_of is None and (
+                player_action is None or player_action.get("type") in ("do", "say")
+            ):
+                try:
+                    from app import npc_gate
+                    if player_action is None:
+                        adjudication = npc_gate.own_beat(
+                            adventure_id, llm_cfg, transport)
+                    else:
+                        adjudication = npc_gate.decide(
+                            adventure_id,
+                            (player_action.get("text") or raw_query_text or ""),
+                            llm_cfg,
+                            transport,
+                            user,
+                            world_check=verdict.to_dict() if verdict else None,
+                        )
+                except Exception:
+                    log.warning("npc_gate: adjudicador indisponível", exc_info=True)
+                    adjudication = None
+                cue = npc_gate.cue_block(adjudication)
+                if cue and built.messages:
+                    last = built.messages[-1]
+                    built.messages[-1] = {
+                        "role": last["role"],
+                        "content": (last.get("content") or "") + "\n" + cue,
+                    }
+
             stream_state = llm_client.StreamState()
             for token in llm_client.stream_chat_completion(
                     llm_cfg, built.messages, sampler=sampler,
@@ -563,11 +585,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 llm_cfg=llm_cfg, sampler=sampler, transport=transport,
                 out_script=out_script,
                 extra_flags=compliance,
+                adjudication=adjudication,
             )
-            if "compliance" in quality:
-                from app import world_facts
-                text = world_facts.refusal_prose(_refusal_names(verdict))
-                quality = [flag for flag in quality if flag != "compliance"]
+            beat = (adjudication or {}).get("initiative") or {}
+            if beat.get("line") and beat.get("npc") and beat["npc"].casefold() not in text.casefold():
+                text = (text.rstrip() + "\n\n" + beat["line"]).strip()
             if not text.strip():
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.
@@ -600,6 +622,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     npc_bonds.apply_turn(conn, adventure_id, player_text, text)
                 except Exception:
                     log.warning("npc_bonds: pesos não atualizados", exc_info=True)
+                try:
+                    from app import npc_gate
+                    npc_gate.remember(conn, adventure_id, adjudication)
+                except Exception:
+                    log.warning("npc_gate: histórico não gravado", exc_info=True)
                 new_turn = _advance_committed_turn(conn, adventure_id, player_action, user)
 
             data: dict[str, Any] = {"action": action}
@@ -711,6 +738,8 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
                                  "a generation is already running for this adventure")
     cancel_post_turn(adventure_id)
 
+    with appending(adventure_id) as conn:
+        _restore_body_from_action(conn, adventure_id, old)
     key = (adventure_id, int(old["seq"]))
     if retry_count is None:
         _retry_counts[key] = _retry_counts.get(key, 0) + 1
@@ -720,6 +749,33 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
 
     return _stream_generation(adventure_id, player_action=None,
                               retry_of=old, retry_count=effective_count, transport=transport)
+
+
+def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> int:
+    """Restaura corpo/expressão/retrato gravados antes do turno removido."""
+    if not action:
+        return 0
+    rules = db.get_action_rules(conn, action.get("id")) or {}
+    snapshots = rules.get("body_before")
+    if not isinstance(snapshots, dict):
+        return 0
+    from app import body_state, npc_assets, portrait_sync
+    restored = 0
+    for card_id, snap in snapshots.items():
+        card = db.get_card(conn, adventure_id, card_id)
+        if not card or not isinstance(snap, dict):
+            continue
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        updated = body_state.restore_sheet(sheet, snap)
+        db.update_card(conn, adventure_id, card_id, {
+            "sheet": json.dumps(updated, ensure_ascii=False),
+        })
+        try:
+            portrait_sync.sync_card(conn, adventure_id, card_id)
+        except Exception:
+            log.warning("undo: retrato não ressincronizado", exc_info=True)
+        restored += 1
+    return restored
 
 
 # ------------------------------------------------------------------ undo
@@ -737,6 +793,7 @@ def handle_undo(adventure_id: str) -> dict:
 
         removed: list[dict] = []
         if last["type"] == "continue":
+            _restore_body_from_action(conn, adventure_id, last)
             db.delete_action(conn, last["id"])
             removed.append(last)
             # Um See pedido no meio do turno grava entre a ação e a resposta;
@@ -752,6 +809,7 @@ def handle_undo(adventure_id: str) -> dict:
             if last["type"] in db.PLAYER_TYPES:
                 from app.sim import engine as sim_engine
                 sim_engine.revert(conn, adventure_id, last["id"])
+                _restore_body_from_action(conn, adventure_id, last)
             db.delete_action(conn, last["id"])
             removed.append(last)
 

@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from app import db, llm_client, npc_assets, npc_bonds, settings_store
+from app import body_state, db, llm_client, npc_assets, npc_bonds, settings_store
 
 log = logging.getLogger("aidungeon.npc_life")
 
@@ -24,11 +24,15 @@ Output STRICT JSON (no markdown) with exactly this shape:
    "memory": "what happened to them, 1-2 sentences, from the passage",
    "mood": "a word or short phrase",
    "activity": "what they are doing now",
+   "expression": "short English expression for the face, or empty if unchanged",
    "sentiments": "how they feel about who is in the scene, starting with the player, at most 240 characters",
-   "bonds": {"relationship": 0-100, "trust": 0-100, "fear": 0-100, "desire": 0-100, "boldness": 0-100}}
+   "bonds": {"relationship": 0-100, "trust": 0-100, "distrust": 0-100, "fear": 0-100, "desire": 0-100, "boldness": 0-100}}
 ]}
 Use the canonical name. Bonds are absolute values, not deltas. Omit a bond key you are not changing.
-Do not change who the person is. Output ONLY the JSON object."""
+Do not change who the person is. Pain, injuries and conditions come from the
+chronicle; read them and let them shape mood/expression, but do not invent or
+heal a wound here. expression must be short and visual (English).
+Output ONLY the JSON object."""
 
 _TICK_SYSTEM = """You invent one off-screen day for one character in an interactive story.
 Output STRICT JSON (no markdown):
@@ -125,6 +129,13 @@ def mind_prompt(cards: list[dict], memories: list[dict], *, reason: str) -> list
         own = by_card.get(card.get("id") or "", [])
         lines = [npc_assets.card_canon_text(card)]
         lines.append("Bonds: " + " ".join(f"{key} {bonds[key]}" for key in npc_bonds.BOND_KEYS))
+        state = body_state.body_state_of(sheet)
+        lines.append(
+            f"Body: pain {state.get('pain')}/10; expression {sheet.get('expression') or '(none)'}"
+        )
+        condition_text = body_state.condition_context(state, limit=8)
+        if condition_text:
+            lines.append("Conditions:\n" + condition_text)
         if own:
             lines.append("Recent memories:")
             for row in own[:3]:
@@ -148,9 +159,21 @@ def _match_card(cards: list[dict], name: str) -> dict | None:
     return None
 
 
+def _remember_snapshot(conn, adventure_id: str, card: dict, sheet: dict) -> None:
+    actions = db.list_actions(conn, adventure_id)
+    latest = next((action for action in reversed(actions) if action.get("type") == "continue"), None)
+    if not latest:
+        return
+    rules = db.get_action_rules(conn, latest["id"]) or {}
+    before = rules.get("body_before") if isinstance(rules.get("body_before"), dict) else {}
+    before.setdefault(card["id"], body_state.snapshot(sheet))
+    db.merge_action_rules(conn, latest["id"], {"body_before": before})
+
+
 def _apply_mind_item(conn, adventure_id: str, card: dict, item: dict, *,
                      day: int) -> None:
     sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    before = body_state.snapshot(sheet)
     memory = " ".join(str(item.get("memory") or "").split())
     mood = " ".join(str(item.get("mood") or "").split())[:80]
     activity = " ".join(str(item.get("activity") or "").split())[:160]
@@ -165,6 +188,9 @@ def _apply_mind_item(conn, adventure_id: str, card: dict, item: dict, *,
     sentiments = item.get("sentiments")
     if isinstance(sentiments, str) and sentiments.strip():
         sheet["sentiments"] = npc_assets._field_text("sentiments", sentiments)
+    expression = " ".join(str(item.get("expression") or "").split())[:80]
+    if expression:
+        sheet["expression"] = expression
     raw_bonds = item.get("bonds") if isinstance(item.get("bonds"), dict) else {}
     bonds = npc_bonds.read_bonds(sheet)
     for key in npc_bonds.BOND_KEYS:
@@ -175,9 +201,16 @@ def _apply_mind_item(conn, adventure_id: str, card: dict, item: dict, *,
         except (TypeError, ValueError):
             continue
     sheet = npc_bonds.write_bonds(sheet, bonds)
+    if sheet != npc_assets.parse_sheet(card.get("sheet") or ""):
+        _remember_snapshot(conn, adventure_id, card, before)
     db.update_card(conn, adventure_id, card["id"], {
         "sheet": json.dumps(sheet, ensure_ascii=False),
     })
+    try:
+        from app import portrait_sync
+        portrait_sync.sync_card(conn, adventure_id, card["id"])
+    except Exception:
+        log.warning("npc_life: retrato não sincronizado", exc_info=True)
 
 
 def run_mind(adventure_id: str, transport: Any = None) -> dict:

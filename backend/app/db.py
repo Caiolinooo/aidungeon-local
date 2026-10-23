@@ -691,6 +691,27 @@ def list_player_characters(conn: sqlite3.Connection, adventure_id: str) -> list[
     return out
 
 
+def _merge_player_sheet(current_raw: str, incoming_raw: str) -> str:
+    """Preserva corpo/expressão/retrato quando o formulário não os reenvia."""
+    try:
+        current = json.loads(current_raw) if current_raw else {}
+    except (TypeError, ValueError):
+        current = {}
+    try:
+        incoming = json.loads(incoming_raw) if incoming_raw else {}
+    except (TypeError, ValueError):
+        incoming = {}
+    if not isinstance(current, dict):
+        current = {}
+    if not isinstance(incoming, dict):
+        incoming = {}
+    for key in ("body_state", "expression", "current_outfit", "portrait_state_key",
+                "portrait_job_id", "portrait_prompt"):
+        if key not in incoming and key in current:
+            incoming[key] = current[key]
+    return _dumps(incoming, {})
+
+
 def upsert_player_character(conn: sqlite3.Connection, adventure_id: str, username: str,
                             *, title: str, sheet: str, portrait_prompt: str | None = None) -> dict:
     """Cria ou atualiza o card do jogador. Id e retrato já gravados ficam."""
@@ -704,7 +725,7 @@ def upsert_player_character(conn: sqlite3.Connection, adventure_id: str, usernam
     fields: dict[str, Any] = {
         "title": title,
         "type": "character",
-        "sheet": sheet,
+        "sheet": _merge_player_sheet(current.get("sheet") or "", sheet),
         "use_for_character_creation": True,
         "player_username": username,
     }
@@ -893,6 +914,8 @@ def image_to_dict(row: sqlite3.Row) -> dict:
         "height": row["height"],
         "kind": row["kind"] or "scene",
         "ref_id": row["ref_id"] or "",
+        "cache_key": (row["cache_key"] if "cache_key" in row.keys() else "") or "",
+        "reused_from": (row["reused_from"] if "reused_from" in row.keys() else "") or "",
         "created_at": row["created_at"],
         "url": f"/api/images/{row['id']}",
     }
@@ -916,16 +939,42 @@ def insert_image(conn: sqlite3.Connection, *, adventure_id: str, action_seq: int
                  provider: str = "", width: int | None = None,
                  height: int | None = None, image_id: str | None = None,
                  kind: str = "scene", ref_id: str = "",
+                 cache_key: str = "", reused_from: str = "",
                  created_at: str | None = None) -> dict:
     iid = image_id or new_id()
     conn.execute(
         "INSERT INTO images(id, adventure_id, action_seq, prompt, negative_prompt,"
-        " file_path, provider, width, height, kind, ref_id, created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        " file_path, provider, width, height, kind, ref_id, cache_key,"
+        " reused_from, created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
-         provider, width, height, kind, ref_id, created_at or utcnow()),
+         provider, width, height, kind, ref_id, cache_key or "",
+         reused_from or "", created_at or utcnow()),
     )
     return image_to_dict(conn.execute("SELECT * FROM images WHERE id=?", (iid,)).fetchone())
+
+
+def find_cached_image(conn: sqlite3.Connection, adventure_id: str, *,
+                      kind: str, ref_id: str, cache_key: str) -> dict | None:
+    """Imagem já produzida para a mesma chave de conteúdo nesta aventura."""
+    if not cache_key:
+        return None
+    row = conn.execute(
+        "SELECT * FROM images WHERE adventure_id=? AND kind=? AND ref_id=?"
+        " AND cache_key=? ORDER BY created_at DESC LIMIT 1",
+        (adventure_id, kind, ref_id or "", cache_key),
+    ).fetchone()
+    return image_to_dict(row) if row else None
+
+
+def list_portrait_images(conn: sqlite3.Connection, adventure_id: str,
+                         card_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM images WHERE adventure_id=? AND kind='portrait' AND ref_id=?"
+        " ORDER BY created_at DESC",
+        (adventure_id, card_id),
+    ).fetchall()
+    return [image_to_dict(row) for row in rows]
 
 
 def get_image(conn: sqlite3.Connection, image_id: str) -> dict | None:
@@ -1039,7 +1088,11 @@ def delete_image(conn: sqlite3.Connection, image_id: str) -> bool:
     path = Path(raw)
     if raw and not path.is_absolute():
         path = REPO_ROOT / path
-    if raw:
+    shared = conn.execute(
+        "SELECT 1 FROM images WHERE file_path=? AND id<>? LIMIT 1",
+        (image.get("file_path") or "", image_id),
+    ).fetchone()
+    if raw and shared is None:
         try:
             resolved = path.resolve()
             root = REPO_ROOT.resolve()
