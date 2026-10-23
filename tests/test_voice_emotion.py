@@ -51,7 +51,7 @@ def test_tts_sends_emotion_but_supertonic_speaks_plain_text(client):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-voice-emotion"] == "anger"
-    assert capture[0]["model"] == "supertonic-3"
+    assert capture[0]["model"] == "omnivoice"
     assert capture[0]["input"] == "She shouted in anger at the gate."
     assert capture[0]["instructions"].startswith("[angry")
     assert "drama-3" not in capture[0]["input"]
@@ -93,7 +93,7 @@ def test_drama3_falls_back_to_supertonic_when_the_model_is_missing(client):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-voice-emotion"] == "fear"
-    assert [item["model"] for item in capture] == ["drama-3", "supertonic-3"]
+    assert [item["model"] for item in capture] == ["drama-3", "omnivoice"]
     assert capture[0]["input"].startswith("[frightened")
     assert capture[1]["input"] == "She is afraid."
     assert "instructions" in capture[1]

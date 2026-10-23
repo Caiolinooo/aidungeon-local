@@ -36,7 +36,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import db, llm_client, settings_store
+from app import db, llm_client, settings_store, ui_runtime
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -62,7 +62,7 @@ def _ui_cfg() -> dict:
     return {
         "enabled": bool(cfg.get("enabled", True)),
         "temperature": float(cfg.get("temperature", 0.3)),
-        "max_tokens": int(cfg.get("max_tokens", 700)),
+        "max_tokens": int(cfg.get("max_tokens", 1000)),
     }
 
 
@@ -82,11 +82,21 @@ app, so echo the ids only; do not translate or rename them.
 - {"type": "character", "label": "...", "fields": [{"name": "Class",
   "value": "..."}]} — a small character sheet. At most 10 fields.
 
+"hud": 2-5 compact facts the player should always see, drawn only from the
+setup. Each item is {"label": "...", "value": "...", "tone": "neutral|info|
+good|warn|danger"}. Good labels: Local, Objetivo, Tempo, Risco, Clima.
+Values must be concrete and short; do not invent information.
+
+"actions": 2-4 things the player can do RIGHT NOW in the opening scene.
+Each item is {"label": "short button", "type": "do|say|story", "text": "the
+full action in the player's voice, first person"}. Ground them in the setup
+and do not resolve them. They are shortcuts, not narration.
+
 Rules: widgets are for GAME MECHANICS ONLY. A pure narrative, conversation,
 slice-of-life, romance or text-adventure story has NO mechanics — output
-"widgets": [] for those. When in doubt, use no widgets. Only add widgets the
-genre actually needs. Labels short (≤24 chars), in the adventure's language.
-Output ONLY the JSON object."""
+"widgets": [] for those, but still provide hud and actions. When in doubt, use
+no widgets. Only add widgets the genre actually needs. Labels short (≤24
+chars), in the adventure's language. Output ONLY the JSON object."""
 
 
 class UiStateIn(BaseModel):
@@ -191,12 +201,14 @@ def _parse_profile(content: str) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("resposta não é um objeto")
     return {"tabs": _normalize_tabs(raw.get("tabs")),
-            "widgets": _normalize_widgets(raw.get("widgets"))}
+            "widgets": _normalize_widgets(raw.get("widgets")),
+            "hud": ui_runtime.normalize_hud(raw.get("hud")),
+            "actions": ui_runtime.normalize_actions(raw.get("actions"))}
 
 
 def initial_state(profile: dict | None) -> dict:
     """Estado inicial dos widgets a partir do manifesto (valores do LLM)."""
-    state: dict[str, Any] = {}
+    state: dict[str, Any] = ui_runtime.seed(profile)
     for w in (profile or {}).get("widgets", []):
         if w["type"] == "stats":
             state[w["id"]] = {s["name"]: s["value"] for s in w["stats"]}
@@ -218,8 +230,12 @@ def get_ui_profile(adventure_id: str) -> dict:
         stored = adv["ui_profile"] if isinstance(adv["ui_profile"], dict) else None
         profile = None
         if stored is not None:
-            profile = {"tabs": _normalize_tabs(stored.get("tabs")),
-                       "widgets": stored.get("widgets") or []}
+            profile = {
+                "tabs": _normalize_tabs(stored.get("tabs")),
+                "widgets": stored.get("widgets") or [],
+                "hud": ui_runtime.normalize_hud(stored.get("hud")),
+                "actions": ui_runtime.normalize_actions(stored.get("actions")),
+            }
         return {"profile": profile, "state": adv["ui_state"]}
 
 
@@ -279,8 +295,16 @@ def post_ui_profile(adventure_id: str,
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         db.update_adventure_ui_profile(conn, adventure_id, profile)
-        # Semeia o estado só se o jogador ainda não mexeu no painel.
+        # Semeia o estado só se o jogador ainda não mexeu no painel. Um perfil
+        # novo pode acrescentar HUD/ações; o estado dos widgets continua intacto.
         if adv and not adv["ui_state"]:
-            db.update_adventure_ui_state(conn, adventure_id, initial_state(profile))
-            return {"profile": profile, "state": initial_state(profile)}
-        return {"profile": profile, "state": adv["ui_state"] if adv else {}}
+            state = initial_state(profile)
+            db.update_adventure_ui_state(conn, adventure_id, state)
+            return {"profile": profile, "state": state}
+        state = dict((adv or {}).get("ui_state") or {})
+        seed = ui_runtime.seed(profile)
+        added = {key: value for key, value in seed.items() if key not in state}
+        if added:
+            state.update(added)
+            db.update_adventure_ui_state(conn, adventure_id, state)
+        return {"profile": profile, "state": state}

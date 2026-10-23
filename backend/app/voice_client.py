@@ -18,6 +18,7 @@ NUNCA é escrita em logs/mensagens de erro.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -31,9 +32,11 @@ log = logging.getLogger("aidungeon.voice")
 class VoiceError(Exception):
     code = "error"
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message)
         self.message = message
+        if code:
+            self.code = code
 
 
 class VoiceUnreachable(VoiceError):
@@ -154,3 +157,78 @@ def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,
     if not isinstance(text, str):
         raise VoiceError("resposta de audio/transcriptions sem campo 'text'")
     return text
+
+_CLONE_PROVIDER_CODES = {"audio_too_short", "audio_too_long", "invalid_audio"}
+
+
+def _raise_provider(resp: httpx.Response, what: str) -> None:
+    """401/403 vira auth. 400 com código conhecido preserva o código. O resto é erro."""
+    if resp.status_code in (401, 403):
+        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em {what}")
+    if resp.status_code == 200:
+        return
+    code = "error"
+    message = f"HTTP {resp.status_code} em {what}: {resp.text[:200]}"
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict) and err.get("code") in _CLONE_PROVIDER_CODES:
+        code = str(err["code"])
+        message = str(err.get("message") or message)
+    raise VoiceError(message, code=code)
+
+
+def register_clone(cfg: dict, voice_id: str, name: str, ref_text: str,
+                   filename: str, data: bytes, *,
+                   content_type: str = "application/octet-stream",
+                   transport: httpx.BaseTransport | None = None) -> dict:
+    """POST {base}/audio/voices. Devolve o JSON do servidor, inclusive rvq_b64."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    files = {"file": (filename or "audio", data, content_type)}
+    form = {"voice_id": voice_id, "name": name, "ref_text": ref_text}
+    with _make_client(transport, timeout) as client:
+        try:
+            resp = client.post(f"{_base(cfg)}/audio/voices", files=files, data=form,
+                               headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    _raise_provider(resp, "audio/voices")
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise VoiceError("resposta de audio/voices não é JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("rvq_b64"), str) or not body["rvq_b64"]:
+        raise VoiceError("resposta de audio/voices sem rvq_b64")
+    return body
+
+
+def put_clone_rvq(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
+                  transport: httpx.BaseTransport | None = None) -> None:
+    """Regrava o .rvq na VM antes da fala. O arquivo cabe em poucos KB."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    payload = {"ref_text": ref_text, "rvq_b64": base64.b64encode(rvq).decode("ascii")}
+    with _make_client(transport, timeout) as client:
+        try:
+            resp = client.put(f"{_base(cfg)}/audio/voices/{voice_id}", json=payload,
+                              headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    _raise_provider(resp, f"audio/voices/{voice_id}")
+
+
+def delete_clone_remote(cfg: dict, voice_id: str, *,
+                        transport: httpx.BaseTransport | None = None) -> None:
+    """Apaga o arquivo na VM. Falha só é logada: a linha local já saiu."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    try:
+        with _make_client(transport, timeout) as client:
+            resp = client.delete(f"{_base(cfg)}/audio/voices/{voice_id}",
+                                 headers=_headers(cfg))
+    except httpx.TransportError as exc:
+        log.warning("não apaguei a voz %s no servidor: %s", voice_id, type(exc).__name__)
+        return
+    if resp.status_code not in (200, 204, 404):
+        log.warning("não apaguei a voz %s no servidor: HTTP %s", voice_id, resp.status_code)
+

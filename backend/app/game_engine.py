@@ -756,24 +756,27 @@ def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> i
     if not action:
         return 0
     rules = db.get_action_rules(conn, action.get("id")) or {}
-    snapshots = rules.get("body_before")
-    if not isinstance(snapshots, dict):
-        return 0
     from app import body_state, npc_assets, portrait_sync
     restored = 0
-    for card_id, snap in snapshots.items():
-        card = db.get_card(conn, adventure_id, card_id)
-        if not card or not isinstance(snap, dict):
-            continue
-        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-        updated = body_state.restore_sheet(sheet, snap)
-        db.update_card(conn, adventure_id, card_id, {
-            "sheet": json.dumps(updated, ensure_ascii=False),
-        })
-        try:
-            portrait_sync.sync_card(conn, adventure_id, card_id)
-        except Exception:
-            log.warning("undo: retrato não ressincronizado", exc_info=True)
+    snapshots = rules.get("body_before")
+    if isinstance(snapshots, dict):
+        for card_id, snap in snapshots.items():
+            card = db.get_card(conn, adventure_id, card_id)
+            if not card or not isinstance(snap, dict):
+                continue
+            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+            updated = body_state.restore_sheet(sheet, snap)
+            db.update_card(conn, adventure_id, card_id, {
+                "sheet": json.dumps(updated, ensure_ascii=False),
+            })
+            try:
+                portrait_sync.sync_card(conn, adventure_id, card_id)
+            except Exception:
+                log.warning("undo: retrato não ressincronizado", exc_info=True)
+            restored += 1
+    ui_before = rules.get("ui_before")
+    if isinstance(ui_before, dict):
+        db.update_adventure_ui_state(conn, adventure_id, ui_before)
         restored += 1
     return restored
 

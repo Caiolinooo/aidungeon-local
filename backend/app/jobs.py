@@ -71,6 +71,7 @@ Output ONLY the prompt."""
 
 # img2img a partir da âncora. Baixo o bastante para o rosto não virar outra pessoa.
 PORTRAIT_DENOISE = 0.35
+PORTRAIT_VARIANT_DENOISE = 0.5
 
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
 # Cena vestida: o fundo recusa nudez. Sem isso a pintura trocava a roupa do
@@ -437,7 +438,10 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         final = f"{prefix}, {final}" if final else prefix
     look = npc_assets.sheet_context(card.get("sheet") or "")
     if look:
-        final = f"{final}. Mandatory appearance, do not contradict: {look}"
+        if state_key:
+            final = f"{final}. Current look, follow the story: {look}"
+        else:
+            final = f"{final}. Mandatory appearance, do not contradict: {look}"
     init_width = init_height = None
     anchor_bytes = None
     if anchor:
@@ -446,7 +450,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         final = f"{final}, same person, keep the same face".strip()
     init_bytes, denoise = likeness.portrait_init(
         card, None if force_reference else anchor_bytes,
-        anchor_denoise=PORTRAIT_DENOISE,
+        anchor_denoise=PORTRAIT_VARIANT_DENOISE if state_key else PORTRAIT_DENOISE,
         force_reference=force_reference,
     )
     if init_bytes and not anchor:

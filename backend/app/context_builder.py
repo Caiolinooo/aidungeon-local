@@ -509,8 +509,12 @@ def render_player_state(ui_state: dict) -> str:
     """v0.7.0 — bloco compacto "[Player state]" a partir do ui_state do painel
     (stats do tipo {"HP": 14}, inventário [{"name","qty"}], ficha {campo: valor}).
     '' quando vazio — histórias sem widgets não gastam tokens."""
+    from app import ui_runtime
+
     lines: list[str] = []
     for key, value in (ui_state or {}).items():
+        if key in ui_runtime.RESERVED_KEYS:
+            continue
         if isinstance(value, dict) and value:
             pairs = ", ".join(f"{k} {v}" for k, v in value.items())
             lines.append(f"{key}: {pairs}")

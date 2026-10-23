@@ -53,6 +53,7 @@ export default function SceneBackdrop({
   storyText,
   generating,
   playerAction,
+  onSceneChange,
 }) {
   const [scene, setScene] = useState(null)
   const [urls, setUrls] = useState({})
@@ -115,6 +116,17 @@ export default function SceneBackdrop({
 
   // Retratos e fundo precisam de fetch autenticado (<img> não manda o Bearer).
   useEffect(() => {
+    if (!scene) return
+    const place = scene.location && scene.location !== 'the current scene' ? scene.location : ''
+    onSceneChange?.({
+      location: place,
+      atmosphere: scene.atmosphere || '',
+      backdrop: scene.backdrop?.status || '',
+      cast: (scene.cast || []).map((npc) => ({ id: npc.id, title: npc.title })),
+    })
+  }, [scene, onSceneChange])
+
+  useEffect(() => {
     const ids = []
     if (scene?.backdrop?.image?.id) ids.push(scene.backdrop.image.id)
     for (const npc of scene?.cast || []) {
@@ -169,7 +181,7 @@ export default function SceneBackdrop({
 
   return (
     <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
-      scene.notice ? 'min-h-48' : 'h-40 sm:h-52'
+      scene.notice ? 'min-h-48 lg:min-h-60 2xl:min-h-72' : 'h-40 sm:h-52 lg:h-60 2xl:h-72'
     }`}>
       {backdropUrl && (
         <div

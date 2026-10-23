@@ -29,8 +29,8 @@ implantação pede em geral 48 GB ou mais de VRAM
 ([AICoder, 14 out 2026](https://aicoder.com/news/news-20261014-fish-audio-drama-3-open-weight-tts-moe)).
 5 GB livres não seguram um checkpoint de 35B. A RAM que sobra também não
 segura os experts fora da GPU. O `abz-voice-audio.service`
-(`/home/caio/Desktop/abz-voice-local/audio_server.py`) só carrega Whisper e
-Supertonic 3. O campo `model` do pedido é ignorado; `instructions` existe no
+(`/home/caio/Desktop/abz-voice-local/audio_server.py`) carrega Whisper, Supertonic 3
+e o OmniVoice Q8 por CLI. O jogo pede `omnivoice`; `tts-1` e `supertonic-3` continuam no Supertonic. O campo `model` do pedido é ignorado; `instructions` existe no
 schema e hoje não é usado.
 
 `voice.drama3_enabled` fica `false` em `config/settings.json`. Não ligar

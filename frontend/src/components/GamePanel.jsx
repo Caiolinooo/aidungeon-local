@@ -280,6 +280,45 @@ function CharacterWidget({ widget, values, disabled, onChange }) {
   )
 }
 
+function SceneControls({ state, disabled, onSend }) {
+  const hud = Array.isArray(state?._hud) ? state._hud : []
+  const actions = Array.isArray(state?._actions) ? state._actions : []
+  if (hud.length === 0 && actions.length === 0) return null
+  return (
+    <div className="space-y-2">
+      {hud.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {hud.map((item) => (
+            <span
+              key={`${item.label}-${item.value}`}
+              className="inline-flex min-h-7 items-center gap-1 rounded-full border border-subtle bg-elevated px-2.5 text-[11px] text-secondary"
+            >
+              <span className="font-semibold uppercase tracking-wide text-muted">{item.label}</span>
+              <span className="text-primary">{item.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {actions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {actions.map((action) => (
+            <button
+              key={`${action.type}-${action.text}`}
+              type="button"
+              onClick={() => onSend(action.type, action.text)}
+              disabled={disabled}
+              title={action.text}
+              className="min-h-8 max-w-full rounded-full border border-accent-pri/35 bg-accent-pri/10 px-3 py-1 text-left text-xs text-accent-pri hover:bg-accent-pri/20 disabled:opacity-40"
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function GamePanel({
   profile, state, disabled, regenerating,
   onStateChange, onSend, onInsert, onRegenerate, onClose,
@@ -288,7 +327,8 @@ export default function GamePanel({
   const widgets = (profile?.widgets ?? []).filter((widget) =>
     !(packOn && (widget.type === 'stats' || widget.type === 'inventory')),
   )
-  if (widgets.length === 0) return null
+  const hasRuntime = (state?._hud?.length ?? 0) > 0 || (state?._actions?.length ?? 0) > 0
+  if (widgets.length === 0 && !hasRuntime) return null
 
   if (inline) {
     return (
@@ -308,6 +348,7 @@ export default function GamePanel({
             </button>
           )}
         </div>
+        <SceneControls state={state} disabled={disabled} onSend={onSend} />
         <div className="flex flex-col gap-3">
           {widgets.map((widget) => (
             <section
@@ -378,8 +419,9 @@ export default function GamePanel({
             </button>
           )}
         </div>
+        <SceneControls state={state} disabled={disabled} onSend={onSend} />
         {/* mobile: cards em fila rolável; desktop: grade de 2 colunas */}
-        <div className="flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible">
+        <div className="mt-2 flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible">
 
           {widgets.map((widget) => (
             <section

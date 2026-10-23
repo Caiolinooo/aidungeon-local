@@ -68,6 +68,35 @@ def test_parse_profile_rejects_garbage():
             pass
 
 
+def test_parse_profile_keeps_hud_and_story_actions():
+    profile = ui_profile._parse_profile(json.dumps({
+        "widgets": [],
+        "hud": [
+            {"label": "Local", "value": "Sala dos Girinos", "tone": "info"},
+            {"label": "clima", "value": "Chuva"},
+            {"label": "", "value": "sem rótulo"},
+        ],
+        "actions": [
+            {"label": "Perguntar sobre a marca", "type": "say",
+             "text": "Pergunto sobre a marca do pântano."},
+            {"type": "invalid", "text": "Observo a porta."},
+            {"label": "sem texto", "type": "do", "text": ""},
+        ],
+    }))
+    assert profile["widgets"] == []
+    assert [item["label"] for item in profile["hud"]] == ["Local", "clima"]
+    assert profile["hud"][0]["tone"] == "info"
+    assert profile["hud"][1]["tone"] == "neutral"
+    assert profile["actions"] == [
+        {"label": "Perguntar sobre a marca", "type": "say",
+         "text": "Pergunto sobre a marca do pântano."},
+        {"label": "Observo a porta.", "type": "do", "text": "Observo a porta."},
+    ]
+    state = ui_profile.initial_state(profile)
+    assert state["_hud"][0]["value"] == "Sala dos Girinos"
+    assert state["_actions"][0]["type"] == "say"
+
+
 def test_parse_profile_caps_lists():
     content = json.dumps({"widgets": [
         {"type": "stats", "stats": [

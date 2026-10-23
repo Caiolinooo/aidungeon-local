@@ -33,7 +33,7 @@ const DEFAULT_TABS = TABS
 
 export default function InputBar({
   disabled, disabledTurn = false, onSend, onTextChange,
-  tabs = DEFAULT_TABS, inject = null,
+  tabs = DEFAULT_TABS, inject = null, storyActions = [],
   panelAvailable = false, panelOpen = false, onTogglePanel,
 }) {
   const toast = useToast()
@@ -212,7 +212,26 @@ export default function InputBar({
 
   return (
     <div className="w-full border-t border-subtle bg-surface/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur">
-      <div className="mx-auto w-full max-w-4xl">
+      <div className="mx-auto w-full max-w-4xl 2xl:max-w-5xl">
+        {storyActions.length > 0 && (
+          <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+              Na cena
+            </span>
+            {storyActions.map((action) => (
+              <button
+                key={`${action.type}-${action.text}`}
+                type="button"
+                onClick={() => onSend(action.type, action.text)}
+                disabled={inputLocked}
+                title={action.text}
+                className="min-h-8 max-w-[18rem] shrink-0 truncate rounded-full border border-accent-pri/35 bg-accent-pri/10 px-3 py-1 text-left text-xs text-accent-pri hover:bg-accent-pri/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="mb-2.5 flex w-full items-center gap-1 rounded-full border border-subtle bg-elevated p-1 sm:w-auto sm:self-start">
           {normTabs.map((t) => (
             <button

@@ -900,7 +900,11 @@ def portrait_variant_prompt(card: dict) -> str:
         bits.append(wounds + ", visible in portrait")
     if not bits:
         return base
-    return (base + ", current state overrides the base: " + "; ".join(bits)).strip(" ,;")
+    return (
+        "; ".join(bits)
+        + ". Keep this same person from the original portrait, face and hair: "
+        + base
+    ).strip(" ,;")
 
 
 def portrait_state_key(card: dict) -> str:

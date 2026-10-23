@@ -406,9 +406,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         )
     elif clause:
         canon = (
-            "Character canon, mandatory whenever they are visible, overrides the prose: "
+            "Character reference, keep them recognizable: "
             + clause
-            + ". Same hair, face, age, build and clothing. Do not invent a different person."
+            + ". Keep the same face, hair, age and build. The player's requested "
+            "moment, clothing and action take priority over older descriptions."
         )
     location, entry = scene._location(cards, assessment.safe_excerpt or moment)
     if assessment.image_directive and assessment.where != "unestablished":
@@ -430,10 +431,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         moment_for_painter(actions, body.action_seq)
     painted = painted_source or "(an empty scene)"
     user = (
-        (canon + "\n\n" if canon else "")
+        ("Player instruction for the picture (highest priority; obey it): " + order + "\n" if order else "")
+        + (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
         + place
-        + ("Player instruction for the picture (obey it): " + order + "\n" if order else "")
         + "Moment to paint:\n"
         + painted
     )

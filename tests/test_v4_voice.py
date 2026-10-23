@@ -73,7 +73,7 @@ def test_tts_ok_default_narrator_voice(client):
     assert resp.content == MP3_BYTES
     # voice omitida → narrator_voice (M1); payload no formato OpenAI TTS
     assert capture[0]["voice"] == "M1"
-    assert capture[0]["model"] == "supertonic-3"
+    assert capture[0]["model"] == "omnivoice"
     assert capture[0]["response_format"] == "mp3"
     assert capture[0]["input"] == "The tavern door creaks open."
 
@@ -206,7 +206,7 @@ def test_voice_settings_get_masks_api_key(client, monkeypatch):
     assert data["api_key"] == "voi…1234"
     assert data["api_key_set"] is True
     assert data["base_url"] == "https://vm.groupabz.com/voice/v1"
-    assert data["tts_model"] == "supertonic-3"
+    assert data["tts_model"] == "omnivoice"
     assert data["stt_model"] == "whisper-1"
     assert data["voices"] == ["M1", "M2", "M3", "F1", "F2", "F3"]
 

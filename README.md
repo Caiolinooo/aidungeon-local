@@ -11,6 +11,12 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.11.0)
+
+- **HUD vivo**: o passe de crônica reescreve o painel a cada turno (`_hud`, `_actions`, `_seq`), publica `ui_changed` e a tela mostra um mini HUD com escala `--ui-scale`.
+- **Retrato no estado da história**: a variante do retrato segue a situação atual (denoise 0.5) em vez de travar o cânone.
+- **Voz OmniVoice**: o TTS do jogo é o OmniVoice Q8 na GPU (`tts_model=omnivoice`). Dá para gravar ou enviar um áudio, salvar a voz e usá-la no narrador ou num personagem.
+
 ## Funcionalidades (v0.10.0)
 
 - **Corpo, dor e expressão canônicos**: cada ficha ganha `body_state`

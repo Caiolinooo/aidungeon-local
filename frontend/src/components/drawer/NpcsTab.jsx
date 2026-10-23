@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { emotionForLine } from '../../ttsText.js'
 import { useToast } from '../Toast.jsx'
+import VoiceCloneModal from '../VoiceCloneModal.jsx'
 import { useConfirm } from '../../confirm.jsx'
 import { CORE_STATS, roll4d6DropLowest } from '../../utils.js'
 
-const VOICES = ['', 'M1', 'M2', 'M3', 'F1', 'F2', 'F3']
 const EMPTY_CARD = {
   type: 'character',
   triggers: [],
@@ -329,6 +329,7 @@ function NpcRow({
   card, job, adventureId, onSave, onRegenerate, onEnrich, onDelete,
   onRegenerateField, onRegenerateAll, onUploadPhoto, onDeleteReference,
   onDeletePortrait, onPortraitFromPhoto, saving, enriching, regenerating,
+  clonedVoices, onVoiceSaved, onVoiceDeleted,
 }) {
   const toast = useToast()
   const [form, setForm] = useState({
@@ -341,6 +342,7 @@ function NpcRow({
   const [sheetOpen, setSheetOpen] = useState(false)
   const [memories, setMemories] = useState([])
   const [previewing, setPreviewing] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
   const [photoMode, setPhotoMode] = useState('reference')
   const previewAudioRef = useRef(null)
   const fileRef = useRef(null)
@@ -459,10 +461,46 @@ function NpcRow({
               onChange={(e) => setForm({ ...form, voice: e.target.value })}
               className="rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri"
             >
-              {VOICES.map((v) => (
-                <option key={v} value={v}>{v === '' ? 'No voice' : v}</option>
+              <option value="">Sem voz</option>
+              {['M1', 'M2', 'M3', 'F1', 'F2', 'F3'].map((v) => (
+                <option key={v} value={v}>{v}</option>
               ))}
+              {(clonedVoices || []).map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+              {form.voice && form.voice.startsWith('cv_') && !(clonedVoices || []).some((c) => c.id === form.voice) && (
+                <option value={form.voice}>{form.voice}</option>
+              )}
             </select>
+            <button
+              type="button"
+              onClick={() => setCloneOpen(true)}
+              className="rounded-lg border border-subtle px-2 py-1 text-xs"
+            >
+              Clonar
+            </button>
+            {cloneOpen && (
+              <VoiceCloneModal
+                open
+                assign={{
+                  kind: 'card',
+                  adventureId,
+                  cardId: card.id,
+                  cardName: card.title || 'Personagem',
+                }}
+                onClose={(result) => {
+                  if (result?.deleted) {
+                    setForm((f) => (f.voice === result.deleted ? { ...f, voice: '' } : f))
+                    onVoiceDeleted?.(result.deleted)
+                    return
+                  }
+                  setCloneOpen(false)
+                  if (!result?.id) return
+                  setForm((f) => ({ ...f, voice: result.id }))
+                  onVoiceSaved?.(result)
+                }}
+              />
+            )}
             <button
               onClick={previewVoice}
               disabled={form.voice === '' || previewing}
@@ -613,6 +651,7 @@ export default function NpcsTab({ adventure }) {
   const [enrichingId, setEnrichingId] = useState(null)
   const [regeneratingId, setRegeneratingId] = useState(null)
   const [dismissed, setDismissed] = useState(() => new Set())
+  const [clonedVoices, setClonedVoices] = useState([])
   const prevStatuses = useRef({})
 
   const reload = useCallback(async () => {
@@ -626,6 +665,10 @@ export default function NpcsTab({ adventure }) {
   useEffect(() => {
     reload()
   }, [reload])
+
+  useEffect(() => {
+    api.voice.list().then((data) => setClonedVoices(data.cloned || [])).catch(() => setClonedVoices([]))
+  }, [])
 
   // Retrato, ficha e CRUD chegam pelo bus do Play. O poll abaixo fica de fallback.
   useEffect(() => {
@@ -949,6 +992,11 @@ export default function NpcsTab({ adventure }) {
                 onDeletePortrait={deletePortrait}
                 onPortraitFromPhoto={portraitFromPhoto}
                 onDelete={remove}
+                clonedVoices={clonedVoices}
+                onVoiceSaved={(voice) => setClonedVoices((list) => (
+                  list.some((c) => c.id === voice.id) ? list : [...list, { id: voice.id, name: voice.name }]
+                ))}
+                onVoiceDeleted={(id) => setClonedVoices((list) => list.filter((c) => c.id !== id))}
               />
               {showError && (
                 <div className="mt-1 flex items-start justify-between gap-2 rounded-lg border border-danger-900 bg-danger-950/60 px-3 py-2 text-xs text-danger-300">

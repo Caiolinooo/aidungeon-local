@@ -396,6 +396,14 @@ export const api = {
   voice: {
     // GET /voices → {voices: [...], narrator_voice: "M1"} (config efetiva).
     list: () => request('/voices'),
+    clone: (file, name, refText) => {
+      const fd = new FormData()
+      fd.append('file', file, file.name || 'voice.webm')
+      fd.append('name', name)
+      fd.append('ref_text', refText || '')
+      return request('/voices/clone', { method: 'POST', body: fd })
+    },
+    remove: (id) => request(`/voices/${id}`, { method: 'DELETE' }),
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
     // extra: { emotion, adventureId } — a emoção da linha e, se a linha

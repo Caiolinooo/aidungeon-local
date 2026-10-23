@@ -12,6 +12,7 @@ import CharacterModal from '../components/CharacterModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
+import MiniHud from '../components/MiniHud.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { useTheme } from '../themeContext.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
@@ -191,6 +192,8 @@ export default function Play() {
 
   const [adventure, setAdventure] = useState(null)
   const [actions, setActions] = useState(null)
+  const [playerCard, setPlayerCard] = useState(null)
+  const [sceneInfo, setSceneInfo] = useState(null)
   const [error, setError] = useState(null)
   const [gen, setGen] = useState(null) // { kind: 'action'|'continue'|'retry', text }
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -267,6 +270,12 @@ export default function Play() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const refreshPlayer = useCallback(() => {
+    api.getCharacter(id)
+      .then((res) => setPlayerCard(unwrapCharacter(res)))
+      .catch(() => {})
+  }, [id])
+
   // Load adventure state
   const load = useCallback(async () => {
     setError(null)
@@ -313,6 +322,10 @@ export default function Play() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    refreshPlayer()
+  }, [refreshPlayer])
 
   // Veredito da checagem de viabilidade. Vem pelo bus (outro jogador) ou pelo
   // stream da própria ação (evento "action_check", antes dos tokens).
@@ -512,13 +525,25 @@ export default function Play() {
     const onAdventureUpdated = () => {
       refreshAdventure({ replaceActions: false })
     }
+    const onUiChanged = (ev) => {
+      const data = parse(ev)
+      if (data?.ui_state && typeof data.ui_state === 'object') {
+        setUiState(data.ui_state)
+      }
+      refreshPlayer()
+    }
     const onUndo = () => {
       setChoices([])
       setWebSources([])
       setLive('')
       setPendingCheck(null)
       awaitingCheckRef.current = false
-      refreshAdventure({ forceActions: true })
+      refreshAdventure({ forceActions: true }).then((st) => {
+        if (!st) return
+        setUiProfile(st.ui_profile ?? null)
+        setUiState(st.ui_state ?? {})
+      })
+      refreshPlayer()
     }
     es.addEventListener('turn_changed', onTurn)
     es.addEventListener('player_action', onPlayer)
@@ -535,6 +560,7 @@ export default function Play() {
     es.addEventListener('card_changed', onCard)
     es.addEventListener('character_changed', onCharacter)
     es.addEventListener('adventure_updated', onAdventureUpdated)
+    es.addEventListener('ui_changed', onUiChanged)
     const onSimChanged = () => {
       setSimVersion((v) => v + 1)
       if (!genRef.current) refreshAdventure({ replaceActions: false })
@@ -564,12 +590,13 @@ export default function Play() {
       es.removeEventListener('card_changed', onCard)
       es.removeEventListener('character_changed', onCharacter)
       es.removeEventListener('adventure_updated', onAdventureUpdated)
+      es.removeEventListener('ui_changed', onUiChanged)
       es.removeEventListener('undo', onUndo)
       es.removeEventListener('sim_changed', onSimChanged)
       es.removeEventListener('rules_roll', onRulesRoll)
       es.close()
     }
-  }, [id, handleCheckData, refreshAdventure])
+  }, [id, handleCheckData, refreshAdventure, refreshPlayer])
 
   useEffect(() => {
     if (!pendingCheck || !Array.isArray(actions) || actions.length === 0) return
@@ -1003,9 +1030,9 @@ export default function Play() {
 
   // Typography Preferences mapping
   const colWidthCls = {
-    compact: 'max-w-[560px]',
-    standard: 'max-w-[720px]',
-    wide: 'max-w-[880px]',
+    compact: 'max-w-[560px] 2xl:max-w-[640px]',
+    standard: 'max-w-[720px] xl:max-w-[780px] 2xl:max-w-[880px]',
+    wide: 'max-w-[880px] 2xl:max-w-[1040px]',
     full: 'max-w-full px-2',
   }[readerPrefs?.columnWidth || 'standard']
 
@@ -1022,6 +1049,7 @@ export default function Play() {
   }[readerPrefs?.lineHeight || 'relaxed']
 
   const fontSizeValue = readerPrefs?.fontSize || 19
+  const storyFontSize = `calc(${fontSizeValue}px * var(--ui-scale, 1))`
 
   const shareButton = canShare ? (
     <button
@@ -1198,12 +1226,21 @@ export default function Play() {
           </div>
         </header>
 
+        <MiniHud
+          profile={uiProfile}
+          state={uiState}
+          playerCard={playerCard}
+          location={sceneInfo?.location}
+          onOpenCharacter={openCharacter}
+        />
+
         {/* Scene Backdrop */}
         <SceneBackdrop
           adventureId={id}
           storyText={latestStoryText}
           generating={generating}
           playerAction={lastPlayer}
+          onSceneChange={setSceneInfo}
         />
 
         {adventure.turn_mode && (
@@ -1229,7 +1266,7 @@ export default function Play() {
             <div
               className={`mx-auto flex flex-col gap-6 pb-14 sm:pb-4 transition-all duration-150 ${colWidthCls} ${fontFamilyCls}`}
               style={{
-                fontSize: `${fontSizeValue}px`,
+                fontSize: storyFontSize,
                 lineHeight: lineHeightValue,
               }}
             >
@@ -1410,6 +1447,7 @@ export default function Play() {
           onTextChange={(t) => setInputDirty(t.trim().length > 0)}
           tabs={uiProfile?.tabs}
           inject={inject}
+          storyActions={Array.isArray(uiState?._actions) ? uiState._actions : []}
           panelAvailable={(uiProfile?.widgets ?? []).length > 0}
           panelOpen={panelOpen}
           onTogglePanel={() => {
@@ -1424,7 +1462,7 @@ export default function Play() {
 
       {/* RIGHT COLUMN: Docked Inspector (Desktop >= 1024px) */}
       {isInspectorDocked && isWide && (
-        <div className="hidden lg:flex w-[380px] xl:w-[420px] shrink-0 h-full overflow-hidden border-l border-subtle bg-surface">
+        <div className="hidden lg:flex w-[380px] xl:w-[420px] 2xl:w-[480px] shrink-0 h-full overflow-hidden border-l border-subtle bg-surface">
           <InspectorPane
             adventure={adventure}
             onAdventureChange={setAdventure}
@@ -1520,6 +1558,7 @@ export default function Play() {
           onClose={() => setCharacterOpen(false)}
           onSaved={(card) => {
             setCharacterCard(card)
+            setPlayerCard(card)
             setNeedsCharacter(false)
             setCharacterOpen(false)
             toast('Personagem salvo.', 'ok')

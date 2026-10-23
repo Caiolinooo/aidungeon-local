@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
+import VoiceCloneModal from '../VoiceCloneModal.jsx'
 
 const HEALTH_STYLE = {
   ok: 'bg-accent-900 text-accent-pri',
@@ -294,11 +295,17 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
   const [loaded, setLoaded] = useState(null) // VoiceSettings efetiva (api_key mascarada)
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const s = await api.voice.getSettings()
-      setLoaded(s)
+      let cloned = []
+      try {
+        const listed = await api.voice.list()
+        cloned = listed.cloned || []
+      } catch { /* a lista de clones é extra */ }
+      setLoaded({ ...s, cloned })
       setForm({
         enabled: !!s.enabled,
         base_url: s.base_url ?? '',
@@ -358,12 +365,14 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
     )
   }
 
-  // Garante a narrator_voice atual nas opções mesmo se a lista vier incompleta.
-  const voiceOptions = loaded.voices?.length
-    ? loaded.voices
-    : form.narrator_voice
-      ? [form.narrator_voice]
-      : []
+  const builtins = loaded.voices?.length ? loaded.voices : ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']
+  const voiceOptions = [
+    ...builtins.map((v) => ({ value: v, label: v })),
+    ...(loaded.cloned || []).map((c) => ({ value: c.id, label: c.name })),
+  ]
+  if (form.narrator_voice && !voiceOptions.some((o) => o.value === form.narrator_voice)) {
+    voiceOptions.push({ value: form.narrator_voice, label: form.narrator_voice })
+  }
 
   return (
     <div className="flex flex-col gap-4 border-t border-subtle pt-4">
@@ -430,7 +439,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
           <input
             value={form.tts_model}
             onChange={(e) => setForm({ ...form, tts_model: e.target.value })}
-            placeholder="supertonic-3"
+            placeholder="omnivoice"
             className={inputCls}
           />
         </label>
@@ -453,11 +462,44 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
             onChange={(e) => setForm({ ...form, narrator_voice: e.target.value })}
             className={inputCls}
           >
-            {voiceOptions.map((v) => (
-              <option key={v} value={v}>{v}</option>
+            {voiceOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         </label>
+        <button
+          type="button"
+          onClick={() => setCloneOpen(true)}
+          className="rounded-lg border border-subtle px-3 py-2 text-sm text-secondary"
+        >
+          Clonar voz
+        </button>
+        {cloneOpen && (
+          <VoiceCloneModal
+            open
+            assign={{ kind: 'narrator' }}
+            onClose={(result) => {
+              if (result?.deleted) {
+                setLoaded((cur) => ({
+                  ...cur,
+                  cloned: (cur?.cloned || []).filter((c) => c.id !== result.deleted),
+                }))
+                setForm((f) => (f && f.narrator_voice === result.deleted ? { ...f, narrator_voice: 'M1' } : f))
+                return
+              }
+              setCloneOpen(false)
+              if (!result?.id) return
+              setForm((f) => ({ ...f, narrator_voice: result.id }))
+              setLoaded((cur) => {
+                const list = cur?.cloned || []
+                const cloned = list.some((c) => c.id === result.id)
+                  ? list
+                  : [...list, { id: result.id, name: result.name }]
+                return { ...cur, cloned }
+              })
+            }}
+          />
+        )}
         <label className="block">
           <span className={labelCls}>Timeout (s)</span>
           <input

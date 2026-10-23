@@ -1,5 +1,5 @@
-// O TTS da VM (Supertonic 3) roda na CPU: ~25 caracteres por segundo de
-// parede. A rota /api/tts recusa acima de max_text_chars (2000) e o cliente
+// O TTS da VM (OmniVoice Q8) carrega o modelo a cada pedido: um trecho curto leva cerca de 5 s e um longo cerca de 11 s.
+// A rota /api/tts recusa acima de max_text_chars (4096) e o cliente
 // HTTP desiste aos 60s — um parágrafo longo estoura os dois. Pedacos curtos
 // cabem no teto, comecam a tocar em poucos segundos, e o proximo e
 // sintetizado enquanto o atual ainda toca.

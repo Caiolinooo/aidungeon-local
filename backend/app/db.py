@@ -1596,3 +1596,52 @@ def job_queue_summary(conn: sqlite3.Connection) -> dict:
             oldest = row["oldest"]
     summary["oldest_pending_at"] = oldest
     return summary
+
+
+# ------------------------------------------------------------- cloned voices
+def insert_cloned_voice(conn: sqlite3.Connection, *, voice_id: str, name: str,
+                        ref_text: str, rvq: bytes, sample_seconds: float) -> dict:
+    created = utcnow()
+    conn.execute(
+        "INSERT INTO cloned_voices(id, name, ref_text, rvq, sample_seconds, created_at)"
+        " VALUES(?,?,?,?,?,?)",
+        (voice_id, name, ref_text, rvq, float(sample_seconds), created),
+    )
+    row = get_cloned_voice(conn, voice_id)
+    assert row is not None
+    return row
+
+
+def list_cloned_voices(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, name FROM cloned_voices ORDER BY created_at, name"
+    ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
+
+
+def get_cloned_voice(conn: sqlite3.Connection, voice_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM cloned_voices WHERE id=?", (voice_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "ref_text": row["ref_text"],
+        "rvq": bytes(row["rvq"]),
+        "sample_seconds": row["sample_seconds"],
+        "created_at": row["created_at"],
+    }
+
+
+def delete_cloned_voice(conn: sqlite3.Connection, voice_id: str) -> bool:
+    cur = conn.execute("DELETE FROM cloned_voices WHERE id=?", (voice_id,))
+    return cur.rowcount > 0
+
+
+def clear_card_voice(conn: sqlite3.Connection, voice_id: str) -> int:
+    cur = conn.execute(
+        "UPDATE story_cards SET voice='' WHERE voice=?", (voice_id,)
+    )
+    return cur.rowcount

@@ -697,7 +697,7 @@ class TestTier2VoiceBoundaries:
         assert resp.json()["error"]["code"] == "invalid_payload"
 
     def test_t2_voice_02_tts_text_too_long_400(self, e2e_client):
-        """TTS with text exceeding max_text_chars (5500) returns 400 text_too_long."""
+        """TTS with text exceeding max_text_chars (4096) returns 400 text_too_long."""
         resp = e2e_client.post("/api/tts", json={"text": "A" * 6000})
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "text_too_long"

@@ -12,12 +12,13 @@ Aventura sem plot ganha plot_essentials neste passe, a partir da abertura.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
 from typing import Any
 
-from app import body_state, db, jobs, likeness, llm_client, npc_assets, settings_store, world_facts
+from app import body_state, db, events, jobs, likeness, llm_client, npc_assets, settings_store, ui_runtime, world_facts
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -61,6 +62,14 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
       ]
     }
   ],
+  "ui": {
+    "hud": [{"label": "Local", "value": "short fact", "tone": "neutral|info|good|warn|danger"}],
+    "actions": [{"label": "short button", "type": "do|say|story",
+                 "text": "full action in the player's voice"}],
+    "stats": [{"widget": "widget id", "name": "exact stat name", "value": 0}],
+    "inventory": [{"widget": "widget id", "op": "add|remove|set", "name": "item", "qty": 1}],
+    "fields": [{"widget": "widget id", "name": "exact field name", "value": "new value"}]
+  },
   "places": [{"name": "place", "aliases": ["short name"], "existing_title": "", "summary": "what the passage established", "facts": ["one new fact"]}],
   "factions": [{"name": "group", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}],
   "items": [{"name": "item", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}]
@@ -103,6 +112,20 @@ Rules:
 - current_outfit is what they are wearing NOW after the passage, only if it
   changed. Otherwise empty; the sheet keeps the previous outfit.
 - If nobody's body/expression/outfit changed, return an empty bodies array.
+- ui is the live game panel. Use the "Game UI" block to get exact widget ids,
+  stat/field names, limits and current values. Never invent a widget.
+- hud: 2-5 short facts the player must always see now (place, time, goal,
+  danger, weather). Use the language of the story. Only facts this passage or
+  the established setup supports; omit a label instead of guessing.
+- actions: 2-4 things the player could do right now, grounded in the scene.
+  Short labels and full first-person text. They are options, never outcomes:
+  do not narrate the result and do not decide how an NPC reacts.
+- stats: absolute new values, only when the passage shows a clear consequence
+  for that exact stat. Respect min/max from the Game UI block.
+- inventory: only items actually gained, lost, used up, broken or given.
+- fields: only values the passage established (objective, title, rank...).
+  Use exact field names from the Game UI block; do not add new fields.
+- If the UI did not change, return empty arrays. Always include the ui object.
 Output ONLY the JSON object."""
 
 _WORLD_KEYS = (
@@ -478,6 +501,30 @@ def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, s
     return changed
 
 
+def _apply_ui(conn, adventure_id: str, payload: dict, *,
+              source_action_id: int | None,
+              source_seq: int | None) -> bool:
+    """Aplica HUD/ações/valores do painel. Guarda o antes para o undo."""
+    update = payload.get("ui")
+    if not isinstance(update, dict):
+        return False
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    profile = adventure.get("ui_profile") if isinstance(adventure.get("ui_profile"), dict) else None
+    state = adventure.get("ui_state") if isinstance(adventure.get("ui_state"), dict) else {}
+    if profile is None and not state:
+        return False
+    updated = ui_runtime.apply(profile, state, update, seq=source_seq)
+    if updated == state:
+        return False
+    if source_action_id:
+        rules = db.get_action_rules(conn, source_action_id) or {}
+        if "ui_before" not in rules:
+            db.merge_action_rules(conn, source_action_id,
+                                  {"ui_before": copy.deepcopy(state)})
+    db.update_adventure_ui_state(conn, adventure_id, updated)
+    return True
+
+
 def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str, *,
                     source_action_id: int | None = None,
                     source_seq: int | None = None) -> dict:
@@ -512,6 +559,10 @@ def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str, *,
                 updated += 1
 
     body_count = _apply_bodies(
+        conn, adventure_id, payload,
+        source_action_id=source_action_id, source_seq=source_seq,
+    )
+    _apply_ui(
         conn, adventure_id, payload,
         source_action_id=source_action_id, source_seq=source_seq,
     )
@@ -554,15 +605,25 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         cards = [card for card in all_cards if card.get("type") == "character"]
         llm_cfg = settings_store.effective_llm_settings(conn)
         plot = adventure.get("plot_essentials") or ""
+        ui_profile = adventure.get("ui_profile") if isinstance(adventure.get("ui_profile"), dict) else None
+        ui_state = adventure.get("ui_state") if isinstance(adventure.get("ui_state"), dict) else {}
         assessment = world_facts.assess(adventure, actions, all_cards, memories)
     non_see = [action["text"] for action in actions if action["type"] != "see" and action.get("text")]
     _canon, attempt = world_facts.chronicle_passage(actions)
     text = (assessment.canon_blob or _canon).strip()
     if not text and not attempt:
         return {"created": 0, "updated": 0}
-    # Gate barato: turno sem sinal de entidade não chama o LLM.
+    # Gate barato: turno sem sinal de entidade não chama o LLM. Com painel
+    # dinâmico o passe roda sempre, porque o HUD e as ações mudam com a cena.
     latest_turn = "\n".join(non_see[-2:]).strip()
-    if not _turn_has_entity_signal(latest_turn, cards, plot):
+    ui_active = bool(
+        (ui_profile or {}).get("widgets")
+        or (ui_profile or {}).get("hud")
+        or (ui_profile or {}).get("actions")
+        or ui_state.get(ui_runtime.HUD_KEY)
+        or ui_state.get(ui_runtime.ACTIONS_KEY)
+    )
+    if not ui_active and not _turn_has_entity_signal(latest_turn, cards, plot):
         return {"created": 0, "updated": 0}
     roster = []
     for card in cards:
@@ -606,10 +667,16 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         f"Canon passage (only this establishes facts):\n{text or '(none)'}\n\n"
         f"Player attempt (NOT canon):\n{attempt or '(none)'}"
     )
+    ui_context = ui_runtime.prompt_context(ui_profile, ui_state)
+    if ui_context:
+        user += (
+            "\n\nGame UI (exact widget ids, names, limits and current values; "
+            "only report changes the passage supports):\n" + ui_context
+        )
     content = llm_client.chat_completion(
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        role="chronicle", temperature=0.2, max_tokens=1600, transport=transport,
+        role="chronicle", temperature=0.2, max_tokens=2100, transport=transport,
     )
     try:
         payload = npc_assets._extract_json(content)
@@ -625,6 +692,13 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
             source_action_id=(latest or {}).get("id"),
             source_seq=(latest or {}).get("seq"),
         )
+        updated = db.get_adventure(conn, adventure_id) or {}
+        ui_after = updated.get("ui_state") or {}
+    if ui_profile is not None or ui_after:
+        events.publish(adventure_id, "ui_changed", {
+            "ui_state": ui_after,
+            "seq": (latest or {}).get("seq"),
+        })
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)
     return result
 

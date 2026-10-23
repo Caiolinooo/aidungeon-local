@@ -211,6 +211,25 @@ body,
   color: rgb(var(--text-primary-rgb));
 }
 
+:root {
+  --ui-scale: 1;
+}
+
+/* Telas largas: escala tipografia e espaçamentos junto com o viewport. */
+@media (min-width: 1680px) {
+  :root { --ui-scale: 1.06; }
+}
+@media (min-width: 1920px) {
+  :root { --ui-scale: 1.12; }
+}
+@media (min-width: 2400px) {
+  :root { --ui-scale: 1.2; }
+}
+
+html {
+  font-size: calc(16px * var(--ui-scale));
+}
+
 body {
   overscroll-behavior: none;
   background-color: rgb(var(--bg-canvas-rgb));

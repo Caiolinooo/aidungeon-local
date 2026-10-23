@@ -332,7 +332,7 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
         "timeout_seconds": int(ov("voice.timeout_seconds",
                                   voice.get("timeout_seconds", 60))),
         "max_text_chars": int(ov("voice.max_text_chars",
-                                 voice.get("max_text_chars", 2000))),
+                                 voice.get("max_text_chars", 4096))),
         "stt_max_bytes": int(ov("voice.stt_max_bytes",
                                 voice.get("stt_max_bytes", 10485760))),
         "drama3_model": ov("voice.drama3_model", voice.get("drama3_model", "drama-3")),
