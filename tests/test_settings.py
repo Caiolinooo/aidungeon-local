@@ -72,6 +72,20 @@ def test_masked_or_non_ascii_key_is_ignored(client, path, field, key, echoed):
     assert resp.json()[field] == "sk-…5678"
 
 
+@pytest.mark.parametrize(("key", "env_name", "getter", "field"), [
+    ("llm.api_key", "LLM_API_KEY", settings_store.effective_llm_settings, "api_key"),
+    ("image.openai_api_key", "IMAGE_API_KEY", settings_store.effective_image_settings, "openai_api_key"),
+    ("voice.api_key", "VOICE_API_KEY", settings_store.effective_voice_settings, "api_key"),
+])
+def test_legacy_masked_override_falls_back_to_environment(
+        client, monkeypatch, key, env_name, getter, field):
+    monkeypatch.setenv(env_name, "sk-env-valid-1234")
+    with db.session() as conn:
+        db.set_setting(conn, key, json.dumps("sk-…1234"))
+        cfg = getter(conn)
+    assert cfg[field] == "sk-env-valid-1234"
+
+
 def test_put_partial_update_keeps_other_fields(client):
     client.put("/api/settings/llm", json={"max_tokens": 1200, "context_size": 98304, "streaming": False})
     data = client.get("/api/settings/llm").json()

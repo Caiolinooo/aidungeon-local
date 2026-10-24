@@ -108,6 +108,14 @@ def _set_override(conn: sqlite3.Connection, key: str, value: Any) -> None:
     db.set_setting(conn, key, json.dumps(value, ensure_ascii=False))
 
 
+def _api_key_or_env(conn: sqlite3.Connection, key: str, env_name: str) -> str | None:
+    """Override ASCII válido; legados mascarados/não ASCII caem para a env."""
+    value = _get_override(conn, key)
+    if isinstance(value, str) and value and value.isascii() and value.isprintable():
+        return value
+    return resolve_env_value(env_name) or None
+
+
 def _apply_key(conn: sqlite3.Connection, key: str, value: str | None) -> bool:
     """Grava a chave ("" apaga). A chave vira header HTTP: a mascarada que o
     front reenvia ("sk-…1234") e qualquer valor fora de ASCII imprimível são
@@ -166,9 +174,9 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
         value = _get_override(conn, key)
         return default if value is None else value
 
-    api_key = _get_override(conn, "llm.api_key")
+    api_key = _api_key_or_env(conn, "llm.api_key", llm.get("api_key_env", "LLM_API_KEY"))
     if not api_key:
-        api_key = resolve_env_api_key() or llm.get("api_key") or None
+        api_key = llm.get("api_key") or None
 
     effective = {
         "provider": llm.get("provider", "llamacpp"),
@@ -248,9 +256,8 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         value = _get_override(conn, key)
         return default if value is None else value
 
-    api_key = _get_override(conn, "image.openai_api_key")
-    if not api_key:
-        api_key = resolve_env_value(openai.get("api_key_env", "IMAGE_API_KEY")) or None
+    api_key = _api_key_or_env(
+        conn, "image.openai_api_key", openai.get("api_key_env", "IMAGE_API_KEY"))
 
     return {
         # ---- shape público (ImageSettings) ----
@@ -340,9 +347,7 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
         value = _get_override(conn, key)
         return default if value is None else value
 
-    api_key = _get_override(conn, "voice.api_key")
-    if not api_key:
-        api_key = resolve_env_value(voice.get("api_key_env", "VOICE_API_KEY")) or None
+    api_key = _api_key_or_env(conn, "voice.api_key", voice.get("api_key_env", "VOICE_API_KEY"))
 
     return {
         "enabled": bool(ov("voice.enabled", voice.get("enabled", True))),
