@@ -87,7 +87,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
         <span>Editar</span>
       </button>
 
-      {!isPlayer && !isSee && <NarrateButton text={display} adventureId={adventureId} />}
+      {!isPlayer && !isSee && <NarrateButton text={display} actionId={action.id} adventureId={adventureId} />}
 
 
       {isSee ? (
@@ -124,7 +124,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
 // teto da rota. Avatar no dock (avatarBus) fala com lip-sync, enfileirando
 // os pedaços; senão, cada mp3 toca via Audio() em sequência.
 // Clique durante loading/play = stop.
-function NarrateButton({ text, adventureId = '' }) {
+function NarrateButton({ text, actionId, adventureId = '' }) {
   const toast = useToast()
   const [state, setState] = useState('idle') // idle | loading | playing
   const audioRef = useRef(null)
@@ -134,6 +134,8 @@ function NarrateButton({ text, adventureId = '' }) {
   const viaAvatarRef = useRef(false)
   // Incrementar invalida o loop de pedaços em andamento (stop / unmount).
   const tokenRef = useRef(0)
+  // Um controlador por reprodução cancela o pedaço atual e o prefetch.
+  const requestControllerRef = useRef(null)
 
   const releaseAudio = () => {
     audioDoneRef.current?.()
@@ -152,6 +154,7 @@ function NarrateButton({ text, adventureId = '' }) {
 
   const stop = () => {
     tokenRef.current += 1
+    requestControllerRef.current?.abort()
     if (viaAvatarRef.current) {
       viaAvatarRef.current = false
       stopNarration()
@@ -165,6 +168,7 @@ function NarrateButton({ text, adventureId = '' }) {
   useEffect(() => {
     return () => {
       tokenRef.current += 1
+      requestControllerRef.current?.abort()
       if (viaAvatarRef.current) stopNarration()
       releaseAudio()
     }
@@ -193,6 +197,9 @@ function NarrateButton({ text, adventureId = '' }) {
     })
 
   const play = async () => {
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     const token = ++tokenRef.current
     const alive = () => tokenRef.current === token
     setState('loading')
@@ -204,10 +211,17 @@ function NarrateButton({ text, adventureId = '' }) {
         setState('idle')
         return
       }
-      const speakPart = (part) => api.voice.tts(part, voice, {
-        emotion: emotionForLine(part),
-        adventureId,
-      })
+      const speakPart = (part) => {
+        const request = api.voice.tts(part, voice, {
+          emotion: emotionForLine(part),
+          adventureId,
+          signal: controller.signal,
+        })
+        // O prefetch pode falhar enquanto o áudio anterior ainda toca; o await
+        // do loop continua recebendo o erro, sem rejeição não tratada.
+        request.catch(() => {})
+        return request
+      }
       let upcoming = speakPart(parts[0])
       let useAvatar = null
       for (let i = 0; i < parts.length; i++) {
@@ -247,9 +261,17 @@ function NarrateButton({ text, adventureId = '' }) {
     } catch (e) {
       if (!alive()) return
       stop()
-      toast(e.message)
+      if (e?.name !== 'AbortError') toast(e.message)
     }
   }
+
+  useEffect(() => {
+    const onAutoNarrate = (event) => {
+      if (String(event.detail?.actionId) === String(actionId)) play()
+    }
+    window.addEventListener('aidl:auto-narrate', onAutoNarrate)
+    return () => window.removeEventListener('aidl:auto-narrate', onAutoNarrate)
+  }, [actionId, text])
 
   return (
     <button

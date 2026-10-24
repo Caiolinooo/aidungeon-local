@@ -230,7 +230,7 @@ def _execute_sandboxed(hook_type: str, script: str, payload: Any, timeout: float
         return payload
 
     effective_timeout = max(0.01, float(timeout if timeout is not None else 1.0))
-    mp_ctx = mp.get_context("fork")
+    mp_ctx = mp.get_context("spawn")
     parent_conn, child_conn = mp_ctx.Pipe(duplex=False)
     proc = mp_ctx.Process(target=_sandbox_worker, args=(child_conn, hook_type, script, payload))
 

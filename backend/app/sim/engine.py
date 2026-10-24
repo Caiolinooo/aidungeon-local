@@ -61,7 +61,7 @@ def _actor_view(actor: dict) -> dict:
 
 def run_turn(adventure_id: str, adventure: dict, player_action: dict,
              actions: list[dict], user: str, llm_cfg: dict, cfg: dict,
-             transport) -> dict | None:
+             transport, cancel=None) -> dict | None:
     settings = _sim_settings(cfg)
     if not settings["enabled"]:
         return None
@@ -93,6 +93,7 @@ def run_turn(adventure_id: str, adventure: dict, player_action: dict,
         ]
         classified = intent.classify(
             text, _actor_view(actor), foes, pack, llm_cfg, transport, settings,
+            cancel=cancel,
         )
         if classified is None:
             classified = intent.normalize({})

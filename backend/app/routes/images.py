@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import db, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
+from app import access, auth, db, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -231,7 +231,7 @@ def _dedupe_negative(*parts: str) -> str:
 # ------------------------------------------------------------ settings/image
 def _image_settings_response(conn) -> dict:
     """Shape ImageSettings do openapi (api_key SEMPRE mascarada)."""
-    cfg = settings_store.effective_image_settings(conn)
+    cfg = image_client.effective_settings(conn)
     return {
         "enabled": cfg["enabled"],
         "provider": cfg["provider"],
@@ -245,6 +245,14 @@ def _image_settings_response(conn) -> dict:
         "openai_model": cfg["openai_model"],
         "openai_size": cfg["openai_size"],
         "style_suffix": cfg["style_suffix"],
+        "seed": cfg["seed"],
+        "variation": cfg["variation"],
+        "cfg_scale": cfg["cfg_scale"],
+        "sampler_name": cfg["sampler_name"],
+        "scheduler": cfg["scheduler"],
+        "denoising_strength": cfg["denoising_strength"],
+        "timeout_seconds": cfg["timeout_seconds"],
+        "sd_model_checkpoint": cfg["sd_model_checkpoint"],
     }
 
 
@@ -260,6 +268,49 @@ def put_image_settings(body: ImageSettingsUpdate) -> dict:
     with db.session() as conn:
         settings_store.apply_image_update(conn, update)
         return _image_settings_response(conn)
+
+
+# ------------------------------------------------------------------ health
+@router.get("/health/image")
+def get_image_health(transport: Any = Depends(get_http_transport)) -> dict:
+    """Sonda options/models, nunca txt2img/img2img; falhas do provider são dados."""
+    try:
+        with db.session() as conn:
+            cfg = image_client.effective_settings(conn)
+    except Exception as exc:
+        log.warning("image health: configuração indisponível (%s)", type(exc).__name__)
+        return {"enabled": None, "provider": None, "status": "error",
+                "detail": "image settings could not be loaded"}
+    return image_client.health(cfg, transport)
+
+
+# -------------------------------------------------------------- cancelamento
+@router.post("/jobs/{job_id}/cancel")
+def cancel_image_job(job_id: str,
+                     info: auth.AuthInfo = Depends(auth.require_auth),
+                     transport: Any = Depends(get_http_transport)) -> dict:
+    """Cancela jobs do dono; running vira canceled antes do interrupt cooperativo."""
+    running = False
+    with db.session() as conn:
+        job = db.get_job(conn, job_id)
+        adventure = db.get_adventure(conn, job["adventure_id"]) if job else None
+        if not job or not adventure or not access.can_see(info.user, adventure.get("owner")):
+            raise GameError.not_found(f"job {job_id} not found")
+        if job["status"] in ("preparing", "pending", "running"):
+            running = job["status"] == "running"
+            canceled = jobs.cancel(conn, job_id)
+            if canceled is None:
+                current = db.get_job(conn, job_id)
+                if current and current["status"] == "canceled":
+                    return current
+                raise GameError(409, "job_not_cancelable", "job already finished")
+            job = canceled
+        elif job["status"] in ("done", "error"):
+            raise GameError(409, "job_not_cancelable",
+                            f"job already finished with status '{job['status']}'")
+    if running:
+        jobs.interrupt_image(job, transport)
+    return job
 
 
 # -------------------------------------------------------------------- /see
@@ -528,7 +579,8 @@ def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
         raise GameError(422, decision.refusal, decision.message)
 
 
-def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
+def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
+              variation: str | int | None = None) -> dict:
     """Prompt do See com o estado da aventura agora. No 202 roda na thread do
     job, fora da fila do SD."""
     with db.session() as conn:
@@ -538,7 +590,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
         actions = db.list_actions(conn, adventure_id)
         cards = [npc_assets.ensure_portrait_prompt(conn, card)
                  for card in db.list_cards(conn, adventure_id)]
-        img_cfg = settings_store.effective_image_settings(conn)
+        img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
     try:
         prompt, negative_extra, caption = _build_final_prompt(
@@ -551,7 +603,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
         "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
         "caption": caption,
         "cache_key": image_client.request_key(
-            img_cfg, prompt, negative_extra=negative_extra),
+            img_cfg, prompt, negative_extra=negative_extra, variation=variation),
     }
 
 
@@ -559,6 +611,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any) -> dict:
 def post_see(adventure_id: str, body: SeeRequest,
              prefer: str = Header(default=""),
              respond_async: bool = Query(default=False, alias="async"),
+             variation: int | None = Query(default=None, ge=0),
              transport: Any = Depends(get_http_transport)) -> dict | JSONResponse:
     """Sem lock de geração: o jogador age enquanto a imagem sai, e o `see`
     entra no fim da aventura. O 202 (C6) é opt-in porque o frontend v0.9.0
@@ -566,7 +619,7 @@ def post_see(adventure_id: str, body: SeeRequest,
     with db.session() as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
-        img_cfg = settings_store.effective_image_settings(conn)
+        img_cfg = image_client.effective_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
@@ -575,13 +628,14 @@ def post_see(adventure_id: str, body: SeeRequest,
     if respond_async or "respond-async" in prefer.lower():
         job = jobs.start_see(
             adventure_id,
-            {"action_seq": body.action_seq, "extra_prompt": body.extra_prompt},
-            plan=lambda: _plan_see(adventure_id, body, transport),
+            {"action_seq": body.action_seq, "extra_prompt": body.extra_prompt,
+             "variation": variation},
+            plan=lambda: _plan_see(adventure_id, body, transport, variation),
         )
         return JSONResponse(status_code=202, content={"job_id": job["id"]},
                             headers={"Preference-Applied": "respond-async"})
 
-    plan = _plan_see(adventure_id, body, transport)
+    plan = _plan_see(adventure_id, body, transport, variation)
     with db.session() as conn:
         cached = db.find_cached_image(
             conn, adventure_id, kind="scene", ref_id="",

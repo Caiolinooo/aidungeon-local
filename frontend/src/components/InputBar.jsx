@@ -50,6 +50,8 @@ export default function InputBar({
   const areaRef = useRef(null)
   const recorderRef = useRef(null)
   const chunksRef = useRef([])
+  const transcriptionControllerRef = useRef(null)
+  const transcriptionTokenRef = useRef(0)
 
   const active = normTabs.find((t) => t.id === tab) ?? normTabs[0] ?? DEFAULT_TABS[0]
 
@@ -84,9 +86,11 @@ export default function InputBar({
     onTextChange?.('')
   }
 
-  // Para a gravação e limpa stream/recorder (unmount no meio da captura).
+  // Para a gravação, cancela a transcrição e limpa stream/recorder no unmount.
   useEffect(() => {
     return () => {
+      transcriptionTokenRef.current += 1
+      transcriptionControllerRef.current?.abort()
       if (recorderRef.current) {
         recorderRef.current.onstop = null
         if (recorderRef.current.state !== 'inactive') recorderRef.current.stop()
@@ -100,6 +104,14 @@ export default function InputBar({
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop()
     }
+  }
+
+  const cancelTranscription = () => {
+    transcriptionTokenRef.current += 1
+    transcriptionControllerRef.current?.abort()
+    transcriptionControllerRef.current = null
+    setTranscribing(false)
+    setMicHint('Transcrição cancelada.')
   }
 
   const startRecording = async () => {
@@ -162,10 +174,14 @@ export default function InputBar({
         toast(msg)
         return
       }
-      setMicHint('Transcrevendo…')
+      setMicHint('Transcrevendo… toque em ✕ para cancelar.')
       setTranscribing(true)
+      const token = ++transcriptionTokenRef.current
+      const controller = new AbortController()
+      transcriptionControllerRef.current = controller
       try {
-        const { text: spoken } = await api.voice.stt(blob)
+        const { text: spoken } = await api.voice.stt(blob, { signal: controller.signal })
+        if (controller.signal.aborted || transcriptionTokenRef.current !== token) return
         const t = (spoken || '').trim()
         if (t) {
           setMicHint('')
@@ -180,10 +196,14 @@ export default function InputBar({
           toast(msg)
         }
       } catch (e) {
+        if (controller.signal.aborted || transcriptionTokenRef.current !== token) return
         setMicHint(e.message)
         toast(e.message)
       } finally {
-        setTranscribing(false)
+        if (transcriptionTokenRef.current === token) {
+          transcriptionControllerRef.current = null
+          setTranscribing(false)
+        }
       }
     }
     try {
@@ -288,23 +308,29 @@ export default function InputBar({
             </button>
           )}
           <button
-            onClick={recording ? stopRecording : startRecording}
-            disabled={inputLocked || transcribing}
+            onClick={recording ? stopRecording : transcribing ? cancelTranscription : startRecording}
+            disabled={inputLocked && !transcribing}
             title={
               transcribing
-                ? 'Transcrevendo…'
+                ? 'Cancelar transcrição'
                 : recording
                   ? 'Parar gravação'
                   : 'Ditar (fala para texto)'
             }
-            aria-label={recording ? 'Parar gravação' : 'Ditar a ação com o microfone'}
+            aria-label={
+              transcribing
+                ? 'Cancelar transcrição'
+                : recording
+                  ? 'Parar gravação'
+                  : 'Ditar a ação com o microfone'
+            }
             className={`h-11 w-11 shrink-0 rounded-full border font-semibold text-primary transition disabled:cursor-not-allowed disabled:opacity-40 ${
-              recording
+              recording || transcribing
                 ? 'animate-pulse border-danger-500 bg-danger-600 text-white hover:bg-danger-500'
                 : 'border-subtle bg-elevated hover:bg-surface'
             }`}
           >
-            {transcribing ? '⏳' : recording ? '⏹' : '🎙'}
+            {transcribing ? '✕' : recording ? '⏹' : '🎙'}
           </button>
           <button
             type="button"

@@ -11,6 +11,28 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.12.0)
+
+- **Cancelamento real**: Parar encerra a chamada da narrativa no provider e faz
+  rollback da ação nova; retry preserva a resposta anterior. TTS/STT cancelam
+  ao desconectar e a UI aborta prefetch/transcrição sem inserir texto atrasado.
+- **Jobs e imagens sob controle**: central com estados, retry e cancelamento;
+  SDWebUI recebe interrupt em render ativo. See tem variações; seed, CFG,
+  sampler, scheduler, denoise, checkpoint e timeout são persistidos.
+- **Diagnóstico honesto**: `/api/health/llm` rejeita 401 em `/props`; voz e
+  imagem ganham sondas não gerativas e botões de verificação na UI.
+- **Preferências por aventura**: tamanho, criatividade, narração automática e
+  See automático ficam em `ui_state._generation`, sem alterar os defaults globais.
+- **Controles unificados e acessíveis**: página Config e drawer compartilham os
+  samplers e opções avançadas, com presets, clones e labels para leitor de tela.
+- **JSON estruturado**: choices, checagem, adjudicação, crônica e UI dinâmica usam
+  JSON Schema, com retry sem `response_format` apenas para provider que recusar
+  com HTTP 400. Choices em inglês numa cena pt-BR são refeitas uma vez.
+- **Benchmark ampliado**: 16 situações, seis gêneros adicionais em pt-BR e uma
+  continuidade longa; detecção de perda de agência também cobre português.
+- **Windows**: scripting hooks usam subprocesso `spawn`; a suíte E2E voltou a ser
+  coletada e os testes de scheduler usam sincronização em vez de timers frágeis.
+
 ## Funcionalidades (v0.11.0)
 
 - **HUD vivo**: o passe de crônica reescreve o painel a cada turno (`_hud`, `_actions`, `_seq`), publica `ui_changed` e a tela mostra um mini HUD com escala `--ui-scale`.

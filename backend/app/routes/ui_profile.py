@@ -283,7 +283,21 @@ def post_ui_profile(adventure_id: str,
     try:
         content = llm_client.chat_completion(
             llm_cfg, messages, role="assistant", temperature=cfg["temperature"],
-            max_tokens=cfg["max_tokens"], transport=transport)
+            max_tokens=cfg["max_tokens"], transport=transport,
+            response_format={"type": "json_schema", "json_schema": {
+                "name": "adventure_ui_profile", "strict": True,
+                "schema": {
+                    "type": "object",
+                    "required": ["tabs", "widgets", "hud", "actions"],
+                    "properties": {
+                        "tabs": {"type": "array", "items": {"type": "object"}},
+                        "widgets": {"type": "array", "items": {"type": "object"}},
+                        "hud": {"type": "array", "items": {"type": "object"}},
+                        "actions": {"type": "array", "items": {"type": "object"}},
+                    },
+                },
+            }},
+        )
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     try:

@@ -356,17 +356,7 @@ def normalize_role(role: str | None) -> str:
     return role
 
 
-def slot_for(cfg: dict, role: str,
-             transport: httpx.BaseTransport | None = None) -> int | None:
-    """Slot fixo do role, ou None (o servidor escolhe).
-
-    - < 2 slots: None (um `id_slot` inexistente trava o llama.cpp).
-    - narrativa: 0.
-    - 2 slots: auxiliares no 1. 3 slots: choices no 1, o resto no 2.
-    - 4+ slots: mapa do contrato C1.
-    """
-    role = normalize_role(role)
-    total = server_slot_count(cfg, transport)
+def _role_slot_for_total(role: str, total: int) -> int | None:
     if total < 2:
         return None
     if role == "narrative":
@@ -378,10 +368,44 @@ def slot_for(cfg: dict, role: str,
     return 1
 
 
+def slot_for(cfg: dict, role: str,
+             transport: httpx.BaseTransport | None = None) -> int | None:
+    """Slot fixo do role, ou None (o servidor escolhe)."""
+    return _role_slot_for_total(normalize_role(role), server_slot_count(cfg, transport))
+
+
 def slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
     """`total_slots` do servidor e o slot de cada role (None: o servidor escolhe)."""
-    return {"total": server_slot_count(cfg, transport),
-            "roles": {role: slot_for(cfg, role, transport) for role in ROLES}}
+    total = server_slot_count(cfg, transport)
+    return {"total": total,
+            "roles": {role: _role_slot_for_total(role, total) for role in ROLES}}
+
+
+def probe_slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
+    """Sonda estrita para health: 401/403 nunca vira falso positivo."""
+    base = _props_base(cfg)
+    timeout = min(float(cfg.get("timeout_seconds", 180)), PROBE_TIMEOUT)
+    try:
+        with _make_client(cfg, transport, timeout) as client:
+            resp = client.get(f"{base}/props", headers=_headers(cfg))
+    except httpx.TransportError as exc:
+        raise LlmUnreachable(f"slot probe unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /props")
+    if resp.status_code == 404:
+        return {"total": None, "roles": {},
+                "details": "servidor não expõe /props; slots automáticos"}
+    if resp.status_code != 200:
+        raise LlmError(f"HTTP {resp.status_code} em /props")
+    try:
+        total = int(resp.json().get("total_slots") or 0)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise LlmError("resposta inválida em /props") from exc
+    if total < 0:
+        raise LlmError("total_slots negativo em /props")
+    _slot_cache[base] = (total, time.monotonic() + _SLOT_CACHE_TTL_S)
+    return {"total": total,
+            "roles": {role: _role_slot_for_total(role, total) for role in ROLES}}
 
 
 def role_timeout(cfg: dict, role: str) -> float:
@@ -858,7 +882,8 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
                     temperature: float = 0.3,
                     max_tokens: int = 200, stop: list[str] | None = None,
                     transport: httpx.BaseTransport | None = None,
-                    state: StreamState | None = None) -> str:
+                    state: StreamState | None = None,
+                    response_format: dict | None = None) -> str:
     """Chamada auxiliar: devolve o texto inteiro (stripped).
 
     Slot e `cache_prompt` seguem o role (C1). `timeout_s` (padrão: prazo do
@@ -883,6 +908,8 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
     slot = slot_for(cfg, role, transport)
     if slot is not None:
         payload["id_slot"] = slot
+    if response_format is not None:
+        payload["response_format"] = response_format
     state.slot = slot
     if cfg.get("disable_thinking", True):
         payload["chat_template_kwargs"] = {"enable_thinking": False}
@@ -893,6 +920,13 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
                               cancel=cancel, transport=transport, state=state)
     except LlmPreempted:
         log.info("llm %s preemptada no slot %s; repetindo uma vez", role, slot)
+    except LlmError as exc:
+        if response_format is None or "HTTP 400" not in exc.message:
+            raise
+        log.warning("llm %s rejeitou JSON schema; repetindo sem response_format", role)
+        payload.pop("response_format", None)
+        return _complete_once(cfg, payload, role=role, slot=slot, total=total,
+                              cancel=cancel, transport=transport, state=state)
     state.timings = {}
     state.ttft_s = None
     return _complete_once(cfg, payload, role=role, slot=slot, total=total,

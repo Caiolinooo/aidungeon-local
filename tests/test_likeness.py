@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -300,10 +301,22 @@ def test_async_see_enqueues_an_explicit_real_person(client):
         assert db.list_jobs(conn, adv["id"])
 
 
-def test_worker_see_failed_still_refuses_a_minor(client):
+def test_worker_see_failed_still_refuses_a_minor(client, monkeypatch):
     minor = make_adventure()
     _character(minor["id"], "Clara", minor=True, age=16)
+    threads = []
+    real_thread = threading.Thread
+
+    def capture_thread(*args, **kwargs):
+        thread = real_thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(jobs.threading, "Thread", capture_thread)
     assert _see_failed(minor["id"], "Clara is naked on the bed.")["code"] == "minor"
+    for thread in threads:
+        thread.join(5)
+        assert not thread.is_alive()
 
 
 def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path):

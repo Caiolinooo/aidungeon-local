@@ -156,11 +156,18 @@ def health_llm(transport: Any = Depends(get_http_transport)) -> dict:
     scheduler = llm_scheduler.snapshot()
     watchdog = _watchdog(cfg)
     if result["status"] == "ok":
-        slots = llm_client.slot_roles(cfg, transport)
-        reason = _degradation(scheduler, watchdog)
-        if reason:
-            result["status"] = "degraded"
-            result["details"] = reason
+        try:
+            slots = llm_client.probe_slot_roles(cfg, transport)
+            result["details"] = slots.pop("details", None) or result.get("details")
+        except llm_client.LlmError as exc:
+            slots = {"total": None, "roles": {}}
+            result["status"] = exc.code if exc.code == "auth_error" else "degraded"
+            result["details"] = exc.message
+        if result["status"] == "ok":
+            reason = _degradation(scheduler, watchdog)
+            if reason:
+                result["status"] = "degraded"
+                result["details"] = reason
     else:
         slots = {"total": None, "roles": {}}
     result.update(

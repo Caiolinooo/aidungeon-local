@@ -152,3 +152,39 @@ python -m pytest tests/ -q                 # suíte completa (77 testes)
 python -m pytest tests/test_e2e_replay.py -q -s   # replay E2E + números de contexto
 python -m pytest tests/test_smoke_vm.py -q -s     # smoke real na VM (precisa do .env)
 ```
+
+## 9. Verificação v0.12.0 — 2026-10-24
+
+- **Suíte completa**: `python -m pytest tests/ -q` → **1019 passed, 4 skipped**
+  em 4 min 10 s, incluindo os 154 testes de `tests/e2e_opaque` que antes falhavam
+  na coleta. Nenhum teste de produto falhou.
+- **Soak local**: 200/200 turnos via API/uvicorn, zero eventos `error`, 200 ações
+  persistidas e `seq` contíguo `0..199` em 116,09 s. Provider controlado e imediato;
+  prova estabilidade, não qualidade narrativa nem latência do modelo externo.
+- **Thread isolada**: `test_worker_see_failed_still_refuses_a_minor` também passa
+  com `PytestUnhandledThreadExceptionWarning` promovido a erro após sincronizar a
+  thread com o fim do teste.
+- **Build de produção**: `npm run build` → sucesso em 14,5 s. Permanecem os avisos
+  de chunks maiores que 500 kB (bundle principal e emotionDetect).
+- **Smoke real do build, banco e providers descartáveis**: login, criação e tela Play
+  sem erros de console. Parar chamou `/generation/cancel` (200), interrompeu o stream
+  e não gravou prosa parcial; o Continue seguinte concluiu.
+- **Preferências por aventura**: Curta + Mais fiel persistiram via `/ui-state`; o
+  provider recebeu `max_tokens=180` e `temperature=0.45`. Preferências internas não
+  entram em `[Player state]`.
+- **Imagens**: See retornou 202, apareceu na central e terminou `done`; Gerar
+  variação chamou `?variation=1` e concluiu uma nova imagem. Artefatos removidos.
+- **Health e acessibilidade**: sondas LLM/voz/imagem `ok` no ambiente controlado;
+  zero controles sem nome acessível na aba LLM; viewport 390×844 sem overflow.
+- **Contratos**: `docs/openapi.yaml` validado como YAML (57 paths) e atualizado com
+  cancelamento, healthchecks, variação e campos avançados de imagem.
+- Os providers do smoke eram controlados e locais, portanto este resultado prova os
+  fluxos e contratos, não a qualidade artística da LLM, da voz ou das imagens reais.
+
+Para repetir:
+
+```bash
+python -m pytest tests/ -q
+cd frontend && npm run build
+python -c "import yaml; yaml.safe_load(open('../docs/openapi.yaml', encoding='utf-8'))"
+```

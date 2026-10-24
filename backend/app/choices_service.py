@@ -43,6 +43,32 @@ Use the character block to make each option specific to who is present.
 Output ONLY the JSON array."""
 
 
+def _response_format(count: int) -> dict:
+    return {"type": "json_schema", "json_schema": {
+        "name": "next_action_choices", "strict": True,
+        "schema": {
+            "type": "array", "minItems": count, "maxItems": count,
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["type", "text"],
+                "properties": {
+                    "type": {"type": "string", "enum": list(CHOICE_TYPES)},
+                    "text": {"type": "string", "maxLength": MAX_TEXT},
+                },
+            },
+        },
+    }}
+
+
+def _language_matches(actions: list[dict], choices: list[dict]) -> bool:
+    from app import output_sanitizer
+    scene = "".join(a.get("text") or "" for a in actions if a.get("type") != "see")
+    if not output_sanitizer.looks_portuguese(scene):
+        return True
+    text = " ".join(choice["text"] for choice in choices)
+    return "language" not in output_sanitizer.quality_flags(text, expected_language="pt")
+
+
 class ChoicesPending(Exception):
     """A geração não terminou dentro do `wait_s`."""
 
@@ -196,11 +222,26 @@ def start(adventure_id: str, *, transport: Any = None) -> _Entry | None:
 def _run(adventure_id: str, entry: _Entry, actions: list[dict], llm_cfg: dict,
          cfg: dict, transport: Any, facts: str = "", cast: str = "") -> None:
     try:
+        messages = messages_for(actions, cfg["count"], facts, cast)
         content = llm_client.chat_completion(
-            llm_cfg, messages_for(actions, cfg["count"], facts, cast), role="choices",
+            llm_cfg, messages, role="choices",
             temperature=cfg["temperature"], max_tokens=cfg["max_tokens"],
-            transport=transport, cancel=entry.cancel)
+            transport=transport, cancel=entry.cancel,
+            response_format=_response_format(cfg["count"]))
         entry.choices = parse_choices(content, cfg["count"])
+        if not _language_matches(actions, entry.choices):
+            messages.extend([
+                {"role": "assistant", "content": content},
+                {"role": "user", "content": "Rewrite the same choices entirely in the language of the scene."},
+            ])
+            content = llm_client.chat_completion(
+                llm_cfg, messages, role="choices",
+                temperature=cfg["temperature"], max_tokens=cfg["max_tokens"],
+                transport=transport, cancel=entry.cancel,
+                response_format=_response_format(cfg["count"]))
+            entry.choices = parse_choices(content, cfg["count"])
+            if not _language_matches(actions, entry.choices):
+                raise ValueError("choices não estão no idioma da cena")
     except llm_client.LlmError as exc:
         entry.error = (exc.code, exc.message)
     except (ValueError, TypeError) as exc:

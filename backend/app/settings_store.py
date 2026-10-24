@@ -30,12 +30,14 @@ OVERRIDE_KEYS = (
     "sampler.repetition_penalty", "sampler.presence_penalty", "sampler.frequency_penalty",
     "sampler.dry_multiplier", "sampler.dry_base", "sampler.dry_allowed_length",
     "sampler.dry_penalty_last_n", "sampler.retry_temperature_step", "sampler.max_retry_temperature",
-    # imagem (v2; storage_dir/timeout_seconds são internos — não saem no PUT)
+    # imagem (v2; storage_dir é interno — não sai no PUT)
     "image.enabled", "image.provider", "image.sdwebui_base_url",
     "image.sdwebui_steps", "image.sdwebui_width", "image.sdwebui_height",
     "image.negative_prompt", "image.openai_base_url", "image.openai_api_key",
     "image.openai_model", "image.openai_size", "image.style_suffix",
-    "image.storage_dir", "image.timeout_seconds",
+    "image.storage_dir", "image.timeout_seconds", "image.seed", "image.variation",
+    "image.cfg_scale", "image.sampler_name", "image.scheduler",
+    "image.denoising_strength", "image.sd_model_checkpoint",
     # voz (v0.4.0; voices/max_text_chars/stt_max_bytes são internos — não saem no PUT)
     "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
     "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
@@ -264,13 +266,21 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "openai_model": ov("image.openai_model", openai.get("model", "")),
         "openai_size": ov("image.openai_size", openai.get("size", "512x512")),
         "style_suffix": ov("image.style_suffix", prompt_builder.get("style_suffix", "")),
+        "seed": ov("image.seed", image.get("seed", sdwebui.get("seed"))),
+        "variation": int(ov("image.variation", image.get("variation", 0))),
+        "cfg_scale": float(ov("image.cfg_scale", sdwebui.get("cfg_scale", 5))),
+        "sampler_name": ov("image.sampler_name", sdwebui.get("sampler_name", "DPM++ 2M")),
+        "scheduler": ov("image.scheduler", sdwebui.get("scheduler", "Karras")),
+        "denoising_strength": float(ov(
+            "image.denoising_strength", sdwebui.get("denoising_strength", 0.35))),
         # ---- internos ----
         "storage_dir": ov("image.storage_dir", image.get("storage_dir", "data/images")),
         "timeout_seconds": int(ov("image.timeout_seconds",
                                   image.get("timeout_seconds", 300))),
         "txt2img_path": sdwebui.get("txt2img_path", "/sdapi/v1/txt2img"),
         "img2img_path": sdwebui.get("img2img_path", "/sdapi/v1/img2img"),
-        "sd_model_checkpoint": sdwebui.get("sd_model_checkpoint", ""),
+        "sd_model_checkpoint": ov(
+            "image.sd_model_checkpoint", sdwebui.get("sd_model_checkpoint", "")),
         "prompt_builder": dict(prompt_builder),
     }
 
@@ -290,10 +300,23 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
                        ("openai_base_url", "image.openai_base_url"),
                        ("openai_model", "image.openai_model"),
                        ("openai_size", "image.openai_size"),
-                       ("style_suffix", "image.style_suffix")):
+                       ("style_suffix", "image.style_suffix"),
+                       ("variation", "image.variation"),
+                       ("cfg_scale", "image.cfg_scale"),
+                       ("sampler_name", "image.sampler_name"),
+                       ("scheduler", "image.scheduler"),
+                       ("denoising_strength", "image.denoising_strength"),
+                       ("timeout_seconds", "image.timeout_seconds"),
+                       ("sd_model_checkpoint", "image.sd_model_checkpoint")):
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
+    if "seed" in update:
+        if update["seed"] is None:
+            db.delete_setting(conn, "image.seed")
+        else:
+            _set_override(conn, "image.seed", update["seed"])
+        changed.add("seed")
     if _apply_key(conn, "image.openai_api_key", update.get("openai_api_key")):
         changed.add("openai_api_key")
     return changed

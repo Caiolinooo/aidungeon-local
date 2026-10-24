@@ -473,7 +473,7 @@ def test_backfill_cli_execution(tmp_path):
     # Initialize DB
     init_cmd = [
         python_bin, "-c",
-        f"import sys; sys.path.insert(0, 'backend'); import app.db as db, os; os.environ['AIDUNGEON_DB_PATH'] = '{db_file}'; db.init_db()"
+        f"import sys; sys.path.insert(0, 'backend'); import app.db as db, os; os.environ['AIDUNGEON_DB_PATH'] = '{db_file.as_posix()}'; db.init_db()"
     ]
     sub_init = subprocess.run(init_cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
     assert sub_init.returncode == 0, f"Init DB failed: {sub_init.stderr}"

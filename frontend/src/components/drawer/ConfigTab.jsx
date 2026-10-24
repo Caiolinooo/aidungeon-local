@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
 import VoiceCloneModal from '../VoiceCloneModal.jsx'
+import { HealthCheck } from '../settings/Controls.jsx'
+import ImageAdvancedControls from '../settings/ImageAdvancedControls.jsx'
+import LlmSamplingControls, { LLM_DEFAULTS } from '../settings/LlmSamplingControls.jsx'
 
 const HEALTH_STYLE = {
   ok: 'bg-accent-900 text-accent-pri',
@@ -13,8 +16,8 @@ const HEALTH_STYLE = {
 // Aba Config: GET/PUT /api/settings/llm (campos do contrato — api_key é
 // write-only: em branco = mantém; botão Clear envia "" para remover) e
 // status ao vivo de GET /api/health/llm (model_discovered etc.).
-// v2: subsection "Generation" (temperature/top_p/repetition_penalty, também
-// via settings/llm) e seção "Images" (GET/PUT /api/settings/image).
+// Geração reúne presets, tamanho da resposta e todos os samplers de
+// settings/llm; as seções Images e Voice usam seus endpoints GET/PUT próprios.
 export default function ConfigTab() {
   const toast = useToast()
   const [settings, setSettings] = useState(null)
@@ -28,16 +31,26 @@ export default function ConfigTab() {
       setSettings(s)
       setHealth(h)
       setForm({
+        ...LLM_DEFAULTS,
         base_url: s.base_url ?? '',
         model_alias: s.model_alias ?? 'auto',
         context_size: s.context_size ?? 8192,
-        max_tokens: s.max_tokens ?? 300,
+        max_tokens: s.max_tokens ?? LLM_DEFAULTS.max_tokens,
         timeout_seconds: s.timeout_seconds ?? 180,
         streaming: !!s.streaming,
         disable_thinking: !!s.disable_thinking,
-        temperature: s.temperature ?? 0.85,
-        top_p: s.top_p ?? 0.95,
-        repetition_penalty: s.repetition_penalty ?? 1.08,
+        temperature: s.temperature ?? LLM_DEFAULTS.temperature,
+        top_p: s.top_p ?? LLM_DEFAULTS.top_p,
+        min_p: s.min_p ?? LLM_DEFAULTS.min_p,
+        repetition_penalty: s.repetition_penalty ?? LLM_DEFAULTS.repetition_penalty,
+        presence_penalty: s.presence_penalty ?? LLM_DEFAULTS.presence_penalty,
+        frequency_penalty: s.frequency_penalty ?? LLM_DEFAULTS.frequency_penalty,
+        dry_multiplier: s.dry_multiplier ?? LLM_DEFAULTS.dry_multiplier,
+        dry_base: s.dry_base ?? LLM_DEFAULTS.dry_base,
+        dry_allowed_length: s.dry_allowed_length ?? LLM_DEFAULTS.dry_allowed_length,
+        dry_penalty_last_n: s.dry_penalty_last_n ?? LLM_DEFAULTS.dry_penalty_last_n,
+        retry_temperature_step: s.retry_temperature_step ?? LLM_DEFAULTS.retry_temperature_step,
+        max_retry_temperature: s.max_retry_temperature ?? LLM_DEFAULTS.max_retry_temperature,
         api_key: '', // write-only: vazio = manter a chave atual
       })
     } catch (e) {
@@ -63,7 +76,16 @@ export default function ConfigTab() {
         disable_thinking: form.disable_thinking,
         temperature: Number(form.temperature),
         top_p: Number(form.top_p),
+        min_p: Number(form.min_p),
         repetition_penalty: Number(form.repetition_penalty),
+        presence_penalty: Number(form.presence_penalty),
+        frequency_penalty: Number(form.frequency_penalty),
+        dry_multiplier: Number(form.dry_multiplier),
+        dry_base: Number(form.dry_base),
+        dry_allowed_length: Number(form.dry_allowed_length),
+        dry_penalty_last_n: Number(form.dry_penalty_last_n),
+        retry_temperature_step: Number(form.retry_temperature_step),
+        max_retry_temperature: Number(form.max_retry_temperature),
       }
       if (form.api_key) payload.api_key = form.api_key // só envia se digitado
       const s = await api.putLlmSettings(payload)
@@ -174,22 +196,6 @@ export default function ConfigTab() {
         </label>
       </div>
 
-      <label className="block">
-        <span className={labelCls}>Response length (max tokens): {form.max_tokens}</span>
-        <input
-          type="range"
-          min={100}
-          max={2048}
-          step={16}
-          value={form.max_tokens}
-          onChange={(e) => setForm({ ...form, max_tokens: e.target.value })}
-          className="w-full accent-accent-600"
-        />
-        <div className="flex justify-between text-[10px] text-muted">
-          <span>100</span>
-          <span>2048</span>
-        </div>
-      </label>
 
       <div className="flex gap-5">
         <label className="flex items-center gap-2 text-sm text-secondary">
@@ -208,65 +214,15 @@ export default function ConfigTab() {
             onChange={(e) => setForm({ ...form, disable_thinking: e.target.checked })}
             className="accent-accent-600"
           />
-          Disable thinking (Qwen3.x)
+          Desativar raciocínio (Qwen3.x)
         </label>
       </div>
 
-      {/* v2 — subsection Generation: sampler do LLM (settings/llm) */}
-      <div className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface/40 p-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Geração</h3>
-
-        <label className="block">
-          <span className={labelCls}>Temperature: {Number(form.temperature).toFixed(2)}</span>
-          <input
-            type="range"
-            min={0}
-            max={2}
-            step={0.05}
-            value={form.temperature}
-            onChange={(e) => setForm({ ...form, temperature: e.target.value })}
-            className="w-full accent-accent-600"
-          />
-          <div className="flex justify-between text-[10px] text-muted">
-            <span>0.00 (focused)</span>
-            <span>2.00 (wild)</span>
-          </div>
-        </label>
-
-        <label className="block">
-          <span className={labelCls}>Top-p: {Number(form.top_p).toFixed(2)}</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={form.top_p}
-            onChange={(e) => setForm({ ...form, top_p: e.target.value })}
-            className="w-full accent-accent-600"
-          />
-          <div className="flex justify-between text-[10px] text-muted">
-            <span>0.00</span>
-            <span>1.00</span>
-          </div>
-        </label>
-
-        <label className="block">
-          <span className={labelCls}>Repetition penalty: {Number(form.repetition_penalty).toFixed(2)}</span>
-          <input
-            type="range"
-            min={1}
-            max={2}
-            step={0.05}
-            value={form.repetition_penalty}
-            onChange={(e) => setForm({ ...form, repetition_penalty: e.target.value })}
-            className="w-full accent-accent-600"
-          />
-          <div className="flex justify-between text-[10px] text-muted">
-            <span>1.00 (off)</span>
-            <span>2.00</span>
-          </div>
-        </label>
-      </div>
+      {/* Geração: presets e todos os samplers persistidos em settings/llm. */}
+      <section className="flex flex-col gap-3 rounded-lg border border-subtle bg-surface/40 p-3" aria-labelledby="drawer-generation-title">
+        <h3 id="drawer-generation-title" className="text-xs font-semibold uppercase tracking-wide text-muted">Geração</h3>
+        <LlmSamplingControls form={form} onChange={setForm} inputCls={inputCls} labelCls={labelCls} compact />
+      </section>
 
       <div className="flex justify-end">
         <button
@@ -281,7 +237,7 @@ export default function ConfigTab() {
       {/* v2 — seção Images: config do provedor de geração de imagens ("See") */}
       <ImageSettingsSection inputCls={inputCls} labelCls={labelCls} />
 
-      {/* v0.4.0 — seção Voice: TTS (Supertonic) + STT (Whisper) da stack da VM */}
+      {/* v0.4.0 — seção Voice: TTS (OmniVoice) + STT (Whisper) da stack da VM */}
       <VoiceSettingsSection inputCls={inputCls} labelCls={labelCls} />
     </div>
   )
@@ -379,16 +335,18 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Voice</h3>
         <p className="mt-0.5 text-xs text-muted">
-          Text-to-speech narration and speech-to-text dictation (OpenAI-compatible provider).
+          Narração com OmniVoice e ditado por transcrição em um provedor compatível com OpenAI.
         </p>
         {loaded.drama3_enabled ? (
           <p className="mt-1 text-xs text-accent-pri">Drama-3 está ligado. As falas saem com uma direção de emoção.</p>
         ) : (
           <p className="mt-1 text-xs text-muted">
-            Drama-3 is off on this machine (not enough free VRAM). Supertonic still speaks, and each line sends an emotion tag.
+            Drama-3 está desativado nesta máquina (VRAM livre insuficiente). O OmniVoice continua narrando e cada fala envia uma etiqueta de emoção.
           </p>
         )}
       </div>
+
+      <HealthCheck service="voice" compact />
 
       <label className="flex items-center gap-2 text-sm text-secondary">
         <input
@@ -435,7 +393,7 @@ function VoiceSettingsSection({ inputCls, labelCls }) {
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className={labelCls}>Modelo de voz</span>
+          <span className={labelCls}>Modelo de voz (OmniVoice)</span>
           <input
             value={form.tts_model}
             onChange={(e) => setForm({ ...form, tts_model: e.target.value })}
@@ -550,6 +508,14 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         openai_model: s.openai_model ?? '',
         openai_size: s.openai_size ?? '512x512',
         style_suffix: s.style_suffix ?? '',
+        seed: s.seed ?? '',
+        variation: s.variation ?? 0,
+        timeout_seconds: s.timeout_seconds ?? 300,
+        cfg_scale: s.cfg_scale ?? 5,
+        sampler_name: s.sampler_name ?? 'DPM++ 2M',
+        scheduler: s.scheduler ?? 'Karras',
+        denoising_strength: s.denoising_strength ?? 0.35,
+        sd_model_checkpoint: s.sd_model_checkpoint ?? '',
         openai_api_key: '', // write-only: vazio = manter a chave atual
       })
     } catch (e) {
@@ -577,6 +543,14 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         openai_model: form.openai_model,
         openai_size: form.openai_size,
         style_suffix: form.style_suffix,
+        seed: form.seed === '' || form.seed == null ? null : Number(form.seed),
+        variation: Number(form.variation),
+        timeout_seconds: Number(form.timeout_seconds),
+        cfg_scale: Number(form.cfg_scale),
+        sampler_name: form.sampler_name,
+        scheduler: form.scheduler,
+        denoising_strength: Number(form.denoising_strength),
+        sd_model_checkpoint: form.sd_model_checkpoint,
       }
       if (form.openai_api_key) payload.openai_api_key = form.openai_api_key // só envia se digitado
       setLoaded(await api.putImageSettings(payload))
@@ -612,9 +586,11 @@ function ImageSettingsSection({ inputCls, labelCls }) {
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Imagens</h3>
         <p className="mt-0.5 text-xs text-muted">
-          Provider used by the "See" action to illustrate the current scene.
+          Provedor usado pela ação “Ver” para ilustrar a cena atual.
         </p>
       </div>
+
+      <HealthCheck service="image" compact />
 
       <div className="flex gap-5">
         <label className="flex items-center gap-2 text-sm text-secondary">
@@ -652,10 +628,12 @@ function ImageSettingsSection({ inputCls, labelCls }) {
           </label>
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
-              <span className={labelCls}>Steps</span>
+              <span className={labelCls}>Passos (20 recomendados)</span>
               <input
                 type="number"
                 min={1}
+                max={150}
+                step={1}
                 value={form.sdwebui_steps}
                 onChange={(e) => setForm({ ...form, sdwebui_steps: e.target.value })}
                 className={inputCls}
@@ -738,7 +716,7 @@ function ImageSettingsSection({ inputCls, labelCls }) {
               />
             </label>
             <label className="block">
-              <span className={labelCls}>Size</span>
+              <span className={labelCls}>Tamanho (largura x altura)</span>
               <input
                 value={form.openai_size}
                 onChange={(e) => setForm({ ...form, openai_size: e.target.value })}
@@ -759,6 +737,8 @@ function ImageSettingsSection({ inputCls, labelCls }) {
           className={inputCls}
         />
       </label>
+
+      <ImageAdvancedControls form={form} onChange={setForm} inputCls={inputCls} labelCls={labelCls} />
 
       <div className="flex justify-end">
         <button

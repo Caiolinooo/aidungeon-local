@@ -4,6 +4,10 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { useTheme } from '../themeContext.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
+import VoiceCloneModal from '../components/VoiceCloneModal.jsx'
+import { HealthCheck, SettingField } from '../components/settings/Controls.jsx'
+import ImageAdvancedControls from '../components/settings/ImageAdvancedControls.jsx'
+import LlmSamplingControls, { LLM_DEFAULTS } from '../components/settings/LlmSamplingControls.jsx'
 import {
   ArrowLeft,
   Cpu,
@@ -12,12 +16,8 @@ import {
   Brain,
   Code2,
   Save,
-  RefreshCw,
   Play,
-  Check,
-  AlertCircle,
   Sliders,
-  Sparkles,
   BookOpen,
 } from 'lucide-react'
 
@@ -44,22 +44,10 @@ export default function Settings() {
     api_key: '',
     model_alias: 'auto',
     context_size: 65536,
-    max_tokens: 300,
     streaming: true,
     disable_thinking: true,
     timeout_seconds: 180,
-    temperature: 0.85,
-    top_p: 1.0,
-    min_p: 0.08,
-    repetition_penalty: 1.02,
-    presence_penalty: 0.15,
-    frequency_penalty: 0.10,
-    dry_multiplier: 0.8,
-    dry_base: 1.75,
-    dry_allowed_length: 2,
-    dry_penalty_last_n: -1,
-    retry_temperature_step: 0.05,
-    max_retry_temperature: 1.15,
+    ...LLM_DEFAULTS,
   })
   const [llmHealth, setLlmHealth] = useState(null)
 
@@ -68,7 +56,7 @@ export default function Settings() {
     enabled: true,
     provider: 'sdwebui',
     sdwebui_base_url: 'http://127.0.0.1:7860',
-    sdwebui_steps: 30,
+    sdwebui_steps: 20,
     sdwebui_width: 1024,
     sdwebui_height: 1024,
     negative_prompt: '',
@@ -77,21 +65,31 @@ export default function Settings() {
     openai_api_key: '',
     openai_model: 'dall-e-3',
     openai_size: '1024x1024',
+    seed: '',
+    variation: 0,
+    timeout_seconds: 300,
+    cfg_scale: 5,
+    sampler_name: 'DPM++ 2M',
+    scheduler: 'Karras',
+    denoising_strength: 0.35,
+    sd_model_checkpoint: '',
   })
 
   // Voice Settings State
   const [voiceForm, setVoiceForm] = useState({
     enabled: true,
     base_url: 'http://127.0.0.1:8000',
-    tts_model: 'supertonic',
+    tts_model: 'omnivoice',
     stt_model: 'whisper-large-v3',
     narrator_voice: 'M1',
     voices: ['M1', 'M2', 'M3', 'F1', 'F2', 'F3'],
+    cloned: [],
     timeout_seconds: 30,
     api_key: '',
   })
+  const [voiceSettings, setVoiceSettings] = useState(null)
   const [previewingVoice, setPreviewingVoice] = useState(null)
-
+  const [cloneOpen, setCloneOpen] = useState(false)
   // Embeddings & Scripting State
   const [embeddingsForm, setEmbeddingsForm] = useState({
     enabled: true,
@@ -113,14 +111,26 @@ export default function Settings() {
     .filter((preset) => preset.val <= contextSizeMax)
     .concat([{ label: `${Math.round(contextSizeMax / 1024)}k Max`, val: contextSizeMax }])
 
+  const voiceOptions = [
+    ...(voiceForm.voices || ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']).map((voice) => ({
+      value: voice,
+      label: `${voice} (${voice.startsWith('M') ? 'masculina' : 'feminina'})`,
+    })),
+    ...(voiceForm.cloned || []).map((clone) => ({ value: clone.id, label: `${clone.name} (clone)` })),
+  ]
+  if (voiceForm.narrator_voice && !voiceOptions.some((option) => option.value === voiceForm.narrator_voice)) {
+    voiceOptions.push({ value: voiceForm.narrator_voice, label: voiceForm.narrator_voice })
+  }
+
   useEffect(() => {
     async function loadAllSettings() {
       setLoading(true)
       try {
-        const [llm, img, vce, emb, scr, health] = await Promise.all([
+        const [llm, img, vce, voiceList, emb, scr, health] = await Promise.all([
           api.getLlmSettings().catch(() => ({})),
           api.getImageSettings().catch(() => ({})),
           api.getVoiceSettings().catch(() => ({})),
+          api.voice.list().catch(() => ({})),
           api.getEmbeddingsSettings().catch(() => ({})),
           api.getScriptingSettings().catch(() => ({})),
           api.healthLlm().catch(() => null),
@@ -130,11 +140,24 @@ export default function Settings() {
           setLlmForm((prev) => ({
             ...prev,
             ...llm,
+            api_key: '',
             context_size: Math.min(llm.context_size_max ?? 106496, llm.context_size || 65536),
           }))
         }
-        if (img && Object.keys(img).length) setImageForm((prev) => ({ ...prev, ...img }))
-        if (vce && Object.keys(vce).length) setVoiceForm((prev) => ({ ...prev, ...vce }))
+        if (img && Object.keys(img).length) {
+          setImageForm((prev) => ({ ...prev, ...img, openai_api_key: '' }))
+        }
+        if (vce && Object.keys(vce).length) {
+          const cloned = voiceList.cloned || []
+          setVoiceSettings({ ...vce, cloned })
+          setVoiceForm((prev) => ({
+            ...prev,
+            ...vce,
+            voices: voiceList.voices || vce.voices || prev.voices,
+            cloned,
+            api_key: '',
+          }))
+        }
         if (emb && Object.keys(emb).length) setEmbeddingsForm((prev) => ({ ...prev, ...emb }))
         if (scr && Object.keys(scr).length) setScriptingForm((prev) => ({ ...prev, ...scr }))
         if (health) setLlmHealth(health)
@@ -170,30 +193,54 @@ export default function Settings() {
           max_retry_temperature: Number(llmForm.max_retry_temperature),
           timeout_seconds: Number(llmForm.timeout_seconds),
         }
+        if (!llmForm.api_key) delete payload.api_key
         const updated = await api.putLlmSettings(payload)
         setLlmForm((prev) => ({
           ...prev,
           ...updated,
+          api_key: '',
           context_size: Math.min(updated.context_size_max ?? contextSizeMax, updated.context_size),
         }))
         toast('Configurações do modelo salvas.', 'ok')
       } else if (activeTab === 'image') {
         const payload = {
-          ...imageForm,
+          enabled: imageForm.enabled,
+          provider: imageForm.provider,
+          sdwebui_base_url: imageForm.sdwebui_base_url,
           sdwebui_steps: Number(imageForm.sdwebui_steps),
           sdwebui_width: Number(imageForm.sdwebui_width),
           sdwebui_height: Number(imageForm.sdwebui_height),
+          negative_prompt: imageForm.negative_prompt,
+          style_suffix: imageForm.style_suffix,
+          openai_base_url: imageForm.openai_base_url,
+          openai_model: imageForm.openai_model,
+          openai_size: imageForm.openai_size,
+          seed: imageForm.seed === '' || imageForm.seed == null ? null : Number(imageForm.seed),
+          variation: Number(imageForm.variation),
+          timeout_seconds: Number(imageForm.timeout_seconds),
+          cfg_scale: Number(imageForm.cfg_scale),
+          sampler_name: imageForm.sampler_name,
+          scheduler: imageForm.scheduler,
+          denoising_strength: Number(imageForm.denoising_strength),
+          sd_model_checkpoint: imageForm.sd_model_checkpoint,
         }
+        if (imageForm.openai_api_key) payload.openai_api_key = imageForm.openai_api_key
         const updated = await api.putImageSettings(payload)
-        setImageForm((prev) => ({ ...prev, ...updated }))
+        setImageForm((prev) => ({ ...prev, ...updated, openai_api_key: '' }))
         toast('Configurações de imagem salvas.', 'ok')
       } else if (activeTab === 'voice') {
         const payload = {
-          ...voiceForm,
+          enabled: voiceForm.enabled,
+          base_url: voiceForm.base_url,
+          tts_model: voiceForm.tts_model,
+          stt_model: voiceForm.stt_model,
+          narrator_voice: voiceForm.narrator_voice,
           timeout_seconds: Number(voiceForm.timeout_seconds),
         }
+        if (voiceForm.api_key) payload.api_key = voiceForm.api_key
         const updated = await api.putVoiceSettings(payload)
-        setVoiceForm((prev) => ({ ...prev, ...updated }))
+        setVoiceSettings((prev) => ({ ...prev, ...updated }))
+        setVoiceForm((prev) => ({ ...prev, ...updated, api_key: '' }))
         toast('Configurações de voz salvas.', 'ok')
       } else if (activeTab === 'memory') {
         const embPayload = {
@@ -210,6 +257,17 @@ export default function Settings() {
       toast('Falha ao salvar: ' + e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const clearVoiceKey = async () => {
+    try {
+      const updated = await api.putVoiceSettings({ api_key: '' })
+      setVoiceSettings((prev) => ({ ...prev, ...updated }))
+      setVoiceForm((prev) => ({ ...prev, api_key: '' }))
+      toast('Chave da API de voz removida.', 'ok')
+    } catch (e) {
+      toast('Falha ao remover a chave: ' + e.message)
     }
   }
 
@@ -340,8 +398,7 @@ export default function Settings() {
                       Endpoint & Model
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className={labelCls}>Base URL</label>
+                      <SettingField label="URL base" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={llmForm.base_url}
@@ -349,9 +406,8 @@ export default function Settings() {
                           placeholder="http://127.0.0.1:1234/v1"
                           className={inputCls}
                         />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Apelido do modelo</label>
+                      </SettingField>
+                      <SettingField label="Apelido do modelo" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={llmForm.model_alias}
@@ -359,11 +415,10 @@ export default function Settings() {
                           placeholder="auto (ou o nome exato do modelo)"
                           className={inputCls}
                         />
-                      </div>
+                      </SettingField>
                     </div>
 
-                    <div>
-                      <label className={labelCls}>Chave da API (opcional / oculta)</label>
+                    <SettingField label="Chave da API (opcional / oculta)" labelClassName={labelCls}>
                       <input
                         type="password"
                         value={llmForm.api_key || ''}
@@ -371,7 +426,7 @@ export default function Settings() {
                         placeholder="Deixe em branco para usar a chave atual ou o .env"
                         className={inputCls}
                       />
-                    </div>
+                    </SettingField>
                   </div>
 
                   {/* Context Size & Long-Horizon Durability */}
@@ -409,6 +464,7 @@ export default function Settings() {
                     <div>
                       <input
                         type="range"
+                        aria-label="Tamanho da janela de contexto"
                         min="4096"
                         max={contextSizeMax}
                         step="4096"
@@ -425,21 +481,8 @@ export default function Settings() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-                      <div>
-                        <label className={labelCls}>Máximo de tokens por turno ({llmForm.max_tokens})</label>
-                        <input
-                          type="range"
-                          min="100"
-                          max="2048"
-                          step="16"
-                          value={llmForm.max_tokens}
-                          onChange={(e) => setLlmForm({ ...llmForm, max_tokens: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Tempo limite (segundos)</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                      <SettingField label="Tempo limite (segundos)" labelClassName={labelCls}>
                         <input
                           type="number"
                           min="10"
@@ -448,7 +491,7 @@ export default function Settings() {
                           onChange={(e) => setLlmForm({ ...llmForm, timeout_seconds: Number(e.target.value) })}
                           className={inputCls}
                         />
-                      </div>
+                      </SettingField>
                       <div className="flex flex-col justify-end gap-2 pb-1">
                         <label className="flex items-center gap-2 text-xs text-secondary cursor-pointer">
                           <input
@@ -473,120 +516,12 @@ export default function Settings() {
                   </div>
 
                   {/* Samplers & Penalties */}
-                  <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-                      Sampler Tuning & DRY Repetition
+                  <section className="rounded-2xl border border-subtle bg-surface p-4" aria-labelledby="llm-sampling-title">
+                    <h3 id="llm-sampling-title" className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted">
+                      Amostragem e penalidades
                     </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <label className={labelCls}>Temperature ({llmForm.temperature})</label>
-                        <input
-                          type="range"
-                          min="0.1"
-                          max="1.5"
-                          step="0.05"
-                          value={llmForm.temperature}
-                          onChange={(e) => setLlmForm({ ...llmForm, temperature: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Top P ({llmForm.top_p})</label>
-                        <input
-                          type="range"
-                          min="0.1"
-                          max="1.0"
-                          step="0.05"
-                          value={llmForm.top_p}
-                          onChange={(e) => setLlmForm({ ...llmForm, top_p: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Min P ({llmForm.min_p})</label>
-                        <input
-                          type="range"
-                          min="0.01"
-                          max="0.3"
-                          step="0.01"
-                          value={llmForm.min_p}
-                          onChange={(e) => setLlmForm({ ...llmForm, min_p: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-                      <div>
-                        <label className={labelCls}>Presence Penalty ({llmForm.presence_penalty})</label>
-                        <input
-                          type="range"
-                          min="0.0"
-                          max="1.0"
-                          step="0.05"
-                          value={llmForm.presence_penalty}
-                          onChange={(e) => setLlmForm({ ...llmForm, presence_penalty: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Frequency Penalty ({llmForm.frequency_penalty})</label>
-                        <input
-                          type="range"
-                          min="0.0"
-                          max="1.0"
-                          step="0.05"
-                          value={llmForm.frequency_penalty}
-                          onChange={(e) => setLlmForm({ ...llmForm, frequency_penalty: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Repetition Penalty ({llmForm.repetition_penalty})</label>
-                        <input
-                          type="range"
-                          min="1.0"
-                          max="1.3"
-                          step="0.01"
-                          value={llmForm.repetition_penalty}
-                          onChange={(e) => setLlmForm({ ...llmForm, repetition_penalty: Number(e.target.value) })}
-                          className="w-full accent-accent-500 h-1.5 bg-elevated rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-subtle">
-                      <div>
-                        <label className={labelCls}>DRY Multiplier ({llmForm.dry_multiplier})</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={llmForm.dry_multiplier}
-                          onChange={(e) => setLlmForm({ ...llmForm, dry_multiplier: Number(e.target.value) })}
-                          className={inputCls}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>DRY Base ({llmForm.dry_base})</label>
-                        <input
-                          type="number"
-                          step="0.05"
-                          value={llmForm.dry_base}
-                          onChange={(e) => setLlmForm({ ...llmForm, dry_base: Number(e.target.value) })}
-                          className={inputCls}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>DRY Allowed Length</label>
-                        <input
-                          type="number"
-                          value={llmForm.dry_allowed_length}
-                          onChange={(e) => setLlmForm({ ...llmForm, dry_allowed_length: Number(e.target.value) })}
-                          className={inputCls}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                    <LlmSamplingControls form={llmForm} onChange={setLlmForm} inputCls={inputCls} labelCls={labelCls} />
+                  </section>
                 </div>
               )}
 
@@ -602,6 +537,8 @@ export default function Settings() {
                     </p>
                   </div>
 
+                  <HealthCheck service="image" />
+
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <div className="flex items-center justify-between">
                       <label className="flex items-center gap-2 text-xs font-semibold text-primary cursor-pointer">
@@ -614,10 +551,11 @@ export default function Settings() {
                         <span>Ativar geração de imagem (cena e retratos)</span>
                       </label>
 
-                      <div className="flex rounded-lg border border-subtle overflow-hidden p-0.5 bg-elevated">
+                      <div className="flex rounded-lg border border-subtle overflow-hidden p-0.5 bg-elevated" role="group" aria-label="Provedor de imagem">
                         <button
                           type="button"
                           onClick={() => setImageForm({ ...imageForm, provider: 'sdwebui' })}
+                          aria-pressed={imageForm.provider === 'sdwebui'}
                           className={`px-3 py-1 text-xs font-medium rounded-md transition ${
                             imageForm.provider === 'sdwebui' ? 'bg-surface text-primary shadow font-semibold' : 'text-secondary'
                           }`}
@@ -627,6 +565,7 @@ export default function Settings() {
                         <button
                           type="button"
                           onClick={() => setImageForm({ ...imageForm, provider: 'openai_compatible' })}
+                          aria-pressed={imageForm.provider === 'openai_compatible'}
                           className={`px-3 py-1 text-xs font-medium rounded-md transition ${
                             imageForm.provider === 'openai_compatible' ? 'bg-surface text-primary shadow font-semibold' : 'text-secondary'
                           }`}
@@ -639,8 +578,7 @@ export default function Settings() {
                     {imageForm.provider === 'sdwebui' ? (
                       <div className="space-y-4 pt-2">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className={labelCls}>URL base do SD WebUI</label>
+                          <SettingField label="URL base do SD WebUI" labelClassName={labelCls}>
                             <input
                               type="text"
                               value={imageForm.sdwebui_base_url}
@@ -648,43 +586,46 @@ export default function Settings() {
                               placeholder="http://127.0.0.1:7860"
                               className={inputCls}
                             />
-                          </div>
-                          <div>
-                            <label className={labelCls}>Passos de inferência (30 recomendado)</label>
+                          </SettingField>
+                          <SettingField label="Passos de inferência (20 recomendados)" labelClassName={labelCls}>
                             <input
                               type="number"
-                              min="10"
-                              max="100"
+                              min="1"
+                              max="150"
+                              step="1"
                               value={imageForm.sdwebui_steps}
-                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_steps: Number(e.target.value) })}
+                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_steps: e.target.value })}
                               className={inputCls}
                             />
-                          </div>
+                          </SettingField>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className={labelCls}>Largura (1024)</label>
+                          <SettingField label="Largura (1024)" labelClassName={labelCls}>
                             <input
                               type="number"
+                              min="64"
+                              max="4096"
+                              step="64"
                               value={imageForm.sdwebui_width}
-                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_width: Number(e.target.value) })}
+                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_width: e.target.value })}
                               className={inputCls}
                             />
-                          </div>
-                          <div>
-                            <label className={labelCls}>Altura (1024)</label>
+                          </SettingField>
+                          <SettingField label="Altura (1024)" labelClassName={labelCls}>
                             <input
                               type="number"
+                              min="64"
+                              max="4096"
+                              step="64"
                               value={imageForm.sdwebui_height}
-                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_height: Number(e.target.value) })}
+                              onChange={(e) => setImageForm({ ...imageForm, sdwebui_height: e.target.value })}
                               className={inputCls}
                             />
-                          </div>
+                          </SettingField>
                         </div>
 
-                        <div>
-                          <label className={labelCls}>Prompt negativo padrão</label>
+                        <SettingField label="Prompt negativo padrão" labelClassName={labelCls}>
                           <textarea
                             rows={3}
                             value={imageForm.negative_prompt}
@@ -692,34 +633,31 @@ export default function Settings() {
                             placeholder="text, watermark, signature, low quality, deformed, blurry..."
                             className={inputCls}
                           />
-                        </div>
+                        </SettingField>
 
-                        <div>
-                          <label className={labelCls}>Sufixo de estilo</label>
+                        <SettingField label="Sufixo de estilo" labelClassName={labelCls}>
                           <input
                             type="text"
                             value={imageForm.style_suffix || ''}
                             onChange={(e) => setImageForm({ ...imageForm, style_suffix: e.target.value })}
-                            placeholder="e.g. masterpiece, grim fantasy oil painting, cinematic lighting"
+                            placeholder="ex.: pintura a óleo de fantasia sombria, luz cinematográfica"
                             className={inputCls}
                           />
-                        </div>
+                        </SettingField>
                       </div>
                     ) : (
                       <div className="space-y-4 pt-2">
+                        <SettingField label="Endpoint OpenAI" labelClassName={labelCls}>
+                          <input
+                            type="text"
+                            value={imageForm.openai_base_url}
+                            onChange={(e) => setImageForm({ ...imageForm, openai_base_url: e.target.value })}
+                            placeholder="https://api.openai.com/v1"
+                            className={inputCls}
+                          />
+                        </SettingField>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className={labelCls}>Endpoint OpenAI</label>
-                            <input
-                              type="text"
-                              value={imageForm.openai_base_url}
-                              onChange={(e) => setImageForm({ ...imageForm, openai_base_url: e.target.value })}
-                              placeholder="https://api.openai.com/v1"
-                              className={inputCls}
-                            />
-                          </div>
-                          <div>
-                            <label className={labelCls}>Modelo</label>
+                          <SettingField label="Modelo" labelClassName={labelCls}>
                             <input
                               type="text"
                               value={imageForm.openai_model}
@@ -727,20 +665,35 @@ export default function Settings() {
                               placeholder="dall-e-3"
                               className={inputCls}
                             />
-                          </div>
+                          </SettingField>
+                          <SettingField label="Tamanho da imagem (largura x altura)" labelClassName={labelCls}>
+                            <input
+                              type="text"
+                              value={imageForm.openai_size}
+                              onChange={(e) => setImageForm({ ...imageForm, openai_size: e.target.value })}
+                              placeholder="1024x1024"
+                              className={inputCls}
+                            />
+                          </SettingField>
                         </div>
-                        <div>
-                          <label className={labelCls}>Chave da API OpenAI</label>
+                        <SettingField label="Chave da API OpenAI" labelClassName={labelCls}>
                           <input
                             type="password"
                             value={imageForm.openai_api_key}
                             onChange={(e) => setImageForm({ ...imageForm, openai_api_key: e.target.value })}
-                            placeholder="sk-..."
+                            placeholder="Em branco mantém a chave atual"
                             className={inputCls}
                           />
-                        </div>
+                        </SettingField>
                       </div>
                     )}
+
+                    <ImageAdvancedControls
+                      form={imageForm}
+                      onChange={setImageForm}
+                      inputCls={inputCls}
+                      labelCls={labelCls}
+                    />
                   </div>
                 </div>
               )}
@@ -753,9 +706,11 @@ export default function Settings() {
                       Voz e fala
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Fala (Supertonic / TTS) e transcrição (Whisper).
+                      Narração com OmniVoice e transcrição com Whisper.
                     </p>
                   </div>
+
+                  <HealthCheck service="voice" />
 
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <label className="flex items-center gap-2 text-xs font-semibold text-primary cursor-pointer">
@@ -769,58 +724,88 @@ export default function Settings() {
                     </label>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className={labelCls}>URL base do serviço de voz</label>
+                      <SettingField label="URL base do serviço de voz" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={voiceForm.base_url}
                           onChange={(e) => setVoiceForm({ ...voiceForm, base_url: e.target.value })}
-                          placeholder="http://127.0.0.1:8000"
+                          placeholder="https://host/voice/v1"
                           className={inputCls}
                         />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Voz padrão do narrador</label>
+                      </SettingField>
+                      <SettingField label="Voz padrão do narrador" labelClassName={labelCls}>
                         <select
                           value={voiceForm.narrator_voice}
                           onChange={(e) => setVoiceForm({ ...voiceForm, narrator_voice: e.target.value })}
                           className={inputCls}
                         >
-                          {(voiceForm.voices || ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']).map((v) => (
-                            <option key={v} value={v}>
-                              {v} ({v.startsWith('M') ? 'Male' : 'Female'})
-                            </option>
+                          {voiceOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
                           ))}
                         </select>
-                      </div>
+                      </SettingField>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className={labelCls}>Modelo de voz</label>
+                      <SettingField label="Modelo de voz (OmniVoice)" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={voiceForm.tts_model}
                           onChange={(e) => setVoiceForm({ ...voiceForm, tts_model: e.target.value })}
+                          placeholder="omnivoice"
                           className={inputCls}
                         />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Modelo de transcrição (Whisper)</label>
+                      </SettingField>
+                      <SettingField label="Modelo de transcrição (Whisper)" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={voiceForm.stt_model}
                           onChange={(e) => setVoiceForm({ ...voiceForm, stt_model: e.target.value })}
+                          placeholder="whisper-1"
                           className={inputCls}
                         />
-                      </div>
+                      </SettingField>
                     </div>
 
-                    {/* Interactive Voice Audition Picker */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <SettingField label="Chave da API de voz (opcional / oculta)" labelClassName={labelCls}>
+                        <input
+                          type="password"
+                          value={voiceForm.api_key}
+                          onChange={(e) => setVoiceForm({ ...voiceForm, api_key: e.target.value })}
+                          placeholder={voiceSettings?.api_key ? `Atual: ${voiceSettings.api_key}` : 'Em branco mantém a chave atual'}
+                          className={inputCls}
+                        />
+                      </SettingField>
+                      <SettingField label="Tempo limite (segundos)" labelClassName={labelCls}>
+                        <input
+                          type="number"
+                          min="1"
+                          max="600"
+                          step="1"
+                          value={voiceForm.timeout_seconds}
+                          onChange={(e) => setVoiceForm({ ...voiceForm, timeout_seconds: e.target.value })}
+                          className={inputCls}
+                        />
+                      </SettingField>
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {voiceSettings?.api_key && (
+                        <button type="button" onClick={clearVoiceKey} className="rounded-lg border border-danger-900 px-3 py-2 text-xs text-danger-400 hover:bg-danger-950">
+                          Remover chave
+                        </button>
+                      )}
+                      <button type="button" onClick={() => setCloneOpen(true)} className="rounded-lg border border-subtle px-3 py-2 text-xs text-secondary hover:text-primary">
+                        Clonar ou gerenciar vozes
+                      </button>
+                    </div>
+
                     <div className="pt-3 border-t border-subtle">
-                      <label className={labelCls}>Prévia da voz</label>
+                      <h3 className={labelCls}>Prévia das vozes</h3>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 mt-2">
-                        {(voiceForm.voices || ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']).map((voiceKey) => {
+                        {voiceOptions.map((option) => {
+                          const voiceKey = option.value
                           const isPreviewing = previewingVoice === voiceKey
                           const isSelected = voiceForm.narrator_voice === voiceKey
                           return (
@@ -832,18 +817,16 @@ export default function Settings() {
                                   : 'border-subtle bg-surface hover:bg-elevated/50'
                               }`}
                             >
-                              <span className="text-xs font-bold text-primary">{voiceKey}</span>
-                              <span className="text-[10px] text-muted">
-                                {voiceKey.startsWith('M') ? 'Male' : 'Female'}
-                              </span>
+                              <span className="max-w-full truncate text-xs font-bold text-primary" title={option.label}>{option.label}</span>
                               <button
                                 type="button"
                                 onClick={() => handlePreviewVoice(voiceKey)}
                                 disabled={isPreviewing}
+                                aria-label={`Ouvir prévia de ${option.label}`}
                                 className="mt-2 flex items-center gap-1 rounded-lg bg-accent-pri/20 border border-accent-pri/40 px-2 py-1 text-[10px] font-semibold text-accent-pri hover:bg-accent-pri/30 transition disabled:opacity-50"
                               >
                                 <Play className={`w-2.5 h-2.5 ${isPreviewing ? 'animate-spin' : ''}`} />
-                                <span>{isPreviewing ? 'Playing…' : 'Sample'}</span>
+                                <span>{isPreviewing ? 'Reproduzindo…' : 'Ouvir'}</span>
                               </button>
                             </div>
                           )
@@ -851,6 +834,36 @@ export default function Settings() {
                       </div>
                     </div>
                   </div>
+
+                  {cloneOpen && (
+                    <VoiceCloneModal
+                      open
+                      assign={{ kind: 'narrator' }}
+                      onClose={(result) => {
+                        if (result?.deleted) {
+                          setVoiceForm((current) => ({
+                            ...current,
+                            cloned: (current.cloned || []).filter((clone) => clone.id !== result.deleted),
+                            narrator_voice: current.narrator_voice === result.deleted ? 'M1' : current.narrator_voice,
+                          }))
+                          setVoiceSettings((current) => ({
+                            ...current,
+                            cloned: (current?.cloned || []).filter((clone) => clone.id !== result.deleted),
+                          }))
+                          return
+                        }
+                        setCloneOpen(false)
+                        if (!result?.id) return
+                        setVoiceForm((current) => ({
+                          ...current,
+                          narrator_voice: result.id,
+                          cloned: (current.cloned || []).some((clone) => clone.id === result.id)
+                            ? current.cloned
+                            : [...(current.cloned || []), { id: result.id, name: result.name }],
+                        }))
+                      }}
+                    />
+                  )}
                 </div>
               )}
 
@@ -882,8 +895,7 @@ export default function Settings() {
                     </label>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className={labelCls}>URL base dos embeddings</label>
+                      <SettingField label="URL base dos embeddings" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={embeddingsForm.base_url}
@@ -891,9 +903,8 @@ export default function Settings() {
                           placeholder="http://127.0.0.1:8081/v1"
                           className={inputCls}
                         />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Modelo de embedding</label>
+                      </SettingField>
+                      <SettingField label="Modelo de embedding" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={embeddingsForm.model}
@@ -901,7 +912,7 @@ export default function Settings() {
                           placeholder="Qwen3-Embedding-0.6B"
                           className={inputCls}
                         />
-                      </div>
+                      </SettingField>
                     </div>
                   </div>
 
@@ -918,10 +929,7 @@ export default function Settings() {
                     </div>
 
                     <div className="space-y-4">
-                      <div>
-                        <label className={labelCls}>
-                          Modificador de entrada (altera a ação do jogador antes do motor)
-                        </label>
+                      <SettingField label="Modificador de entrada (altera a ação do jogador antes do motor)" labelClassName={labelCls}>
                         <textarea
                           rows={4}
                           value={scriptingForm.input_modifier}
@@ -931,12 +939,9 @@ export default function Settings() {
                           placeholder="# Example:&#10;def modify(action):&#10;    action['text'] = action['text'].strip()&#10;    return action"
                           className={`${inputCls} font-mono`}
                         />
-                      </div>
+                      </SettingField>
 
-                      <div>
-                        <label className={labelCls}>
-                          Modificador de contexto (altera as mensagens antes de enviar ao modelo)
-                        </label>
+                      <SettingField label="Modificador de contexto (altera as mensagens antes de enviar ao modelo)" labelClassName={labelCls}>
                         <textarea
                           rows={4}
                           value={scriptingForm.context_modifier}
@@ -946,12 +951,9 @@ export default function Settings() {
                           placeholder="# Example:&#10;def modify(context):&#10;    # context is a list of {role, content}&#10;    return context"
                           className={`${inputCls} font-mono`}
                         />
-                      </div>
+                      </SettingField>
 
-                      <div>
-                        <label className={labelCls}>
-                          Modificador de saída (altera a geração antes de gravar o turno)
-                        </label>
+                      <SettingField label="Modificador de saída (altera a geração antes de gravar o turno)" labelClassName={labelCls}>
                         <textarea
                           rows={4}
                           value={scriptingForm.output_modifier}
@@ -961,7 +963,7 @@ export default function Settings() {
                           placeholder="# Example:&#10;def modify(text):&#10;    return text.replace('  ', ' ')"
                           className={`${inputCls} font-mono`}
                         />
-                      </div>
+                      </SettingField>
                     </div>
                   </div>
                 </div>

@@ -38,8 +38,8 @@ class _TrackingLock:
         self.release()
 
 
-def test_overlapping_post_turn_passes_serialize(monkeypatch):
-    adventure_id = "race-post-turn"
+def test_overlapping_post_turn_passes_serialize(tmp_db, monkeypatch):
+    adventure_id = make_adventure()["id"]
     tracker = _TrackingLock()
     game_engine._post_turn_locks[adventure_id] = tracker
     monkeypatch.setenv("AIDUNGEON_CHRONICLE", "1")

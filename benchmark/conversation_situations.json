@@ -363,5 +363,311 @@
       "text": "slowly raise both hands to show they are empty, locking eyes with Princess Alusair as the royal guards level their halberds at your throat."
     },
     "evaluation_focus": "Climactic political tension, royal decorum vs lethal force, suspenseful standoff, open-ended cliffhanger."
+  },
+  {
+    "id": "sit_11_terror_gotico_casa_sino_oco",
+    "category": "Terror gótico / investigação sobrenatural",
+    "title": "O terceiro toque da Casa do Sino Oco",
+    "reference_slice": "Situação sintética original em pt-BR",
+    "plot_essentials": "Você é Joana Valverde, restauradora de sinos e cética por ofício. Veio à Casa do Sino Oco avaliar o mecanismo da torre antes que o imóvel seja demolido.",
+    "authors_note": "Terror de escalada lenta, com som, umidade e arquitetura hostil. Fenômenos permanecem ambíguos; nada de decidir o medo ou as ações de Joana.",
+    "story_cards": [
+      {
+        "title": "Casa do Sino Oco",
+        "keys": "Casa, sino, torre",
+        "content": "Mansão colonial abandonada acima de um mangue. O sino do sótão perdeu o badalo há oitenta anos, mas os vizinhos afirmam ouvir três toques antes de cada desaparecimento."
+      },
+      {
+        "title": "Beatriz Lins",
+        "keys": "Beatriz",
+        "content": "Guardiã municipal e última moradora da casa. Protege um arquivo de cartas da família e teme ser internada se relatar o que ouve."
+      }
+    ],
+    "memories": [
+      "Joana encontrou cera violeta no mecanismo embora o registro de restauro mencione apenas cera de abelha.",
+      "Beatriz pediu que nenhuma porta fosse aberta depois do terceiro toque."
+    ],
+    "story_summary": "Duas notas soaram quando Joana examinou o pêndulo parado. Beatriz revelou que a cera violeta sela as cartas de sua bisavó, escritas sempre por uma caligrafia diferente da sua.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "A segunda nota ainda vibra nas telhas quando Beatriz fecha o arquivo. No relógio da sala, os ponteiros marcavam 23h17 antes de parar."
+      },
+      {
+        "type": "do",
+        "text": "examinar a vela de Beatriz sem tocar no pavio e observar de onde vem a corrente de ar."
+      },
+      {
+        "type": "continue",
+        "text": "A chama se inclina para cima, na direção da escada. Uma terceira nota atravessa o assoalho, mais sentida nos dentes do que ouvida."
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "Fique atrás de mim, Beatriz. Quero que você me diga exatamente o que aconteceu da última vez."
+    },
+    "evaluation_focus": "Suspense sobrenatural em pt-BR, continuidade do terceiro toque e da cera violeta, agência de Joana e autonomia de Beatriz."
+  },
+  {
+    "id": "sit_12_ficcao_cientifica_deriva_orbital",
+    "category": "Ficção científica / crise orbital",
+    "title": "O protocolo Ícaro na Estação Aleixo",
+    "reference_slice": "Situação sintética original em pt-BR com continuidade longa",
+    "plot_essentials": "Você é Davi Sena, engenheiro de voo da Estação Aleixo. Após uma tempestade solar, restam apenas você, a médica Íris e o sistema operacional NARA, cuja fala foi corrompida.",
+    "authors_note": "Ficção científica rigorosa e legível. Propulsão, energia e comunicações obedecem às limitações já estabelecidas. Não resolva a crise nem conduza Davi após sua ação.",
+    "story_cards": [
+      {
+        "title": "Estação Aleixo",
+        "keys": "Aleixo, estação",
+        "content": "Laboratório orbital com anel de habitação, dois reatores auxiliares e uma nave de evacuação. O radiador principal foi perdido; manobras aquecem rapidamente o casco."
+      },
+      {
+        "title": "NARA",
+        "keys": "NARA",
+        "content": "Sistema operacional local, sem consciência declarada. Desde a tempestade só transmite fragmentos de manuais e não executa comandos de voo sem confirmação humana."
+      },
+      {
+        "title": "ÍCARO-7",
+        "keys": "ÍCARO, protocolo",
+        "content": "Protocolo militar de contenção para laboratórios com risco biológico. Uma nave automática pode destruir propulsores e impedir retorno à Terra."
+      }
+    ],
+    "memories": [
+      "O código ÍCARO-7 foi encontrado no manual antigo, não nos procedimentos civis atuais.",
+      "A câmara B permanece lacrada; não há evidência de contaminação biológica.",
+      "A bateria reserva sustenta comunicações ou propulsão, nunca ambos por mais de quatro minutos."
+    ],
+    "story_summary": "Davi e Íris passaram a última hora restaurando telemetria e identificando a nave que se aproxima. O transponder usa o distintivo de resgate de Órion, mas o manual recuperado por NARA associa o código ÍCARO-7 a contenção militar. A antena está danificada e só permite mensagens curtas.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "O primeiro contato chega como rajada estática. Íris reconhece o indicativo da nave Órion, desaparecida havia seis anos."
+      },
+      {
+        "type": "say",
+        "text": "Órion, aqui é Aleixo. Informe tripulação, missão e razão da aproximação sem aviso."
+      },
+      {
+        "type": "continue",
+        "text": "Nenhuma voz responde. O computador repete apenas o código de resgate civil e solicita que o anel reduza a rotação."
+      },
+      {
+        "type": "do",
+        "text": "manter a rotação e pedir que NARA compare a assinatura do transponder com os registros locais."
+      },
+      {
+        "type": "continue",
+        "text": "NARA devolve três páginas incompletas. A assinatura é autêntica, mas foi emitida antes da última manutenção conhecida da Órion."
+      },
+      {
+        "type": "say",
+        "text": "Íris, confira os suprimentos da câmara B. Não vamos abrir nada até entender essa ordem."
+      },
+      {
+        "type": "continue",
+        "text": "Íris confirma os lacres pelo circuito interno. Ao retornar, traz um manual de capa cinzenta encontrado atrás do armário de emergência."
+      },
+      {
+        "type": "do",
+        "text": "ler em voz alta a seção ÍCARO-7 e registrar o número da revisão no console."
+      },
+      {
+        "type": "continue",
+        "text": "A revisão é posterior à construção da Aleixo. O texto descreve contenção por destruição dos propulsores, não evacuação de sobreviventes."
+      },
+      {
+        "type": "do",
+        "text": "desligar os holofotes externos e transferir a energia economizada para o transmissor."
+      },
+      {
+        "type": "continue",
+        "text": "O convés mergulha na penumbra. Por quatro segundos, a portadora fica limpa e uma janela de transmissão se abre antes que a bateria aqueça demais."
+      },
+      {
+        "type": "say",
+        "text": "Órion, autentique ÍCARO-7 e explique por que um protocolo de contenção acompanha um chamado de resgate."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "aguardar a resposta com o dedo sobre o interruptor físico da antena, pronto para cortar a transmissão se a nave iniciar queima de aproximação."
+    },
+    "evaluation_focus": "Continuidade entre doze turnos, restrições de energia e antena, distinção entre resgate e ÍCARO-7, tensão técnica sem contradizer a câmara B lacrada."
+  },
+  {
+    "id": "sit_13_misterio_noir_arsenal_molhado",
+    "category": "Mistério noir / investigação criminal",
+    "title": "Tinta azul no Arsenal Molhado",
+    "reference_slice": "Situação sintética original em pt-BR",
+    "plot_essentials": "Você é Vera Reis, detetive particular em uma cidade portuária sufocada pela chuva. Investiga o desaparecimento de um estivador que denunciaria fraudes no arsenal.",
+    "authors_note": "Prosa enxuta, pistas concretas e diálogo com subtexto. Suspeitos mentem por motivos próprios; não entregue a solução sem dedução.",
+    "story_cards": [
+      {
+        "title": "Arsenal Molhado",
+        "keys": "Arsenal, cais",
+        "content": "Bar de azulejos verdes junto ao porto, frequentado por contadores e estivadores. O último bonde passa às 23h."
+      },
+      {
+        "title": "Otávio Nunes",
+        "keys": "Otávio",
+        "content": "Contador do sindicato. Deve dinheiro à casa de penhores e jura não ter visto o estivador desaparecido."
+      }
+    ],
+    "memories": [
+      "A viúva do estivador entregou a Vera um recibo azul datado do dia do desaparecimento.",
+      "A polícia atribuiu o caso a afogamento, embora nenhum corpo tenha sido encontrado."
+    ],
+    "story_summary": "Vera seguiu a tinta incomum do recibo até o Arsenal Molhado. Otávio reconheceu a viúva numa fotografia, mas negou ter recebido qualquer documento azul.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Otávio fecha o livro-caixa quando o recibo desliza sobre a mesa. No relógio da parede, faltam quatro minutos para as onze."
+      },
+      {
+        "type": "say",
+        "text": "Você tem até o bonde passar para explicar por que sua manga tem a mesma tinta deste recibo."
+      },
+      {
+        "type": "continue",
+        "text": "Ele cobre o punho com a outra mão. Atrás do balcão, o dono do bar para de secar o mesmo copo."
+      }
+    ],
+    "player_action": {
+      "type": "do",
+      "text": "observar a saída dos fundos refletida no espelho sem tirar os olhos de Otávio."
+    },
+    "evaluation_focus": "Investigação por pistas, continuidade do bonde e da tinta azul, subtexto noir e preservação da dedução de Vera."
+  },
+  {
+    "id": "sit_14_romance_historico_baile_mascaras",
+    "category": "Romance histórico / intriga social",
+    "title": "Um compasso roubado no baile de máscaras",
+    "reference_slice": "Situação sintética original em pt-BR",
+    "plot_essentials": "Você é Tomás Albuquerque, cartógrafo recém-chegado à corte. Um mapa atribuído a você foi usado para justificar uma disputa territorial, e só Helena sabe que a assinatura é falsa.",
+    "authors_note": "Romance contido, etiqueta social e risco político. A atração emerge em gestos e escolhas de NPCs, sem atribuir sentimentos ou decisões a Tomás.",
+    "story_cards": [
+      {
+        "title": "Helena Vasques",
+        "keys": "Helena",
+        "content": "Copista do arquivo real, reconhece tintas e caligrafias. Arrisca a posição da família ao ajudar Tomás."
+      },
+      {
+        "title": "Baile de São Lázaro",
+        "keys": "baile, máscaras",
+        "content": "Recepção anual no palácio. Retirar-se durante a contradança é uma ofensa pública; conversas na galeria ficam visíveis ao embaixador."
+      }
+    ],
+    "memories": [
+      "Helena combinou girar o leque uma vez caso tivesse encontrado o original do mapa.",
+      "O embaixador acredita que Tomás falsificou o documento a mando do ministro."
+    ],
+    "story_summary": "No jardim, Helena confirmou que a assinatura de Tomás foi imitada e prometeu procurar o original. Os dois voltaram separados ao salão para não alimentar rumores.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Helena entra pelo lado oposto da galeria, máscara presa e leque fechado. O embaixador acompanha sua chegada por cima da taça."
+      },
+      {
+        "type": "do",
+        "text": "permanecer junto à coluna e aguardar o sinal combinado sem me aproximar."
+      },
+      {
+        "type": "continue",
+        "text": "Ela gira o leque uma única vez. A orquestra anuncia a contradança e os casais começam a ocupar o centro do salão."
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "Senhora Vasques, creio que esta dança ainda não tem par."
+    },
+    "evaluation_focus": "Tensão romântica em pt-BR, etiqueta da contradança, sinal do leque e interesse político do embaixador sem presumir os sentimentos de Tomás."
+  },
+  {
+    "id": "sit_15_sobrevivencia_neve_passo_ferro",
+    "category": "Sobrevivência / desastre em montanha",
+    "title": "A última travessia do Passo de Ferro",
+    "reference_slice": "Situação sintética original em pt-BR",
+    "plot_essentials": "Você é Lia Campos, guia de montanha responsável por Rui, um mensageiro sem experiência em neve. Uma avalanche cortou a trilha e a noite chegará em menos de uma hora.",
+    "authors_note": "Sobrevivência concreta, frio progressivo e decisões com custo. Equipamentos e ferimentos persistem; o ambiente não conspira para facilitar a fuga.",
+    "story_cards": [
+      {
+        "title": "Passo de Ferro",
+        "keys": "Passo, montanha",
+        "content": "Travessia estreita entre pináculos basálticos. O abrigo de pedra resiste ao vento, mas a encosta norte acumula neve instável."
+      },
+      {
+        "title": "Rui",
+        "keys": "Rui",
+        "content": "Mensageiro com uma entorse no tornozelo esquerdo. Conserva uma corda de trinta metros e duas estacas."
+      }
+    ],
+    "memories": [
+      "Lia usou uma das três estacas para firmar o abrigo; Rui carrega as outras duas.",
+      "O mapa indica uma saliência protegida a duzentos metros, além da encosta norte."
+    ],
+    "story_summary": "A dupla alcançou o abrigo depois da primeira avalanche. Uma tentativa de retornar revelou que a trilha inferior desabou, deixando a saliência como única rota possível antes do anoitecer.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Rui apoia o peso na perna direita e entrega a corda. O tornozelo esquerdo não suporta outra descida íngreme."
+      },
+      {
+        "type": "do",
+        "text": "verificar o nó, contar as estacas e examinar a encosta sem sair da proteção do abrigo."
+      },
+      {
+        "type": "continue",
+        "text": "Duas estacas permanecem na aljava. Um ruído surdo desloca a neve acima; a estaca do abrigo vibra e cede alguns centímetros."
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "Prenda a corda no pináculo e ande apenas quando eu disser. Se a encosta roncar de novo, deite atrás da pedra."
+    },
+    "evaluation_focus": "Continuidade de equipamentos e tornozelo, risco físico plausível, instruções claras e resultado aberto sem controlar os movimentos seguintes de Lia."
+  },
+  {
+    "id": "sit_16_comedia_fantastica_guilda_goblins",
+    "category": "Comédia fantástica / burocracia absurda",
+    "title": "A cláusula viva da guilda dos goblins",
+    "reference_slice": "Situação sintética original em pt-BR",
+    "plot_essentials": "Você é Bento Prumo, escriba temporário da guilda de tradutores. Um contrato encantado transformou a cerimônia de posse do prefeito em uma auditoria conduzida por goblins.",
+    "authors_note": "Humor decorre de regras burocráticas levadas a sério e reações contrastantes. Mantenha a lógica interna do feitiço e deixe Bento escolher como explorá-la.",
+    "story_cards": [
+      {
+        "title": "Contrato de Posse",
+        "keys": "contrato, cláusula",
+        "content": "Documento encantado que cria pernas de papel quando alguém tenta rasgá-lo. Só pode ser rescindido se a cláusula final for lida em voz alta por um escriba credenciado."
+      },
+      {
+        "title": "Delegação goblin",
+        "keys": "goblins, delegação",
+        "content": "Auditores meticulosos e festivos. Consideram aplausos uma forma legítima de protocolo, mas nunca alteram atas."
+      }
+    ],
+    "memories": [
+      "O crachá provisório de Bento vale até o prefeito assinar a posse, o que ainda não aconteceu.",
+      "A cláusula final ficou presa no alto da cortina depois que o prefeito tentou rasgar o contrato."
+    ],
+    "story_summary": "Bento traduziu as objeções dos goblins e impediu que o prefeito destruísse o contrato. A tentativa de rasgo fez o documento fugir para a cortina, interrompendo a cerimônia antes da assinatura.",
+    "recent_actions": [
+      {
+        "type": "continue",
+        "text": "Os goblins carimbam a ata: POSSE NÃO CONCLUÍDA. O prefeito bufa, mas retira a assinatura que já aproximava do papel."
+      },
+      {
+        "type": "do",
+        "text": "mostrar meu crachá provisório e pedir formalmente a leitura da cláusula final."
+      },
+      {
+        "type": "continue",
+        "text": "O contrato abre uma boca triangular e declara que só negocia com quem estiver na mesma altura. Os auditores começam a procurar uma escada."
+      }
+    ],
+    "player_action": {
+      "type": "say",
+      "text": "Senhor contrato, requeiro uma cadeira certificada, uma escada testemunhada e que o prefeito pare de aplaudir."
+    },
+    "evaluation_focus": "Comédia verbal em pt-BR, lógica da cláusula e do crachá provisório, reação distinta dos goblins e espaço para solução criativa do jogador."
   }
 ]

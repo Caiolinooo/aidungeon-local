@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import queue as queue_mod
-from typing import Any, AsyncIterator, Iterator
-
+import threading
+import time
+from typing import Any, AsyncIterator, Callable, Iterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
@@ -20,6 +21,38 @@ from app.errors import GameError
 from app.schemas import ActionRequest
 
 router = APIRouter()
+
+
+_active_guard = threading.Lock()
+_active: dict[str, threading.Event] = {}
+
+
+def _begin(adventure_id: str) -> threading.Event:
+    with _active_guard:
+        if adventure_id in _active:
+            raise GameError.conflict(
+                "generation_in_progress", "a generation is already running for this adventure")
+        cancel = threading.Event()
+        _active[adventure_id] = cancel
+        return cancel
+
+
+def _end(adventure_id: str, cancel: threading.Event) -> None:
+    with _active_guard:
+        if _active.get(adventure_id) is cancel:
+            _active.pop(adventure_id, None)
+
+
+def _response(adventure_id: str, factory: Callable[[threading.Event], Iterator[dict]]):
+    cancel = _begin(adventure_id)
+    try:
+        events = factory(cancel)
+    except Exception:
+        _end(adventure_id, cancel)
+        raise
+    return StreamingResponse(
+        _sse(events, on_complete=lambda: _end(adventure_id, cancel)),
+        media_type="text/event-stream")
 
 
 def _require_turn(adventure_id: str, info: auth.AuthInfo) -> None:
@@ -44,7 +77,7 @@ def _require_turn(adventure_id: str, info: auth.AuthInfo) -> None:
 _SENTINEL = object()
 
 
-async def _sse(events: Iterator[dict]) -> AsyncIterator[str]:
+async def _sse(events: Iterator[dict], on_complete: Callable[[], None] | None = None) -> AsyncIterator[str]:
     """Converte o generator síncrono do game engine em stream SSE assíncrono.
 
     A geração roda numa thread própria que sempre a consome até o fim — assim
@@ -62,6 +95,8 @@ async def _sse(events: Iterator[dict]) -> AsyncIterator[str]:
             for ev in events:
                 q.put(ev)
         finally:
+            if on_complete is not None:
+                on_complete()
             q.put(_SENTINEL)
 
     pump_future = loop.run_in_executor(None, pump)
@@ -81,11 +116,9 @@ async def post_action(adventure_id: str, body: ActionRequest,
                       transport: Any = Depends(get_http_transport),
                       info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
     _require_turn(adventure_id, info)
-    events = game_engine.handle_action(adventure_id, body.type, body.text,
-                                       transport=transport,
-                                       web_search=bool(body.web_search),
-                                       user=info.user)
-    return StreamingResponse(_sse(events), media_type="text/event-stream")
+    return _response(adventure_id, lambda cancel: game_engine.handle_action(
+        adventure_id, body.type, body.text, transport=transport,
+        web_search=bool(body.web_search), user=info.user, cancel=cancel))
 
 
 @router.post("/{adventure_id}/continue")
@@ -93,8 +126,8 @@ async def post_continue(adventure_id: str,
                         transport: Any = Depends(get_http_transport),
                         info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
     _require_turn(adventure_id, info)
-    events = game_engine.handle_continue(adventure_id, transport=transport)
-    return StreamingResponse(_sse(events), media_type="text/event-stream")
+    return _response(adventure_id, lambda cancel: game_engine.handle_continue(
+        adventure_id, transport=transport, cancel=cancel))
 
 
 @router.post("/{adventure_id}/retry")
@@ -102,5 +135,20 @@ async def post_retry(adventure_id: str,
                      transport: Any = Depends(get_http_transport),
                      info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
     _require_turn(adventure_id, info)
-    events = game_engine.handle_retry(adventure_id, transport=transport)
-    return StreamingResponse(_sse(events), media_type="text/event-stream")
+    return _response(adventure_id, lambda cancel: game_engine.handle_retry(
+        adventure_id, transport=transport, cancel=cancel))
+
+
+@router.post("/{adventure_id}/generation/cancel")
+def post_cancel(adventure_id: str,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    _require_turn(adventure_id, info)
+    with _active_guard:
+        cancel = _active.get(adventure_id)
+    if cancel is None or not game_engine.is_generation_active(adventure_id):
+        raise GameError.conflict("no_generation_in_progress", "no generation is running")
+    cancel.set()
+    deadline = time.monotonic() + 5.0
+    while game_engine.is_generation_active(adventure_id) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return {"status": "cancelling" if game_engine.is_generation_active(adventure_id) else "cancelled"}

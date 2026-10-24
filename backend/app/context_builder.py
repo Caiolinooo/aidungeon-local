@@ -513,7 +513,7 @@ def render_player_state(ui_state: dict) -> str:
 
     lines: list[str] = []
     for key, value in (ui_state or {}).items():
-        if key in ui_runtime.RESERVED_KEYS:
+        if key.startswith("_") or key in ui_runtime.RESERVED_KEYS:
             continue
         if isinstance(value, dict) and value:
             pairs = ", ".join(f"{k} {v}" for k, v in value.items())
@@ -551,14 +551,22 @@ def context_scale_factor(cfg: dict) -> float:
     return min(max_scale, max(1.0, ctx / base))
 
 
+def prompt_overhead_tokens() -> int:
+    """System/cues fora dos budgets + margem de delimitadores e estimativa."""
+    return estimate_tokens(BASE_SYSTEM_PROMPT + STYLE_CUE + CANON_CUE + LORE_CUE) + 128
+
+
 def recent_window_budget(cfg: dict) -> int:
-    """Regra dinâmica: context_size − soma(demais budgets) − response_reserve."""
+    """Contexto menos blocos, resposta e overhead fora dos budgets nomeados."""
     budgets = cfg["budgets"]
     fixed = sum(int(budgets.get(k, 0)) for k in FIXED_BUDGET_KEYS)
     reserve = int(budgets.get("response_reserve", 512))
     max_new = int((cfg.get("sampler") or {}).get("max_tokens", 0) or 0)
     effective_reserve = max(reserve, max_new)
-    return max(0, int(cfg["context_size"]) - fixed - effective_reserve)
+    # System base, cues e template não aparecem como blocos independentes.
+    # Reserva adicional cobre delimitadores do chat e variação do estimador.
+    overhead = prompt_overhead_tokens()
+    return max(0, int(cfg["context_size"]) - fixed - effective_reserve - overhead)
 
 
 def _card_matches_immediate_turn(card: dict, immediate_norm: str) -> bool:

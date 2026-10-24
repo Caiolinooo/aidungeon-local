@@ -237,6 +237,14 @@ class ImageSettingsUpdate(BaseModel):
     openai_model: str | None = None
     openai_size: str | None = None
     style_suffix: str | None = None
+    seed: int | None = Field(default=None, ge=-1, le=2147483647)
+    variation: int | None = Field(default=None, ge=0, le=1000000)
+    cfg_scale: float | None = Field(default=None, ge=1.0, le=30.0)
+    sampler_name: str | None = Field(default=None, min_length=1, max_length=80)
+    scheduler: str | None = Field(default=None, min_length=1, max_length=80)
+    denoising_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    sd_model_checkpoint: str | None = Field(default=None, max_length=300)
 
 
 # ------------------------------------------------------------------ v4: voice

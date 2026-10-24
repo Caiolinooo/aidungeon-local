@@ -55,6 +55,14 @@ def _make_client(transport: httpx.BaseTransport | None, timeout: float) -> httpx
         kwargs["transport"] = transport
     return httpx.Client(**kwargs)
 
+def _make_async_client(transport: httpx.AsyncBaseTransport | None,
+                       timeout: float) -> httpx.AsyncClient:
+    t = httpx.Timeout(timeout, connect=min(10.0, timeout))
+    kwargs: dict[str, Any] = {"timeout": t, "trust_env": False}
+    if transport is not None:
+        kwargs["transport"] = transport
+    return httpx.AsyncClient(**kwargs)
+
 
 def _headers(cfg: dict) -> dict[str, str]:
     """Authorization Bearer (se api_key efetiva); NUNCA logar o valor."""
@@ -79,6 +87,24 @@ def _post_speech(cfg: dict, payload: dict, *,
         try:
             resp = client.post(f"{_base(cfg)}/audio/speech", json=payload,
                                headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em audio/speech")
+    if resp.status_code != 200:
+        raise VoiceError(f"HTTP {resp.status_code} em audio/speech: {resp.text[:200]}")
+    if not resp.content:
+        raise VoiceError("resposta de audio/speech vazia")
+    return resp.content
+
+
+async def _post_speech_async(cfg: dict, payload: dict, *,
+                             transport: httpx.AsyncBaseTransport | None) -> bytes:
+    timeout = float(cfg.get("timeout_seconds", 60))
+    async with _make_async_client(transport, timeout) as client:
+        try:
+            resp = await client.post(f"{_base(cfg)}/audio/speech", json=payload,
+                                     headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
     if resp.status_code in (401, 403):
@@ -124,6 +150,33 @@ def synthesize(cfg: dict, text: str, voice: str, *,
         return _post_speech(cfg, payload, transport=transport)
 
 
+async def synthesize_async(cfg: dict, text: str, voice: str, *,
+                           emotion: str | None = None,
+                           transport: httpx.AsyncBaseTransport | None = None) -> bytes:
+    """Versão assíncrona de synthesize; cancelar a coroutine fecha o POST HTTP."""
+    instruction = direction_for(emotion) if emotion else None
+    use_drama = bool(cfg.get("drama3_enabled"))
+    payload = {
+        "model": (cfg.get("drama3_model") or "drama-3") if use_drama else cfg["tts_model"],
+        "voice": voice,
+        "input": f"{instruction} {text}" if use_drama and instruction else text,
+        "response_format": "mp3",
+    }
+    if instruction:
+        payload["instructions"] = instruction
+    try:
+        return await _post_speech_async(cfg, payload, transport=transport)
+    except (VoiceAuthError, VoiceUnreachable):
+        raise
+    except VoiceError as exc:
+        if not use_drama:
+            raise
+        log.warning("drama-3 indisponível (%s); fallback %s", exc.code, cfg.get("tts_model"))
+        payload["model"] = cfg["tts_model"]
+        payload["input"] = text
+        return await _post_speech_async(cfg, payload, transport=transport)
+
+
 def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,
                language: str | None = None,
                transport: httpx.BaseTransport | None = None) -> str:
@@ -157,6 +210,77 @@ def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,
     if not isinstance(text, str):
         raise VoiceError("resposta de audio/transcriptions sem campo 'text'")
     return text
+
+
+async def transcribe_async(cfg: dict, filename: str, content_type: str, data: bytes, *,
+                           language: str | None = None,
+                           transport: httpx.AsyncBaseTransport | None = None) -> str:
+    """Versão assíncrona de transcribe; cancelar a coroutine fecha o POST HTTP."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    files = {"file": (filename, data, content_type)}
+    form = {"model": cfg["stt_model"]}
+    if language:
+        form["language"] = language
+    async with _make_async_client(transport, timeout) as client:
+        try:
+            resp = await client.post(f"{_base(cfg)}/audio/transcriptions", files=files,
+                                     data=form, headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em audio/transcriptions")
+    if resp.status_code != 200:
+        raise VoiceError(f"HTTP {resp.status_code} em audio/transcriptions: {resp.text[:200]}")
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise VoiceError("resposta de audio/transcriptions não é JSON") from exc
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str):
+        raise VoiceError("resposta de audio/transcriptions sem campo 'text'")
+    return text
+
+
+PROBE_TIMEOUT = 5.0
+
+
+def probe_models(cfg: dict, *,
+                 transport: httpx.BaseTransport | None = None) -> list[dict]:
+    """Sonda não gerativa GET /models; endpoint ausente ou inválido é erro."""
+    timeout = min(float(cfg.get("timeout_seconds", 60)), PROBE_TIMEOUT)
+    try:
+        with _make_client(transport, timeout) as client:
+            resp = client.get(f"{_base(cfg)}/models", headers=_headers(cfg))
+    except httpx.TransportError as exc:
+        raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em /models")
+    if resp.status_code != 200:
+        raise VoiceError(f"HTTP {resp.status_code} em /models")
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise VoiceError("resposta de /models não é JSON") from exc
+    models = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(models, list):
+        raise VoiceError("resposta de /models sem lista 'data'")
+    return models
+
+
+def health(cfg: dict, *, transport: httpx.BaseTransport | None = None) -> dict:
+    """Resultado sanitizado para health; nunca ecoa corpo do provider ou segredos."""
+    try:
+        probe_models(cfg, transport=transport)
+    except VoiceAuthError as exc:
+        return {"status": "auth_error", "details": exc.message}
+    except VoiceUnreachable as exc:
+        return {"status": "unreachable", "details": exc.message}
+    except VoiceError as exc:
+        return {"status": "error", "details": exc.message}
+    except Exception as exc:
+        log.warning("sonda de voz falhou: %s", type(exc).__name__)
+        return {"status": "error", "details": f"voice health probe failed: {type(exc).__name__}"}
+    return {"status": "ok", "details": None}
 
 _CLONE_PROVIDER_CODES = {"audio_too_short", "audio_too_long", "invalid_audio"}
 
@@ -213,6 +337,20 @@ def put_clone_rvq(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
         try:
             resp = client.put(f"{_base(cfg)}/audio/voices/{voice_id}", json=payload,
                               headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    _raise_provider(resp, f"audio/voices/{voice_id}")
+
+
+async def put_clone_rvq_async(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
+                              transport: httpx.AsyncBaseTransport | None = None) -> None:
+    """Regrava o clone antes do TTS sem bloquear o cancelamento da requisição."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    payload = {"ref_text": ref_text, "rvq_b64": base64.b64encode(rvq).decode("ascii")}
+    async with _make_async_client(transport, timeout) as client:
+        try:
+            resp = await client.put(f"{_base(cfg)}/audio/voices/{voice_id}", json=payload,
+                                    headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
     _raise_provider(resp, f"audio/voices/{voice_id}")

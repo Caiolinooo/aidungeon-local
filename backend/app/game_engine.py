@@ -131,6 +131,10 @@ def is_any_generation_active() -> bool:
         return any(lock.locked() for lock in _locks.values())
 
 
+def is_generation_active(adventure_id: str) -> bool:
+    return _lock_for(adventure_id).locked()
+
+
 # --------------------------------------------------------------- helpers
 def _adventure_or_404(adventure_id: str) -> dict:
     with db.session() as conn:
@@ -328,14 +332,17 @@ def _prepare_action_check(conn: sqlite3.Connection, adventure: dict, actions: li
 
 
 def _apply_action_check(built, text: str, type_: str, state: dict | None,
-                        llm_cfg: dict, transport: Any, cfg: dict):
+                        llm_cfg: dict, transport: Any, cfg: dict, cancel=None):
     """Injeta o bloco no contexto. None se não houve veredito; nunca propaga."""
     if state is None:
         return None
     try:
         verdict = action_check.check_action(
             text, type_, state, llm_cfg=llm_cfg, transport=transport, cfg=cfg,
+            cancel=cancel,
         )
+    except llm_client.LlmCancelled:
+        raise
     except Exception:
         log.warning("action_check: checagem falhou", exc_info=True)
         return None
@@ -366,7 +373,8 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
                        llm_cfg: dict, sampler: dict, transport,
                        out_script: str | None,
                        extra_flags: list[str] | None = None,
-                       adjudication: dict | None = None) -> tuple[str, list[str]]:
+                       adjudication: dict | None = None,
+                       cancel=None) -> tuple[str, list[str]]:
     """Um retry silencioso quando a prosa viola as regras. Empate fica com a segunda."""
     expected = "pt" if output_sanitizer.looks_portuguese(player_text) else ""
     flags = output_sanitizer.quality_flags(text, expected_language=expected)
@@ -405,8 +413,10 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
     try:
         for token in llm_client.stream_chat_completion(
                 llm_cfg, retry_messages, sampler=retry_sampler,
-                stop=built.stop_sequences, transport=transport):
+                stop=built.stop_sequences, transport=transport, cancel=cancel):
             parts.append(token)
+    except llm_client.LlmCancelled:
+        raise
     except llm_client.LlmError:
         log.warning("corrective retry failed; keeping the first narration")
         return text, flags
@@ -428,7 +438,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        web_search: bool = False,
                        raw_query_text: str = "",
                        transport: Any,
-                       user: str = "") -> Iterator[dict]:
+                       user: str = "",
+                       cancel: threading.Event | None = None) -> Iterator[dict]:
     """Gerador de eventos. Contexto = ações atuais (retry: sem a antiga)."""
 
     def events() -> Iterator[dict]:
@@ -446,6 +457,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             resolution = None
             applied_action_id = None
             rules_block = ""
+            if cancel is not None and cancel.is_set():
+                raise llm_client.LlmCancelled("llm call cancelled")
             with db.session() as conn:
                 adventure = db.get_adventure(conn, adventure_id)
                 actions = db.list_actions(conn, adventure_id)
@@ -455,6 +468,15 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 built = context_builder.build_context(adventure, actions, cfg, conn)
                 llm_cfg = cfg["llm"]
                 sampler = dict(cfg["sampler"])
+                preferences = (adventure.get("ui_state") or {}).get("_generation") or {}
+                if isinstance(preferences, dict):
+                    try:
+                        if "max_tokens" in preferences:
+                            sampler["max_tokens"] = max(100, min(2048, int(preferences["max_tokens"])))
+                        if "temperature" in preferences:
+                            sampler["temperature"] = max(0.0, min(2.0, float(preferences["temperature"])))
+                    except (TypeError, ValueError):
+                        log.warning("preferências de geração inválidas; usando defaults")
                 if retry_of is not None and retry_count > 0:
                     base_t = float(sampler.get("temperature", 0.85))
                     step = float(sampler.get("retry_temperature_step", 0.05))
@@ -467,7 +489,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             if player_action is not None and retry_of is None:
                 outcome = sim_engine.run_turn(
                     adventure_id, adventure, player_action, actions, user,
-                    llm_cfg, cfg, transport,
+                    llm_cfg, cfg, transport, cancel=cancel,
                 )
                 if outcome and outcome.get("refusal"):
                     refusal = outcome["refusal"]
@@ -488,6 +510,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             elif retry_of is not None:
                 rules_block = sim_engine.reuse_block(actions, retry_of) or ""
 
+            if cancel is not None and cancel.is_set():
+                raise llm_client.LlmCancelled("llm call cancelled")
             if web_search and raw_query_text.strip():
                 research = web_search_mod.research_context(
                     raw_query_text,
@@ -523,7 +547,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 _publish_live(adventure_id, "rules_roll", rolled)
 
             verdict = _apply_action_check(
-                built, check_text, check_type, check_state, llm_cfg, transport, check_cfg)
+                built, check_text, check_type, check_state, llm_cfg, transport, check_cfg,
+                cancel=cancel)
             if verdict is not None:
                 payload = verdict.to_dict()
                 yield {"event": "action_check", "data": payload}
@@ -542,7 +567,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     from app import npc_gate
                     if player_action is None:
                         adjudication = npc_gate.own_beat(
-                            adventure_id, llm_cfg, transport)
+                            adventure_id, llm_cfg, transport, cancel=cancel)
                     else:
                         adjudication = npc_gate.decide(
                             adventure_id,
@@ -551,7 +576,10 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                             transport,
                             user,
                             world_check=verdict.to_dict() if verdict else None,
+                            cancel=cancel,
                         )
+                except llm_client.LlmCancelled:
+                    raise
                 except Exception:
                     log.warning("npc_gate: adjudicador indisponível", exc_info=True)
                     adjudication = None
@@ -567,7 +595,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             for token in llm_client.stream_chat_completion(
                     llm_cfg, built.messages, sampler=sampler,
                     stop=built.stop_sequences, transport=transport,
-                    state=stream_state):
+                    state=stream_state, cancel=cancel):
                 full.append(token)
                 _publish_live(adventure_id, "token", {"token": token})
                 yield {"event": "token", "data": {"token": token}}
@@ -586,6 +614,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 out_script=out_script,
                 extra_flags=compliance,
                 adjudication=adjudication,
+                cancel=cancel,
             )
             beat = (adjudication or {}).get("initiative") or {}
             if beat.get("line") and beat.get("npc") and beat["npc"].casefold() not in text.casefold():
@@ -598,6 +627,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     "message": "the narrator returned no story text; nothing was saved, try again"}}
                 return
 
+            if cancel is not None and cancel.is_set():
+                raise llm_client.LlmCancelled("llm call cancelled")
             with appending(adventure_id) as conn:
                 if retry_of is not None:
                     # substitui: mesmo seq, novo id (apaga a antiga só no sucesso)
@@ -649,9 +680,18 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                                {"action_id": action["id"], "seq": action["seq"]})
             _spawn_post_turn(adventure_id, transport)
             yield {"event": "done", "data": data}
+        except llm_client.LlmCancelled as exc:
+            _revert_applied_rules(adventure_id, applied_action_id)
+            if player_action is not None and retry_of is None:
+                with appending(adventure_id) as conn:
+                    db.delete_action(conn, player_action["id"])
+                _publish_live(adventure_id, "undo", {})
+            yield {"event": "error", "data": {
+                "message": exc.message, "code": "llm_cancelled"}}
         except llm_client.LlmError as exc:
             _revert_applied_rules(adventure_id, applied_action_id)
-            yield {"event": "error", "data": {"message": exc.message}}
+            yield {"event": "error", "data": {
+                "message": exc.message, "code": exc.code}}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
             _revert_applied_rules(adventure_id, applied_action_id)
             yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
@@ -665,7 +705,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
 def handle_action(adventure_id: str, type_: str, text: str,
                   transport: Any = None, *,
                   web_search: bool = False,
-                  user: str = "") -> Iterator[dict]:
+                  user: str = "",
+                  cancel: threading.Event | None = None) -> Iterator[dict]:
     """POST /action: persiste a ação do jogador e streama a resposta da IA."""
     _adventure_or_404(adventure_id)
     if type_ not in db.PLAYER_TYPES:
@@ -698,7 +739,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
     return _stream_generation(adventure_id, player_action=player_action,
                               retry_of=None, retry_count=0,
                               web_search=web_search, raw_query_text=text,
-                              transport=transport, user=user)
+                              transport=transport, user=user, cancel=cancel)
 
 
 def _meta_command_events(adventure_id: str, cmd: meta_commands.MetaCommand,
@@ -712,7 +753,8 @@ def _meta_command_events(adventure_id: str, cmd: meta_commands.MetaCommand,
         yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
 
 
-def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
+def handle_continue(adventure_id: str, transport: Any = None, *,
+                    cancel: threading.Event | None = None) -> Iterator[dict]:
     """POST /continue: a IA segue sozinha (sem nova entrada do jogador)."""
     _adventure_or_404(adventure_id)
     if not acquire_generation_lock(adventure_id):
@@ -720,11 +762,13 @@ def handle_continue(adventure_id: str, transport: Any = None) -> Iterator[dict]:
                                  "a generation is already running for this adventure")
     cancel_post_turn(adventure_id)
     return _stream_generation(adventure_id, player_action=None,
-                              retry_of=None, retry_count=0, transport=transport)
+                              retry_of=None, retry_count=0, transport=transport,
+                              cancel=cancel)
 
 
 def handle_retry(adventure_id: str, transport: Any = None, *,
-                 retry_count: int | None = None) -> Iterator[dict]:
+                 retry_count: int | None = None,
+                 cancel: threading.Event | None = None) -> Iterator[dict]:
     """POST /retry: regenera a última resposta da IA com stepping de temperatura."""
     _adventure_or_404(adventure_id)
     with db.session() as conn:
@@ -748,7 +792,8 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
         effective_count = retry_count
 
     return _stream_generation(adventure_id, player_action=None,
-                              retry_of=old, retry_count=effective_count, transport=transport)
+                              retry_of=old, retry_count=effective_count,
+                              transport=transport, cancel=cancel)
 
 
 def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> int:

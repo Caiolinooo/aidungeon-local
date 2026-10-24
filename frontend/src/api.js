@@ -180,6 +180,8 @@ export const api = {
     request(`/adventures/${id}/consistency/repair`, { method: 'POST', body: { check } }),
   deleteAdventure: (id) => request(`/adventures/${id}`, { method: 'DELETE' }),
   undo: (id) => request(`/adventures/${id}/undo`, { method: 'POST' }),
+  cancelGeneration: (id) =>
+    request(`/adventures/${id}/generation/cancel`, { method: 'POST' }),
   // Download autenticado do .zip (Âncoras <a href> não levam o header Bearer).
   downloadExport: async (id) => {
     let res
@@ -279,6 +281,8 @@ export const api = {
   getLlmSettings: () => request('/settings/llm'),
   putLlmSettings: (payload) => request('/settings/llm', { method: 'PUT', body: payload }),
   healthLlm: () => request('/health/llm'),
+  healthVoice: () => request('/health/voice'),
+  healthImage: () => request('/health/image'),
   getVoiceSettings: () => request('/settings/voice'),
   putVoiceSettings: (payload) => request('/settings/voice', { method: 'PUT', body: payload }),
   getEmbeddingsSettings: () => request('/settings/embeddings'),
@@ -357,13 +361,15 @@ export const api = {
 
   // ------------------------------------------------------------ images (v2)
   // Ação "See": 202 na hora. A pintura segue no job; a tela consulta o GET.
-  see: (advId, { action_seq, extra_prompt } = {}) =>
-    request(`/adventures/${advId}/see`, {
+  see: (advId, { action_seq, extra_prompt, variation } = {}) =>
+    request(`/adventures/${advId}/see${qs({ variation })}`, {
       method: 'POST',
       body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
       headers: { Prefer: 'respond-async' },
     }),
+  listJobs: (advId) => request(`/adventures/${advId}/jobs`),
   getAdventureJob: (advId, jobId) => request(`/adventures/${advId}/jobs/${jobId}`),
+  cancelJob: (jobId) => request(`/jobs/${jobId}/cancel`, { method: 'POST' }),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
   getChoices: (advId) => request(`/adventures/${advId}/choices`, { method: 'POST' }),
 
@@ -421,8 +427,10 @@ export const api = {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(body),
+          signal: extra?.signal,
         })
-      } catch {
+      } catch (e) {
+        if (e.name === 'AbortError') throw e
         throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
       }
       const contentType = res.headers.get('content-type') || ''
@@ -437,7 +445,7 @@ export const api = {
     // audio.webm faz o Whisper recusar um mp4 do Safari.
     // language: subtag do browser (pt, en…). Sem isso o servidor de voz
     // força português e uma fala em inglês volta vazia.
-    stt: (blob) => {
+    stt: (blob, { signal, language } = {}) => {
       const fd = new FormData()
       const mime = blob.type || 'audio/webm'
       const ext = mime.includes('mp4') || mime.includes('m4a')
@@ -448,9 +456,9 @@ export const api = {
             ? 'wav'
             : 'webm'
       fd.append('file', blob, `audio.${ext}`)
-      const lang = (navigator.language || 'pt').slice(0, 2).toLowerCase()
+      const lang = (language || navigator.language || 'pt').slice(0, 2).toLowerCase()
       if (/^[a-z]{2}$/.test(lang)) fd.append('language', lang)
-      return request('/stt', { method: 'POST', body: fd })
+      return request('/stt', { method: 'POST', body: fd, signal })
     },
     getSettings: () => request('/settings/voice'),
     putSettings: (patch) => request('/settings/voice', { method: 'PUT', body: patch }),

@@ -94,20 +94,38 @@ UPGRADED_SAMPLER = {
 # --------------------------------------------------------------------------- #
 
 IMPERSONATION_PATTERNS = {
-    "action_prompt": re.compile(r"(?:^|\n)\s*>\s*you\b", re.IGNORECASE),
+    "action_prompt": re.compile(r"(?:^|\n)\s*>\s*(?:you|você)\b", re.IGNORECASE),
     "dialogue_dictation": re.compile(
-        r"\byou\s+(?:say|shout|whisper|mutter|reply|answer|exclaim|demand|ask)\s*[,:]?\s*[\"\'“]",
+        r"\b(?:you\s+(?:say|shout|whisper|mutter|reply|answer|exclaim|demand|ask)"
+        r"|você\s+(?:diz|grita|sussurra|murmura|responde|exclama|exige|pergunta))"
+        r"(?:\s+que\b|\s*[,:]?\s*[\"“])",
         re.IGNORECASE,
     ),
     "internal_decision": re.compile(
-        r"\byou\s+(?:decide|choose|resolve|hesitate|agree|refuse)\s+to\b",
+        r"\b(?:you\s+(?:decide|choose|resolve|hesitate|agree|refuse)\s+to\b"
+        r"|você\s+(?:(?:decide|escolhe|resolve)\s+(?:a\s+)?[\wà-ÿ'-]+"
+        r"|(?:hesita|concorda)\s+em\b|(?:recusa|se\s+recusa)\s+a\b))",
         re.IGNORECASE,
     ),
     "forced_action": re.compile(
-        r"\byou\s+(?:draw\s+your|strike\s+at|reach\s+for\s+your|turn\s+and\s+run|walk\s+away|grab\s+your|attack)\b",
+        r"\b(?:you\s+(?:draw\s+your|strike\s+at|reach\s+for\s+your|turn\s+and\s+run|walk\s+away|grab\s+your|attack)"
+        r"|você\s+(?:saca\s+(?:sua|seu|a|o)|ataca|golpeia|agarra|pega\s+(?:sua|seu|a|o)|"
+        r"corre|foge|se\s+afasta|se\s+vira\s+e\s+corre|avança\s+contra))\b",
         re.IGNORECASE,
     ),
 }
+
+QUOTED_DIALOGUE_PATTERN = re.compile(r'"[^"\n]*"|“[^”\n]*”')
+HYPOTHETICAL_PREFIX_PATTERN = re.compile(r"(?:se|caso)\s+$", re.IGNORECASE)
+
+
+def _is_narrator_match(text: str, match: re.Match) -> bool:
+    """Excludes quoted NPC speech and explicit Portuguese hypotheticals."""
+    if any(span.start() <= match.start() < span.end() for span in QUOTED_DIALOGUE_PATTERN.finditer(text)):
+        return False
+    if HYPOTHETICAL_PREFIX_PATTERN.search(text[:match.start()]):
+        return False
+    return True
 
 
 def _extract_words(text: str) -> List[str]:
@@ -168,12 +186,14 @@ def compute_repetition_metrics(continuation: str, context: str = "") -> Dict[str
 
 
 def compute_impersonation_metrics(text: str) -> Dict[str, Any]:
-    """Detects narrator overstepping by dictating player actions, dialogue, or thoughts."""
+    """Detects narrator overstepping in English or Portuguese, excluding NPC quotations."""
     hits = {}
     total_violations = 0
     for name, pattern in IMPERSONATION_PATTERNS.items():
-        matches = pattern.findall(text)
-        count = len(matches)
+        matches = pattern.finditer(text)
+        if name != "action_prompt":
+            matches = (match for match in matches if _is_narrator_match(text, match))
+        count = sum(1 for _ in matches)
         hits[name] = count
         total_violations += count
 
@@ -436,6 +456,30 @@ MOCK_OUTPUTS = {
             "\"Lord Caio, you have gravely overstepped the hospitality of Cormyr. Surrender your weapons at once.\" "
             "The captain advances with steel drawn."
         ),
+        "sit_11_terror_gotico_casa_sino_oco": (
+            "O sino sem badalo oscila no forro e você decide subir até o sótão. A porta se abre sozinha, "
+            "revelando pegadas molhadas que sobem pelas paredes. Você saca sua lanterna e avança."
+        ),
+        "sit_12_ficcao_cientifica_deriva_orbital": (
+            "O alarme da estação corta o silêncio. Você corre até o comando e agarra o manche, enquanto "
+            "a nave auxiliar se aproxima sem responder aos chamados."
+        ),
+        "sit_13_misterio_noir_arsenal_molhado": (
+            "A chuva apaga as pegadas no cais. Você diz: \"Ninguém sai até eu terminar.\" O contador "
+            "empalidece e esconde a mão direita sob a mesa."
+        ),
+        "sit_14_romance_historico_baile_mascaras": (
+            "A orquestra muda de compasso e Helena aperta o leque. Você hesita em conduzi-la para fora "
+            "do salão, mas o embaixador já observa os dois da galeria."
+        ),
+        "sit_15_sobrevivencia_neve_passo_ferro": (
+            "A cornija de neve cede atrás do abrigo. Você corre para a saliência e grita: \"Siga minhas "
+            "pegadas!\" O vento engole o restante da frase."
+        ),
+        "sit_16_comedia_fantastica_guilda_goblins": (
+            "O contrato cospe tinta na barba do prefeito. Você pega seu cajado e ataca o pergaminho, que "
+            "responde com um ofendido trombetear de papel amassado."
+        ),
     },
     "new": {
         "sit_01_combat_spellcasting": (
@@ -503,6 +547,36 @@ MOCK_OUTPUTS = {
             "the unyielding authority of the Obarskyr crown, her hand resting on the pommel of her side-sword. \"Stand "
             "fast, Captain,\" she commands quietly, her piercing gaze locked on yours across the leveled weapons. \"Lord "
             "Caio has words to speak before Cormyr renders judgment. Speak them swiftly, sorcerer.\""
+        ),
+        "sit_11_terror_gotico_casa_sino_oco": (
+            "Três notas graves vibram dentro das paredes, embora o sino do sótão não tenha badalo. A cera "
+            "do selo violeta escurece entre os dedos de Beatriz, e a vela dela se inclina para a escada. "
+            "No alto, uma porta se destrava com o estalo seco de um dente partido."
+        ),
+        "sit_12_ficcao_cientifica_deriva_orbital": (
+            "O manual antigo confirma o código ÍCARO-7: a nave auxiliar não veio resgatar a tripulação, "
+            "mas executar o protocolo de contenção. Íris desvia a energia dos holofotes para o transmissor, "
+            "deixando o convés na penumbra. Uma única resposta aparece no console: RESTEM ONDE ESTÃO."
+        ),
+        "sit_13_misterio_noir_arsenal_molhado": (
+            "Otávio olha para o recibo azul, depois para a janela por onde a viúva desapareceu. O contador "
+            "nega conhecer a tinta, mas o mesmo azul mancha a aba de sua manga. Do lado de fora, o bonde "
+            "das onze freia sem nenhum passageiro na plataforma."
+        ),
+        "sit_14_romance_historico_baile_mascaras": (
+            "Helena gira o leque uma vez, o sinal combinado no jardim, e deixa a máscara escorregar apenas "
+            "o suficiente para revelar um sorriso tenso. O embaixador interrompe a conversa com o ministro. "
+            "Ao fundo, os primeiros compassos da contradança prendem todos aos seus lugares."
+        ),
+        "sit_15_sobrevivencia_neve_passo_ferro": (
+            "O abrigo aguenta o impacto, mas a estaca norte desaparece sob a neve. Rui amarra a ponta da "
+            "corda ao pináculo basáltico e testa o nó duas vezes. Através do uivo do vento, um segundo "
+            "deslocamento de neve responde mais acima, ainda fora de vista."
+        ),
+        "sit_16_comedia_fantastica_guilda_goblins": (
+            "O contrato se desdobra em sete pernas de papel e sobe na cortina, exigindo falar com um "
+            "advogado. Os goblins aplaudem; o prefeito finge consultar um relógio inexistente. No teto, a "
+            "cláusula de rescisão acende em dourado, ao alcance de qualquer escada suficientemente educada."
         ),
     },
 }

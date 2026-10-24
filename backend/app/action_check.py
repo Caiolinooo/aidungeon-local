@@ -81,7 +81,8 @@ def collect_state(conn, adventure: dict, actions: list[dict], cards: list[dict],
 
 
 def check_action(action_text: str, action_type: str, state: dict, *,
-                 llm_cfg: dict, transport: Any, cfg: dict) -> Verdict | None:
+                 llm_cfg: dict, transport: Any, cfg: dict,
+                 cancel=None) -> Verdict | None:
     """Veredito, ou None se a checagem LLM não pôde ser lida.
 
     Bloqueio já marcado pelo world_facts não consulta o modelo.
@@ -105,9 +106,26 @@ def check_action(action_text: str, action_type: str, state: dict, *,
             max_tokens=_max_tokens(cfg),
             timeout_s=_timeout(cfg),
             transport=transport,
+            cancel=cancel,
+            response_format={"type": "json_schema", "json_schema": {
+                "name": "action_check", "strict": True,
+                "schema": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["possible", "blockers", "risks", "notes", "cost", "consequence"],
+                    "properties": {
+                        "possible": {"type": "boolean"},
+                        "blockers": {"type": "array", "items": {"type": "string"}},
+                        "risks": {"type": "array", "items": {"type": "string"}},
+                        "notes": {"type": "string"},
+                        "cost": {"type": "string"},
+                        "consequence": {"type": "string"},
+                    },
+                },
+            }},
         )
+    except llm_client.LlmCancelled:
+        raise
     except Exception:
-        log.warning("action_check: LLM indisponível", exc_info=True)
         return None
     verdict = _verdict_from_text(raw)
     if verdict is None:

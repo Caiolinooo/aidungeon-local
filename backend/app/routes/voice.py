@@ -13,14 +13,18 @@ unreachable → 502 `unreachable`; 401/403 → 502 `auth_error`; demais → 502 
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import sqlite3
 import uuid
-from typing import Any
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
+from starlette.requests import ClientDisconnect
+
 
 from app import db, npc_bonds, settings_store, voice_client, voice_emotion
 from app.deps import get_http_transport
@@ -30,6 +34,26 @@ from app.schemas import TtsRequest, VoiceSettingsUpdate
 log = logging.getLogger("aidungeon.voice")
 
 router = APIRouter()
+
+T = TypeVar("T")
+
+
+async def _await_until_disconnect(request: Request, operation: Coroutine[Any, Any, T]) -> T:
+    """Cancela o awaitable HTTP quando ASGI informa que o cliente desconectou."""
+    task = asyncio.create_task(operation)
+    try:
+        while True:
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise ClientDisconnect()
+            done, _ = await asyncio.wait((task,), timeout=0.1)
+            if task in done:
+                return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 # ------------------------------------------------------------ settings/voice
@@ -72,6 +96,14 @@ def put_voice_settings(body: VoiceSettingsUpdate) -> dict:
         return _voice_settings_response(conn)
 
 
+
+# --------------------------------------------------------------- /health/voice
+@router.get("/health/voice")
+def health_voice(transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        cfg = settings_store.effective_voice_settings(conn)
+    return voice_client.health(cfg, transport=transport)
+
 # -------------------------------------------------------------------- /voices
 def _known_voice(conn, name: str) -> bool:
     if not name:
@@ -96,8 +128,8 @@ def list_voices() -> dict:
 
 # ----------------------------------------------------------------------- /tts
 @router.post("/tts")
-def post_tts(body: TtsRequest,
-             transport: Any = Depends(get_http_transport)) -> Response:
+async def post_tts(request: Request, body: TtsRequest,
+                   transport: Any = Depends(get_http_transport)) -> Response:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
     if not cfg["enabled"]:
@@ -119,8 +151,11 @@ def post_tts(body: TtsRequest,
         cloned = db.get_cloned_voice(conn, voice) if voice.startswith("cv_") else None
     if cloned is not None:
         try:
-            voice_client.put_clone_rvq(
-                cfg, voice, cloned["ref_text"], cloned["rvq"], transport=transport)
+            await _await_until_disconnect(
+                request,
+                voice_client.put_clone_rvq_async(
+                    cfg, voice, cloned["ref_text"], cloned["rvq"], transport=transport),
+            )
         except voice_client.VoiceError as exc:
             raise GameError(502, exc.code, exc.message) from exc
     npc_emotion = None
@@ -133,8 +168,11 @@ def post_tts(body: TtsRequest,
     emotion = voice_emotion.choose_emotion(
         text, npc_emotion=npc_emotion, hint=body.emotion)
     try:
-        audio = voice_client.synthesize(
-            cfg, text, voice, emotion=emotion, transport=transport)
+        audio = await _await_until_disconnect(
+            request,
+            voice_client.synthesize_async(
+                cfg, text, voice, emotion=emotion, transport=transport),
+        )
     except voice_client.VoiceError as exc:
         raise GameError(502, exc.code, exc.message) from exc
     return Response(content=audio, media_type="audio/mpeg",
@@ -171,10 +209,13 @@ async def post_stt(request: Request, file: UploadFile | None = File(None),
     if len(lang) != 2 or not lang.isalpha():
         lang = None
     try:
-        text = voice_client.transcribe(
-            cfg, file.filename or "audio",
-            file.content_type or "application/octet-stream",
-            data, language=lang, transport=transport)
+        text = await _await_until_disconnect(
+            request,
+            voice_client.transcribe_async(
+                cfg, file.filename or "audio",
+                file.content_type or "application/octet-stream",
+                data, language=lang, transport=transport),
+        )
     except voice_client.VoiceError as exc:
         raise GameError(502, exc.code, exc.message) from exc
     return {"text": text}

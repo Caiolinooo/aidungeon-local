@@ -940,17 +940,29 @@ def insert_image(conn: sqlite3.Connection, *, adventure_id: str, action_seq: int
                  height: int | None = None, image_id: str | None = None,
                  kind: str = "scene", ref_id: str = "",
                  cache_key: str = "", reused_from: str = "",
-                 created_at: str | None = None) -> dict:
+                 created_at: str | None = None, job_id: str | None = None) -> dict:
     iid = image_id or new_id()
-    conn.execute(
-        "INSERT INTO images(id, adventure_id, action_seq, prompt, negative_prompt,"
-        " file_path, provider, width, height, kind, ref_id, cache_key,"
-        " reused_from, created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
-         provider, width, height, kind, ref_id, cache_key or "",
-         reused_from or "", created_at or utcnow()),
-    )
+    values = (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
+              provider, width, height, kind, ref_id, cache_key or "",
+              reused_from or "", created_at or utcnow())
+    columns = ("id, adventure_id, action_seq, prompt, negative_prompt,"
+               " file_path, provider, width, height, kind, ref_id, cache_key,"
+               " reused_from, created_at")
+    if job_id is None:
+        conn.execute(
+            f"INSERT INTO images({columns}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            values,
+        )
+    else:
+        # A publicação e a checagem do status são uma única operação atômica:
+        # se o cancelamento comitar primeiro, action/retrato fazem rollback.
+        cur = conn.execute(
+            f"INSERT INTO images({columns}) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?"
+            " WHERE EXISTS (SELECT 1 FROM jobs WHERE id=? AND status='running')",
+            (*values, job_id),
+        )
+        if cur.rowcount != 1:
+            raise JobCanceled(job_id)
     return image_to_dict(conn.execute("SELECT * FROM images WHERE id=?", (iid,)).fetchone())
 
 
@@ -1115,20 +1127,25 @@ def clear_card_portrait(conn: sqlite3.Connection, card_id: str) -> bool:
 
 
 def set_card_portrait(conn: sqlite3.Connection, card_id: str, image_id: str | None,
-                      *, anchor_id: str | None = None) -> None:
+                      *, anchor_id: str | None = None,
+                      job_id: str | None = None) -> None:
     """Grava a foto exibida. anchor_id só preenche a âncora se ela ainda está vazia."""
     if anchor_id:
-        conn.execute(
-            "UPDATE story_cards SET portrait_image_id=?,"
-            " portrait_anchor_id=COALESCE(NULLIF(portrait_anchor_id, ''), ?),"
-            " updated_at=? WHERE id=?",
-            (image_id, anchor_id, utcnow(), card_id),
-        )
+        sql = ("UPDATE story_cards SET portrait_image_id=?,"
+               " portrait_anchor_id=COALESCE(NULLIF(portrait_anchor_id, ''), ?),"
+               " updated_at=? WHERE id=?")
+        params: tuple = (image_id, anchor_id, utcnow(), card_id)
     else:
-        conn.execute(
-            "UPDATE story_cards SET portrait_image_id=?, updated_at=? WHERE id=?",
-            (image_id, utcnow(), card_id),
-        )
+        sql = "UPDATE story_cards SET portrait_image_id=?, updated_at=? WHERE id=?"
+        params = (image_id, utcnow(), card_id)
+    if job_id is not None:
+        sql += " AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND status='running')"
+        params = (*params, job_id)
+    cur = conn.execute(sql, params)
+    if job_id is not None and cur.rowcount == 0:
+        job = get_job(conn, job_id)
+        if job is None or job["status"] != "running":
+            raise JobCanceled(job_id)
 
 
 def delete_card(conn: sqlite3.Connection, adventure_id: str, card_id: str) -> bool:
@@ -1387,6 +1404,14 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM settings WHERE key=?", (key,))
 
 
+
+class JobCanceled(Exception):
+    """A publicação foi recusada porque o job já não estava running."""
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        super().__init__(f"job {job_id} was canceled")
+
 # -------------------------------------------------------------------- jobs
 JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick",
              "card_assets")
@@ -1505,19 +1530,21 @@ def claim_next_job(conn: sqlite3.Connection, *,
 
 
 def finish_job(conn: sqlite3.Connection, job_id: str, status: str,
-               result: dict | None = None, error: str | None = None) -> None:
-    conn.execute(
-        "UPDATE jobs SET status=?, result=?, error=?, finished_at=? WHERE id=?",
+               result: dict | None = None, error: str | None = None) -> bool:
+    cur = conn.execute(
+        "UPDATE jobs SET status=?, result=?, error=?, finished_at=? WHERE id=?"
+        " AND status<>'canceled'",
         (status, _dumps(result, None) if result is not None else None,
          error, utcnow(), job_id),
     )
+    return cur.rowcount == 1
 
 
 def cancel_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
-    """Cancela jobs que ainda não rodam (running é cooperativo — v1 não interrompe)."""
+    """Cancela qualquer job ativo; running passa a impedir publicações tardias."""
     cur = conn.execute(
         "UPDATE jobs SET status='canceled', finished_at=? WHERE id=?"
-        " AND status IN ('preparing','pending')",
+        " AND status IN ('preparing','pending','running')",
         (utcnow(), job_id),
     )
     if cur.rowcount == 0:

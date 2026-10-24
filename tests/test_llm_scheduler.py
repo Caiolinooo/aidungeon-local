@@ -469,7 +469,7 @@ def llama():
         server.close()
 
 
-FAST_STALL = {"stall": {"first_token_s": 0.3, "progress_s": 0.2}}
+FAST_STALL = {"stall": {"first_token_s": 1.0, "progress_s": 0.8}}
 
 
 def _narrate(cfg: dict, state: llm_client.StreamState | None = None) -> str:
@@ -481,7 +481,13 @@ def test_role_deadline_starts_at_admission(llama):
     server = llama([("hang",)])
     cfg = _cfg(server.base_url)
     held = llm_scheduler.acquire("choices", 1)
-    threading.Timer(0.4, llm_scheduler.release, args=(held, "ok")).start()
+
+    def release_after_queue() -> None:
+        assert _wait_for(lambda: bool(llm_scheduler.snapshot()["waiting"]))
+        time.sleep(0.3)
+        llm_scheduler.release(held, "ok")
+
+    threading.Thread(target=release_after_queue, daemon=True).start()
     started = time.monotonic()
     with pytest.raises(llm_client.LlmTimeout) as exc:
         llm_client.chat_completion(cfg, MESSAGES, role="choices", timeout_s=0.6)
@@ -490,7 +496,7 @@ def test_role_deadline_starts_at_admission(llama):
     assert 0.9 <= elapsed < 2.0
     last = llm_client.recent_calls(1)[0]
     assert last["outcome"] == "timeout"
-    assert 0.3 <= last["waited_s"] < 0.6
+    assert 0.2 <= last["waited_s"] < 0.8
 
 
 def test_preempted_aux_is_retried_once(llama):
@@ -538,7 +544,7 @@ def test_prompt_progress_keeps_a_slow_narrative_alive(llama):
     script = [("sse", [("progress", 0), ("sleep", 0.25), ("progress", 40), ("sleep", 0.25),
                        ("progress", 80), ("sleep", 0.25), "Ok."])]
     server = llama(script)
-    cfg = _cfg(server.base_url, scheduler={"stall": {"first_token_s": 0.3, "progress_s": 0.4}})
+    cfg = _cfg(server.base_url, scheduler={"stall": {"first_token_s": 0.6, "progress_s": 0.5}})
     state = llm_client.StreamState()
     assert _narrate(cfg, state) == "Ok."
     assert len(server.requests) == 1

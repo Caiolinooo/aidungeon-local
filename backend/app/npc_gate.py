@@ -244,7 +244,8 @@ def _player_context(card: dict | None, username: str) -> dict:
     }
 
 
-def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = 900) -> dict | None:
+def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = 900,
+          cancel=None) -> dict | None:
     try:
         raw = llm_client.chat_completion(
             llm_cfg,
@@ -257,7 +258,24 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = 900) -> 
             max_tokens=max_tokens,
             timeout_s=45,
             transport=transport,
+            cancel=cancel,
+            response_format={"type": "json_schema", "json_schema": {
+                "name": "turn_adjudication", "strict": True,
+                "schema": {
+                    "type": "object",
+                    "required": ["decision", "outcome", "reactions", "initiative", "cue"],
+                    "properties": {
+                        "decision": {"type": "string", "enum": list(DECISIONS)},
+                        "outcome": {"type": "string"},
+                        "reactions": {"type": "array", "items": {"type": "object"}},
+                        "initiative": {"type": ["object", "null"]},
+                        "cue": {"type": "string"},
+                    },
+                },
+            }},
         )
+    except llm_client.LlmCancelled:
+        raise
     except Exception:
         log.warning("npc_gate: adjudicador indisponível", exc_info=True)
         return None
@@ -309,7 +327,7 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
 
 
 def decide(adventure_id: str, text: str, llm_cfg: dict, transport, user: str = "",
-           rng=None, world_check: dict | None = None) -> dict | None:
+           rng=None, world_check: dict | None = None, cancel=None) -> dict | None:
     """Adjudicação de uma ação do jogador. Sem LLM, devolve None."""
     with db.session() as conn:
         ensure_saved(conn, adventure_id)
@@ -319,11 +337,12 @@ def decide(adventure_id: str, text: str, llm_cfg: dict, transport, user: str = "
         payload, _ = packed
     if isinstance(world_check, dict):
         payload["world_check"] = world_check
-    data = _call(llm_cfg or {}, payload, transport)
+    data = _call(llm_cfg or {}, payload, transport, cancel=cancel)
     return _normalize_payload(data, payload)
 
 
-def own_beat(adventure_id: str, llm_cfg: dict | None = None, transport=None) -> dict | None:
+def own_beat(adventure_id: str, llm_cfg: dict | None = None, transport=None,
+             cancel=None) -> dict | None:
     """Continue: a IA decide se alguém age por conta própria e como."""
     with db.session() as conn:
         ensure_saved(conn, adventure_id)
@@ -336,7 +355,7 @@ def own_beat(adventure_id: str, llm_cfg: dict | None = None, transport=None) -> 
         "No player action this beat. Decide whether a present NPC acts on their own "
         "motive. If nobody acts, use decision=allow, empty reactions, initiative=null."
     )
-    data = _call(llm_cfg or {}, payload, transport)
+    data = _call(llm_cfg or {}, payload, transport, cancel=cancel)
     result = _normalize_payload(data, payload)
     if result is None:
         return None

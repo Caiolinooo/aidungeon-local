@@ -677,6 +677,22 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
         llm_cfg,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
         role="chronicle", temperature=0.2, max_tokens=2100, transport=transport,
+        response_format={"type": "json_schema", "json_schema": {
+            "name": "npc_chronicle", "strict": True,
+            "schema": {
+                "type": "object",
+                "required": ["plot_essentials", "characters", "bodies", "ui", "places", "factions", "items"],
+                "properties": {
+                    "plot_essentials": {"type": "string"},
+                    "characters": {"type": "array", "items": {"type": "object"}},
+                    "bodies": {"type": "array", "items": {"type": "object"}},
+                    "ui": {"type": "object"},
+                    "places": {"type": "array", "items": {"type": "object"}},
+                    "factions": {"type": "array", "items": {"type": "object"}},
+                    "items": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        }},
     )
     try:
         payload = npc_assets._extract_json(content)

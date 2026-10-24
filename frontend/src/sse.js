@@ -4,8 +4,8 @@
 // frames "event: <nome>\ndata: <json>\n\n" (contrato: docs/openapi.yaml).
 //
 // Eventos: "token" (trecho gerado), "done" (Action persistida), "error" (falha).
-// Cancelamento: AbortController — interrompe o stream localmente (o backend
-// pode concluir a geração e persistir a action; ela aparece ao recarregar).
+// Cancelamento: o botão Parar chama /generation/cancel e depois aborta o
+// stream local; fechar só a conexão não cancela o turno no backend.
 //
 // Auth: mesmo esquema do api.js — header Bearer em toda chamada; 401 →
 // clearToken() + evento 'aidl:unauthorized' (AuthGate volta ao /login).

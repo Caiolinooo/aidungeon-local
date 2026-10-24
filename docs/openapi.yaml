@@ -333,6 +333,33 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/adventures/{adventureId}/generation/cancel:
+    post:
+      tags: [generation]
+      summary: Cancelar a geração em andamento
+      operationId: cancelGeneration
+      description: |
+        Sinaliza o cancelamento até o provider e aguarda até 5 s pela liberação.
+        Uma ação nova é removida; retry preserva a resposta anterior. Fechar
+        apenas o stream não chama este endpoint e não cancela o turno.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Cancelamento concluído ou ainda em finalização.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [cancelling, cancelled]
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Nenhuma geração ativa (no_generation_in_progress).
+
   /api/adventures/{adventureId}/continue:
     post:
       tags: [generation]
@@ -1075,7 +1102,29 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+    post:
+      tags: [assets]
+      summary: Cancelar job pelo id, inclusive render em execução
+      operationId: cancelJobById
+      description: |
+        preparing/pending são cancelados imediatamente. Em running, publica o
+        cancelamento e usa /sdapi/v1/interrupt para SDWebUI; resultado tardio
+        não grava imagem/action nem emite evento ready. Repetir é idempotente.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job cancelado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Job já concluído ou com erro.
   # ------------------------------------------------------------------- memory
+
   /api/adventures/{adventureId}/memory:
     get:
       tags: [memory]
@@ -1449,6 +1498,13 @@ paths:
           schema:
             type: boolean
           description: 'Mesmo efeito do `Prefer: respond-async`.'
+        - name: variation
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Variação independente no cache; omitida preserva a chave anterior.
       requestBody:
         required: true
         content:
@@ -1839,6 +1895,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LlmHealth'
+
+
+  /api/health/voice:
+    get:
+      tags: [health]
+      summary: Sonda não gerativa do provider de voz
+      operationId: healthVoice
+      description: Consulta /models com timeout de 5 s. Não sintetiza nem transcreve áudio.
+      responses:
+        '200':
+          description: Sempre 200; status informa ok, unreachable, auth_error ou error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderHealth'
+
+  /api/health/image:
+    get:
+      tags: [health]
+      summary: Sonda não gerativa do provider de imagem
+      operationId: healthImage
+      description: SDWebUI usa /sdapi/v1/options; OpenAI-compatible usa /models.
+      responses:
+        '200':
+          description: Sempre 200; status inclui também disabled quando desligado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderHealth'
 
   # ------------------------------------------------------------------ rulesets
   /api/rulesets:
@@ -2772,6 +2857,23 @@ components:
           maximum: 2.0
           description: Persistido como override sampler.repetition_penalty.
 
+    ProviderHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, disabled, unreachable, auth_error, error]
+        enabled:
+          type: boolean
+        provider:
+          type: string
+        details:
+          type: string
+          nullable: true
+        detail:
+          type: string
+          nullable: true
+
     LlmHealth:
       type: object
       properties:
@@ -3294,6 +3396,24 @@ components:
           example: 512x512
         style_suffix:
           type: string
+        seed:
+          type: integer
+          nullable: true
+        variation:
+          type: integer
+          minimum: 0
+        cfg_scale:
+          type: number
+        sampler_name:
+          type: string
+        scheduler:
+          type: string
+        denoising_strength:
+          type: number
+        timeout_seconds:
+          type: integer
+        sd_model_checkpoint:
+          type: string
 
     ImageSettingsUpdate:
       type: object
@@ -3325,6 +3445,31 @@ components:
         openai_size:
           type: string
         style_suffix:
+          type: string
+        seed:
+          type: integer
+          nullable: true
+          description: Null remove o override; omitido mantém.
+        variation:
+          type: integer
+          minimum: 0
+        cfg_scale:
+          type: number
+          minimum: 1
+          maximum: 30
+        sampler_name:
+          type: string
+        scheduler:
+          type: string
+        denoising_strength:
+          type: number
+          minimum: 0
+          maximum: 1
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+        sd_model_checkpoint:
           type: string
 
     VoiceList:

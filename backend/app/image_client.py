@@ -78,6 +78,25 @@ def _post_json(client: httpx.Client, url: str, payload: dict,
         raise ImageError(f"resposta de {what} inválida (não é objeto JSON)")
     return data
 
+def _get_json(client: httpx.Client, url: str,
+              headers: dict[str, str], what: str) -> dict:
+    """GET JSON para health checks; nunca inicia uma geração."""
+    try:
+        resp = client.get(url, headers=headers)
+    except httpx.TransportError as exc:
+        raise ImageUnreachable(f"image provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em {what}")
+    if resp.status_code != 200:
+        raise ImageError(f"HTTP {resp.status_code} em {what}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ImageError(f"resposta de {what} não é JSON") from exc
+    if not isinstance(data, dict):
+        raise ImageError(f"resposta de {what} inválida (não é objeto JSON)")
+    return data
+
 
 def _download(client: httpx.Client, url: str, headers: dict[str, str]) -> bytes:
     """Baixa uma imagem por URL (ramo data[0].url do openai_compatible)."""
@@ -143,16 +162,19 @@ def _merged_negative(cfg: dict) -> str:
 def _sd_payload(cfg: dict, prompt: str, width: int, height: int) -> dict:
     # DPM++ 2M Karras e CFG 5 servem o epiCRealism XL (pede CFG 3-6).
     # O checkpoint é travado por _apply_checkpoint em volta deste payload.
-    return {
+    payload = {
         "prompt": prompt,
         "negative_prompt": _merged_negative(cfg),
         "steps": cfg["sdwebui_steps"],
         "width": width,
         "height": height,
-        "sampler_name": "DPM++ 2M",
-        "scheduler": "Karras",
-        "cfg_scale": 5,
+        "sampler_name": cfg.get("sampler_name", "DPM++ 2M"),
+        "scheduler": cfg.get("scheduler", "Karras"),
+        "cfg_scale": float(cfg.get("cfg_scale", 5)),
     }
+    if cfg.get("seed") is not None:
+        payload["seed"] = int(cfg["seed"])
+    return payload
 
 
 def _apply_checkpoint(cfg: dict, payload: dict) -> dict:
@@ -243,8 +265,13 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
 def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 height: int | None = None, init_image: bytes | None = None,
                 denoising_strength: float | None = None,
-                negative_extra: str = "") -> str:
-    """Hash estável do pedido final. Não inclui api_key e nunca vai para prompt."""
+                negative_extra: str = "",
+                variation: str | int | None = None) -> str:
+    """Hash estável do pedido final. Não inclui api_key e nunca vai para prompt.
+
+    Seed e variation só entram quando configurados; assim chaves antigas e o
+    comportamento de cache da instalação padrão continuam válidos.
+    """
     provider = cfg.get("provider") or "sdwebui"
     negative = _merged_negative({
         **cfg,
@@ -258,11 +285,17 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 int(height or cfg.get("sdwebui_height") or 0)]
         extra = {
             "steps": cfg.get("sdwebui_steps"),
-            "sampler": "DPM++ 2M",
-            "scheduler": "Karras",
-            "cfg_scale": 5,
-            "denoise": None if denoising_strength is None else round(float(denoising_strength), 4),
+            "sampler": cfg.get("sampler_name", "DPM++ 2M"),
+            "scheduler": cfg.get("scheduler", "Karras"),
+            "cfg_scale": float(cfg.get("cfg_scale", 5)),
+            "denoise": (
+                round(float(denoising_strength if denoising_strength is not None
+                            else cfg.get("denoising_strength", 0.35)), 4)
+                if init_image is not None or denoising_strength is not None else None
+            ),
         }
+        if cfg.get("seed") is not None:
+            extra["seed"] = int(cfg["seed"])
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -277,6 +310,9 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         "extra": extra,
         "init": hashlib.sha256(init_image).hexdigest() if init_image is not None else "",
     }
+    variation_value = cfg.get("variation", 0) if variation is None else variation
+    if variation_value not in (None, "", 0, "0"):
+        payload["variation"] = str(variation_value)
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -309,7 +345,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                     "cannot keep the same face: this image provider has no img2img")
             content, width, height = _generate_sdwebui_img2img(
                 cfg, client, prompt, init_image, width, height,
-                float(denoising_strength if denoising_strength is not None else 0.35),
+                float(denoising_strength if denoising_strength is not None
+                      else cfg.get("denoising_strength", 0.35)),
             )
         elif provider == "sdwebui":
             content, width, height = _generate_sdwebui(cfg, client, prompt, width, height)
@@ -320,3 +357,70 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     file_path = _save_png(cfg, adventure_id, image_id, content)
     return {"file_path": file_path, "width": width, "height": height,
             "provider": provider}
+
+
+def effective_settings(conn) -> dict:
+    """Config efetiva: defaults do arquivo seguidos dos overrides persistidos."""
+    from app import settings_store
+
+    return settings_store.effective_image_settings(conn)
+
+
+def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
+    """Sonda não gerativa do provider. O resultado é sempre serializável."""
+    provider = cfg.get("provider") or "sdwebui"
+    result = {"enabled": bool(cfg.get("enabled", True)),
+              "provider": provider, "status": "ok"}
+    if not result["enabled"]:
+        result["status"] = "disabled"
+        result["detail"] = "image generation is disabled"
+        return result
+    try:
+        timeout = min(float(cfg.get("timeout_seconds", 300)), 10.0)
+        with _make_client(transport, timeout) as client:
+            if provider == "sdwebui":
+                data = _get_json(client, f"{_sd_base(cfg)}/sdapi/v1/options",
+                                 {"Accept": "application/json"}, "options")
+                result["checkpoint"] = str(data.get("sd_model_checkpoint") or "") or None
+            elif provider == "openai_compatible":
+                base = str(cfg.get("openai_base_url") or "").rstrip("/")
+                if not base:
+                    raise ImageError(
+                        "config_error: image.providers.openai_compatible.base_url vazio")
+                headers = {"Accept": "application/json"}
+                if cfg.get("openai_api_key"):
+                    headers["Authorization"] = f"Bearer {cfg['openai_api_key']}"
+                data = _get_json(client, f"{base}/models", headers, "models")
+                models = data.get("data")
+                if not isinstance(models, list):
+                    raise ImageError("resposta de models sem lista 'data'")
+                ids = {str(item.get("id")) for item in models if isinstance(item, dict)}
+                result["model_count"] = len(ids)
+                if cfg.get("openai_model"):
+                    result["model_available"] = cfg["openai_model"] in ids
+            else:
+                raise ImageError(f"config_error: provider de imagem desconhecido: {provider!r}")
+    except ImageError as exc:
+        result["status"] = exc.code
+        result["detail"] = exc.message
+    except Exception as exc:
+        log.warning("image health: falha inesperada (%s)", type(exc).__name__)
+        result["status"] = "error"
+        result["detail"] = "image health check failed"
+    return result
+
+
+def interrupt_sdwebui(cfg: dict, transport: httpx.BaseTransport | None = None) -> None:
+    """Pede interrupção cooperativa ao WebUI; não gera nem exige corpo JSON."""
+    timeout = min(float(cfg.get("timeout_seconds", 300)), 10.0)
+    with _make_client(transport, timeout) as client:
+        try:
+            resp = client.post(f"{_sd_base(cfg)}/sdapi/v1/interrupt", json={},
+                               headers={"Accept": "application/json"})
+        except httpx.TransportError as exc:
+            raise ImageUnreachable(
+                f"image provider unreachable: {type(exc).__name__}") from exc
+        if resp.status_code in (401, 403):
+            raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em interrupt")
+        if resp.status_code != 200:
+            raise ImageError(f"HTTP {resp.status_code} em interrupt: {resp.text[:200]}")

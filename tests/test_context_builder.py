@@ -210,8 +210,8 @@ def test_recent_window_dynamic_rule(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    expected = 65536 - (700 + 1600 + 900 + 1600 + 800 + 800 + 300 + 200 + 320 + 300) - 1024
-    assert built.meta["budgets"]["recent_window"] == expected == 56992
+    expected = 65536 - (700 + 1600 + 900 + 1600 + 800 + 800 + 300 + 200 + 320 + 300) - 1024 - cb.prompt_overhead_tokens()
+    assert built.meta["budgets"]["recent_window"] == expected
 
 
 def test_long_context_dynamic_scaling_and_continuity_anchor(tmp_db):
@@ -278,7 +278,7 @@ def test_window_keeps_newest_whole_actions_first(tmp_db):
         # sem a mais antiga), não a ação 0. O descarte sobe para múltiplo de
         # WINDOW_DROP_CHUNK (8): saem as ações 0..7 e ficam 8..10, inteiras.
         # (7520 = budgets fixos, incl. character_rules=900, player_state=320 e npc_minds=300)
-        cfg = _cfg(conn, context_size=7520 + 1024 + 250)
+        cfg = _cfg(conn, context_size=7520 + 1024 + 250 + cb.prompt_overhead_tokens())
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert cb.WINDOW_DROP_CHUNK == 8
@@ -300,7 +300,7 @@ def test_window_chunk_snap_can_empty_the_window(tmp_db):
         actions = db.list_actions(conn, adv["id"])
         # budget da janela = 250 tokens: caberia a ação 1 inteira (~101), mas
         # dropped=1 → snap 8 → keep<=0. (7520 = budgets fixos)
-        cfg = _cfg(conn, context_size=7520 + 1024 + 250)
+        cfg = _cfg(conn, context_size=7520 + 1024 + 250 + cb.prompt_overhead_tokens())
         built = _build(adv, actions, cfg)
     assert built.meta["budgets"]["recent_window"] == 250
     assert built.meta["window_action_count"] == 0
@@ -379,7 +379,7 @@ def test_window_drops_in_chunks_of_eight(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         # last_action fora da janela: soma no budget fixo, context_size compensa.
-        cfg = _cfg(conn, context_size=440)
+        cfg = _cfg(conn, context_size=440 + cb.prompt_overhead_tokens())
         for key in cfg["budgets"]:
             cfg["budgets"][key] = 0
         cfg["budgets"]["last_action"] = 20
@@ -424,7 +424,7 @@ def test_summarizer_evicts_the_same_chunked_window(tmp_db):
     add_action(adv["id"], 27, "story", "CURRENT")
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
-        cfg = _cfg(conn, context_size=440)
+        cfg = _cfg(conn, context_size=440 + cb.prompt_overhead_tokens())
         for key in cfg["budgets"]:
             cfg["budgets"][key] = 0
         cfg["budgets"]["last_action"] = 20

@@ -106,11 +106,12 @@ def _progress(job: dict) -> None:
 
 
 def _finish(job: dict, status: str, *, result: dict | None = None,
-            error: str | None = None) -> None:
+            error: str | None = None) -> bool:
     with db.session() as conn:
-        db.finish_job(conn, job["id"], status, result=result, error=error)
-    _progress({**job, "status": status})
-
+        finished = db.finish_job(conn, job["id"], status, result=result, error=error)
+    if finished:
+        _progress({**job, "status": status})
+    return finished
 
 # ------------------------------------------------------------- enfileirar
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
@@ -327,11 +328,31 @@ def _fail_see(job: dict, code: str, message: str) -> None:
 
 
 def cancel(conn, job_id: str) -> dict | None:
-    """Cancela um job que ainda não roda e avisa no bus; None se já rodava."""
+    """Cancela um job ativo e avisa no bus; None se já terminou."""
     job = db.cancel_job(conn, job_id)
     if job is not None:
         _progress(job)
     return job
+
+
+def interrupt_image(job: dict, transport: Any = None) -> bool:
+    """Melhor esforço para interromper o render SD de um job running cancelado."""
+    if job["type"] not in ("character_portrait", "scene_backdrop", "see_image"):
+        return False
+    try:
+        with db.session() as conn:
+            cfg = image_client.effective_settings(conn)
+        if (cfg.get("provider") or "sdwebui") != "sdwebui":
+            return False
+        image_client.interrupt_sdwebui(cfg, transport)
+    except ImageError as exc:
+        log.warning("job %s: interrupt do WebUI falhou: %s", job["id"], exc.message)
+        return False
+    except Exception as exc:
+        log.warning("job %s: interrupt do WebUI indisponível (%s)",
+                    job["id"], type(exc).__name__)
+        return False
+    return True
 
 
 # --------------------------------------------------------------- execução
@@ -350,6 +371,10 @@ def _raise_if_gone(adventure_id: str, file_path: str) -> None:
             return
     (db.REPO_ROOT / file_path).unlink(missing_ok=True)
     raise AdventureGone(adventure_id)
+
+def _discard_png(file_path: str) -> None:
+    """Remove um render que perdeu a corrida para cancelamento."""
+    (db.REPO_ROOT / file_path).unlink(missing_ok=True)
 
 
 def _build_portrait_prompt(adv: dict, card: dict, llm_cfg: dict,
@@ -415,7 +440,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                                 "portrait is already assigned but the image row is missing")
             return {"image": db.image_ref(existing), "card_id": card["id"],
                     "prompt": card.get("portrait_prompt") or "", "kept": True}
-        img_cfg = settings_store.effective_image_settings(conn)
+        img_cfg = image_client.effective_settings(conn)
         if not img_cfg["enabled"]:
             raise GameError(503, "image_generation_disabled",
                             "Image generation is disabled in settings")
@@ -471,7 +496,8 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             cached_stale = bool(state_key and desired and desired != state_key)
             if not cached_stale:
                 db.set_card_portrait(conn, card["id"], cached["id"],
-                                     anchor_id=anchor_id or cached["id"])
+                                     anchor_id=anchor_id or cached["id"],
+                                     job_id=job["id"])
                 _set_portrait_state(conn, adv["id"], card["id"], state_key, "")
             return {"image": db.image_ref(cached), "card_id": card["id"],
                     "prompt": prompt, "reused": True, "stale": cached_stale}
@@ -499,7 +525,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                 negative_prompt=img_cfg["negative_prompt"],
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
                 image_id=image_id, kind="portrait", ref_id=card["id"],
-                cache_key=stored_key,
+                cache_key=stored_key, job_id=job["id"],
             )
             current = db.get_card(conn, adv["id"], card["id"])
             desired = str(npc_assets.parse_sheet(
@@ -507,8 +533,12 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             stale = bool(state_key and desired and desired != state_key)
             if not stale:
                 db.set_card_portrait(conn, card["id"], image["id"],
-                                     anchor_id=anchor_id or image["id"])
+                                     anchor_id=anchor_id or image["id"],
+                                     job_id=job["id"])
                 _set_portrait_state(conn, adv["id"], card["id"], stored_key, "")
+    except db.JobCanceled:
+        _discard_png(meta["file_path"])
+        raise
     except sqlite3.IntegrityError:
         _raise_if_gone(adv["id"], meta["file_path"])
         raise
@@ -610,7 +640,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         raise GameError(500, "generation_failed", "scene backdrop job has no prompt")
     payload = job.get("payload") or {}
     with db.session() as conn:
-        img_cfg = settings_store.effective_image_settings(conn)
+        img_cfg = image_client.effective_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled",
                         "Image generation is disabled in settings")
@@ -651,8 +681,11 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
                 negative_prompt=negative,
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
                 image_id=image_id, kind="backdrop", ref_id=job["ref_id"] or "",
-                cache_key=cache_key,
+                cache_key=cache_key, job_id=job["id"],
             )
+    except db.JobCanceled:
+        _discard_png(meta["file_path"])
+        raise
     except sqlite3.IntegrityError:
         _raise_if_gone(job["adventure_id"], meta["file_path"])
         raise
@@ -661,7 +694,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
 
 def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
               prompt: str, negative_prompt: str, cache_key: str = "",
-              reused_from: str = "") -> dict:
+              reused_from: str = "", job_id: str | None = None) -> dict:
     """Grava a action `see` no fim da aventura e a imagem no mesmo seq (rota
     síncrona e job). Devolve o ImageResult."""
     try:
@@ -672,7 +705,7 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
                             file_path=meta["file_path"], provider=meta["provider"],
                             width=meta["width"], height=meta["height"],
                             image_id=image_id, cache_key=cache_key,
-                            reused_from=reused_from)
+                            reused_from=reused_from, job_id=job_id)
             action = db.get_action(conn, action["id"])
     except sqlite3.IntegrityError:
         _raise_if_gone(adventure_id, meta["file_path"])
@@ -704,13 +737,14 @@ def _execute_see(job: dict, transport: Any) -> dict:
     if not prompt:
         raise GameError(500, "generation_failed", "see job has no prompt")
     with db.session() as conn:
-        img_cfg = settings_store.effective_image_settings(conn)
+        img_cfg = image_client.effective_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     negative_extra = str(payload.get("negative_extra") or "")
     cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
-        img_cfg, prompt, negative_extra=negative_extra)
+        img_cfg, prompt, negative_extra=negative_extra,
+        variation=payload.get("variation"))
     with db.session() as conn:
         cached = db.find_cached_image(
             conn, job["adventure_id"], kind="scene", ref_id="",
@@ -725,17 +759,21 @@ def _execute_see(job: dict, transport: Any) -> dict:
             job["adventure_id"], str(payload.get("caption") or ""), meta,
             image_id=db.new_id(), prompt=prompt,
             negative_prompt=str(payload.get("negative_prompt") or ""),
-            cache_key=cache_key, reused_from=cached["id"],
+            cache_key=cache_key, reused_from=cached["id"], job_id=job["id"],
         )
         return {"image": image, "reused": True}
     image_id = db.new_id()
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
         transport=transport, negative_extra=negative_extra)
-    image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
-                      image_id=image_id, prompt=prompt,
-                      negative_prompt=str(payload.get("negative_prompt") or ""),
-                      cache_key=cache_key)
+    try:
+        image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
+                          image_id=image_id, prompt=prompt,
+                          negative_prompt=str(payload.get("negative_prompt") or ""),
+                          cache_key=cache_key, job_id=job["id"])
+    except db.JobCanceled:
+        _discard_png(meta["file_path"])
+        raise
     return {"image": image}
 
 
@@ -749,8 +787,8 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
 
 
 def _failed(job: dict, code: str, message: str) -> None:
-    _finish(job, "error", result={"code": code}, error=message)
-    if job["type"] == "see_image":
+    finished = _finish(job, "error", result={"code": code}, error=message)
+    if finished and job["type"] == "see_image":
         events.publish(job["adventure_id"], "see_failed",
                        {"job_id": job["id"], "code": code, "message": message})
 
@@ -786,6 +824,8 @@ def _run_job(job: dict, transport: Any) -> None:
         if executor is None:
             raise GameError(500, "generation_failed", f"unknown job type {job['type']}")
         result = executor(job, transport)
+    except db.JobCanceled:
+        log.info("job %s (%s): cancelado antes da publicação", job["id"], job["type"])
     except AdventureGone:
         log.info("job %s (%s): aventura apagada no meio, PNG descartado",
                  job["id"], job["type"])
@@ -799,9 +839,9 @@ def _run_job(job: dict, transport: Any) -> None:
         log.exception("job %s (%s) erro inesperado", job["id"], job["type"])
         _failed(job, "generation_failed", "unexpected internal error")
     else:
-        log.info("job %s (%s) concluído", job["id"], job["type"])
-        _finish(job, "done", result=result)
-        _announce(job, result)
+        if _finish(job, "done", result=result):
+            log.info("job %s (%s) concluído", job["id"], job["type"])
+            _announce(job, result)
 
 
 def process_pending(transport: Any = None, *, should_pause=None) -> int:

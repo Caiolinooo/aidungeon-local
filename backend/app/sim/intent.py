@@ -91,7 +91,7 @@ def normalize(raw: dict | None) -> dict:
 
 
 def classify(text: str, actor_view: dict, foes: list[str], pack: dict | None,
-             llm_cfg: dict, transport, cfg: dict) -> dict | None:
+             llm_cfg: dict, transport, cfg: dict, cancel=None) -> dict | None:
     messages = [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": json.dumps({
@@ -106,9 +106,11 @@ def classify(text: str, actor_view: dict, foes: list[str], pack: dict | None,
             llm_cfg, messages, role="meta", temperature=0.1,
             max_tokens=int(cfg.get("max_tokens", 220)),
             timeout_s=cfg.get("timeout_seconds", 20),
-            transport=transport,
+            transport=transport, cancel=cancel,
         )
         return normalize(npc_assets._extract_json(reply))
+    except llm_client.LlmCancelled:
+        raise
     except Exception:
         log.warning("sim intent: classificação falhou", exc_info=True)
         return None

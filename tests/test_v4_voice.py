@@ -239,3 +239,51 @@ def test_voice_settings_put_invalid_narrator_400(client):
     assert resp.json()["error"]["code"] == "invalid_voice"
     # nada foi persistido
     assert client.get("/api/settings/voice").json()["narrator_voice"] == "M1"
+
+
+# --------------------------------------------------------------------- health
+def test_voice_health_ok_uses_non_generative_models_probe(client):
+    capture: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        capture.append(request)
+        return httpx.Response(200, json={"data": [{"id": "omnivoice"}]})
+
+    assert client.put("/api/settings/voice", json={"api_key": "health-secret"}).status_code == 200
+    override_transport(client, httpx.MockTransport(handler))
+    try:
+        resp = client.get("/api/health/voice")
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "details": None}
+    assert len(capture) == 1
+    assert capture[0].method == "GET"
+    assert capture[0].url.path.endswith("/models")
+    assert capture[0].headers["authorization"] == "Bearer health-secret"
+
+
+def test_voice_health_failure_statuses_are_200_and_sanitized(client):
+    secret = "provider-secret-reflected-in-body"
+    cases = [
+        ("connect", "unreachable"),
+        ("auth", "auth_error"),
+        ("missing", "error"),
+        ("invalid", "error"),
+    ]
+    for failure, expected in cases:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if failure == "connect":
+                raise httpx.ConnectError("connection refused")
+            if failure == "auth":
+                return httpx.Response(401, text=secret)
+            if failure == "missing":
+                return httpx.Response(404, text=secret)
+            return httpx.Response(200, text=secret)
+
+        override_transport(client, httpx.MockTransport(handler))
+        resp = client.get("/api/health/voice")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == expected
+        assert secret not in resp.text
+    client.app.dependency_overrides.clear()

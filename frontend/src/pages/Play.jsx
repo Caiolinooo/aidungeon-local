@@ -12,6 +12,8 @@ import CharacterModal from '../components/CharacterModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
+import AdventureJobs from '../components/AdventureJobs.jsx'
+import GenerationPreferences from '../components/GenerationPreferences.jsx'
 import MiniHud from '../components/MiniHud.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { useTheme } from '../themeContext.jsx'
@@ -201,6 +203,7 @@ export default function Play() {
   const [seeing, setSeeing] = useState(false)
   const [seeOpen, setSeeOpen] = useState(false)
   const [seePrompt, setSeePrompt] = useState('')
+  const [seeVariation, setSeeVariation] = useState(0)
   const [choices, setChoices] = useState([])
   const [webSources, setWebSources] = useState([])
   const [inputDirty, setInputDirty] = useState(false)
@@ -240,12 +243,13 @@ export default function Play() {
   const genRef = useRef(null)
   const openCharacterRef = useRef(() => {})
   const currentUserRef = useRef('')
-  const seeTokenRef = useRef(0)
+  const seeJobRef = useRef(null)
   const feedRef = useRef(null)
   const nearBottomRef = useRef(true)
   const newBlockIdRef = useRef(null)
   const initialScrollDone = useRef(false)
   const actionsRef = useRef(null)
+  const generationPrefsRef = useRef({})
   const actionChecksRef = useRef({})
   const awaitingCheckRef = useRef(false)
   const awaitingBaselineRef = useRef(null)
@@ -256,6 +260,7 @@ export default function Play() {
   genRef.current = gen
   currentUserRef.current = currentUser
   actionsRef.current = actions
+  generationPrefsRef.current = adventure?.ui_state?._generation || {}
   actionChecksRef.current = actionChecks
   const turnBlocked = !!(
     adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
@@ -326,6 +331,11 @@ export default function Play() {
   useEffect(() => {
     refreshPlayer()
   }, [refreshPlayer])
+  useEffect(() => {
+    seeJobRef.current = null
+    setSeeing(false)
+    setSeeVariation(0)
+  }, [id])
 
   // Veredito da checagem de viabilidade. Vem pelo bus (outro jogador) ou pelo
   // stream da própria ação (evento "action_check", antes dos tokens).
@@ -485,12 +495,18 @@ export default function Play() {
     const onPortrait = (ev) => {
       fan('portrait_ready', parse(ev))
     }
+    const onJobChanged = (ev) => {
+      fan('job_changed', parse(ev))
+    }
     const onBackdrop = (ev) => {
       fan('backdrop_ready', parse(ev))
     }
     const onSee = (ev) => {
       const data = parse(ev)
-      setSeeing(false)
+      if (!data?.job_id || !seeJobRef.current || String(data.job_id) === seeJobRef.current) {
+        seeJobRef.current = null
+        setSeeing(false)
+      }
       const action = data?.image?.action
       if (!action || typeof action !== 'object' || action.id == null) {
         if (!genRef.current) refreshAdventure()
@@ -557,6 +573,8 @@ export default function Play() {
     es.addEventListener('backdrop_ready', onBackdrop)
     es.addEventListener('see_ready', onSee)
     es.addEventListener('card_assets_ready', onCardAssets)
+    es.addEventListener('job_progress', onJobChanged)
+    es.addEventListener('job_queued', onJobChanged)
     es.addEventListener('card_changed', onCard)
     es.addEventListener('character_changed', onCharacter)
     es.addEventListener('adventure_updated', onAdventureUpdated)
@@ -586,6 +604,8 @@ export default function Play() {
       es.removeEventListener('portrait_ready', onPortrait)
       es.removeEventListener('backdrop_ready', onBackdrop)
       es.removeEventListener('see_ready', onSee)
+      es.removeEventListener('job_progress', onJobChanged)
+      es.removeEventListener('job_queued', onJobChanged)
       es.removeEventListener('card_assets_ready', onCardAssets)
       es.removeEventListener('card_changed', onCard)
       es.removeEventListener('character_changed', onCharacter)
@@ -740,6 +760,7 @@ export default function Play() {
       setChoices([])
       setWebSources([])
       const fail = (msg, meta) => {
+        if (meta?.code === 'llm_cancelled') return
         genRef.current = null
         setGen(null)
         if (isCharacterRequired(msg, meta)) {
@@ -809,6 +830,19 @@ export default function Play() {
           if (Array.isArray(data.web_sources) && data.web_sources.length) {
             setWebSources(data.web_sources)
           }
+          if (data.action?.type === 'continue') {
+            const preferences = generationPrefsRef.current
+            if (preferences.auto_narrate) {
+              window.setTimeout(() => window.dispatchEvent(new CustomEvent('aidl:auto-narrate', {
+                detail: { actionId: data.action.id },
+              })), 0)
+            }
+            if (preferences.auto_see) {
+              window.setTimeout(() => requestSee({
+                action_seq: data.action.seq, variation: 0,
+              }).catch((e) => toast(e.message)), 0)
+            }
+          }
           refreshAdventure({ replaceActions: false })
         },
         onError: (msg, meta) => fail(msg, meta),
@@ -866,10 +900,18 @@ export default function Play() {
     })
   }
 
-  const stop = () => {
-    abortRef.current?.abort()
-    genRef.current = null
-    setGen(null)
+  const stop = async () => {
+    try {
+      await api.cancelGeneration(id)
+    } catch (e) {
+      if (e?.code !== 'no_generation_in_progress') toast(e.message)
+    } finally {
+      abortRef.current?.abort()
+      genRef.current = null
+      setGen(null)
+      setLive('')
+      refreshAdventure({ forceActions: true })
+    }
   }
 
   const doUndo = async () => {
@@ -896,70 +938,87 @@ export default function Play() {
     }
   }
 
-  const watchSee = (jobId, token) => {
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-    ;(async () => {
-      const deadline = Date.now() + 180000
-      try {
-        while (Date.now() < deadline) {
-          if (seeTokenRef.current !== token) return
-          const job = await api.getAdventureJob(id, jobId)
-          if (seeTokenRef.current !== token) return
-          if (job.status === 'done') {
-            const action = job.result?.image?.action
-            if (action) {
-              setActions((prev) => {
-                const list = prev ?? []
-                if (action.id != null && list.some((a) => a.id === action.id)) return list
-                return [...list, action].sort(bySeq)
-              })
-            }
-            toast('Imagem gerada.', 'ok')
-            return
-          }
-          if (job.status === 'error' || job.status === 'canceled') {
-            toast(job.error || 'Não foi possível pintar a cena.')
-            return
-          }
-          await wait(800)
-        }
-        toast('A pintura ainda está em andamento.')
-      } catch (e) {
-        if (seeTokenRef.current === token) toast(e.message)
-      } finally {
-        if (seeTokenRef.current === token) setSeeing(false)
-      }
-    })()
-  }
-
-  const doSee = async () => {
-    const target = [...(actions || [])].reverse().find(
-      (a) => a.type === 'continue' || a.type === 'start' || a.type === 'story',
-    )
-    if (!target || seeing || generating) return
+  const requestSee = useCallback(async ({ action_seq, extra_prompt, variation = 0 }) => {
     setSeeing(true)
-    setSeeOpen(false)
     try {
-      const extra = seePrompt.trim()
-      const r = await api.see(id, { action_seq: target.seq, extra_prompt: extra || undefined })
+      const r = await api.see(id, { action_seq, extra_prompt, variation })
       if (r?.action) {
-        setActions((prev) => [...(prev ?? []), r.action].sort(bySeq))
-        setSeePrompt('')
-        toast('Imagem gerada.', 'ok')
+        if (r.action.id != null) seenIdsRef.current.add(r.action.id)
+        setActions((prev) => {
+          const list = prev ?? []
+          if (r.action.id != null && list.some((a) => a.id === r.action.id)) return list
+          return [...list, r.action].sort(bySeq)
+        })
         setSeeing(false)
-        return
+        toast('Imagem gerada.', 'ok')
+        return r
       }
       if (!r?.job_id) {
         setSeeing(false)
         toast('Não foi possível iniciar a pintura.')
-        return
+        return r
       }
-      setSeePrompt('')
-      const token = seeTokenRef.current + 1
-      seeTokenRef.current = token
-      watchSee(r.job_id, token)
+      seeJobRef.current = String(r.job_id)
+      return r
     } catch (e) {
+      seeJobRef.current = null
       setSeeing(false)
+      throw e
+    }
+  }, [id, toast])
+
+  const handleJobsChange = useCallback((jobs) => {
+    const jobId = seeJobRef.current
+    if (!jobId) return
+    const job = jobs.find((item) => String(item.id) === jobId)
+    if (!job || ['preparing', 'pending', 'running'].includes(job.status)) return
+    seeJobRef.current = null
+    setSeeing(false)
+    if (job.status === 'done') {
+      const action = job.result?.image?.action
+      if (action) {
+        if (action.id != null) seenIdsRef.current.add(action.id)
+        setActions((prev) => {
+          const list = prev ?? []
+          if (action.id != null && list.some((a) => a.id === action.id)) return list
+          return [...list, action].sort(bySeq)
+        })
+      }
+      toast('Imagem gerada.', 'ok')
+    } else if (job.status === 'canceled') {
+      toast('Pintura cancelada.')
+    } else {
+      toast(job.error || 'Não foi possível pintar a cena.')
+    }
+  }, [toast])
+
+  const retrySee = useCallback((job) => {
+    const payload = job.payload || {}
+    if (payload.action_seq == null) {
+      throw new Error('Este job não tem os dados necessários para uma nova tentativa.')
+    }
+    return requestSee({
+      action_seq: payload.action_seq,
+      extra_prompt: payload.extra_prompt || undefined,
+      variation: payload.variation ?? 0,
+    })
+  }, [requestSee])
+
+  const doSee = async (variation = 0) => {
+    const target = [...(actions || [])].reverse().find(
+      (a) => a.type === 'continue' || a.type === 'start' || a.type === 'story',
+    )
+    if (!target || seeing || generating) return
+    setSeeOpen(false)
+    try {
+      const extra = seePrompt.trim()
+      const r = await requestSee({
+        action_seq: target.seq,
+        extra_prompt: extra || undefined,
+        variation,
+      })
+      if (r?.action || r?.job_id) setSeePrompt('')
+    } catch (e) {
       toast(e.message)
     }
   }
@@ -1124,6 +1183,17 @@ export default function Play() {
 
           {/* Action Toolbar */}
           <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap justify-end">
+            <GenerationPreferences
+              adventure={adventure}
+              onSaved={(uiState) => setAdventure((current) => ({ ...current, ui_state: uiState }))}
+            />
+            <AdventureJobs
+              adventureId={id}
+              onJobsChange={handleJobsChange}
+              onRetrySee={retrySee}
+              watching={seeing}
+            />
+
             {generating ? (
               <>
                 {shareButton}
@@ -1525,10 +1595,22 @@ export default function Play() {
             </button>
             <button
               type="button"
-              onClick={doSee}
+              onClick={() => doSee(0)}
               className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition"
             >
               Pintar a cena
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const nextVariation = seeVariation + 1
+                setSeeVariation(nextVariation)
+                doSee(nextVariation)
+              }}
+              className="rounded-lg border border-accent-pri/50 px-3 py-1.5 text-xs font-semibold text-accent-pri hover:bg-accent-pri/10 transition"
+              title={`Gerar a variação ${seeVariation + 1} da cena`}
+            >
+              Gerar variação
             </button>
           </div>
         </Modal>

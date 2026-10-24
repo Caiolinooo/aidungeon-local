@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from unittest import mock
+
 import pytest
 
 from app import db, scripting
@@ -87,6 +89,12 @@ def modifier(t):
     initial = "the dark woods"
     res = scripting.run_output_modifier(script, initial)
     assert res == "The Dark Woods"
+
+def test_sandbox_uses_portable_spawn_context():
+    with mock.patch.object(scripting.mp, "get_context", wraps=scripting.mp.get_context) as get_context:
+        assert scripting.run_output_modifier("text = text.upper()", "hello") == "HELLO"
+
+    get_context.assert_called_once_with("spawn")
 
 
 # =============================================================================
