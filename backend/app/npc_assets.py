@@ -67,13 +67,22 @@ Every key must be present. Use an empty string when a text field is unknown. sta
 
 
 def _extract_json(text: str) -> dict:
-    """Parse tolerante: remove code fences e decodifica o primeiro objeto JSON
-    (raw_decode tolera lixo após o objeto, comum em respostas de LLM)."""
+    """Parse tolerante; recupera JSON truncado pelo teto de tokens."""
     cleaned = re.sub(r"```(?:json)?", "", text)
     start = cleaned.find("{")
     if start < 0:
         raise ValueError("resposta sem objeto JSON")
-    obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+    except json.JSONDecodeError:
+        from app.assistant import _salvage_truncated
+        repaired = re.sub(r",\s*([}\]])", r"\1", cleaned[start:])
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(repaired)
+        except json.JSONDecodeError:
+            obj = _salvage_truncated(cleaned)
+            if obj is None:
+                raise
     if not isinstance(obj, dict):
         raise ValueError("resposta não é um objeto JSON")
     return obj
@@ -223,7 +232,7 @@ def _complete_sheet(llm_cfg: dict, *, title: str, entry: str, sheet: dict,
             title, entry, sheet, story=story, card_type=card_type)},
     ]
     content = llm_client.chat_completion(
-        llm_cfg, messages, role=role, temperature=0.4, max_tokens=600, transport=transport,
+        llm_cfg, messages, role=role, temperature=0.4, max_tokens=1200, transport=transport,
     )
     try:
         data = _extract_json(content)
