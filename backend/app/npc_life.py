@@ -74,6 +74,10 @@ def write_life(sheet: dict, state: dict) -> dict:
     }
     return updated
 
+def _can_act(card: dict) -> bool:
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    return str(sheet.get("status") or "").strip().lower() not in ("dead", "missing")
+
 
 def add_memory(conn, adventure_id: str, card_id: str, kind: str, text: str,
                mood: str = "") -> dict:
@@ -222,7 +226,7 @@ def run_mind(adventure_id: str, transport: Any = None) -> dict:
                 return {"updated": 0}
             cards = [
                 card for card in db.list_cards(conn, adventure_id)
-                if card.get("type") == "character"
+                if card.get("type") == "character" and _can_act(card)
             ]
             if not cards:
                 return {"updated": 0}
@@ -245,7 +249,7 @@ def run_mind(adventure_id: str, transport: Any = None) -> dict:
         with db.session() as conn:
             fresh = [
                 card for card in db.list_cards(conn, adventure_id)
-                if card.get("type") == "character"
+                if card.get("type") == "character" and _can_act(card)
             ]
             for item in items:
                 if not isinstance(item, dict):
@@ -263,6 +267,8 @@ def run_mind(adventure_id: str, transport: Any = None) -> dict:
 
 def _tick_one(adventure_id: str, card: dict, llm_cfg: dict, *, day: int,
               reflection_after: int, transport: Any) -> None:
+    if not _can_act(card):
+        return
     with db.session() as conn:
         count = _memory_count(conn, adventure_id, card["id"])
         memories = recent_for_cards(conn, adventure_id, [card["id"]])
@@ -291,6 +297,8 @@ def _tick_one(adventure_id: str, card: dict, llm_cfg: dict, *, day: int,
     reflection = " ".join(str(data.get("reflection") or "").split())[:400]
     with db.session() as conn:
         current = db.get_card(conn, adventure_id, card["id"]) or card
+        if not _can_act(current):
+            return
         sheet = npc_assets.parse_sheet(current.get("sheet") or "")
         if event:
             add_memory(conn, adventure_id, card["id"], "event", event, mood)
@@ -319,7 +327,7 @@ def tick_day(adventure_id: str, transport: Any = None) -> dict:
         db.update_adventure_life(conn, adventure_id, day=day, tick_seq=seq)
         cards = [
             card for card in db.list_cards(conn, adventure_id)
-            if card.get("type") == "character"
+            if card.get("type") == "character" and _can_act(card)
         ]
         llm_cfg = settings_store.effective_llm_settings(conn)
     life_cfg = settings_store.load_file_settings().get("life") or {}

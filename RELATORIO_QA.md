@@ -206,3 +206,17 @@ python -c "import yaml; yaml.safe_load(open('../docs/openapi.yaml', encoding='ut
 
 Este relatório não declara o simulador completo. Esse marco exige todos os gates
 do `PLANO.md §12.1`, não apenas a suíte atual.
+
+## 11. Dinamismo, livefeed e UI v0.13.0 — 2026-10-25
+
+- **1060 verificações verdes**: 1058 aprovações na suíte completa e os dois casos
+  restantes (rotação de vez e atividade da rotina) corrigidos e reexecutados; 4 skips.
+- Build concluído em 16,8 s após validação do novo `LiveFeed.jsx`.
+- Reprodução real em 1568×747: feed principal caía para 48 px com o GamePanel aberto.
+  Painel, backdrop e dock foram corrigidos com altura por viewport e scroll próprio.
+- Event log durável com cursor separado de tokens, replay e `reset_required`; regressão
+  de `turn_changed` após tokens incluída nos testes.
+- Autonomia com ticks idempotentes, play/pause/speed e step manual. Cada segundo avança
+  `speed` minutos lógicos; mortos/ausentes não participam das rotinas.
+- OpenAPI documenta playback, step e histórico. Roadmap permanece parcial em L1–L3;
+  undo total, cobertura de todos os domínios e agendas/utilidade continuam pendentes.

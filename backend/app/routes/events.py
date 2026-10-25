@@ -63,20 +63,75 @@ def _last_event_id(request: Request, query_value: int | None) -> int | None:
     return query_value
 
 
-@router.get("/{adventure_id}/events")
-def adventure_events(adventure_id: str, request: Request,
-                     token: str | None = Query(None),
-                     last_event_id: int | None = Query(None)) -> StreamingResponse:
+@router.get("/{adventure_id}/events/history")
+def adventure_event_history(adventure_id: str, request: Request,
+                            token: str | None = Query(None),
+                            after: int = Query(0, ge=0),
+                            limit: int = Query(100, ge=1, le=500)) -> dict:
+    """Página ascendente e estável do log; `after` é um event_id exclusivo."""
     user = _user(request, token)
     with db.session() as conn:
         if db.get_adventure(conn, adventure_id) is None \
                 or not access.adventure_visible(conn, user, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
-    subscription = events.subscribe(adventure_id, _last_event_id(request, last_event_id))
+        page, has_more = events.list_history(
+            conn, adventure_id, after=after, limit=limit)
+        bounds = conn.execute(
+            "SELECT MIN(event_id) AS first_id, MAX(event_id) AS last_id"
+            " FROM world_events WHERE adventure_id=?", (adventure_id,),
+        ).fetchone()
+    latest = int(bounds["last_id"] or 0)
+    first = bounds["first_id"]
+    reset_required = after > latest or (first is not None and after < int(first) - 1)
+    return {
+        "events": page,
+        "next_cursor": page[-1]["event_id"] if page else after,
+        "has_more": has_more,
+        "latest_event_id": latest,
+        "reset_required": reset_required,
+    }
+
+
+@router.get("/{adventure_id}/events")
+def adventure_events(adventure_id: str, request: Request,
+                     token: str | None = Query(None),
+                     last_event_id: int | None = Query(None)) -> StreamingResponse:
+    user = _user(request, token)
+    cursor = _last_event_id(request, last_event_id)
+    snapshot = None
+    with db.session() as conn:
+        if db.get_adventure(conn, adventure_id) is None \
+                or not access.adventure_visible(conn, user, adventure_id):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        if cursor is None:
+            row = conn.execute(
+                "SELECT MAX(event_id) AS last_id FROM world_events WHERE adventure_id=?",
+                (adventure_id,),
+            ).fetchone()
+            latest = int(row["last_id"] or 0)
+            backlog = []
+            reset_required = False
+        else:
+            backlog, reset_required, latest = events.replay(
+                conn, adventure_id, cursor)
+            if reset_required:
+                snapshot = db.adventure_state(conn, adventure_id)
+    subscription = events.subscribe(
+        adventure_id, latest if reset_required else cursor,
+        backlog=backlog, since=latest if cursor is None else None,
+    )
     breaker = llm_scheduler.snapshot()["breaker"]
 
     async def stream():
         try:
+            if reset_required:
+                data = json.dumps({
+                    "reason": "cursor_expired",
+                    "cursor": cursor,
+                    "latest_event_id": latest,
+                    "snapshot": snapshot,
+                }, ensure_ascii=False, separators=(",", ":"))
+                yield f"event: reset_required\ndata: {data}\n\n"
             # `ready` fixa o Last-Event-ID do navegador desde já: cair antes do
             # primeiro evento não pode perder o que sair até a reconexão.
             yield f"retry: 3000\nid: {subscription.since}\nevent: ready\ndata: {{}}\n\n"

@@ -394,8 +394,8 @@ export default function GamePanel({
   }
 
   return (
-    <div className="border-t border-subtle bg-surface/95 backdrop-blur">
-      <div className="mx-auto max-w-3xl px-3 py-2">
+    <div className="max-h-[min(22rem,40vh)] w-full min-w-0 max-w-full shrink-0 overflow-y-auto overscroll-y-contain border-t border-subtle bg-surface/95 backdrop-blur">
+      <div className="mx-auto w-full max-w-6xl px-3 py-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
             Game controls
@@ -420,8 +420,8 @@ export default function GamePanel({
           )}
         </div>
         <SceneControls state={state} disabled={disabled} onSend={onSend} />
-        {/* mobile: cards em fila rolável; desktop: grade de 2 colunas */}
-        <div className="mt-2 flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible">
+        {/* mobile: cards em fila rolável; desktop: grade conforme a largura disponível */}
+        <div className="mt-2 flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] sm:overflow-visible">
 
           {widgets.map((widget) => (
             <section

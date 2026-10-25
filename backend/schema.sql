@@ -274,3 +274,55 @@ CREATE TABLE IF NOT EXISTS cloned_voices (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloned_voices_name
   ON cloned_voices(name COLLATE NOCASE);
 
+-- Log durável do mundo e revisões (migration 030).
+CREATE TABLE world_events (
+  adventure_id TEXT NOT NULL REFERENCES adventures(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL,
+  state_revision INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  actor TEXT NOT NULL DEFAULT '',
+  entity_id TEXT NOT NULL DEFAULT '',
+  turn_seq INTEGER,
+  generation_id TEXT NOT NULL DEFAULT '',
+  correlation_id TEXT NOT NULL DEFAULT '',
+  causation_id INTEGER,
+  sim_day INTEGER,
+  sim_minute INTEGER,
+  created_at TEXT NOT NULL,
+  idempotency_key TEXT,
+  PRIMARY KEY (adventure_id, event_id),
+  UNIQUE (adventure_id, idempotency_key)
+);
+CREATE INDEX idx_world_events_replay
+  ON world_events(adventure_id, event_id);
+CREATE INDEX idx_world_events_causation
+  ON world_events(adventure_id, causation_id);
+
+CREATE TABLE world_event_counters (
+  adventure_id TEXT PRIMARY KEY REFERENCES adventures(id) ON DELETE CASCADE,
+  last_event_id INTEGER NOT NULL DEFAULT 0,
+  state_revision INTEGER NOT NULL DEFAULT 0
+);
+
+-- Tempo autônomo, leases e deduplicação de ticks (migration 031).
+CREATE TABLE sim_runtime(
+  adventure_id TEXT PRIMARY KEY REFERENCES adventures(id) ON DELETE CASCADE,
+  running INTEGER NOT NULL DEFAULT 0,
+  speed INTEGER NOT NULL DEFAULT 1 CHECK(speed IN (1, 4, 20)),
+  tick_seq INTEGER NOT NULL DEFAULT 0,
+  active_tick_id TEXT NOT NULL DEFAULT '',
+  lease_owner TEXT NOT NULL DEFAULT '',
+  lease_until REAL NOT NULL DEFAULT 0,
+  updated_at TEXT
+);
+CREATE TABLE sim_ticks(
+  adventure_id TEXT NOT NULL REFERENCES adventures(id) ON DELETE CASCADE,
+  tick_id TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  minute INTEGER NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT,
+  PRIMARY KEY(adventure_id, tick_id)
+);
+

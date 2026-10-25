@@ -141,6 +141,12 @@ export const api = {
     request(`/adventures/${id}/sim/life`, { method: 'PUT', body: { enabled, wage_per_hour: wage } }),
   simAdvance: (id, minutes, activity) =>
     request(`/adventures/${id}/sim/life/advance`, { method: 'POST', body: { minutes, activity } }),
+  simSetPlayback: (id, running, speed) =>
+    request(`/adventures/${id}/sim/life/playback`, {
+      method: 'PUT', body: { running, speed },
+    }),
+  simStep: (id, minutes = 60) =>
+    request(`/adventures/${id}/sim/life/step`, { method: 'POST', body: { minutes } }),
   simPutActor: (id, body) =>
     request(`/adventures/${id}/sim/actor`, { method: 'PUT', body }),
   simRoll: (id, expr, mode = '') =>
@@ -158,6 +164,8 @@ export const api = {
   // ------------------------------------------------------------ adventures
   listAdventures: () => request('/adventures'),
   getAdventure: (id) => request(`/adventures/${id}`),
+  getEventHistory: (id, { after = 0, limit = 100 } = {}) =>
+    request(`/adventures/${id}/events/history${qs({ after, limit })}`),
   createAdventure: (payload) => request('/adventures', { method: 'POST', body: payload }),
   createAdventureFromDraft: (payload) =>
     request('/adventures/from-draft', { method: 'POST', body: payload }),

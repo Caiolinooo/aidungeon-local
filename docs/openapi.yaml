@@ -1993,6 +1993,109 @@ paths:
                 $ref: '#/components/schemas/ProviderHealth'
 
   # ------------------------------------------------------------------ rulesets
+  /api/adventures/{adventureId}/sim/life/playback:
+    put:
+      tags: [sim]
+      summary: Iniciar, pausar ou alterar velocidade do tempo autônomo
+      operationId: putLifePlayback
+      description: Sem chamada LLM. Default pausado, 1×; cada segundo avança speed minutos lógicos.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [running]
+              properties:
+                running:
+                  type: boolean
+                speed:
+                  type: integer
+                  enum: [1, 4, 20]
+      responses:
+        '200':
+          description: Estado do simulador, incluindo life.running e life.speed.
+          content:
+            application/json:
+              schema:
+                type: object
+        '409':
+          description: Modo Vida desativado.
+
+  /api/adventures/{adventureId}/sim/life/step:
+    post:
+      tags: [sim]
+      summary: Avançar o tempo manualmente de forma idempotente
+      operationId: stepLife
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 60
+      responses:
+        '200':
+          description: Estado após o avanço.
+          content:
+            application/json:
+              schema:
+                type: object
+        '409':
+          description: Modo Vida desativado.
+
+  /api/adventures/{adventureId}/events/history:
+    get:
+      tags: [events]
+      summary: Histórico durável do livefeed por cursor
+      operationId: getEventHistory
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: after
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Página ordenada de eventos e estado do cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                  next_cursor:
+                    type: integer
+                  has_more:
+                    type: boolean
+                  latest_event_id:
+                    type: integer
+                  reset_required:
+                    type: boolean
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/rulesets:
     get:
       tags: [rulesets]

@@ -280,6 +280,44 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
           <div className="font-semibold">
             Dia {life.day} ({life.weekday}, {life.season}), {life.clock}
           </div>
+          {lifeOn && (
+            <div className="flex flex-wrap items-end gap-2 rounded-lg bg-elevated p-2">
+              <button
+                type="button"
+                disabled={busy}
+                aria-label={life.running ? 'Pausar tempo automático' : 'Iniciar tempo automático'}
+                onClick={() => run(() => api.simSetPlayback(id, !life.running, life.speed || 1))}
+                className="rounded-lg border border-subtle px-2 py-1 text-[11px] hover:bg-surface disabled:opacity-40"
+              >
+                {life.running ? 'Pausar' : 'Iniciar'}
+              </button>
+              <label className="flex flex-col gap-0.5 text-[10px] text-muted">
+                Velocidade
+                <select
+                  aria-label="Velocidade do tempo automático"
+                  value={life.speed || 1}
+                  disabled={busy}
+                  onChange={(e) => run(() => api.simSetPlayback(id, !!life.running, Number(e.target.value)))}
+                  className="rounded-lg border border-subtle bg-surface px-2 py-1 text-[11px] text-primary outline-none focus:border-accent-pri"
+                >
+                  <option value={1}>1×</option>
+                  <option value={4}>4×</option>
+                  <option value={20}>20×</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => run(() => api.simStep(id, 60))}
+                className="rounded-lg border border-subtle px-2 py-1 text-[11px] hover:bg-surface disabled:opacity-40"
+              >
+                Avançar 1 hora
+              </button>
+              <span aria-live="polite" className="pb-1 text-[10px] text-muted">
+                {life.running ? 'Tempo automático ativo' : 'Tempo automático pausado'}
+              </span>
+            </div>
+          )}
           {needs && lifeOn && (
             <div className="flex flex-col gap-1.5">
               <div className="text-[11px] text-muted">Humor {moodOf(needs)}</div>

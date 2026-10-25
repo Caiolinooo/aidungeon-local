@@ -439,7 +439,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                        raw_query_text: str = "",
                        transport: Any,
                        user: str = "",
-                       cancel: threading.Event | None = None) -> Iterator[dict]:
+                       cancel: threading.Event | None = None,
+                       generation_id: str = "") -> Iterator[dict]:
     """Gerador de eventos. Contexto = ações atuais (retry: sem a antiga)."""
 
     def events() -> Iterator[dict]:
@@ -495,7 +496,16 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     refusal = outcome["refusal"]
                     with appending(adventure_id) as conn:
                         db.delete_action(conn, player_action["id"])
-                    _publish_live(adventure_id, "undo", {})
+                        metadata = {
+                            "actor": user, "entity_id": str(player_action["id"]),
+                            "turn_seq": player_action["seq"],
+                            "generation_id": generation_id,
+                        }
+                        events_bus.record(conn, adventure_id, "undo", {}, **metadata)
+                        events_bus.record(
+                            conn, adventure_id, "generation_failed",
+                            {"message": refusal, "code": "rules_refused"}, **metadata,
+                        )
                     yield {"event": "refused", "data": {
                         "action_id": player_action["id"], "reason": refusal,
                     }}
@@ -623,8 +633,16 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.
                 _revert_applied_rules(adventure_id, applied_action_id)
-                yield {"event": "error", "data": {
-                    "message": "the narrator returned no story text; nothing was saved, try again"}}
+                source = player_action or retry_of or {}
+                payload = {
+                    "message": "the narrator returned no story text; nothing was saved, try again",
+                }
+                events_bus.publish(
+                    adventure_id, "generation_failed", payload,
+                    actor=user, entity_id=str(source.get("id") or ""),
+                    turn_seq=source.get("seq"), generation_id=generation_id,
+                )
+                yield {"event": "error", "data": payload}
                 return
 
             if cancel is not None and cancel.is_set():
@@ -645,7 +663,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                         db.merge_action_rules(
                             conn, player_action["id"], {"quality_flags": quality})
                         player_action["quality_flags"] = quality
-                _publish_live(adventure_id, "action", action)
+                events_bus.record(
+                    conn, adventure_id, "action", action,
+                    actor="assistant", entity_id=str(action["id"]),
+                    turn_seq=action["seq"], generation_id=generation_id,
+                )
                 # Pesos no mesmo commit da prosa: o turno seguinte já lê
                 # os números novos. Falha aqui não apaga a narração.
                 try:
@@ -659,6 +681,18 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 except Exception:
                     log.warning("npc_gate: histórico não gravado", exc_info=True)
                 new_turn = _advance_committed_turn(conn, adventure_id, player_action, user)
+                if new_turn is not None:
+                    events_bus.record(
+                        conn, adventure_id, "turn_changed", {"turn_user": new_turn},
+                        entity_id=str(action["id"]), turn_seq=action["seq"],
+                        generation_id=generation_id,
+                    )
+                events_bus.record(
+                    conn, adventure_id, "turn_done",
+                    {"action_id": action["id"], "seq": action["seq"]},
+                    actor="assistant", entity_id=str(action["id"]),
+                    turn_seq=action["seq"], generation_id=generation_id,
+                )
 
             data: dict[str, Any] = {"action": action}
             if player_action is not None:
@@ -674,27 +708,46 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
             release_generation_lock(adventure_id)
             lock_released = True
-            if new_turn is not None:
-                events_bus.publish(adventure_id, "turn_changed", {"turn_user": new_turn})
-            events_bus.publish(adventure_id, "turn_done",
-                               {"action_id": action["id"], "seq": action["seq"]})
             _spawn_post_turn(adventure_id, transport)
             yield {"event": "done", "data": data}
         except llm_client.LlmCancelled as exc:
             _revert_applied_rules(adventure_id, applied_action_id)
+            source = player_action or retry_of or {}
+            metadata = {
+                "actor": user, "entity_id": str(source.get("id") or ""),
+                "turn_seq": source.get("seq"), "generation_id": generation_id,
+            }
+            payload = {"message": exc.message, "code": "llm_cancelled"}
             if player_action is not None and retry_of is None:
                 with appending(adventure_id) as conn:
                     db.delete_action(conn, player_action["id"])
-                _publish_live(adventure_id, "undo", {})
-            yield {"event": "error", "data": {
-                "message": exc.message, "code": "llm_cancelled"}}
+                    events_bus.record(conn, adventure_id, "undo", {}, **metadata)
+                    events_bus.record(
+                        conn, adventure_id, "generation_cancelled", payload, **metadata)
+            else:
+                events_bus.publish(adventure_id, "generation_cancelled", payload, **metadata)
+            yield {"event": "error", "data": payload}
         except llm_client.LlmError as exc:
             _revert_applied_rules(adventure_id, applied_action_id)
-            yield {"event": "error", "data": {
-                "message": exc.message, "code": exc.code}}
+            source = player_action or retry_of or {}
+            payload = {"message": exc.message, "code": exc.code}
+            events_bus.publish(
+                adventure_id, "generation_failed", payload,
+                actor=user, entity_id=str(source.get("id") or ""),
+                turn_seq=source.get("seq"), generation_id=generation_id,
+            )
+            yield {"event": "error", "data": payload}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
             _revert_applied_rules(adventure_id, applied_action_id)
-            yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
+            source = player_action or retry_of or {}
+            payload = {"message": f"{type(exc).__name__}: {exc}",
+                       "code": "generation_failed"}
+            events_bus.publish(
+                adventure_id, "generation_failed", payload,
+                actor=user, entity_id=str(source.get("id") or ""),
+                turn_seq=source.get("seq"), generation_id=generation_id,
+            )
+            yield {"event": "error", "data": {"message": payload["message"]}}
         finally:
             if not lock_released:
                 release_generation_lock(adventure_id)
@@ -717,6 +770,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+    generation_id = db.new_id()
     try:
         cancel_post_turn(adventure_id)
         # Scripting hook: input modifier (before input processing)
@@ -732,14 +786,19 @@ def handle_action(adventure_id: str, type_: str, text: str,
                                           _format_player_text(type_, text),
                                           actor=user)
             _retry_counts.pop((adventure_id, player_action["seq"]), None)
-        _publish_live(adventure_id, "player_action", player_action)
+            events_bus.record(
+                conn, adventure_id, "player_action", player_action,
+                actor=user, entity_id=str(player_action["id"]),
+                turn_seq=player_action["seq"], generation_id=generation_id,
+            )
     except Exception:
         release_generation_lock(adventure_id)
         raise
     return _stream_generation(adventure_id, player_action=player_action,
                               retry_of=None, retry_count=0,
                               web_search=web_search, raw_query_text=text,
-                              transport=transport, user=user, cancel=cancel)
+                              transport=transport, user=user, cancel=cancel,
+                              generation_id=generation_id)
 
 
 def _meta_command_events(adventure_id: str, cmd: meta_commands.MetaCommand,
@@ -763,7 +822,7 @@ def handle_continue(adventure_id: str, transport: Any = None, *,
     cancel_post_turn(adventure_id)
     return _stream_generation(adventure_id, player_action=None,
                               retry_of=None, retry_count=0, transport=transport,
-                              cancel=cancel)
+                              cancel=cancel, generation_id=db.new_id())
 
 
 def handle_retry(adventure_id: str, transport: Any = None, *,
@@ -793,7 +852,8 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
 
     return _stream_generation(adventure_id, player_action=None,
                               retry_of=old, retry_count=effective_count,
-                              transport=transport, cancel=cancel)
+                              transport=transport, cancel=cancel,
+                              generation_id=db.new_id())
 
 
 def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> int:
@@ -870,7 +930,10 @@ def handle_undo(adventure_id: str) -> dict:
             "last_action": remaining[-1] if remaining else None,
             "action_count": len(remaining),
         }
-    _publish_live(adventure_id, "undo", {})
+        events_bus.record(
+            conn, adventure_id, "undo", {},
+            entity_id=str(last["id"]), turn_seq=last["seq"],
+        )
     return result
 
 
@@ -884,6 +947,10 @@ def handle_edit(action_id: int, text: str) -> dict:
         db.update_action_text(conn, action_id, text)
         db.touch_adventure(conn, action["adventure_id"])
         edited = db.get_action(conn, action_id)
+        events_bus.record(
+            conn, action["adventure_id"], "action_edited", edited,
+            entity_id=str(action_id), turn_seq=action["seq"],
+        )
     # O cache das choices é preso a (id, seq): texto editado não muda a chave.
     choices_service.forget(action["adventure_id"])
     return edited

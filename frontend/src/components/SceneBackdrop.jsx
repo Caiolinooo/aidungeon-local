@@ -181,7 +181,7 @@ export default function SceneBackdrop({
 
   return (
     <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
-      scene.notice ? 'min-h-48 lg:min-h-60 2xl:min-h-72' : 'h-40 sm:h-52 lg:h-60 2xl:h-72'
+      scene.notice ? 'min-h-[clamp(10rem,28vh,20rem)]' : 'h-[clamp(8rem,24vh,18rem)]'
     }`}>
       {backdropUrl && (
         <div

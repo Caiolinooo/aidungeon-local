@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -10,7 +11,7 @@ from pydantic import BaseModel, Field
 from app import auth, db, events, npc_assets
 from app.errors import GameError
 from app.routes.adventures import _managed_adventure, _visible_adventure
-from app.sim import dice, intent, life, packs, rules, state
+from app.sim import dice, intent, life, packs, rules, runtime, state
 
 router = APIRouter()
 
@@ -27,6 +28,14 @@ class LifeBody(BaseModel):
 class AdvanceBody(BaseModel):
     minutes: int = Field(ge=1, le=720)
     activity: str
+
+class PlaybackBody(BaseModel):
+    running: bool
+    speed: Literal[1, 4, 20] | None = None
+
+
+class StepBody(BaseModel):
+    minutes: int = Field(ge=1, le=60)
 
 
 class InventoryRow(BaseModel):
@@ -73,7 +82,7 @@ def _legacy_inventory(ui_state: dict) -> list | None:
     return None
 
 
-def _clock_view(sim: dict, user: str) -> dict | None:
+def _clock_view(sim: dict, user: str, playback: dict | None = None) -> dict | None:
     life_state = sim.get("life") if isinstance(sim.get("life"), dict) else None
     if not life_state:
         return None
@@ -117,8 +126,11 @@ def _clock_view(sim: dict, user: str) -> dict | None:
                 "clock": str(item.get("clock") or ""),
                 "text": text,
             })
+    playback = playback or {"running": False, "speed": 1}
     return {
         "enabled": bool(life_state.get("enabled")),
+        "running": bool(playback.get("running")),
+        "speed": int(playback.get("speed") or 1),
         "day": day,
         "minute": minute,
         "clock": life.clock(minute),
@@ -130,7 +142,7 @@ def _clock_view(sim: dict, user: str) -> dict | None:
     }
 
 
-def _view(adventure: dict, user: str) -> dict:
+def _view(adventure: dict, user: str, conn=None) -> dict:
     sim = state.load(adventure)
     key = state.actor_key(user)
     actor = (sim.get("actors") or {}).get(key)
@@ -143,7 +155,9 @@ def _view(adventure: dict, user: str) -> dict:
         "packs": packs.list_packs(),
         "actor": actor if isinstance(actor, dict) else None,
         "foes": foes,
-        "life": _clock_view(sim, user),
+        "life": _clock_view(
+            sim, user, runtime.get_playback(conn, adventure["id"]) if conn is not None else None
+        ),
     }
 
 
@@ -159,7 +173,7 @@ def _sheet_stats(conn, adventure_id: str, user: str) -> tuple[dict | None, str]:
 def get_sim(adventure_id: str, info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         adventure = _visible_adventure(conn, adventure_id, info.user)
-        return _view(adventure, info.user)
+        return _view(adventure, info.user, conn)
 
 
 @router.put("/{adventure_id}/sim/pack")
@@ -181,7 +195,7 @@ def put_pack(adventure_id: str, body: PackBody,
             )
         db.set_sim_state(conn, adventure_id, sim)
         saved = db.get_adventure(conn, adventure_id) or adventure
-        payload = _view(saved, info.user)
+        payload = _view(saved, info.user, conn)
     _publish(adventure_id)
     return payload
 
@@ -202,9 +216,10 @@ def put_life(adventure_id: str, body: LifeBody,
                 sim["life"]["wage_per_hour"] = wage
         else:
             life.disable(sim)
+            runtime.set_playback(conn, adventure_id, False)
         db.set_sim_state(conn, adventure_id, sim)
         saved = db.get_adventure(conn, adventure_id) or adventure
-        payload = _view(saved, info.user)
+        payload = _view(saved, info.user, conn)
     _publish(adventure_id)
     return payload
 
@@ -234,9 +249,44 @@ def post_advance(adventure_id: str, body: AdvanceBody,
             jobs.enqueue_day_tick(conn, adventure_id, reason="clock")
         db.set_sim_state(conn, adventure_id, sim)
         saved = db.get_adventure(conn, adventure_id) or adventure
-        payload = _view(saved, info.user)
+        payload = _view(saved, info.user, conn)
     _publish(adventure_id)
     return payload
+
+
+@router.put("/{adventure_id}/sim/life/playback")
+def put_playback(adventure_id: str, body: PlaybackBody,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    from app import game_engine
+    with game_engine.appending(adventure_id) as conn:
+        adventure = _managed_adventure(conn, adventure_id, info.user)
+        sim = state.load(adventure)
+        life_state = sim.get("life") if isinstance(sim.get("life"), dict) else None
+        if not life_state or not life_state.get("enabled"):
+            raise GameError(409, "life_disabled", "life mode is off")
+        runtime.set_playback(conn, adventure_id, body.running, body.speed)
+        saved = db.get_adventure(conn, adventure_id) or adventure
+        payload = _view(saved, info.user, conn)
+        playback = payload["life"]
+        created = events.record(
+            conn, adventure_id, "life_playback_changed",
+            {"running": playback["running"], "speed": playback["speed"]},
+            sim_day=playback["day"], sim_minute=playback["minute"],
+        )
+    events.publish(created)
+    _publish(adventure_id)
+    return payload
+
+
+@router.post("/{adventure_id}/sim/life/step")
+def post_step(adventure_id: str, body: StepBody,
+              info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+    runtime.run_tick(adventure_id, body.minutes, source="step")
+    with db.session() as conn:
+        saved = _visible_adventure(conn, adventure_id, info.user)
+        return _view(saved, info.user, conn)
 
 
 @router.put("/{adventure_id}/sim/actor")
@@ -286,7 +336,7 @@ def put_actor(adventure_id: str, body: ActorBody,
             actor["xp"] = max(0, min(1000000, int(body.xp)))
         db.set_sim_state(conn, adventure_id, sim)
         saved = db.get_adventure(conn, adventure_id) or adventure
-        payload = _view(saved, info.user)
+        payload = _view(saved, info.user, conn)
     _publish(adventure_id)
     return payload
 
@@ -391,7 +441,7 @@ def post_action(adventure_id: str, body: ActionBody,
             })
         db.set_sim_state(conn, adventure_id, sim)
         saved = db.get_adventure(conn, adventure_id) or adventure
-        payload = _view(saved, info.user)
+        payload = _view(saved, info.user, conn)
         payload["resolution"] = {
             "steps": resolution.steps,
             "changes": resolution.changes,

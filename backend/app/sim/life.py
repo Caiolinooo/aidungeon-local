@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app import npc_assets
 NEEDS = ("fome", "energia", "higiene", "social", "diversao", "bexiga")
 NEED_START = 80
 NEED_LABELS_LOW = {
@@ -18,7 +19,7 @@ NEED_BANDS = {
     "energia": ("descansado", "cansado", "exausto"),
     "higiene": ("limpo", "sujo", "imundo"),
     "social": ("em companhia", "isolado", "sozinho"),
-    "diversao": ("entretido", "entediado", "aburrido"),
+    "diversao": ("entretido", "entediado", "entediado"),
     "bexiga": ("confortável", "apertado", "urgente"),
 }
 NEED_NAMES = {
@@ -178,14 +179,19 @@ def _sync_npcs(life: dict, cards: list[dict]) -> dict:
     if not isinstance(bucket, dict):
         bucket = {}
         life["npcs"] = bucket
+    active: set[str] = set()
     for card in cards or []:
         if (card.get("type") or "") != "character":
             continue
         if card.get("player_username"):
             continue
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        if str(sheet.get("status") or "").strip().lower() in ("dead", "missing"):
+            continue
         card_id = card.get("id")
         if not card_id:
             continue
+        active.add(str(card_id))
         current = bucket.get(card_id)
         if not isinstance(current, dict):
             current = {
@@ -198,6 +204,9 @@ def _sync_npcs(life: dict, cards: list[dict]) -> dict:
         elif not isinstance(current.get("needs"), dict):
             current["needs"] = _blank_needs()
         current["name"] = card.get("title") or current.get("name") or "NPC"
+    for card_id in list(bucket):
+        if str(card_id) not in active:
+            del bucket[card_id]
     return bucket
 
 

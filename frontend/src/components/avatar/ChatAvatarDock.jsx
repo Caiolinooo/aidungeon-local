@@ -130,7 +130,7 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
   if (present.length === 0) return null
 
   return (
-    <div className="absolute bottom-2 left-2 right-2 z-20 flex flex-row items-end gap-1 sm:bottom-auto sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end">
+    <div className="absolute bottom-2 left-2 right-2 z-20 flex min-w-0 flex-row items-end gap-1 sm:bottom-2 sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end">
       <button
         onClick={() => setCollapsed((c) => !c)}
         title={collapsed ? 'Mostrar avatares dos NPCs' : 'Esconder avatares dos NPCs'}
@@ -139,7 +139,7 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
         {collapsed ? `NPCs (${present.length})` : 'Hide'}
       </button>
       {!collapsed && (
-        <div className="flex flex-row gap-2 overflow-x-auto sm:flex-col sm:overflow-visible">
+        <div className="flex min-w-0 max-w-full flex-row gap-2 overflow-x-auto sm:min-h-0 sm:max-h-full sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-y-contain">
           {present.map((c) => (
             <DockAvatar
               key={c.id}

@@ -102,31 +102,45 @@ def wake() -> None:
 # ---------------------------------------------------------------- eventos
 def _progress(job: dict) -> None:
     events.publish(job["adventure_id"], "job_progress",
-                   {"job_id": job["id"], "type": job["type"], "status": job["status"]})
+                   {"job_id": job["id"], "type": job["type"], "status": job["status"]},
+                   entity_id=job["id"], correlation_id=job["id"])
 
 
 def _finish(job: dict, status: str, *, result: dict | None = None,
             error: str | None = None) -> bool:
     with db.session() as conn:
         finished = db.finish_job(conn, job["id"], status, result=result, error=error)
-    if finished:
-        _progress({**job, "status": status})
+        if finished:
+            events.record(
+                conn, job["adventure_id"], "job_progress",
+                {"job_id": job["id"], "type": job["type"], "status": status},
+                entity_id=job["id"], correlation_id=job["id"],
+                idempotency_key=f"job:{job['id']}:{status}",
+            )
     return finished
 
 # ------------------------------------------------------------- enfileirar
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
             payload: dict | None = None, priority: int = PRIORITY_BACKDROP,
             supersede_key: str | None = None) -> dict:
-    """Job novo (C5). Com `supersede_key`, cancela os pendentes antigos com a
-    mesma chave. Os eventos saem antes do commit de quem chamou."""
+    """Job novo (C5). Fila e eventos saem no commit de quem chamou."""
     job = db.insert_job(conn, adventure_id=adventure_id, type=type_, ref_id=ref_id or "",
                         payload=payload, priority=priority,
                         supersede_key=supersede_key or "")
     superseded = db.supersede_jobs(conn, supersede_key, job["id"]) if supersede_key else []
-    events.publish(adventure_id, "job_queued",
-                   {"job_id": job["id"], "type": type_, "ref_id": job["ref_id"]})
+    events.record(
+        conn, adventure_id, "job_queued",
+        {"job_id": job["id"], "type": type_, "ref_id": job["ref_id"]},
+        entity_id=job["id"], correlation_id=job["id"],
+        idempotency_key=f"job:{job['id']}:queued",
+    )
     for old in superseded:
-        _progress(old)
+        events.record(
+            conn, adventure_id, "job_progress",
+            {"job_id": old["id"], "type": old["type"], "status": old["status"]},
+            entity_id=old["id"], correlation_id=job["id"],
+            idempotency_key=f"job:{old['id']}:{old['status']}",
+        )
     wake()
     return job
 
@@ -295,8 +309,12 @@ def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dic
     with db.session() as conn:
         job = db.insert_job(conn, adventure_id=adventure_id, type="see_image",
                             payload=payload, priority=PRIORITY_SEE, status="preparing")
-    events.publish(adventure_id, "job_queued",
-                   {"job_id": job["id"], "type": "see_image", "ref_id": ""})
+        events.record(
+            conn, adventure_id, "job_queued",
+            {"job_id": job["id"], "type": "see_image", "ref_id": ""},
+            entity_id=job["id"], correlation_id=job["id"],
+            idempotency_key=f"job:{job['id']}:queued",
+        )
     threading.Thread(target=_prepare_see, args=(job, plan), name="see-prompt",
                      daemon=True).start()
     return job
@@ -328,10 +346,15 @@ def _fail_see(job: dict, code: str, message: str) -> None:
 
 
 def cancel(conn, job_id: str) -> dict | None:
-    """Cancela um job ativo e avisa no bus; None se já terminou."""
+    """Cancela um job ativo e grava seu evento no mesmo commit."""
     job = db.cancel_job(conn, job_id)
     if job is not None:
-        _progress(job)
+        events.record(
+            conn, job["adventure_id"], "job_progress",
+            {"job_id": job["id"], "type": job["type"], "status": job["status"]},
+            entity_id=job["id"], correlation_id=job["id"],
+            idempotency_key=f"job:{job['id']}:{job['status']}",
+        )
     return job
 
 

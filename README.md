@@ -11,6 +11,18 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.13.0)
+
+- **Livefeed durável**: `world_events` numera fatos e revisões por aventura,
+  com replay por cursor, `reset_required`, histórico paginado e painel de atividade
+  com filtros. Tokens continuam fora do log. Ações, jobs e vida têm correlação.
+- **Tempo autônomo**: Modo Vida pode iniciar/pausar em 1×/4×/20× e avançar 1h.
+  Worker com lease e ticks idempotentes; cada segundo avança `speed` minutos
+  lógicos, sem chamar LLM. Mortos/ausentes não participam de rotinas ou reflexões.
+- **Layout e scroll**: GamePanel com largura/altura responsivas e scroll interno,
+  backdrop por viewport e dock de avatares rolável. Feed pagina 100 ações por lote,
+  reconcilia GETs fora de ordem e se recupera de EOF sem `done`/`error`.
+
 ## Funcionalidades (v0.12.1)
 
 - **Propriedade e administração**: cenários e clones têm dono; configurações

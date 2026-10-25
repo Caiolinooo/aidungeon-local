@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense, lazy } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, API_BASE } from '../api.js'
 import { getToken } from '../auth.js'
@@ -14,6 +14,7 @@ import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
 import AdventureJobs from '../components/AdventureJobs.jsx'
 import GenerationPreferences from '../components/GenerationPreferences.jsx'
+import LiveFeed from '../components/LiveFeed.jsx'
 import MiniHud from '../components/MiniHud.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { useTheme } from '../themeContext.jsx'
@@ -58,6 +59,57 @@ function isPlayerAction(action) {
   return action?.type === 'do' || action?.type === 'say' || action?.type === 'story'
 }
 
+
+function lastMatchingAction(list, predicate) {
+  if (!Array.isArray(list)) return null
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (predicate(list[i])) return list[i]
+  }
+  return null
+}
+function reconcileActions(current, incoming, baseline, removeMissing = false) {
+  const indices = new Map()
+  const incomingIndices = new Map()
+  const baselineIndices = new Map()
+  const idKey = (action) => action.id == null ? null : `id:${typeof action.id}:${action.id}`
+  const seqKey = (action) => action.seq == null ? null : `seq:${typeof action.seq}:${action.seq}`
+  const register = (map, action, index) => {
+    const byId = idKey(action)
+    const bySequence = seqKey(action)
+    if (byId) map.set(byId, index)
+    if (bySequence) map.set(bySequence, index)
+  }
+  const find = (map, action) => {
+    const byId = idKey(action)
+    if (byId && map.has(byId)) return map.get(byId)
+    const bySequence = seqKey(action)
+    return bySequence && map.has(bySequence) ? map.get(bySequence) : -1
+  }
+  incoming.forEach((action, index) => register(incomingIndices, action, index))
+  baseline.forEach((action, index) => register(baselineIndices, action, index))
+  const out = current.filter((action) => {
+    if (!removeMissing) return true
+    const baselineIndex = find(baselineIndices, action)
+    if (baselineIndex < 0 || action !== baseline[baselineIndex]) return true
+    return find(incomingIndices, action) >= 0
+  })
+  out.forEach((action, index) => register(indices, action, index))
+  for (const action of incoming) {
+    const index = find(indices, action)
+    if (index < 0) {
+      register(indices, action, out.length)
+      out.push(action)
+      continue
+    }
+    const baselineIndex = find(baselineIndices, out[index])
+    // Só o snapshot substitui uma ação que não mudou desde o início do GET.
+    if (baselineIndex >= 0 && out[index] === baseline[baselineIndex]) {
+      out[index] = action
+      register(indices, action, index)
+    }
+  }
+  return out.sort(bySeq)
+}
 function lastPlayerAction(list) {
   if (!Array.isArray(list)) return null
   for (let i = list.length - 1; i >= 0; i -= 1) {
@@ -187,6 +239,28 @@ function ActionCheckNote({ check }) {
   )
 }
 
+const FEED_PAGE_SIZE = 100
+
+const StoryFeedItem = memo(function StoryFeedItem({
+  action, check, rules, onEdit, disabled, isLatest, adventureId,
+}) {
+  return (
+    <div className="min-w-0">
+      <FeedItem
+        action={action}
+        onEdit={onEdit}
+        disabled={disabled}
+        isLatest={isLatest}
+        adventureId={adventureId}
+      />
+      {isPlayerAction(action) && check && <ActionCheckNote check={check} />}
+      {isPlayerAction(action) && (rules || (action.quality_flags || []).length > 0) && (
+        <RulesNote rules={rules} flags={action.quality_flags} />
+      )}
+    </div>
+  )
+})
+
 export default function Play() {
   const { id } = useParams()
   const toast = useToast()
@@ -194,6 +268,7 @@ export default function Play() {
 
   const [adventure, setAdventure] = useState(null)
   const [actions, setActions] = useState(null)
+  const [visibleCount, setVisibleCount] = useState(FEED_PAGE_SIZE)
   const [playerCard, setPlayerCard] = useState(null)
   const [sceneInfo, setSceneInfo] = useState(null)
   const [error, setError] = useState(null)
@@ -248,6 +323,8 @@ export default function Play() {
   const nearBottomRef = useRef(true)
   const newBlockIdRef = useRef(null)
   const initialScrollDone = useRef(false)
+  const pendingPrependRef = useRef(null)
+  const adventureRequestRef = useRef(0)
   const actionsRef = useRef(null)
   const generationPrefsRef = useRef({})
   const actionChecksRef = useRef({})
@@ -262,6 +339,12 @@ export default function Play() {
   actionsRef.current = actions
   generationPrefsRef.current = adventure?.ui_state?._generation || {}
   actionChecksRef.current = actionChecks
+  const feedMounted = !!adventure && actions !== null
+  const visibleStart = Math.max(0, (actions?.length ?? 0) - visibleCount)
+  const visibleActions = useMemo(
+    () => (actions ?? []).slice(visibleStart),
+    [actions, visibleStart],
+  )
   const turnBlocked = !!(
     adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
   )
@@ -283,10 +366,12 @@ export default function Play() {
 
   // Load adventure state
   const load = useCallback(async () => {
+    const requestId = ++adventureRequestRef.current
     setError(null)
     readyRef.current = false
     try {
       const st = await api.getAdventure(id)
+      if (requestId !== adventureRequestRef.current) return
       const list = [...(st.actions ?? [])].sort(bySeq)
       seenIdsRef.current = new Set(list.map((a) => a.id).filter((x) => x != null))
       livePlayerIdsRef.current = new Set()
@@ -301,6 +386,7 @@ export default function Play() {
       setLive('')
       readyRef.current = true
     } catch (e) {
+      if (requestId !== adventureRequestRef.current) return
       setError(e)
       setAdventure(null)
       setActions([])
@@ -313,13 +399,19 @@ export default function Play() {
   const refreshAdventure = useCallback((opts) => {
     const replaceActions = !opts || opts.replaceActions !== false
     const forceActions = !!opts?.forceActions
+    const requestId = ++adventureRequestRef.current
+    const baseline = actionsRef.current ?? []
     return api.getAdventure(id).then((st) => {
+      if (requestId !== adventureRequestRef.current) return null
       setAdventure((prev) => (prev ? { ...prev, ...st } : st))
       if (!replaceActions) return st
       if (genRef.current && !forceActions) return st
       const list = [...(st.actions ?? [])].sort(bySeq)
-      seenIdsRef.current = new Set(list.map((a) => a.id).filter((x) => x != null))
-      setActions(list)
+      setActions((prev) => {
+        const next = reconcileActions(prev ?? [], list, baseline, forceActions)
+        seenIdsRef.current = new Set(next.map((a) => a.id).filter((x) => x != null))
+        return next
+      })
       return st
     }).catch(() => null)
   }, [id])
@@ -428,6 +520,7 @@ export default function Play() {
       if (!readyRef.current) return
       const data = parse(ev)
       if (!data || typeof data !== 'object' || data.id == null) return
+      fan('player_action', data)
       const actor = typeof data.actor === 'string' ? data.actor : ''
       if (actor === currentUserRef.current) return
       if (seenIdsRef.current.has(data.id)) return
@@ -452,6 +545,7 @@ export default function Play() {
     const onAction = (ev) => {
       if (!readyRef.current) return
       const data = parse(ev)
+      fan('action', data)
       setLive('')
       if (genRef.current) return
       if (!data || typeof data !== 'object' || data.id == null) return
@@ -497,6 +591,7 @@ export default function Play() {
     }
     const onJobChanged = (ev) => {
       fan('job_changed', parse(ev))
+      fan('job_progress', parse(ev))
     }
     const onBackdrop = (ev) => {
       fan('backdrop_ready', parse(ev))
@@ -579,6 +674,16 @@ export default function Play() {
     es.addEventListener('character_changed', onCharacter)
     es.addEventListener('adventure_updated', onAdventureUpdated)
     es.addEventListener('ui_changed', onUiChanged)
+    const onLifeTick = (ev) => {
+      fan('life_tick_completed', parse(ev))
+      setSimVersion((v) => v + 1)
+    }
+    const onResetRequired = (ev) => {
+      fan('reset_required', parse(ev))
+      refreshAdventure({ forceActions: true })
+    }
+    es.addEventListener('life_tick_completed', onLifeTick)
+    es.addEventListener('reset_required', onResetRequired)
     const onSimChanged = () => {
       setSimVersion((v) => v + 1)
       if (!genRef.current) refreshAdventure({ replaceActions: false })
@@ -612,6 +717,8 @@ export default function Play() {
       es.removeEventListener('adventure_updated', onAdventureUpdated)
       es.removeEventListener('ui_changed', onUiChanged)
       es.removeEventListener('undo', onUndo)
+      es.removeEventListener('life_tick_completed', onLifeTick)
+      es.removeEventListener('reset_required', onResetRequired)
       es.removeEventListener('sim_changed', onSimChanged)
       es.removeEventListener('rules_roll', onRulesRoll)
       es.close()
@@ -722,17 +829,41 @@ export default function Play() {
   useEffect(() => () => abortRef.current?.abort(), [])
 
   // Smart feed scroll
+  useEffect(() => {
+    initialScrollDone.current = false
+    newBlockIdRef.current = null
+    pendingPrependRef.current = null
+    nearBottomRef.current = true
+    setVisibleCount(FEED_PAGE_SIZE)
+  }, [id])
+
   const onFeedScroll = useCallback(() => {
     const el = feedRef.current
     if (!el) return
     nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }, [])
 
-  useEffect(() => {
+  const loadEarlier = useCallback(() => {
+    const el = feedRef.current
+    if (!el) return
+    pendingPrependRef.current = { height: el.scrollHeight, top: el.scrollTop }
+    nearBottomRef.current = false
+    const total = actionsRef.current?.length ?? 0
+    setVisibleCount((count) => Math.min(total, count + FEED_PAGE_SIZE))
+  }, [])
+
+  useLayoutEffect(() => {
     const el = feedRef.current
     if (!el || actions === null) return
+    const prepend = pendingPrependRef.current
+    if (prepend) {
+      pendingPrependRef.current = null
+      el.scrollTop = Math.max(0, el.scrollHeight - prepend.height + prepend.top)
+      return
+    }
     if (!initialScrollDone.current) {
       initialScrollDone.current = true
+      nearBottomRef.current = true
       el.scrollTop = el.scrollHeight
       return
     }
@@ -745,7 +876,20 @@ export default function Play() {
       return
     }
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [actions, gen?.text, seeing, live])
+  }, [actions, gen?.text, seeing, live, visibleCount])
+
+  useEffect(() => {
+    const el = feedRef.current
+    const content = el?.firstElementChild
+    if (!el || !content || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => {
+      if (initialScrollDone.current && nearBottomRef.current && !pendingPrependRef.current) {
+        el.scrollTop = el.scrollHeight
+      }
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [id, feedMounted])
 
   // SSE Stream runner
   const runStream = useCallback(
@@ -760,9 +904,11 @@ export default function Play() {
       setChoices([])
       setWebSources([])
       const fail = (msg, meta) => {
-        if (meta?.code === 'llm_cancelled') return
+        if (abortRef.current !== ctrl) return
         genRef.current = null
         setGen(null)
+        setLive('')
+        if (meta?.code === 'llm_cancelled') return
         if (isCharacterRequired(msg, meta)) {
           promptCharacter()
           return
@@ -777,8 +923,12 @@ export default function Play() {
       streamGeneration(path, {
         body,
         signal: ctrl.signal,
-        onToken: (tok) => setGen((g) => (g ? { ...g, text: g.text + tok } : g)),
+        onToken: (tok) => {
+          if (abortRef.current !== ctrl) return
+          setGen((g) => (g ? { ...g, text: g.text + tok } : g))
+        },
         onEvent: (name, data) => {
+          if (abortRef.current !== ctrl) return
           if (name === 'action_check') handleCheckData(data)
           if (name === 'rules_roll' && data?.action_id != null) {
             setRulesChips((prev) => ({ ...prev, [String(data.action_id)]: data }))
@@ -796,6 +946,7 @@ export default function Play() {
           }
         },
         onDone: (data) => {
+          if (abortRef.current !== ctrl) return
           newBlockIdRef.current = data.player_action?.id ?? data.action?.id ?? null
           setActions((prev) => {
             const merged = applyDone(prev ?? [], data)
@@ -1078,14 +1229,13 @@ export default function Play() {
   const canRetry = !generating && !turnBlocked && !needsCharacter && lastAction?.type === 'continue'
   const canUndo = !generating && actions.some((a) => a.type !== 'start')
   const canSee = !generating && !seeing && actions.some((a) => a.type === 'continue')
-  const lastAiTextId = [...actions].reverse().find((a) => a.type === 'continue')?.id
-  const latestStoryText = [...actions].reverse().find(
+  const lastAiTextId = lastMatchingAction(actions, (a) => a.type === 'continue')?.id
+  const latestStoryText = lastMatchingAction(
+    actions,
     (a) => a.type !== 'do' && a.type !== 'say' && a.type !== 'see',
   )?.text
   const showChoices = !generating && !inputDirty && choices.length > 0
-  const lastPlayer = [...actions].reverse().find(
-    (a) => a.type === 'do' || a.type === 'say' || a.type === 'story',
-  )
+  const lastPlayer = lastMatchingAction(actions, isPlayerAction)
 
   // Typography Preferences mapping
   const colWidthCls = {
@@ -1187,6 +1337,7 @@ export default function Play() {
               adventure={adventure}
               onSaved={(uiState) => setAdventure((current) => ({ ...current, ui_state: uiState }))}
             />
+            <LiveFeed adventureId={id} />
             <AdventureJobs
               adventureId={id}
               onJobsChange={handleJobsChange}
@@ -1347,25 +1498,32 @@ export default function Play() {
                 </div>
               )}
 
-              {actions.map((a) => {
+              {visibleStart > 0 && (
+                <button
+                  type="button"
+                  onClick={loadEarlier}
+                  className="self-center rounded-full border border-subtle bg-surface px-4 py-2 text-xs font-semibold text-secondary hover:bg-elevated hover:text-primary transition"
+                >
+                  Carregar {Math.min(FEED_PAGE_SIZE, visibleStart)} ações anteriores
+                </button>
+              )}
+
+              {visibleActions.map((a, index) => {
                 const check = a?.id != null ? actionChecks[String(a.id)] : null
                 const rules = a?.id != null
                   ? (rulesChips[String(a.id)] || a.rules || null)
                   : null
                 return (
-                  <div key={a.id} className="min-w-0">
-                    <FeedItem
-                      action={a}
-                      onEdit={setEditing}
-                      disabled={generating}
-                      isLatest={a.id === lastAiTextId}
-                      adventureId={id}
-                    />
-                    {isPlayerAction(a) && check && <ActionCheckNote check={check} />}
-                    {isPlayerAction(a) && (rules || (a.quality_flags || []).length > 0) && (
-                      <RulesNote rules={rules} flags={a.quality_flags} />
-                    )}
-                  </div>
+                  <StoryFeedItem
+                    key={a.id ?? a.seq ?? `${visibleStart + index}`}
+                    action={a}
+                    check={check}
+                    rules={rules}
+                    onEdit={setEditing}
+                    disabled={generating}
+                    isLatest={a.id === lastAiTextId}
+                    adventureId={id}
+                  />
                 )
               })}
 

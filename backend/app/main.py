@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth as auth_core
 from app import access, db, jobs, settings_store, users
+from app.sim import runtime as sim_runtime
 from app.auth import require_auth
 from app.errors import GameError
 from app.routes import (actions, adventures, assistant, cards, choices,
@@ -58,9 +59,11 @@ async def lifespan(app: FastAPI):
             "POST /api/auth/login responde 503."
         )
     jobs.start_worker(app)
+    sim_runtime.start_worker(app)
     try:
         yield
     finally:
+        sim_runtime.stop_worker(app)
         jobs.stop_worker(app)
 
 

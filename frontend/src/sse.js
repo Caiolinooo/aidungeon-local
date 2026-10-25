@@ -52,6 +52,27 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
   let buffer = ''
   const result = { aborted: false, done: null }
 
+  let terminal = false
+  const dispatch = (raw) => {
+    const ev = parseEvent(raw)
+    if (!ev || terminal) return
+    if (ev.event === 'token') onToken?.(ev.data?.token ?? '')
+    else if (ev.event === 'done') {
+      terminal = true
+      result.done = ev.data
+      onDone?.(ev.data)
+    } else if (ev.event === 'error') {
+      terminal = true
+      onError?.(ev.data?.message ?? 'Generation failed', {
+        status: ev.data?.status,
+        code: typeof ev.data?.code === 'string' ? ev.data.code : '',
+      })
+    } else {
+      // Eventos extras do contrato (ex.: action_check, que chega antes dos tokens).
+      onEvent?.(ev.event, ev.data)
+    }
+  }
+
   try {
     for (;;) {
       const { value, done } = await reader.read()
@@ -62,29 +83,26 @@ export async function streamGeneration(path, { body, signal, onToken, onDone, on
       while ((idx = buffer.indexOf('\n\n')) >= 0) {
         const raw = buffer.slice(0, idx)
         buffer = buffer.slice(idx + 2)
-        const ev = parseEvent(raw)
-        if (!ev) continue
-        if (ev.event === 'token') onToken?.(ev.data?.token ?? '')
-        else if (ev.event === 'done') {
-          result.done = ev.data
-          onDone?.(ev.data)
-        } else if (ev.event === 'error') {
-          onError?.(ev.data?.message ?? 'Generation failed', {
-            status: ev.data?.status,
-            code: typeof ev.data?.code === 'string' ? ev.data.code : '',
-          })
-        } else {
-          // Eventos extras do contrato (ex.: action_check, que chega antes dos tokens).
-          onEvent?.(ev.event, ev.data)
-        }
+        dispatch(raw)
       }
+    }
+    buffer += decoder.decode().replace(/\r\n/g, '\n')
+    // Alguns servidores omitem a linha em branco final; o frame ainda é válido no EOF.
+    if (buffer) dispatch(buffer)
+    if (signal?.aborted) {
+      result.aborted = true
+      return result
+    }
+    if (!terminal) {
+      terminal = true
+      onError?.('Generation stream ended before completion.')
     }
   } catch (e) {
     if (e.name === 'AbortError') {
       result.aborted = true
       return result
     }
-    onError?.('Stream interrupted.')
+    if (!terminal) onError?.('Stream interrupted.')
   }
   return result
 }

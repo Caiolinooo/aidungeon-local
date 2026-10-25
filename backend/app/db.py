@@ -53,15 +53,24 @@ def connect() -> sqlite3.Connection:
 
 @contextmanager
 def session() -> Iterator[sqlite3.Connection]:
-    """Contexto de escrita/leitura: commit no sucesso, rollback na exceção."""
+    """Contexto de escrita/leitura: commit no sucesso, rollback na exceção.
+
+    Fatos gravados com events.record são entregues ao SSE somente depois do
+    commit; uma exceção também descarta as publicações pendentes.
+    """
     conn = connect()
+    from app import events
     try:
         yield conn
         conn.commit()
     except Exception:
         conn.rollback()
+        events.rolled_back(conn)
         raise
+    else:
+        events.committed(conn)
     finally:
+        events.rolled_back(conn)
         conn.close()
 
 
