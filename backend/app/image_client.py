@@ -219,7 +219,7 @@ def _first_image(data: dict, what: str) -> bytes:
 # O modelo e o CLIP-ViT-H ficam na instalação do Forge Neo.
 _REFERENCE_MODULE = "CLIP-ViT-H (IPAdapter)"
 _REFERENCE_MODEL = "ip-adapter-plus_sdxl_vit-h"
-_REFERENCE_WEIGHT = 1.0
+_REFERENCE_WEIGHT = 0.8
 _MAX_REFERENCES = 3
 
 
@@ -235,7 +235,7 @@ def _reference_unit(image: bytes) -> dict:
         "threshold_a": -1,
         "threshold_b": -1,
         "guidance_start": 0.0,
-        "guidance_end": 1.0,
+        "guidance_end": 0.8,
         "pixel_perfect": False,
         "control_mode": "ControlNet is more important",
     }
