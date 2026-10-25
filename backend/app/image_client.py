@@ -215,11 +215,11 @@ def _first_image(data: dict, what: str) -> bytes:
     if not isinstance(images, list) or not images:
         raise ImageError(f"resposta de {what} sem lista 'images'")
     return _decode_b64(str(images[0]), what)
-# IP-Adapter SDXL: a foto condiciona aparência, não só o estilo do AdaIN.
-# O modelo e o CLIP-ViT-H ficam na instalação do Forge Neo.
-_REFERENCE_MODULE = "CLIP-ViT-H (IPAdapter)"
-_REFERENCE_MODEL = "ip-adapter-plus_sdxl_vit-h"
-_REFERENCE_WEIGHT = 0.8
+# FaceID SDXL: embedding facial preserva a pessoa sem copiar roupa/fundo.
+# O modelo e o InsightFace buffalo_l ficam na instalação do Forge Neo.
+_REFERENCE_MODULE = "InsightFace+CLIP-H (IPAdapter)"
+_REFERENCE_MODEL = "ip-adapter-faceid_sdxl"
+_REFERENCE_WEIGHT = 0.85
 _MAX_REFERENCES = 3
 
 
@@ -235,7 +235,7 @@ def _reference_unit(image: bytes) -> dict:
         "threshold_a": -1,
         "threshold_b": -1,
         "guidance_start": 0.0,
-        "guidance_end": 0.8,
+        "guidance_end": 1.0,
         "pixel_perfect": False,
         "control_mode": "ControlNet is more important",
     }
