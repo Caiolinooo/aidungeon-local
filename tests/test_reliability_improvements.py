@@ -4,9 +4,15 @@ import json
 import threading
 
 import httpx
+import pytest
 
 from app import choices_service, db, deps, game_engine, llm_client
 from conftest import add_action, make_adventure
+
+
+@pytest.fixture()
+def auth_token(admin_token):
+    return admin_token
 
 
 def test_cancel_during_stream_rolls_back_player_action(monkeypatch, tmp_db):

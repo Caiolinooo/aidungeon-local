@@ -86,6 +86,12 @@ def auth_token() -> str:
     return auth_core.make_token(TEST_AUTH_USER, TEST_AUTH_SECRET, ttl_h=1)
 
 
+
+@pytest.fixture()
+def admin_token() -> str:
+    """Bearer do admin para testes de operações globais privilegiadas."""
+    return auth_core.make_token("Caio", TEST_AUTH_SECRET, ttl_h=1)
+
 @pytest.fixture()
 def client(tmp_db, auth_token):
     """TestClient autenticado (Authorization: Bearer em todas as chamadas)."""

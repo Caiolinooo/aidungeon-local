@@ -299,10 +299,15 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
         _discovery_cache[(base, "auto")] = discovered
         result["model_discovered"] = discovered
         if discovered is None:
+            result["status"] = "degraded"
             result["details"] = "servidor respondeu, mas nenhum modelo carregado"
     else:
         result["model_discovered"] = alias
-        if models and not any(m.get("id") == alias for m in models):
+        if not models:
+            result["status"] = "degraded"
+            result["details"] = "servidor respondeu, mas nenhum modelo carregado"
+        elif not any(m.get("id") == alias for m in models):
+            result["status"] = "degraded"
             result["details"] = f"alias '{alias}' não consta em /models"
     return result
 

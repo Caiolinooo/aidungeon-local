@@ -5,8 +5,14 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 from app import db, deps
+
+
+@pytest.fixture()
+def auth_token(admin_token):
+    return admin_token
 
 MP3_BYTES = b"ID3\x04\x00\x00\x00\x00\x00\x21fake-mp3-audio-bytes"
 

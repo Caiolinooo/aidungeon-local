@@ -217,8 +217,8 @@ export const api = {
   // ----------------------------------------------------------------- cards
   listCards: (advId, params = {}) => request(`/adventures/${advId}/cards${qs(params)}`),
   createCard: (advId, payload) => request(`/adventures/${advId}/cards`, { method: 'POST', body: payload }),
-  updateCard: (advId, cardId, payload) =>
-    request(`/adventures/${advId}/cards/${cardId}`, { method: 'PATCH', body: payload }),
+  updateCard: (advId, cardId, payload, { signal } = {}) =>
+    request(`/adventures/${advId}/cards/${cardId}`, { method: 'PATCH', body: payload, signal }),
   deleteCard: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}`, { method: 'DELETE' }),
   bulkCards: (advId, payload) =>
@@ -367,7 +367,6 @@ export const api = {
       body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
       headers: { Prefer: 'respond-async' },
     }),
-  listJobs: (advId) => request(`/adventures/${advId}/jobs`),
   getAdventureJob: (advId, jobId) => request(`/adventures/${advId}/jobs/${jobId}`),
   cancelJob: (jobId) => request(`/jobs/${jobId}/cancel`, { method: 'POST' }),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.
@@ -401,15 +400,15 @@ export const api = {
   // TTS (Supertonic) + STT (Whisper) via stack de voz da VM — contrato v0.4.0.
   voice: {
     // GET /voices → {voices: [...], narrator_voice: "M1"} (config efetiva).
-    list: () => request('/voices'),
-    clone: (file, name, refText) => {
+    list: ({ signal } = {}) => request('/voices', { signal }),
+    clone: (file, name, refText, { signal } = {}) => {
       const fd = new FormData()
       fd.append('file', file, file.name || 'voice.webm')
       fd.append('name', name)
       fd.append('ref_text', refText || '')
-      return request('/voices/clone', { method: 'POST', body: fd })
+      return request('/voices/clone', { method: 'POST', body: fd, signal })
     },
-    remove: (id) => request(`/voices/${id}`, { method: 'DELETE' }),
+    remove: (id, { signal } = {}) => request(`/voices/${id}`, { method: 'DELETE', signal }),
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
     // extra: { emotion, adventureId } — a emoção da linha e, se a linha
@@ -461,6 +460,6 @@ export const api = {
       return request('/stt', { method: 'POST', body: fd, signal })
     },
     getSettings: () => request('/settings/voice'),
-    putSettings: (patch) => request('/settings/voice', { method: 'PUT', body: patch }),
+    putSettings: (patch, { signal } = {}) => request('/settings/voice', { method: 'PUT', body: patch, signal }),
   },
 }

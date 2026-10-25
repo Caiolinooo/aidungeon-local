@@ -183,6 +183,7 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "story_cards": _loads(row["story_cards"], []),
         "character_rules": (row["character_rules"] if "character_rules" in keys else "") or "",
         "third_person": bool(row["third_person"]),
+        "owner": (row["owner"] if "owner" in keys else "") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -359,17 +360,17 @@ def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = 
                     authors_note: str = "", opening_text: str = "",
                     image_style: str = "",
                     tags: list | None = None, story_cards: list | None = None,
-                    third_person: bool = False,
+                    third_person: bool = False, owner: str = "",
                     created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     sid = new_id()
     conn.execute(
         "INSERT INTO scenarios(id, title, description, ai_instructions, plot_essentials,"
-        " authors_note, opening_text, image_style, tags, story_cards, third_person, created_at, updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " authors_note, opening_text, image_style, tags, story_cards, third_person, owner,"
+        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (sid, title, description, ai_instructions, plot_essentials, authors_note,
          opening_text, image_style, _dumps(tags, []), _dumps(story_cards, []), int(third_person),
-         created_at or now, updated_at or now),
+         owner or "", created_at or now, updated_at or now),
     )
     return scenario_to_dict(conn.execute("SELECT * FROM scenarios WHERE id=?", (sid,)).fetchone())
 
@@ -1627,22 +1628,29 @@ def job_queue_summary(conn: sqlite3.Connection) -> dict:
 
 # ------------------------------------------------------------- cloned voices
 def insert_cloned_voice(conn: sqlite3.Connection, *, voice_id: str, name: str,
-                        ref_text: str, rvq: bytes, sample_seconds: float) -> dict:
+                        ref_text: str, rvq: bytes, sample_seconds: float,
+                        owner: str = "") -> dict:
     created = utcnow()
     conn.execute(
-        "INSERT INTO cloned_voices(id, name, ref_text, rvq, sample_seconds, created_at)"
-        " VALUES(?,?,?,?,?,?)",
-        (voice_id, name, ref_text, rvq, float(sample_seconds), created),
+        "INSERT INTO cloned_voices(id, name, ref_text, rvq, sample_seconds, owner, created_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (voice_id, name, ref_text, rvq, float(sample_seconds), owner or "", created),
     )
     row = get_cloned_voice(conn, voice_id)
     assert row is not None
     return row
 
 
-def list_cloned_voices(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT id, name FROM cloned_voices ORDER BY created_at, name"
-    ).fetchall()
+def list_cloned_voices(conn: sqlite3.Connection, *, owner: str | None = None) -> list[dict]:
+    if owner is None:
+        rows = conn.execute(
+            "SELECT id, name FROM cloned_voices ORDER BY created_at, name"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, name FROM cloned_voices WHERE owner=? ORDER BY created_at, name",
+            (owner,),
+        ).fetchall()
     return [{"id": row["id"], "name": row["name"]} for row in rows]
 
 
@@ -1658,6 +1666,7 @@ def get_cloned_voice(conn: sqlite3.Connection, voice_id: str) -> dict | None:
         "ref_text": row["ref_text"],
         "rvq": bytes(row["rvq"]),
         "sample_seconds": row["sample_seconds"],
+        "owner": (row["owner"] if "owner" in row.keys() else "") or "",
         "created_at": row["created_at"],
     }
 

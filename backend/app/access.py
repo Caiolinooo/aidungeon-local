@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import re
 
-from fastapi import Request
+from fastapi import Depends, Request
 
 from app import auth, db
+from app.errors import GameError
 from app.users import is_admin
 
 _ADVENTURE = re.compile(r"^/api/adventures/([0-9a-fA-F]{32})(?:/|$)")
@@ -37,6 +38,17 @@ def can_see(username: str, owner: str | None) -> bool:
         return True
     owner = owner or ""
     return owner == "" or owner == username
+
+
+def can_manage(username: str, owner: str | None) -> bool:
+    """Somente o dono ou admin; registros sem dono ficam sob o admin."""
+    return is_admin(username) or bool(owner) and owner == username
+
+
+def require_admin(info: auth.AuthInfo = Depends(auth.require_auth)) -> auth.AuthInfo:
+    if not is_admin(info.user):
+        raise GameError(403, "forbidden", "only the admin can change global settings")
+    return info
 
 
 def adventure_visible(conn, username: str, adventure_id: str) -> bool:

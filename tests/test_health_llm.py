@@ -194,6 +194,24 @@ def test_unreachable_server_keeps_status_and_skips_props(probe):
     assert data["memory"]["ram_available_mb"] == 11924
 
 
+@pytest.mark.parametrize(("alias", "models"), [
+    ("auto", []),
+    ("expected-model", []),
+    ("expected-model", [{"id": "other-model"}]),
+])
+def test_empty_models_or_missing_alias_degrades_health(alias, models):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": models}))
+    result = llm_client.health({
+        "base_url": "http://llm.local/v1",
+        "model_alias": alias,
+    }, transport=transport)
+
+    assert result["status"] == "degraded"
+    assert result["details"]
+    assert result["model_loaded"] is bool(models)
+
+
 def test_narrative_ttft_and_speed_of_recent_turns(probe):
     for ttft in (1.0, 2.0, 3.0, 4.0, 9.0):
         _narrative(ttft, tok_s=17.5 + ttft)

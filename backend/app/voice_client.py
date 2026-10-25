@@ -328,6 +328,30 @@ def register_clone(cfg: dict, voice_id: str, name: str, ref_text: str,
     return body
 
 
+async def register_clone_async(cfg: dict, voice_id: str, name: str, ref_text: str,
+                                filename: str, data: bytes, *,
+                                content_type: str = "application/octet-stream",
+                                transport: httpx.AsyncBaseTransport | None = None) -> dict:
+    """Versão assíncrona de register_clone; cancelar fecha o POST HTTP."""
+    timeout = float(cfg.get("timeout_seconds", 60))
+    files = {"file": (filename or "audio", data, content_type)}
+    form = {"voice_id": voice_id, "name": name, "ref_text": ref_text}
+    async with _make_async_client(transport, timeout) as client:
+        try:
+            resp = await client.post(f"{_base(cfg)}/audio/voices", files=files, data=form,
+                                     headers=_headers(cfg))
+        except httpx.TransportError as exc:
+            raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+    _raise_provider(resp, "audio/voices")
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise VoiceError("resposta de audio/voices não é JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("rvq_b64"), str) or not body["rvq_b64"]:
+        raise VoiceError("resposta de audio/voices sem rvq_b64")
+    return body
+
+
 def put_clone_rvq(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
                   transport: httpx.BaseTransport | None = None) -> None:
     """Regrava o .rvq na VM antes da fala. O arquivo cabe em poucos KB."""

@@ -934,10 +934,11 @@ class TestTier1SceneSee:
         assert "provider" in data
         assert "openai_api_key" in data
 
-    def test_t1_scene_04_update_image_settings(self, e2e_client):
+    def test_t1_scene_04_update_image_settings(self, e2e_client, admin_token):
         """PUT /api/settings/image updates steps, cfg_scale, and prompt prefix."""
         resp = e2e_client.put(
             "/api/settings/image",
+            headers={"Authorization": f"Bearer {admin_token}"},
             json={
                 "sdwebui_steps": 25,
                 "style_suffix": ", oil painting",
@@ -979,10 +980,11 @@ class TestTier1Voice:
         assert "tts_model" in data
         assert "stt_model" in data
 
-    def test_t1_voice_03_update_voice_settings(self, e2e_client):
+    def test_t1_voice_03_update_voice_settings(self, e2e_client, admin_token):
         """PUT /api/settings/voice updates narrator voice choice."""
         resp = e2e_client.put(
             "/api/settings/voice",
+            headers={"Authorization": f"Bearer {admin_token}"},
             json={"narrator_voice": "F1"},
         )
         assert resp.status_code == 200

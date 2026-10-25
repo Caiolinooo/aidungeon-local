@@ -18,6 +18,11 @@ from app import db, deps, llm_client, settings_store
 from conftest import make_llm_transport
 
 
+@pytest.fixture()
+def auth_token(admin_token):
+    return admin_token
+
+
 def test_get_settings_defaults(client):
     resp = client.get("/api/settings/llm")
     assert resp.status_code == 200

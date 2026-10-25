@@ -217,6 +217,7 @@ def create_adventure_from_draft(
             tags=draft.tags,
             story_cards=[c.model_dump(exclude_none=True) for c in draft.story_cards],
             third_person=draft.third_person,
+            owner=info.user,
         )
         adv = db.insert_adventure(
             conn, scenario_id=scenario["id"], owner=info.user,

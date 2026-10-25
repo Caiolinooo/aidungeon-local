@@ -7,6 +7,10 @@
                           provider /audio/transcriptions com model=stt_model);
 - GET/PUT /settings/voice → config de voz (api_key SEMPRE mascarada).
 
+Clones pertencem a quem os criou. O dono e o admin podem usá-los; participantes
+de uma aventura compartilhada podem usar, informando adventure_id, os clones
+do dono dessa aventura. Listar e apagar não expõe clones de outras pessoas.
+
 Mapeamento de erros do provider (mesmo padrão de routes/images.py):
 unreachable → 502 `unreachable`; 401/403 → 502 `auth_error`; demais → 502 `error`.
 """
@@ -26,10 +30,11 @@ from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
 
 
-from app import db, npc_bonds, settings_store, voice_client, voice_emotion
+from app import access, auth, db, npc_bonds, settings_store, voice_client, voice_emotion
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import TtsRequest, VoiceSettingsUpdate
+from app.users import is_admin
 
 log = logging.getLogger("aidungeon.voice")
 
@@ -84,7 +89,8 @@ def get_voice_settings() -> dict:
 
 
 @router.put("/settings/voice")
-def put_voice_settings(body: VoiceSettingsUpdate) -> dict:
+def put_voice_settings(body: VoiceSettingsUpdate,
+                       info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         narrator = update.get("narrator_voice")
@@ -115,10 +121,11 @@ def _known_voice(conn, name: str) -> bool:
 
 
 @router.get("/voices")
-def list_voices() -> dict:
+def list_voices(info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
-        cloned = db.list_cloned_voices(conn)
+        cloned = db.list_cloned_voices(
+            conn, owner=None if is_admin(info.user) else info.user)
     return {
         "voices": cfg["voices"],
         "cloned": cloned,
@@ -126,9 +133,21 @@ def list_voices() -> dict:
     }
 
 
+def _may_use_clone(conn, username: str, cloned: dict, adventure_id: str) -> bool:
+    if access.can_manage(username, cloned["owner"]):
+        return True
+    if not adventure_id:
+        return False
+    adventure = db.get_adventure(conn, adventure_id)
+    if not adventure or not db.can_access_adventure(conn, adventure, username):
+        return False
+    return bool(adventure["owner"]) and cloned["owner"] == adventure["owner"]
+
+
 # ----------------------------------------------------------------------- /tts
 @router.post("/tts")
 async def post_tts(request: Request, body: TtsRequest,
+                   info: auth.AuthInfo = Depends(auth.require_auth),
                    transport: Any = Depends(get_http_transport)) -> Response:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
@@ -144,11 +163,14 @@ async def post_tts(request: Request, body: TtsRequest,
             f"text exceeds max_text_chars ({cfg['max_text_chars']})")
     # voice omitida (null) → narrator_voice; string vazia é inválida (400)
     voice = cfg["narrator_voice"] if body.voice is None else body.voice
+    adventure_id = (body.adventure_id or "").strip()
     with db.session() as conn:
         if not voice or not _known_voice(conn, voice):
             raise GameError.bad_request(
                 "invalid_voice", f"unknown voice {body.voice!r}")
         cloned = db.get_cloned_voice(conn, voice) if voice.startswith("cv_") else None
+        if cloned is not None and not _may_use_clone(conn, info.user, cloned, adventure_id):
+            raise GameError(404, "voice_not_found", f"voice {voice} not found")
     if cloned is not None:
         try:
             await _await_until_disconnect(
@@ -159,7 +181,6 @@ async def post_tts(request: Request, body: TtsRequest,
         except voice_client.VoiceError as exc:
             raise GameError(502, exc.code, exc.message) from exc
     npc_emotion = None
-    adventure_id = (body.adventure_id or "").strip()
     if adventure_id:
         with db.session() as conn:
             if db.get_adventure(conn, adventure_id):
@@ -231,9 +252,11 @@ def _voice_http(exc: voice_client.VoiceError) -> GameError:
 
 
 @router.post("/voices/clone")
-async def post_clone(file: UploadFile | None = File(None),
+async def post_clone(request: Request,
+                     file: UploadFile | None = File(None),
                      name: str = Form(""),
                      ref_text: str = Form(""),
+                     info: auth.AuthInfo = Depends(auth.require_auth),
                      transport: Any = Depends(get_http_transport)) -> dict:
     """Grava uma voz clonada. Sem ref_text, o Whisper preenche o que foi dito."""
     clean_name = (name or "").strip()
@@ -258,10 +281,13 @@ async def post_clone(file: UploadFile | None = File(None),
     transcript = (ref_text or "").strip()
     if not transcript:
         try:
-            transcript = voice_client.transcribe(
-                cfg, file.filename or "audio",
-                file.content_type or "application/octet-stream",
-                data, language="pt", transport=transport).strip()
+            transcript = (await _await_until_disconnect(
+                request,
+                voice_client.transcribe_async(
+                    cfg, file.filename or "audio",
+                    file.content_type or "application/octet-stream",
+                    data, language="pt", transport=transport),
+            )).strip()
         except voice_client.VoiceError as exc:
             raise _voice_http(exc) from exc
     if not transcript:
@@ -278,11 +304,14 @@ async def post_clone(file: UploadFile | None = File(None),
     if voice_id is None:
         raise GameError(500, "error", "could not allocate voice id")
     try:
-        remote = voice_client.register_clone(
-            cfg, voice_id, clean_name, transcript,
-            file.filename or "audio", data,
-            content_type=file.content_type or "application/octet-stream",
-            transport=transport)
+        remote = await _await_until_disconnect(
+            request,
+            voice_client.register_clone_async(
+                cfg, voice_id, clean_name, transcript,
+                file.filename or "audio", data,
+                content_type=file.content_type or "application/octet-stream",
+                transport=transport),
+        )
     except voice_client.VoiceError as exc:
         raise _voice_http(exc) from exc
     try:
@@ -296,7 +325,7 @@ async def post_clone(file: UploadFile | None = File(None),
         with db.session() as conn:
             db.insert_cloned_voice(
                 conn, voice_id=voice_id, name=clean_name, ref_text=transcript,
-                rvq=rvq, sample_seconds=seconds)
+                rvq=rvq, sample_seconds=seconds, owner=info.user)
     except sqlite3.IntegrityError as exc:
         raise GameError.conflict("voice_name_taken", "Já existe uma voz com esse nome.") from exc
     return {"id": voice_id, "name": clean_name, "ref_text": transcript, "seconds": seconds}
@@ -304,10 +333,13 @@ async def post_clone(file: UploadFile | None = File(None),
 
 @router.delete("/voices/{voice_id}")
 def delete_voice(voice_id: str,
+                 info: auth.AuthInfo = Depends(auth.require_auth),
                  transport: Any = Depends(get_http_transport)) -> dict:
     with db.session() as conn:
         row = db.get_cloned_voice(conn, voice_id)
         if row is None:
+            raise GameError(404, "voice_not_found", f"voice {voice_id} not found")
+        if not access.can_manage(info.user, row["owner"]):
             raise GameError(404, "voice_not_found", f"voice {voice_id} not found")
         db.delete_cloned_voice(conn, voice_id)
         db.clear_card_voice(conn, voice_id)

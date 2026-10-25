@@ -6,9 +6,15 @@ import base64
 import json
 
 import httpx
+import pytest
 
 from app import db, deps, settings_store
 from conftest import add_action, make_adventure, sse_body
+
+
+@pytest.fixture()
+def auth_token(admin_token):
+    return admin_token
 
 # PNG 1x1 válido (usado como resposta fake do sdwebui)
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"

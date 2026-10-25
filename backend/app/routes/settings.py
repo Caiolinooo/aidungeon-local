@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app import db, llm_client, settings_store
+from app import access, auth, db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.schemas import EmbeddingsSettingsUpdate, LlmSettingsUpdate, ScriptingSettingsUpdate
 
@@ -62,6 +62,7 @@ def get_llm_settings() -> dict:
 
 @router.put("/settings/llm")
 def put_llm_settings(body: LlmSettingsUpdate,
+                     info: auth.AuthInfo = Depends(access.require_admin),
                      transport: Any = Depends(get_http_transport)) -> dict:
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
@@ -87,7 +88,8 @@ def get_embeddings_settings() -> dict:
 
 
 @router.put("/settings/embeddings")
-def put_embeddings_settings(body: EmbeddingsSettingsUpdate) -> dict:
+def put_embeddings_settings(body: EmbeddingsSettingsUpdate,
+                            info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         settings_store.apply_embeddings_update(conn, update)
@@ -105,7 +107,8 @@ def get_scripting_settings() -> dict:
 
 
 @router.put("/settings/scripting")
-def put_scripting_settings(body: ScriptingSettingsUpdate) -> dict:
+def put_scripting_settings(body: ScriptingSettingsUpdate,
+                           info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         for hook in ("input_modifier", "context_modifier", "output_modifier"):

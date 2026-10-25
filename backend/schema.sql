@@ -8,6 +8,7 @@ CREATE TABLE scenarios(
   image_style TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', third_person INTEGER DEFAULT 0,
   story_cards TEXT DEFAULT '[]',       -- v2: cards do rascunho do assistente (JSON)
+  owner TEXT DEFAULT '',
   created_at TEXT, updated_at TEXT);
 
 CREATE TABLE adventures(
@@ -267,6 +268,7 @@ CREATE TABLE IF NOT EXISTS cloned_voices (
   ref_text TEXT NOT NULL,
   rvq BLOB NOT NULL,
   sample_seconds REAL NOT NULL DEFAULT 0,
+  owner TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloned_voices_name

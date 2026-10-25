@@ -22,25 +22,72 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
   const [error, setError] = useState('')
   const [cloned, setCloned] = useState([])
   const recRef = useRef(null)
+  const streamRef = useRef(null)
   const chunksRef = useRef([])
   const timerRef = useRef(null)
   const urlRef = useRef('')
+  const requestsRef = useRef(null)
+  const activeRef = useRef(false)
+  const sessionRef = useRef(0)
+
+  function cleanup() {
+    activeRef.current = false
+    sessionRef.current += 1
+    const controller = requestsRef.current
+    requestsRef.current = null
+    controller?.abort()
+    clearInterval(timerRef.current)
+
+    const rec = recRef.current
+    recRef.current = null
+    if (rec) {
+      rec.ondataavailable = null
+      rec.onstop = null
+      if (rec.state !== 'inactive') {
+        try { rec.stop() } catch { /* recorder já parou */ }
+      }
+    }
+    const stream = streamRef.current || rec?.stream
+    streamRef.current = null
+    stream?.getTracks().forEach((track) => track.stop())
+
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = ''
+    }
+  }
+
+  function close(result) {
+    cleanup()
+    onClose(result)
+  }
+
+  function isCurrent(controller, session) {
+    return activeRef.current
+      && sessionRef.current === session
+      && !controller.signal.aborted
+  }
 
   useEffect(() => {
     if (!open) return undefined
+    activeRef.current = true
+    sessionRef.current += 1
+    setBusy(false)
+    setRecording(false)
+    const controller = new AbortController()
+    requestsRef.current = controller
     let cancelled = false
-    api.voice.list()
-      .then((data) => { if (!cancelled) setCloned(data.cloned || []) })
-      .catch(() => { if (!cancelled) setCloned([]) })
+    api.voice.list({ signal: controller.signal })
+      .then((data) => { if (!cancelled && !controller.signal.aborted) setCloned(data.cloned || []) })
+      .catch(() => { if (!cancelled && !controller.signal.aborted) setCloned([]) })
     const onKey = (event) => {
-      if (event.key === 'Escape' && !busy) onClose(null)
+      if (event.key === 'Escape' && !busy) close(null)
     }
     window.addEventListener('keydown', onKey)
     return () => {
       cancelled = true
       window.removeEventListener('keydown', onKey)
-      clearInterval(timerRef.current)
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+      cleanup()
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -60,31 +107,48 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
   }
 
   async function transcribe(file) {
+    const controller = requestsRef.current
+    const session = sessionRef.current
+    if (!controller) return
     setError('')
     try {
-      const { text } = await api.voice.stt(file)
+      const { text } = await api.voice.stt(file, { signal: controller.signal })
+      if (!isCurrent(controller, session)) return
       if (text && text.trim()) setRefText(text.trim())
     } catch (err) {
-      setError(messageFor(err))
+      if (isCurrent(controller, session)) setError(messageFor(err))
     }
   }
 
   async function startRec() {
+    const session = sessionRef.current
     setError('')
     let stream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch {
-      setError('Não foi possível acessar o microfone.')
+      if (activeRef.current && sessionRef.current === session) {
+        setError('Não foi possível acessar o microfone.')
+      }
       return
     }
+    if (!activeRef.current || sessionRef.current !== session) {
+      stream.getTracks().forEach((track) => track.stop())
+      return
+    }
+    streamRef.current = stream
     const rec = new MediaRecorder(stream)
     chunksRef.current = []
     rec.ondataavailable = (event) => {
-      if (event.data && event.data.size) chunksRef.current.push(event.data)
+      if (sessionRef.current === session && event.data && event.data.size) {
+        chunksRef.current.push(event.data)
+      }
     }
     rec.onstop = () => {
       stream.getTracks().forEach((track) => track.stop())
+      if (streamRef.current === stream) streamRef.current = null
+      if (recRef.current === rec) recRef.current = null
+      if (!activeRef.current || sessionRef.current !== session) return
       const type = rec.mimeType || 'audio/webm'
       const blob = new Blob(chunksRef.current, { type })
       setAudio(new File([blob], 'gravacao.webm', { type }))
@@ -113,44 +177,57 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
   }
 
   async function applyVoice(voice) {
+    const controller = requestsRef.current
+    const session = sessionRef.current
+    if (!controller) return
     setBusy(true)
     setError('')
     try {
       if (assign.kind === 'narrator') {
-        await api.voice.putSettings({ narrator_voice: voice.id })
+        await api.voice.putSettings({ narrator_voice: voice.id }, { signal: controller.signal })
       } else {
-        await api.updateCard(assign.adventureId, assign.cardId, { voice: voice.id })
+        await api.updateCard(assign.adventureId, assign.cardId, { voice: voice.id }, { signal: controller.signal })
       }
-      onClose(voice)
+      if (isCurrent(controller, session)) close(voice)
     } catch (err) {
+      if (!isCurrent(controller, session)) return
       setError(messageFor(err))
       setBusy(false)
     }
   }
 
   async function save() {
+    const controller = requestsRef.current
+    const session = sessionRef.current
+    if (!controller) return
     setBusy(true)
     setError('')
     try {
-      const saved = await api.voice.clone(audioFile, name.trim(), refText.trim())
+      const saved = await api.voice.clone(audioFile, name.trim(), refText.trim(), { signal: controller.signal })
+      if (!isCurrent(controller, session)) return
       await applyVoice(saved)
     } catch (err) {
+      if (!isCurrent(controller, session)) return
       setError(messageFor(err))
       setBusy(false)
     }
   }
 
   async function remove(id) {
+    const controller = requestsRef.current
+    const session = sessionRef.current
+    if (!controller) return
     setBusy(true)
     setError('')
     try {
-      await api.voice.remove(id)
+      await api.voice.remove(id, { signal: controller.signal })
+      if (!isCurrent(controller, session)) return
       setCloned((list) => list.filter((item) => item.id !== id))
-      onClose({ deleted: id })
+      close({ deleted: id })
     } catch (err) {
-      setError(messageFor(err))
+      if (isCurrent(controller, session)) setError(messageFor(err))
     } finally {
-      setBusy(false)
+      if (isCurrent(controller, session)) setBusy(false)
     }
   }
 
@@ -159,7 +236,7 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={() => { if (!busy) onClose(null) }}
+      onClick={() => { if (!busy) close(null) }}
     >
       <div
         className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-subtle bg-surface p-4 text-secondary"
@@ -227,7 +304,7 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
         {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
 
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" disabled={busy} onClick={() => onClose(null)} className="rounded-lg px-3 py-2 text-sm">
+          <button type="button" disabled={busy} onClick={() => close(null)} className="rounded-lg px-3 py-2 text-sm">
             Cancelar
           </button>
           <button

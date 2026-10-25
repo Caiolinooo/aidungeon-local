@@ -98,12 +98,28 @@ def _get_json(client: httpx.Client, url: str,
     return data
 
 
-def _download(client: httpx.Client, url: str, headers: dict[str, str]) -> bytes:
-    """Baixa uma imagem por URL (ramo data[0].url do openai_compatible)."""
-    try:
-        resp = client.get(url, headers=headers)
-    except httpx.TransportError as exc:
-        raise ImageUnreachable(f"image provider unreachable: {type(exc).__name__}") from exc
+def _download(client: httpx.Client, url: str, headers: dict[str, str],
+              configured_url: str) -> bytes:
+    """Baixa uma imagem sem levar a credencial do provider a outra origem."""
+    configured = httpx.URL(configured_url)
+    configured_origin = (configured.scheme, configured.host, configured.port)
+    current_url = url
+    for redirect_count in range(6):
+        request = client.build_request("GET", current_url, headers=headers)
+        origin = (request.url.scheme, request.url.host, request.url.port)
+        if origin != configured_origin and "Authorization" in request.headers:
+            del request.headers["Authorization"]
+        try:
+            resp = client.send(request, follow_redirects=False)
+        except httpx.TransportError as exc:
+            raise ImageUnreachable(
+                f"image provider unreachable: {type(exc).__name__}") from exc
+        location = resp.headers.get("location")
+        if not resp.is_redirect or not location:
+            break
+        if redirect_count == 5:
+            raise ImageError("excesso de redirects ao baixar imagem")
+        current_url = str(resp.url.join(location))
     if resp.status_code in (401, 403):
         raise ImageAuthError(f"auth_error: HTTP {resp.status_code} ao baixar imagem")
     if resp.status_code != 200:
@@ -250,7 +266,7 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
     if first.get("b64_json"):
         content = _decode_b64(str(first["b64_json"]), "images/generations")
     elif first.get("url"):
-        content = _download(client, str(first["url"]), headers)
+        content = _download(client, str(first["url"]), headers, base)
     else:
         raise ImageError("resposta de images/generations sem b64_json nem url")
     width = height = None
@@ -398,6 +414,13 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 result["model_count"] = len(ids)
                 if cfg.get("openai_model"):
                     result["model_available"] = cfg["openai_model"] in ids
+                if not models:
+                    result["status"] = "degraded"
+                    result["detail"] = "servidor respondeu, mas nenhum modelo está disponível"
+                elif not result.get("model_available", True):
+                    result["status"] = "degraded"
+                    result["detail"] = (
+                        f"modelo '{cfg['openai_model']}' não consta em /models")
             else:
                 raise ImageError(f"config_error: provider de imagem desconhecido: {provider!r}")
     except ImageError as exc:

@@ -198,11 +198,13 @@ def test_portrait_job_card_deleted_errors(client, tmp_path):
     assert "not found" in done["error"]
 
 
-def test_portrait_job_images_disabled_errors(client, tmp_path):
+def test_portrait_job_images_disabled_errors(client, tmp_path, admin_token):
     adv = make_adventure()
     npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
     use_tmp_storage(tmp_path)
-    client.put("/api/settings/image", json={"enabled": False})
+    resp = client.put("/api/settings/image", json={"enabled": False},
+                      headers={"Authorization": f"Bearer {admin_token}"})
+    assert resp.status_code == 200
     job = client.post(
         f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
 

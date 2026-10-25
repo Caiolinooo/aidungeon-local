@@ -263,7 +263,8 @@ def get_image_settings() -> dict:
 
 
 @router.put("/settings/image")
-def put_image_settings(body: ImageSettingsUpdate) -> dict:
+def put_image_settings(body: ImageSettingsUpdate,
+                       info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         settings_store.apply_image_update(conn, update)

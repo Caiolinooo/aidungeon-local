@@ -7,7 +7,8 @@ import json
 
 import httpx
 
-from app import db, deps, settings_store
+from app import auth, db, deps, settings_store, users
+from conftest import TEST_AUTH_SECRET, TEST_AUTH_USER
 
 RVQ = base64.b64encode(b"rvq-bytes").decode("ascii")
 
@@ -45,6 +46,11 @@ def _use(client, transport) -> None:
     client.app.dependency_overrides[deps.get_http_transport] = lambda: transport
 
 
+def _as_admin(client) -> None:
+    token = auth.make_token(users.ADMIN_USERNAME, TEST_AUTH_SECRET, ttl_h=1)
+    client.headers["Authorization"] = f"Bearer {token}"
+
+
 def _clone(client, name="Clara", ref_text="Olá, esta é a minha voz."):
     return client.post(
         "/api/voices/clone",
@@ -65,6 +71,8 @@ def test_clone_is_listed_apart_from_builtins(client):
     assert body["name"] == "Clara"
     assert body["id"].startswith("cv_")
     assert len(body["id"]) == 11
+    with db.session() as conn:
+        assert db.get_cloned_voice(conn, body["id"])["owner"] == TEST_AUTH_USER
     listed = client.get("/api/voices")
     assert listed.status_code == 200
     data = listed.json()
@@ -102,6 +110,7 @@ def test_narrator_accepts_cloned_voice_and_rejects_unknown(client):
         created = _clone(client, name="Narradora")
         assert created.status_code == 200, created.text
         voice_id = created.json()["id"]
+        _as_admin(client)
         ok = client.put("/api/settings/voice", json={"narrator_voice": voice_id})
         bad = client.put("/api/settings/voice", json={"narrator_voice": "cv_00000000"})
     finally:

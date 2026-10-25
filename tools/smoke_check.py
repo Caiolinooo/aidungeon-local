@@ -6,9 +6,10 @@ smoke_check.py -- Confere uma instância do backend depois de um deploy (G9).
 1. Espera até --wait-s o GET /api/adventures sem token responder 401 (no ar,
    auth ligada).
 2. Com o token mintado de AUTH_USER/AUTH_SECRET do --env-file (nunca
-   impresso): GET /api/adventures 200 e GET /api/health/llm 200. O status do
-   LLM só é impresso: servidor LLM fora do ar não é falha do deploy.
-3. --db: migrations registradas em schema_migrations e user_version.
+   impresso): GET /api/adventures 200 e GET /api/health/llm 200 com status ok
+   e model_loaded=true.
+3. --db: migrations esperadas registradas em schema_migrations, user_version
+   atual e PRAGMA integrity_check=ok.
 
 Com --player-idle-min N --idle-db BANCO não sobe nada: sai 0 se o jogador
 está parado há N minutos ou mais (mesma regra do --yield-db do
@@ -73,28 +74,54 @@ def check_api(base: str, token: str) -> bool:
         health = json.loads(raw)
     except ValueError:
         health = {}
+    if not isinstance(health, dict):
+        health = {}
     breaker = (health.get("scheduler") or {}).get("breaker") or {}
     slots = (health.get("slots") or {}).get("total")
     print(f"  GET /api/health/llm: HTTP {status} status={health.get('status')} "
           f"modelo={health.get('model_discovered')} slots={slots} breaker={breaker.get('state')}"
           + (f" ({health.get('details')})" if health.get("details") else ""))
-    if health.get("status") not in ("ok", "degraded"):
-        print("  aviso: o LLM não está ok; o app subiu, então o deploy segue")
-    return status == 200 and "status" in health
+    return (status == 200 and health.get("status") == "ok"
+            and health.get("model_loaded") is True)
 
 
 def check_db(path: str) -> bool:
+    conn = None
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        applied = [n for n, in conn.execute("SELECT number FROM schema_migrations ORDER BY number")]
-        conn.close()
+        applied = [n for n, in conn.execute(
+            "SELECT number FROM schema_migrations ORDER BY number")]
+        integrity = [row[0] for row in conn.execute("PRAGMA integrity_check")]
     except sqlite3.Error as exc:
         print(f"  banco {path}: {exc}")
         return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+    migrations_dir = Path(__file__).resolve().parents[1] / "backend" / "migrations"
+    expected = sorted(
+        int(migration.name.split("_", 1)[0])
+        for migration in migrations_dir.glob("*.sql")
+        if "_" in migration.name and migration.name.split("_", 1)[0].isdigit()
+    )
+    latest = expected[-1] if expected else 0
     print(f"  banco: user_version={version} migrations={applied[0] if applied else '-'}"
-          f"..{applied[-1] if applied else '-'} ({len(applied)})")
-    return True
+          f"..{applied[-1] if applied else '-'} ({len(applied)}) "
+          f"integrity={','.join(integrity)}")
+    ok = True
+    if integrity != ["ok"]:
+        print("  banco: PRAGMA integrity_check falhou")
+        ok = False
+    missing = sorted(set(expected) - set(applied))
+    if missing:
+        print(f"  banco: migrations ausentes: {missing}")
+        ok = False
+    if version != latest:
+        print(f"  banco: user_version={version}, esperado {latest}")
+        ok = False
+    return ok
 
 
 def build_parser() -> argparse.ArgumentParser:

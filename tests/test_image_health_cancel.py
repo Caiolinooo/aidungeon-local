@@ -79,6 +79,63 @@ def test_openai_health_uses_models_and_provider_failure_is_200(client):
     assert resp.status_code == 200
     assert resp.json()["status"] == "unreachable"
 
+def test_openai_url_download_strips_authorization_on_external_origin():
+    external_auth = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/generations":
+            assert request.headers["Authorization"] == "Bearer provider-secret"
+            return httpx.Response(200, json={
+                "data": [{"url": "https://cdn.example/result.png"}]})
+        external_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=b"png")
+
+    cfg = _cfg(provider="openai_compatible", openai_base_url="http://images.local/v1",
+               openai_api_key="provider-secret", openai_model="image-model",
+               openai_size="1024x1024")
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        content, _, _ = image_client._generate_openai(cfg, client, "a lantern")
+
+    assert content == b"png"
+    assert external_auth == [None]
+
+
+def test_openai_download_redirect_does_not_forward_authorization():
+    external_auth = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/generations":
+            return httpx.Response(200, json={
+                "data": [{"url": "http://images.local/v1/result"}]})
+        if request.url.host == "images.local":
+            assert request.headers["Authorization"] == "Bearer provider-secret"
+            return httpx.Response(302, headers={
+                "Location": "https://cdn.example/result.png"})
+        external_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=b"png")
+
+    cfg = _cfg(provider="openai_compatible", openai_base_url="http://images.local/v1",
+               openai_api_key="provider-secret", openai_model="image-model",
+               openai_size="1024x1024")
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        content, _, _ = image_client._generate_openai(cfg, client, "a lantern")
+
+    assert content == b"png"
+    assert external_auth == [None]
+
+
+def test_openai_health_degrades_without_models_or_configured_alias():
+    for models in ([], [{"id": "other-model"}]):
+        cfg = _cfg(provider="openai_compatible",
+                   openai_base_url="http://images.local/v1",
+                   openai_model="image-model")
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"data": models}))
+        result = image_client.health(cfg, transport=transport)
+        assert result["status"] == "degraded"
+        assert result["model_available"] is False
+        assert result["detail"]
+
 
 def test_seed_and_variation_change_cache_without_changing_default():
     baseline = image_client.request_key(_cfg(), "a lantern")
