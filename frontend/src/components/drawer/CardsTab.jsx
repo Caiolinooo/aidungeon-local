@@ -64,6 +64,7 @@ export default function CardsTab({ adventure }) {
   const [saving, setSaving] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [webOn, setWebOn] = useState(false)
+  const [webSources, setWebSources] = useState([])
   const [aiCreating, setAiCreating] = useState(false)
 
   // Search & Filter state
@@ -284,7 +285,9 @@ export default function CardsTab({ adventure }) {
         ...(card.sheet && typeof card.sheet === 'object' ? { sheet: card.sheet } : {}),
         ...(card.portrait_prompt ? { portrait_prompt: card.portrait_prompt } : {}),
       }))
+      setWebSources(r.web_sources || [])
       if (r.web_sources?.length) toast(`Enriquecido com ${r.web_sources.length} fontes da web.`, 'ok')
+      else if (webOn) toast('A busca não encontrou fontes úteis; a ficha foi gerada sem elas.')
       else toast('Ficha enriquecida. Revise e salve.', 'ok')
     } catch (e) {
       toast(e.message)
@@ -316,8 +319,9 @@ export default function CardsTab({ adventure }) {
       const card = { ...r.card }
       delete card.web_sources
       await api.createCard(adventure.id, card)
+      setWebSources(r.web_sources || [])
       if (r.web_sources?.length) toast(`Enriquecido com ${r.web_sources.length} fontes da web.`, 'ok')
-      else toast('Ficha criada.', 'ok')
+      else toast('Ficha criada, mas a busca não encontrou fontes úteis.', 'ok')
       reload()
     } catch (e) {
       toast(e.message)
@@ -755,6 +759,28 @@ export default function CardsTab({ adventure }) {
                 </button>
               </div>
             </div>
+            {webSources.length > 0 && (
+              <div className="rounded-xl border border-subtle bg-elevated/40 p-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
+                  Fontes usadas nesta pesquisa
+                </p>
+                <ul className="space-y-1 text-xs text-secondary">
+                  {webSources.map((source, index) => (
+                    <li key={`${source.url}-${index}`}>
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-accent-pri underline hover:text-accent-hov"
+                      >
+                        {source.title}
+                      </a>
+                      {source.snippet && <span className="block text-muted">{source.snippet}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </Modal>
       )}

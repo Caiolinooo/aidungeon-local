@@ -43,14 +43,19 @@ def resolve_likeness(adventure_id: str, card_id: str,
 @router.put("/adventures/{adventure_id}/cards/{card_id}/reference")
 def put_reference(adventure_id: str, card_id: str,
                   file: UploadFile = File(...),
-                  mode: str = Form("reference")) -> dict:
-    """Upload manual. `reference` é NPC fictício; `real_person` marca a ficha."""
+                  mode: str = Form("reference"),
+                  transport=Depends(get_http_transport)) -> dict:
+    """Upload manual; também atualiza os campos visuais do card pela foto."""
     card = _card_or_404(adventure_id, card_id)
     content = file.file.read(likeness.MAX_IMAGE_BYTES + 1)
     with db.session() as conn:
         current = db.get_card(conn, adventure_id, card_id) or card
+        llm_cfg = settings_store.effective_llm_settings(conn)
         updated = likeness.save_upload(
             conn, current, content, filename=file.filename or "", mode=mode,
+        )
+        updated = likeness.apply_visual_card(
+            conn, updated, content, llm_cfg=llm_cfg, transport=transport,
         )
         return db.attach_portrait(conn, updated)
 

@@ -609,6 +609,73 @@ def _default_describe(content: bytes, llm_cfg: dict | None,
         return ""
     return english_bits(text)
 
+_VISUAL_CARD_SYSTEM = """You analyze one reference photo for an RPG character card.
+Describe only visible, non-sensitive physical attributes. Do not identify the person.
+Return STRICT JSON only:
+{
+  "appearance": "face, hair color/style, eyes, skin, distinctive marks",
+  "body": "visible build, posture and physical features",
+  "clothing": "visible outfit, accessories, jewelry, glasses, tattoos",
+  "portrait_prompt": "one detailed English portrait prompt matching the photo",
+  "entry_visual": "one concise visual description for the story card"
+}
+Do not invent biography, personality, age, ethnicity or identity. No nudity."""
+
+
+def analyze_visual_card(content: bytes, llm_cfg: dict | None,
+                        transport: httpx.BaseTransport | None) -> dict:
+    """Lê a foto e devolve campos visuais para atualizar o card."""
+    if not llm_cfg:
+        return {}
+    encoded = base64.b64encode(content).decode("ascii")
+    kind = "image/png" if content.startswith(b"\x89PNG") else "image/jpeg"
+    messages = [
+        {"role": "system", "content": _VISUAL_CARD_SYSTEM},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Analyze this reference photo and fill the JSON."},
+            {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{encoded}"}},
+        ]},
+    ]
+    try:
+        raw = llm_client.chat_completion(
+            llm_cfg, messages, role="assistant", temperature=0.1,
+            max_tokens=350, timeout_s=45, transport=transport,
+        )
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        data = json.loads(raw[start:end + 1])
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        log.info("likeness: análise visual do card indisponível (%s)", exc)
+        return {}
+
+
+def apply_visual_card(conn, card: dict, content: bytes, *,
+                      llm_cfg: dict | None,
+                      transport: httpx.BaseTransport | None) -> dict:
+    """Atualiza os campos visuais do card sem tocar na mente ou no estado."""
+    analysis = analyze_visual_card(content, llm_cfg, transport)
+    if not analysis:
+        return card
+    sheet = dict(sheet_of(card))
+    for key in ("appearance", "body", "clothing"):
+        value = analysis.get(key)
+        if isinstance(value, str) and value.strip():
+            sheet[key] = value.strip()
+    fields: dict = {"sheet": json.dumps(sheet, ensure_ascii=False)}
+    prompt = analysis.get("portrait_prompt")
+    if isinstance(prompt, str) and prompt.strip():
+        fields["portrait_prompt"] = prompt.strip()
+    visual = analysis.get("entry_visual")
+    if isinstance(visual, str) and visual.strip():
+        old_entry = str(card.get("entry") or "").strip()
+        marker = "Visual de referência:"
+        clean = re.sub(r"(?:^|\n)Visual de referência:.*?(?=\n|$)", "", old_entry).strip()
+        fields["entry"] = f"{marker} {visual.strip()}" + (f"\n{clean}" if clean else "")
+    updated = db.update_card(conn, card["adventure_id"], card["id"], fields)
+    return updated or card
+
 
 def _store_sheet(conn, card: dict, sheet: dict) -> dict:
     updated = db.update_card(conn, card["adventure_id"], card["id"], {

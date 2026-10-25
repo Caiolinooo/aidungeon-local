@@ -92,6 +92,39 @@ def test_uploaded_photo_uses_the_rigid_denoise(tmp_path, monkeypatch):
     assert denoise <= 0.15
     assert denoise < likeness.REFERENCE_DENOISE
 
+def test_visual_upload_updates_card_fields_without_erasing_personality(tmp_db, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Clara",
+            entry="Uma ranger da floresta.",
+            sheet=json.dumps({
+                "personality": " cautelosa e leal ",
+                "background": "Cresceu entre os pinheiros.",
+                "appearance": "old description",
+            }),
+        )
+    analysis = {
+        "appearance": "long blonde hair, green eyes, light skin",
+        "body": "athletic build, upright posture",
+        "clothing": "green cloak, leather boots",
+        "portrait_prompt": "blonde woman in a green cloak, forest portrait",
+        "entry_visual": "a blonde woman in a green cloak",
+    }
+    monkeypatch.setattr(likeness, "analyze_visual_card", lambda *args, **kwargs: analysis)
+    with db.session() as conn:
+        updated = likeness.apply_visual_card(conn, card, PNG_BYTES, llm_cfg=None, transport=None)
+    sheet = json.loads(updated["sheet"])
+    assert sheet["appearance"] == analysis["appearance"]
+    assert sheet["body"] == analysis["body"]
+    assert sheet["clothing"] == analysis["clothing"]
+    assert sheet["personality"] == " cautelosa e leal "
+    assert sheet["background"] == "Cresceu entre os pinheiros."
+    assert updated["portrait_prompt"] == analysis["portrait_prompt"]
+    assert "Visual de referência: a blonde woman in a green cloak" in updated["entry"]
+    assert "Uma ranger da floresta." in updated["entry"]
+
 
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))

@@ -376,10 +376,27 @@ def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = N
 
 
 def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
-                transport: Any, *, role: str = "assistant") -> dict:
-    """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado."""
+                transport: Any, *, role: str = "assistant",
+                web_search: bool = False) -> dict:
+    """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado.
+
+    Com web_search, pesquisa nome e descrição e injeta as fontes no contexto.
+    """
     existing = parse_sheet(card["sheet"])
     story = f"Story: {adv['title']} — {(adv.get('description') or '')[:600]}"
+    web_sources: list[dict] = []
+    if web_search:
+        from app import web_search as web_search_mod
+        query = " ".join(part for part in (
+            card.get("title") or "", card.get("entry") or "",
+        ) if part).strip()
+        research = web_search_mod.research_context(
+            query, llm_cfg=llm_cfg, language="pt", mode="always",
+            max_results=4, transport=transport,
+        )
+        web_sources = research.get("sources") or []
+        if research.get("context_block"):
+            story += "\n\n" + research["context_block"]
     built = build_sheet(
         llm_cfg, title=card["title"], entry=card.get("entry") or "",
         sheet=existing, transport=transport, role=role, story=story,
@@ -394,7 +411,7 @@ def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
         fields["portrait_prompt"] = portrait
     updated = db.update_card(conn, adv["id"], card["id"], fields)
     log.info("npc_assets: ficha enriquecida p/ card %s (%s)", card["id"], card["title"])
-    return updated
+    return {**updated, "web_sources": web_sources}
 
 
 def _regen_context(adv: dict, card: dict, sheet: dict) -> str:

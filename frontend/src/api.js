@@ -258,8 +258,8 @@ export const api = {
   syncScene: (advId, { retry = false } = {}) =>
     request(`/adventures/${advId}/scene`, { method: 'POST', body: retry ? { retry: true } : {} }),
   // v0.5.0 — ficha estruturada do NPC (síncronos, ver docs/openapi.yaml).
-  enrichCard: (advId, cardId) =>
-    request(`/adventures/${advId}/cards/${cardId}/enrich`, { method: 'POST', body: {} }),
+  enrichCard: (advId, cardId, { webSearch = false } = {}) =>
+    request(`/adventures/${advId}/cards/${cardId}/enrich`, { method: 'POST', body: { web_search: webSearch } }),
   regenerateCard: (advId, cardId, body) =>
     request(`/adventures/${advId}/cards/${cardId}/regenerate`, { method: 'POST', body }),
   listNpcMemories: (advId, cardId) =>

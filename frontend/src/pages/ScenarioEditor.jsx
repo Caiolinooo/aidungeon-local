@@ -46,6 +46,7 @@ export default function ScenarioEditor() {
   const [pending, setPending] = useState(null)
   const [regen, setRegen] = useState(null)
   const [webOn, setWebOn] = useState(false)
+  const [webSources, setWebSources] = useState([])
   const opRef = useRef(false)
 
   const busy = pending !== null || regen !== null
@@ -107,7 +108,7 @@ export default function ScenarioEditor() {
         card_count: count,
         pov: form.third_person ? 'third' : 'second',
         deep_characters: true,
-        web_search_mode: 'off',
+        web_search_mode: webOn ? 'always' : 'off',
       })
       setForm({
         title: draft.title ?? form.title,
@@ -131,7 +132,9 @@ export default function ScenarioEditor() {
   }
 
   const noteWeb = (sources) => {
+    setWebSources(sources || [])
     if (sources?.length) toast(`Enriquecido com ${sources.length} fontes da web.`, 'ok')
+    else if (webOn) toast('A busca não encontrou fontes úteis; o conteúdo foi gerado sem elas.')
   }
 
   const refine = async (field, instruction = '') => {
@@ -513,6 +516,23 @@ export default function ScenarioEditor() {
             </button>
             {regenBtn('story_cards')}
           </StoryCardsEditor>
+          {webSources.length > 0 && (
+            <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-800/40 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                Fontes da pesquisa
+              </p>
+              <ul className="space-y-1 text-xs text-zinc-300">
+                {webSources.map((source, index) => (
+                  <li key={`${source.url}-${index}`}>
+                    <a href={source.url} target="_blank" rel="noreferrer" className="text-emerald-400 underline">
+                      {source.title}
+                    </a>
+                    {source.snippet && <span className="block text-zinc-500">{source.snippet}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <label className="flex items-center gap-2 text-sm text-zinc-300">

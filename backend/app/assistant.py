@@ -968,8 +968,16 @@ def generate_single_card(
 
     web_sources: list[dict] = []
     if web_search:
+        query_parts = [concept.strip()]
+        if instruction and instruction.strip():
+            query_parts.append(instruction.strip())
+        if current_card:
+            entry = str(current_card.get("entry") or "").strip()
+            if entry:
+                query_parts.append(entry[:240])
+        query = " ".join(part for part in query_parts if part)
         research = web_search_mod.research_context(
-            concept, llm_cfg=llm_cfg, language=language, mode="always", max_results=4, transport=transport
+            query, llm_cfg=llm_cfg, language=language, mode="always", max_results=4, transport=transport
         )
         web_sources = research.get("sources") or []
         if research.get("context_block"):

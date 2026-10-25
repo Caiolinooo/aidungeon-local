@@ -335,6 +335,9 @@ class AssistantCardRequest(BaseModel):
     web_search: bool = False
     language: str = "pt"
 
+class CardEnrichRequest(BaseModel):
+    web_search: bool = False
+
 
 class AssistantSyncPlotRequest(BaseModel):
     adventure_id: str

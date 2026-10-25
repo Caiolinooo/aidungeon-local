@@ -650,8 +650,9 @@ export default function NpcsTab({ adventure }) {
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
   const [enrichingId, setEnrichingId] = useState(null)
+  const [webOn, setWebOn] = useState(false)
+  const [webSources, setWebSources] = useState([])
   const [regeneratingId, setRegeneratingId] = useState(null)
-  const [dismissed, setDismissed] = useState(() => new Set())
   const [clonedVoices, setClonedVoices] = useState([])
   const prevStatuses = useRef({})
 
@@ -798,9 +799,17 @@ export default function NpcsTab({ adventure }) {
   const enrich = async (card) => {
     setEnrichingId(card.id)
     try {
-      const updated = await api.enrichCard(adventure.id, card.id)
-      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
-      toast('Sheet enriched.', 'ok')
+      const updated = await api.enrichCard(adventure.id, card.id, { webSearch: webOn })
+      const { web_sources: sources = [], ...savedCard } = updated
+      setCards((cs) => cs.map((c) => (c.id === card.id ? savedCard : c)))
+      setWebSources(sources)
+      if (updated.web_sources?.length) {
+        toast(`NPC enriquecido com ${updated.web_sources.length} fontes da web.`, 'ok')
+      } else if (webOn) {
+        toast('NPC enriquecido, mas a busca não encontrou fontes úteis.', 'ok')
+      } else {
+        toast('Sheet enriched.', 'ok')
+      }
     } catch (e) {
       toast(e.message)
     } finally {
@@ -950,6 +959,15 @@ export default function NpcsTab({ adventure }) {
             Generate missing portraits
           </button>
         </div>
+        <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer" title="Pesquisar na internet ao enriquecer NPCs">
+          <input
+            type="checkbox"
+            checked={webOn}
+            onChange={(e) => setWebOn(e.target.checked)}
+            className="accent-emerald-600 rounded"
+          />
+          <span>🌐 web</span>
+        </label>
       </div>
 
       <div className="mb-3">
@@ -1015,6 +1033,28 @@ export default function NpcsTab({ adventure }) {
           )
         })}
       </ul>
+      {webSources.length > 0 && (
+        <div className="mt-3 rounded-xl border border-subtle bg-elevated/40 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
+            Fontes da pesquisa
+          </p>
+          <ul className="space-y-1 text-xs text-secondary">
+            {webSources.map((source, index) => (
+              <li key={`${source.url}-${index}`}>
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent-pri underline hover:text-accent-hov"
+                >
+                  {source.title}
+                </a>
+                {source.snippet && <span className="block text-muted">{source.snippet}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

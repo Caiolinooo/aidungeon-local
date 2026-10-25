@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Response
 from app import db, events, llm_client, npc_assets, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import CardBulkAction, CardRegenerateRequest, StoryCardUpsert
+from app.schemas import CardBulkAction, CardEnrichRequest, CardRegenerateRequest, StoryCardUpsert
 
 router = APIRouter()
 
@@ -147,14 +147,17 @@ def regenerate_card(adventure_id: str, card_id: str, body: CardRegenerateRequest
 
 
 @router.post("/{adventure_id}/cards/{card_id}/enrich")
-def enrich_card(adventure_id: str, card_id: str,
+def enrich_card(adventure_id: str, card_id: str, body: CardEnrichRequest | None = None,
                 transport=Depends(get_http_transport)) -> dict:
-    """v0.5.0: LLM preenche a ficha estruturada + portrait_prompt do card."""
+    """Preenche ficha e retrato; com web_search, fundamenta fatos na internet."""
     with db.session() as conn:
         adv, card = _card_or_404(conn, adventure_id, card_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
         try:
-            card = npc_assets.enrich_card(conn, adv, card, llm_cfg, transport=transport)
+            card = npc_assets.enrich_card(
+                conn, adv, card, llm_cfg, transport=transport,
+                web_search=bool(body and body.web_search),
+            )
         except llm_client.LlmError as exc:
             raise GameError(503, "llm_unreachable", "LLM service unavailable") from exc
         card = db.attach_portrait(conn, card)
