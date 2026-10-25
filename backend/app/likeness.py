@@ -175,29 +175,39 @@ def english_descriptor(card: dict) -> str:
 
 
 def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
-    """Nome real e descritor na frente; o resto é o rosto dos cards fictícios.
+    """Nome e aparência na frente; foto enviada substitui descrição facial.
 
-    Sem pessoa real, o texto é o de `npc_assets.likeness_clause`.
+    Quando há foto de referência, o texto não descreve cabelo, olhos ou rosto:
+    esses traços vêm da imagem. Descrição concorrente fazia o SD trocar a pessoa.
     """
     reals = [card for card in cards if is_real_person(card) and not is_minor(card)]
     others = [card for card in cards if card not in reals]
-    rest = npc_assets.likeness_clause(others, explicit=explicit)
-    if not reals:
+    rest = npc_assets.likeness_clause(
+        [card for card in others if not has_reference_image(card)],
+        explicit=explicit,
+    )
+    photo_names = [
+        (card.get("title") or "").strip()
+        for card in others if has_reference_image(card)
+    ]
+    if not reals and not photo_names:
         return rest
     bits: list[str] = []
     for card in reals:
+        if has_reference_image(card):
+            bits.append(display_name(card))
+            continue
         desc = english_descriptor(card)
         if not explicit:
             desc = strip_explicit(desc)
         bits.append(f"{display_name(card)}: {desc}" if desc else display_name(card))
+    bits.extend(name for name in photo_names if name)
     lead = "exact likeness of " + ", ".join(bits)
     if not rest:
         return lead
     prefix = "exact likeness, "
     tail = rest[len(prefix):] if rest.startswith(prefix) else rest
     return f"{lead}, {tail}"
-
-
 def real_person_prefix(card: dict) -> str:
     """Abre o retrato com o nome real. Vazio se não for pessoa real adulta."""
     if not is_real_person(card) or is_minor(card):
@@ -249,6 +259,13 @@ def reference_bytes(card: dict) -> bytes | None:
     if path is None:
         return None
     return path.read_bytes()
+
+def has_reference_image(card: dict) -> bool:
+    """Existe foto real para travar a aparência desta carta."""
+    return bool(visual_reference_bytes(card) or (
+        is_real_person(card) and reference_bytes(card)
+    ))
+
 
 
 def visual_reference_bytes(card: dict) -> bytes | None:

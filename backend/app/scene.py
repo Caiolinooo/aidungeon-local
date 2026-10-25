@@ -134,6 +134,19 @@ def _last_mention(text: str, name: str) -> int:
         last = match.start()
     return last
 
+def _mention_names(card: dict) -> list[str]:
+    """Título, gatilhos e o primeiro nome de um personagem com sobrenome.
+
+    A narração chama "Thalita" depois de apresentar "Thalita Massoto".
+    Sem o nome curto, a carta — e a foto de referência — fica fora da cena.
+    """
+    names = [card.get("title") or "", *(card.get("triggers") or [])]
+    title = " ".join(str(card.get("title") or "").split())
+    if len(title.split()) > 1:
+        names.append(title.split()[0])
+    return list(dict.fromkeys(name for name in names if name))
+
+
 
 def atmosphere_of(text: str) -> str:
     lower = text.lower()
@@ -188,7 +201,7 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
     for card in cards:
         if (card.get("type") or "") != "character":
             continue
-        names = [card.get("title") or "", *(card.get("triggers") or [])]
+        names = _mention_names(card)
         index = max((_last_mention(text, name) for name in names), default=-1)
         if index >= 0:
             ranked.append((index, card))

@@ -51,6 +51,17 @@ def _unit(payload: dict) -> dict:
     return args[0]
 
 
+def test_first_name_puts_the_reference_card_in_the_scene():
+    from app import scene
+    card = {"id": "c1", "type": "character", "title": "Thalita Massoto", "triggers": []}
+    other = {"id": "c2", "type": "character", "title": "Maria Fernanda", "triggers": []}
+    text = "Thalita soltou o lápis e olhou para Caio."
+    assert scene._cast([card, other], text) == [card]
+
+    # Nome composto não pode virar substring de outra palavra.
+    assert scene._cast([card], "O talitalmo brilhou.") == []
+
+
 def test_reference_images_skip_a_minor(tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path))
     photo = tmp_path / "face.png"
