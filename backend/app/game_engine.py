@@ -41,6 +41,7 @@ from typing import Any, Iterator
 
 from app import (
     action_check,
+    canon,
     choices_service,
     context_builder,
     db,
@@ -495,6 +496,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 if outcome and outcome.get("refusal"):
                     refusal = outcome["refusal"]
                     with appending(adventure_id) as conn:
+                        canon.restore(conn, adventure_id, [player_action["id"]])
                         db.delete_action(conn, player_action["id"])
                         metadata = {
                             "actor": user, "entity_id": str(player_action["id"]),
@@ -633,6 +635,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 # Só notas de contexto (cortadas pela stop ou pelo sanitizer) ou
                 # resposta vazia: um continue vazio quebraria choices e chronicle.
                 _revert_applied_rules(adventure_id, applied_action_id)
+                if player_action is None:
+                    _discard_pending_canon(adventure_id, generation_id)
                 source = player_action or retry_of or {}
                 payload = {
                     "message": "the narrator returned no story text; nothing was saved, try again",
@@ -653,9 +657,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     db.delete_action(conn, retry_of["id"])
                     action = db.insert_action(conn, adventure_id, retry_of["seq"],
                                               "continue", text)
+                    canon.reanchor(conn, adventure_id, retry_of["id"], action["id"])
                     db.touch_adventure(conn, adventure_id)
                 else:
                     action = append_action(conn, adventure_id, "continue", text)
+                    canon.attach(conn, adventure_id, generation_id, action["id"])
                 if quality:
                     db.merge_action_rules(conn, action["id"], {"quality_flags": quality})
                     action["quality_flags"] = quality
@@ -720,15 +726,18 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             payload = {"message": exc.message, "code": "llm_cancelled"}
             if player_action is not None and retry_of is None:
                 with appending(adventure_id) as conn:
+                    canon.restore(conn, adventure_id, [player_action["id"]])
                     db.delete_action(conn, player_action["id"])
                     events_bus.record(conn, adventure_id, "undo", {}, **metadata)
                     events_bus.record(
                         conn, adventure_id, "generation_cancelled", payload, **metadata)
             else:
+                _discard_pending_canon(adventure_id, generation_id)
                 events_bus.publish(adventure_id, "generation_cancelled", payload, **metadata)
             yield {"event": "error", "data": payload}
         except llm_client.LlmError as exc:
             _revert_applied_rules(adventure_id, applied_action_id)
+            _discard_pending_canon(adventure_id, generation_id)
             source = player_action or retry_of or {}
             payload = {"message": exc.message, "code": exc.code}
             events_bus.publish(
@@ -739,6 +748,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             yield {"event": "error", "data": payload}
         except Exception as exc:  # defesa — o stream sempre termina com erro legível
             _revert_applied_rules(adventure_id, applied_action_id)
+            _discard_pending_canon(adventure_id, generation_id)
             source = player_action or retry_of or {}
             payload = {"message": f"{type(exc).__name__}: {exc}",
                        "code": "generation_failed"}
@@ -791,6 +801,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
                 actor=user, entity_id=str(player_action["id"]),
                 turn_seq=player_action["seq"], generation_id=generation_id,
             )
+            canon.capture(conn, adventure_id, generation_id, player_action["id"])
     except Exception:
         release_generation_lock(adventure_id)
         raise
@@ -820,9 +831,12 @@ def handle_continue(adventure_id: str, transport: Any = None, *,
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
     cancel_post_turn(adventure_id)
+    generation_id = db.new_id()
+    with appending(adventure_id) as conn:
+        canon.capture(conn, adventure_id, generation_id)
     return _stream_generation(adventure_id, player_action=None,
                               retry_of=None, retry_count=0, transport=transport,
-                              cancel=cancel, generation_id=db.new_id())
+                              cancel=cancel, generation_id=generation_id)
 
 
 def handle_retry(adventure_id: str, transport: Any = None, *,
@@ -854,6 +868,17 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
                               retry_of=old, retry_count=effective_count,
                               transport=transport, cancel=cancel,
                               generation_id=db.new_id())
+
+
+def _discard_pending_canon(adventure_id: str, generation_id: str) -> None:
+    """Continue que não chegou a gravar não deixa foto órfã."""
+    if not generation_id:
+        return
+    try:
+        with db.session() as conn:
+            canon.discard_unanchored(conn, adventure_id, generation_id)
+    except Exception:
+        log.warning("canon: foto sem action não descartada", exc_info=True)
 
 
 def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> int:
@@ -901,25 +926,28 @@ def handle_undo(adventure_id: str) -> dict:
 
         removed: list[dict] = []
         if last["type"] == "continue":
-            _restore_body_from_action(conn, adventure_id, last)
-            db.delete_action(conn, last["id"])
             removed.append(last)
             # Um See pedido no meio do turno grava entre a ação e a resposta;
             # ele não é parte do turno e fica.
             prev = next((a for a in reversed(actions[:-1]) if a["type"] != "see"), None)
             if prev and prev["type"] in db.PLAYER_TYPES:
-                from app.sim import engine as sim_engine
-                sim_engine.revert(conn, adventure_id, prev["id"])
-                db.delete_action(conn, prev["id"])
                 removed.append(prev)
         else:
-            # ação do jogador órfã (geração falhou) ou 'see': remove só ela
-            if last["type"] in db.PLAYER_TYPES:
+            removed.append(last)
+        restored = canon.restore(conn, adventure_id, [action["id"] for action in removed])
+        if not restored:
+            if last["type"] == "continue":
+                _restore_body_from_action(conn, adventure_id, last)
+                prev = next((action for action in removed if action["id"] != last["id"]), None)
+                if prev is not None:
+                    from app.sim import engine as sim_engine
+                    sim_engine.revert(conn, adventure_id, prev["id"])
+            elif last["type"] in db.PLAYER_TYPES:
                 from app.sim import engine as sim_engine
                 sim_engine.revert(conn, adventure_id, last["id"])
                 _restore_body_from_action(conn, adventure_id, last)
-            db.delete_action(conn, last["id"])
-            removed.append(last)
+        for action in removed:
+            db.delete_action(conn, action["id"])
 
         removed.sort(key=lambda a: a["seq"])
         db.touch_adventure(conn, adventure_id)

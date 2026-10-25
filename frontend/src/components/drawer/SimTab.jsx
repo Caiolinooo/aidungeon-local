@@ -313,6 +313,14 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               >
                 Avançar 1 hora
               </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => run(() => api.simCatchup(id, 1440))}
+                className="rounded-lg border border-subtle px-2 py-1 text-[11px] hover:bg-surface disabled:opacity-40"
+              >
+                Recuperar até 24h
+              </button>
               <span aria-live="polite" className="pb-1 text-[10px] text-muted">
                 {life.running ? 'Tempo automático ativo' : 'Tempo automático pausado'}
               </span>
@@ -368,6 +376,8 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
               {life.npcs.map((npc) => (
                 <li key={npc.card_id}>
                   {npc.name || 'NPC'}: {npc.activity || '…'}{npc.place ? ` (${npc.place})` : ''}
+                  {npc.reason ? ` — ${npc.reason}` : ''}
+                  {npc.agenda_next?.clock ? ` · próximo ${npc.agenda_next.clock} ${npc.agenda_next.activity}` : ''}
                 </li>
               ))}
             </ul>

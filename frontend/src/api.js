@@ -147,6 +147,8 @@ export const api = {
     }),
   simStep: (id, minutes = 60) =>
     request(`/adventures/${id}/sim/life/step`, { method: 'POST', body: { minutes } }),
+  simCatchup: (id, minutes = 1440) =>
+    request(`/adventures/${id}/sim/life/catchup`, { method: 'POST', body: { minutes, key: 'manual' } }),
   simPutActor: (id, body) =>
     request(`/adventures/${id}/sim/actor`, { method: 'PUT', body }),
   simRoll: (id, expr, mode = '') =>

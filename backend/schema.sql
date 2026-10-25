@@ -314,6 +314,7 @@ CREATE TABLE sim_runtime(
   active_tick_id TEXT NOT NULL DEFAULT '',
   lease_owner TEXT NOT NULL DEFAULT '',
   lease_until REAL NOT NULL DEFAULT 0,
+  last_tick_real REAL NOT NULL DEFAULT 0,
   updated_at TEXT
 );
 CREATE TABLE sim_ticks(
@@ -325,4 +326,16 @@ CREATE TABLE sim_ticks(
   created_at TEXT,
   PRIMARY KEY(adventure_id, tick_id)
 );
+
+-- Foto lógica do turno (migration 032). Banco novo não roda o arquivo.
+CREATE TABLE IF NOT EXISTS turn_canon (
+  adventure_id TEXT NOT NULL,
+  generation_id TEXT NOT NULL,
+  anchor_action_id INTEGER,
+  snapshot_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (adventure_id, generation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_canon_anchor
+  ON turn_canon(adventure_id, anchor_action_id);
 

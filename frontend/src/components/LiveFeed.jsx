@@ -25,6 +25,12 @@ const TYPE_LABELS = {
   undo: 'Desfazer',
   generation_failed: 'Erro',
   generation_cancelled: 'Cancelado',
+  see_failed: 'Imagem',
+  stale_work_dropped: 'Obsoleto',
+  life_playback_changed: 'Tempo',
+  turn_changed: 'Turno',
+  action_edited: 'Edição',
+  ui_changed: 'Painel',
   reset_required: 'Sincronização',
 }
 
@@ -41,8 +47,20 @@ function eventText(event) {
     const day = data.day ?? data.sim_day
     const minute = data.minute ?? data.sim_minute
     const clock = minute == null ? '' : ` ${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
-    return `Dia ${day ?? '—'}${clock}: o mundo avançou.`
+    const decisions = Array.isArray(data.activities)
+      ? data.activities.slice(0, 3).map((row) => {
+        const why = row.reason ? ` (${row.reason})` : ''
+        return `${row.name || 'NPC'}: ${row.activity || '…'}${why}`
+      }).join('; ')
+      : ''
+    return `Dia ${day ?? '—'}${clock}: o mundo avançou.${decisions ? ` ${decisions}` : ''}`
   }
+  if (type === 'stale_work_dropped') return 'Trabalho obsoleto descartado.'
+  if (type === 'life_playback_changed') return data.running ? 'Tempo automático iniciado.' : 'Tempo automático pausado.'
+  if (type === 'turn_changed') return data.turn_user ? `A vez passou para ${data.turn_user}.` : 'A vez mudou.'
+  if (type === 'action_edited') return 'Texto de uma ação editado.'
+  if (type === 'see_failed') return data.message || 'A imagem falhou.'
+  if (type === 'ui_changed') return 'O painel do jogo mudou.'
   if (type === 'action') return data.text || 'Nova resposta da IA.'
   if (type === 'player_action') return data.text || 'Nova ação do jogador.'
   if (type === 'job_progress') return `${data.type || 'Job'}: ${data.status || 'atualizado'}.`

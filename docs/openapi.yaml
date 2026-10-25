@@ -2024,6 +2024,38 @@ paths:
         '409':
           description: Modo Vida desativado.
 
+  /api/adventures/{adventureId}/sim/life/catchup:
+    post:
+      tags: [sim]
+      summary: Recuperar tempo lógico parado, sem LLM
+      operationId: catchUpLife
+      description: Fatias idempotentes de até 60 minutos. A mesma chave não avança o relógio duas vezes. Teto de 24 horas.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 1440
+                  default: 1440
+                key:
+                  type: string
+      responses:
+        '200':
+          description: Estado após o catch-up.
+          content:
+            application/json:
+              schema:
+                type: object
+        '409':
+          description: Modo Vida desativado.
+
   /api/adventures/{adventureId}/sim/life/step:
     post:
       tags: [sim]

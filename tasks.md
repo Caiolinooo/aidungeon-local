@@ -124,9 +124,9 @@ Plano: `local://rpg-life-sim-plan.md`. Brief: `outputs/rpg-life-sim-research.md`
 | ID | Entrega | Status |
 |---|---|---|
 | L0 | Propriedade/admin, SSRF, clone async, health/deploy real | feito |
-| L1 | Cânone transacional, revisões, idempotência e undo completo | parcial: outbox/revisões/idempotência; falta undo total |
-| L2 | Event log durável e livefeed unificado com cursor | parcial: log/replay/UI; falta cobrir todos os domínios |
-| L3 | Tempo autônomo, play/pause/speed, catch-up e agendas | parcial: worker/playbacks; faltam agendas/utilidade |
+| L1 | Cânone transacional, revisões, idempotência e undo completo | feito: foto lógica por geração, undo restaura hash e turn_user, crônica idempotente e obsoleta não grava. Jobs de imagem ainda não checam a revisão de origem. |
+| L2 | Event log durável e livefeed unificado com cursor | parcial: log/replay/UI, terminais de job (falha, cancelamento, restart) e ui_changed no mesmo commit. Nem toda mutação de domínio emite evento. |
+| L3 | Tempo autônomo, play/pause/speed, catch-up e agendas | feito: agenda por profissão/dia/estação, necessidade crítica ou bloqueio, catch-up de 24h idempotente sem LLM, mortos e caídos sem ação |
 | L4 | Necessidades, relações, economia e consequências sistêmicas | pendente |
 | L5 | Mapa, viagem, quests, facções, combate e geração executável | pendente |
 | L6 | Mídia, acessibilidade, virtualização, cadência e quotas | pendente |

@@ -345,16 +345,16 @@ export default function GamePanel({
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-2 pb-2 border-b border-subtle">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-            Game Controls
+            Controles do jogo
           </span>
           {onRegenerate && (
             <button
               onClick={onRegenerate}
               disabled={disabled || regenerating}
-              title="Ask AI to redesign these controls"
+              title="Pedir à IA para redesenhar estes controles"
               className="text-xs text-accent-pri hover:underline disabled:opacity-50"
             >
-              {regenerating ? 'Redesigning…' : '↻ Redesign'}
+              {regenerating ? 'Redesenhando…' : '↻ Redesenhar'}
             </button>
           )}
         </div>
@@ -408,7 +408,7 @@ export default function GamePanel({
       <div className="mx-auto w-full max-w-6xl px-3 py-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Game controls
+            Controles do jogo
           </span>
           <span className="flex-1" />
           <button
@@ -417,7 +417,7 @@ export default function GamePanel({
             title="Pedir à IA para redesenhar estes controles"
             className="min-h-11 rounded-md px-2 text-xs text-secondary hover:bg-elevated hover:text-primary disabled:opacity-40"
           >
-            {regenerating ? '…' : '↻ Redesign'}
+            {regenerating ? '…' : '↻ Redesenhar'}
           </button>
           {onClose && (
             <button

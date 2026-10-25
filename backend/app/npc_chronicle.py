@@ -18,7 +18,7 @@ import logging
 import re
 from typing import Any
 
-from app import body_state, db, events, jobs, likeness, llm_client, npc_assets, settings_store, ui_runtime, world_facts
+from app import body_state, canon, db, events, jobs, likeness, llm_client, npc_assets, settings_store, ui_runtime, world_facts
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -531,6 +531,8 @@ def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str, *,
     """Aplica o JSON do passe. Não chama o LLM."""
     if not isinstance(payload, dict):
         return {"created": 0, "updated": 0, "bodies": 0}
+    if canon.chronicle_gate(conn, adventure_id, source_action_id) == "duplicate":
+        return {"created": 0, "updated": 0, "bodies": 0, "idempotent": True}
     incoming = _incoming_plot(payload, plot)
     protagonists = protagonist_names(plot) | protagonist_names(incoming)
     all_cards = db.list_cards(conn, adventure_id)
@@ -568,6 +570,8 @@ def apply_chronicle(conn, adventure_id: str, payload: dict, plot: str, *,
     )
     if incoming:
         db.update_adventure_memory(conn, adventure_id, plot_essentials=incoming)
+    if source_action_id and db.get_action(conn, int(source_action_id)) is not None:
+        db.merge_action_rules(conn, int(source_action_id), {"chronicle_applied": True})
     return {"created": created, "updated": updated, "bodies": body_count}
 
 
@@ -702,19 +706,34 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     payload = world_facts.filter_chronicle_payload(payload, assessment)
     _confirm_real_people(payload, transport)
     latest = next((action for action in reversed(actions) if action.get("type") == "continue"), None)
+    source_action_id = (latest or {}).get("id")
     with db.session() as conn:
+        gate = canon.chronicle_gate(conn, adventure_id, source_action_id)
+        if gate == "stale":
+            events.record(
+                conn, adventure_id, "stale_work_dropped",
+                {"source_action_id": source_action_id, "worker": "chronicle"},
+                entity_id=str(source_action_id or ""),
+                idempotency_key=f"chronicle:{source_action_id}:stale",
+            )
+            return {"created": 0, "updated": 0, "stale": True}
+        if gate == "duplicate":
+            return {"created": 0, "updated": 0, "idempotent": True}
         result = apply_chronicle(
             conn, adventure_id, payload, plot,
-            source_action_id=(latest or {}).get("id"),
+            source_action_id=source_action_id,
             source_seq=(latest or {}).get("seq"),
         )
         updated = db.get_adventure(conn, adventure_id) or {}
         ui_after = updated.get("ui_state") or {}
-    if ui_profile is not None or ui_after:
-        events.publish(adventure_id, "ui_changed", {
-            "ui_state": ui_after,
-            "seq": (latest or {}).get("seq"),
-        })
+        if ui_profile is not None or ui_after:
+            events.record(
+                conn, adventure_id, "ui_changed",
+                {"ui_state": ui_after, "seq": (latest or {}).get("seq")},
+                entity_id=str(source_action_id or ""),
+                turn_seq=(latest or {}).get("seq"),
+                idempotency_key=f"chronicle:{source_action_id}:ui",
+            )
     log.info("npc_chronicle: aventura %s → %s", adventure_id, result)
     return result
 

@@ -586,7 +586,7 @@ def update_adventure(conn: sqlite3.Connection, adventure_id: str, **fields: Any)
 def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
     """Remove a aventura e todos os dependentes (schema não tem ON DELETE CASCADE)."""
     for table in ("jobs", "images", "memories", "npc_memories", "story_cards",
-                  "actions", "adventure_shares"):
+                  "actions", "adventure_shares", "turn_canon"):
         conn.execute(f"DELETE FROM {table} WHERE adventure_id=?", (adventure_id,))
     cur = conn.execute("DELETE FROM adventures WHERE id=?", (adventure_id,))
     return cur.rowcount > 0

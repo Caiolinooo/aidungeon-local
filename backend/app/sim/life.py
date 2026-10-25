@@ -186,7 +186,7 @@ def _sync_npcs(life: dict, cards: list[dict]) -> dict:
         if card.get("player_username"):
             continue
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-        if str(sheet.get("status") or "").strip().lower() in ("dead", "missing"):
+        if str(sheet.get("status") or "").strip().lower() in ("dead", "missing", "down"):
             continue
         card_id = card.get("id")
         if not card_id:
@@ -208,6 +208,106 @@ def _sync_npcs(life: dict, cards: list[dict]) -> dict:
         if str(card_id) not in active:
             del bucket[card_id]
     return bucket
+
+
+_PROFESSIONS = {
+    "guarda": ("quartel", (8, 18)),
+    "soldado": ("quartel", (8, 18)),
+    "guard": ("quartel", (8, 18)),
+    "taverneiro": ("taverna", (10, 23)),
+    "estalajadeiro": ("taverna", (10, 23)),
+    "innkeeper": ("taverna", (10, 23)),
+    "ferreiro": ("forja", (7, 17)),
+    "smith": ("forja", (7, 17)),
+    "mercador": ("mercado", (8, 17)),
+    "sacerdote": ("templo", (6, 18)),
+    "priest": ("templo", (6, 18)),
+    "bardo": ("praça", (16, 23)),
+    "bard": ("praça", (16, 23)),
+}
+_WEEKEND_WORK = {"taverneiro", "estalajadeiro", "innkeeper"}
+_RECOVERY = {
+    "fome": ("eat", "casa"),
+    "energia": ("sleep", "casa"),
+    "higiene": ("wash", "casa"),
+    "social": ("social", "praça"),
+    "diversao": ("fun", "taverna"),
+    "bexiga": ("bladder", "casa"),
+}
+_BLOCKED = ("imprisoned", "preso")
+
+
+def _profession(sheet: dict) -> str:
+    for key in ("profession", "occupation", "class", "job", "role"):
+        raw = sheet.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().casefold()
+    return ""
+
+
+def agenda_slot(card: dict | None, day: int, hour: int) -> tuple[str, str, str]:
+    """Agenda determinística: profissão, dia da semana e estação. Sem aleatório."""
+    day = max(1, int(day))
+    hour = int(hour) % 24
+    week, season = weekday_season(day)
+    sheet = npc_assets.parse_sheet((card or {}).get("sheet") or "") if card else {}
+    profession = _profession(sheet)
+    activity, place = DEFAULT_ROUTINE.get(hour, ("other", "rua"))
+    reason = "agenda"
+    job = _PROFESSIONS.get(profession)
+    weekend = week in ("sábado", "domingo")
+    if job and job[1][0] <= hour < job[1][1]:
+        if weekend and profession not in _WEEKEND_WORK:
+            activity, place, reason = "fun", "praça", "fim de semana"
+        else:
+            activity, place, reason = "work", job[0], "profissão"
+    elif weekend and activity == "work":
+        activity, place, reason = "fun", "praça", "fim de semana"
+    if season == "Inverno" and hour >= 21:
+        activity, place, reason = "sleep", "casa", "inverno"
+    return activity, place, reason
+
+
+def choose_npc(npc: dict, card: dict | None, day: int, hour: int) -> tuple[str, str, str]:
+    """Necessidade crítica vence a agenda. Preso registra o bloqueio."""
+    sheet = npc_assets.parse_sheet((card or {}).get("sheet") or "") if card else {}
+    status = str(sheet.get("status") or "").strip().lower()
+    if status in _BLOCKED:
+        return "rest", "cela", "bloqueado: sem liberdade de movimento"
+    needs = npc.get("needs") if isinstance(npc.get("needs"), dict) else {}
+    worst_key = None
+    worst_val = 25
+    for key in NEEDS:
+        try:
+            value = int(needs.get(key, NEED_START) or 0)
+        except (TypeError, ValueError):
+            value = NEED_START
+        if value < worst_val:
+            worst_key = key
+            worst_val = value
+    if worst_key is not None:
+        activity, place = _RECOVERY[worst_key]
+        return activity, place, f"necessidade crítica: {NEED_NAMES[worst_key]}"
+    return agenda_slot(card, day, hour)
+
+
+def next_agenda(card: dict | None, day: int, minute: int) -> dict:
+    minute = int(minute) % 1440
+    day = max(1, int(day))
+    hour = minute // 60
+    current = agenda_slot(card, day, hour)
+    for step in range(1, 25):
+        future = minute + step * 60
+        slot = agenda_slot(card, day + future // 1440, (future // 60) % 24)
+        if (slot[0], slot[1]) != (current[0], current[1]):
+            return {
+                "activity": slot[0], "place": slot[1], "reason": slot[2],
+                "clock": clock(future % 1440),
+            }
+    return {
+        "activity": current[0], "place": current[1], "reason": current[2],
+        "clock": clock(hour * 60),
+    }
 
 
 def advance(state: dict, minutes: int, activity: str, actor_key_: str,
@@ -236,6 +336,9 @@ def advance(state: dict, minutes: int, activity: str, actor_key_: str,
     worked = 0
     crossed = False
     chance = float(ctx_npc_chance)
+    cards_by_id = {
+        str(card.get("id")): card for card in (cards or []) if card.get("id")
+    }
     while remaining > 0:
         minute = int(life["minute"])
         until_hour = 60 - (minute % 60)
@@ -250,9 +353,12 @@ def advance(state: dict, minutes: int, activity: str, actor_key_: str,
         for card_id, npc in npcs.items():
             if not isinstance(npc, dict) or card_id not in npc_delta:
                 continue
-            npc_activity, place = DEFAULT_ROUTINE.get(hour, ("other", "rua"))
+            card = cards_by_id.get(str(card_id))
+            npc_activity, place, reason = choose_npc(npc, card, int(life["day"]), hour)
             npc["activity"] = npc_activity
             npc["place"] = place
+            npc["reason"] = reason
+            npc["agenda_next"] = next_agenda(card, int(life["day"]), int(life["minute"]))
             rates = _rates(npc_activity)
             for key in NEEDS:
                 npc_delta[card_id][key] += rates[key] * (slice_min / 60.0)
@@ -442,6 +548,8 @@ def render(state: dict, user: str, scene_cards: list[dict]) -> str:
         place = npc.get("place") or "rua"
         low = _need_bits(npc.get("needs") or {}, only_low=True)
         piece = f"{npc.get('name') or card.get('title') or 'NPC'}: {verb} ({place})"
+        if npc.get("reason"):
+            piece += f" — {npc['reason']}"
         if low:
             piece += f", {low}"
         npc_bits.append(piece)

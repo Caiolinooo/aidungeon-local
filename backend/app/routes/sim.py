@@ -38,6 +38,11 @@ class StepBody(BaseModel):
     minutes: int = Field(ge=1, le=60)
 
 
+class CatchupBody(BaseModel):
+    minutes: int = Field(default=24 * 60, ge=1, le=24 * 60)
+    key: str = "catchup"
+
+
 class InventoryRow(BaseModel):
     name: str
     qty: int = 1
@@ -100,6 +105,8 @@ def _clock_view(sim: dict, user: str, playback: dict | None = None) -> dict | No
             "name": npc.get("name") or "",
             "activity": npc.get("activity") or "",
             "place": npc.get("place") or "",
+            "reason": npc.get("reason") or "",
+            "agenda_next": npc.get("agenda_next") if isinstance(npc.get("agenda_next"), dict) else None,
             "needs": needs,
             "mood": life.mood(needs),
         })
@@ -276,6 +283,17 @@ def put_playback(adventure_id: str, body: PlaybackBody,
     events.publish(created)
     _publish(adventure_id)
     return payload
+
+
+@router.post("/{adventure_id}/sim/life/catchup")
+def post_catchup(adventure_id: str, body: CatchupBody,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        _visible_adventure(conn, adventure_id, info.user)
+    runtime.catch_up(adventure_id, body.minutes, key=body.key or "catchup")
+    with db.session() as conn:
+        saved = _visible_adventure(conn, adventure_id, info.user)
+        return _view(saved, info.user, conn)
 
 
 @router.post("/{adventure_id}/sim/life/step")

@@ -106,8 +106,34 @@ def _progress(job: dict) -> None:
                    entity_id=job["id"], correlation_id=job["id"])
 
 
+def _terminal_event(job: dict, status: str, result: dict | None,
+                    error: str | None) -> tuple[str, dict] | None:
+    """Evento terminal de mídia, gravado no mesmo commit do status do job."""
+    if status == "error" and job.get("type") == "see_image":
+        code = (result or {}).get("code") or "generation_failed"
+        return ("see_failed", {
+            "job_id": job["id"], "code": code, "message": error or "",
+        })
+    if status != "done" or not isinstance(result, dict):
+        return None
+    data = {"job_id": job["id"]}
+    if result.get("image"):
+        data["image"] = result["image"]
+    if job["type"] == "character_portrait" and result.get("card_id"):
+        return ("portrait_ready", {**data, "card_id": result["card_id"]})
+    if job["type"] == "scene_backdrop":
+        return ("backdrop_ready", {**data, "ref_id": job.get("ref_id") or ""})
+    if job["type"] == "see_image":
+        return ("see_ready", data)
+    if job["type"] == "card_assets" and result.get("card_id"):
+        return ("card_assets_ready", {
+            **data, "card_id": result["card_id"], "filled": result.get("filled") or [],
+        })
+    return None
+
+
 def _finish(job: dict, status: str, *, result: dict | None = None,
-            error: str | None = None) -> bool:
+            error: str | None = None, terminal: tuple[str, dict] | None = None) -> bool:
     with db.session() as conn:
         finished = db.finish_job(conn, job["id"], status, result=result, error=error)
         if finished:
@@ -117,6 +143,13 @@ def _finish(job: dict, status: str, *, result: dict | None = None,
                 entity_id=job["id"], correlation_id=job["id"],
                 idempotency_key=f"job:{job['id']}:{status}",
             )
+            if terminal is not None:
+                event_type, data = terminal
+                events.record(
+                    conn, job["adventure_id"], event_type, data,
+                    entity_id=job["id"], correlation_id=job["id"],
+                    idempotency_key=f"job:{job['id']}:{event_type}",
+                )
     return finished
 
 # ------------------------------------------------------------- enfileirar
@@ -810,32 +843,9 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
 
 
 def _failed(job: dict, code: str, message: str) -> None:
-    finished = _finish(job, "error", result={"code": code}, error=message)
-    if finished and job["type"] == "see_image":
-        events.publish(job["adventure_id"], "see_failed",
-                       {"job_id": job["id"], "code": code, "message": message})
-
-
-def _announce(job: dict, result: dict) -> None:
-    """Evento do tipo, depois do `job_progress` done.
-
-    Só os jobs de imagem carregam `image`; os demais (dia do mundo, ficha do
-    NPC) publicam o que têm."""
-    data = {"job_id": job["id"]}
-    if result.get("image"):
-        data["image"] = result["image"]
-    if job["type"] == "character_portrait":
-        events.publish(job["adventure_id"], "portrait_ready",
-                       {**data, "card_id": result["card_id"]})
-    elif job["type"] == "scene_backdrop":
-        events.publish(job["adventure_id"], "backdrop_ready",
-                       {**data, "ref_id": job["ref_id"]})
-    elif job["type"] == "see_image":
-        events.publish(job["adventure_id"], "see_ready", data)
-    elif job["type"] == "card_assets":
-        events.publish(job["adventure_id"], "card_assets_ready",
-                       {**data, "card_id": result["card_id"],
-                        "filled": result.get("filled") or []})
+    result = {"code": code}
+    _finish(job, "error", result=result, error=message,
+            terminal=_terminal_event(job, "error", result, message))
 
 
 def _run_job(job: dict, transport: Any) -> None:
@@ -862,9 +872,9 @@ def _run_job(job: dict, transport: Any) -> None:
         log.exception("job %s (%s) erro inesperado", job["id"], job["type"])
         _failed(job, "generation_failed", "unexpected internal error")
     else:
-        if _finish(job, "done", result=result):
+        if _finish(job, "done", result=result,
+                   terminal=_terminal_event(job, "done", result, None)):
             log.info("job %s (%s) concluído", job["id"], job["type"])
-            _announce(job, result)
 
 
 def process_pending(transport: Any = None, *, should_pause=None) -> int:
@@ -888,7 +898,40 @@ def process_pending(transport: Any = None, *, should_pause=None) -> int:
 def recover_interrupted() -> tuple[int, int]:
     """Jobs que o processo anterior deixou no meio (db.requeue_interrupted_jobs)."""
     with db.session() as conn:
+        failed_rows = [dict(row) for row in conn.execute(
+            "SELECT id, adventure_id, type FROM jobs "
+            "WHERE type='see_image' AND status IN ('preparing','pending','running')"
+        )]
+        running_rows = [dict(row) for row in conn.execute(
+            "SELECT id, adventure_id, type FROM jobs "
+            "WHERE type<>'see_image' AND status='running'"
+        )]
         requeued, failed = db.requeue_interrupted_jobs(conn)
+        for row in failed_rows:
+            if db.get_adventure(conn, row["adventure_id"]) is None:
+                continue
+            events.record(
+                conn, row["adventure_id"], "job_progress",
+                {"job_id": row["id"], "type": row["type"], "status": "error"},
+                entity_id=row["id"], correlation_id=row["id"],
+                idempotency_key=f"job:{row['id']}:error",
+            )
+            events.record(
+                conn, row["adventure_id"], "see_failed",
+                {"job_id": row["id"], "code": "interrupted",
+                 "message": "interrupted by a restart"},
+                entity_id=row["id"], correlation_id=row["id"],
+                idempotency_key=f"job:{row['id']}:see_failed",
+            )
+        for row in running_rows:
+            if db.get_adventure(conn, row["adventure_id"]) is None:
+                continue
+            events.record(
+                conn, row["adventure_id"], "job_progress",
+                {"job_id": row["id"], "type": row["type"], "status": "pending"},
+                entity_id=row["id"], correlation_id=row["id"],
+                idempotency_key=f"job:{row['id']}:requeued",
+            )
     if requeued or failed:
         log.info("jobs: %d de volta à fila, %d See interrompidos", requeued, failed)
     return requeued, failed
