@@ -549,6 +549,10 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         anchor_denoise=PORTRAIT_VARIANT_DENOISE if state_key else PORTRAIT_DENOISE,
         force_reference=force_reference,
     )
+    if force_reference:
+        # Nova imagem da mesma pessoa: IP-Adapter trava a identidade, sem
+        # img2img copiar pose, roupa e fundo da foto de referência.
+        init_bytes, denoise = None, None
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
     references = likeness.reference_images([card])

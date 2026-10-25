@@ -125,6 +125,27 @@ def test_visual_upload_updates_card_fields_without_erasing_personality(tmp_db, t
     assert "Visual de referência: a blonde woman in a green cloak" in updated["entry"]
     assert "Uma ranger da floresta." in updated["entry"]
 
+def test_new_image_from_photo_uses_identity_not_img2img(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Clara",
+            entry="A ranger.", portrait_prompt="long brown hair, green eyes",
+        )
+    _upload(client, adv["id"], card["id"])
+    with db.session() as conn:
+        queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True, force_reference=True)
+    assert queued is not None
+    seen: list[dict] = []
+    assert jobs.process_pending(_sd_handler(seen)) == 1
+    assert len(seen) == 1
+    payload = seen[0]
+    assert "init_images" not in payload
+    assert "denoising_strength" not in payload
+    assert base64.b64decode(_unit(payload)["image"]) == PNG_BYTES
+
 
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
