@@ -146,6 +146,36 @@ def test_new_image_from_photo_uses_identity_not_img2img(client, tmp_path, monkey
     assert "denoising_strength" not in payload
     assert base64.b64decode(_unit(payload)["image"]) == PNG_BYTES
 
+def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], type="character", title="Clara", entry="A ranger.")
+    _upload(client, adv["id"], card["id"])
+    other = b"\x89PNG\r\n\x1a\nsecond-photo"
+    resp = client.put(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/reference",
+        files={"file": ("second.png", other, "image/png")},
+        data={"mode": "reference"},
+    )
+    assert resp.status_code == 200, resp.text
+    sheet = json.loads(resp.json()["sheet"])
+    assert len(sheet["reference"]["images"]) == 2
+    with db.session() as conn:
+        saved = db.get_card(conn, adv["id"], card["id"])
+    refs = likeness.reference_images([saved])
+    assert refs == [PNG_BYTES, other]
+    seen: list[dict] = []
+    with db.session() as conn:
+        queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True, force_reference=True)
+    assert queued is not None
+    assert jobs.process_pending(_sd_handler(seen)) == 1
+    args = seen[0]["alwayson_scripts"]["controlnet"]["args"]
+    assert len(args) == 2
+    assert base64.b64decode(args[0]["image"]) == PNG_BYTES
+    assert base64.b64decode(args[1]["image"]) == other
+
 
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
@@ -173,8 +203,8 @@ def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypa
     unit = _unit(payload)
     assert unit["enabled"] is True
     assert unit["module"] == "InsightFace+CLIP-H (IPAdapter)"
-    assert unit["model"] == "ip-adapter-faceid_sdxl"
-    assert unit["weight"] == 0.85
+    assert unit["model"] == "ip-adapter-faceid-plusv2_sdxl"
+    assert unit["weight"] == 0.65
     assert unit["threshold_a"] == -1
     assert unit["control_mode"] == "ControlNet is more important"
     assert base64.b64decode(unit["image"]) == PNG_BYTES

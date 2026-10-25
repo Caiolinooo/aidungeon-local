@@ -347,6 +347,7 @@ function NpcRow({
   const previewAudioRef = useRef(null)
   const fileRef = useRef(null)
   const referencePath = form.sheet?.reference?.image_path || ''
+  const referenceCount = (form.sheet?.reference?.images?.length || (referencePath ? 1 : 0))
   const life = form.sheet?.life || {}
 
   useEffect(() => {
@@ -549,11 +550,12 @@ function NpcRow({
           ref={fileRef}
           type="file"
           accept="image/jpeg,image/png,image/webp"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0]
+            const files = Array.from(e.target.files || [])
             e.target.value = ''
-            if (file) onUploadPhoto?.(card, file, photoMode)
+            files.forEach((file) => onUploadPhoto?.(card, file, photoMode))
           }}
         />
         <select
@@ -567,10 +569,10 @@ function NpcRow({
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          title="Esta foto trava o rosto no retrato e nas cenas. O gerador não inventa outra pessoa."
+          title="Envie várias fotos da mesma pessoa para aumentar a fidelidade. Elas definem rosto e aparência nas novas imagens."
           className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated"
         >
-          Enviar foto de referência
+          Enviar fotos de referência{referenceCount ? ` (${referenceCount})` : ''}
         </button>
         <button
           type="button"
@@ -858,11 +860,15 @@ export default function NpcsTab({ adventure }) {
     }
   }
 
-  const uploadPhoto = async (card, file, mode) => {
+  const uploadPhoto = async (card, files, mode) => {
+    const queue = Array.isArray(files) ? files : [files]
     try {
-      const updated = await api.uploadReference(adventure.id, card.id, file, mode)
-      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
-      toast('Photo saved.', 'ok')
+      let updated = card
+      for (const file of queue) {
+        updated = await api.uploadReference(adventure.id, card.id, file, mode)
+        setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      }
+      toast(queue.length > 1 ? `${queue.length} fotos salvas.` : 'Photo saved.', 'ok')
     } catch (e) {
       toast(e.message)
     }

@@ -40,7 +40,7 @@ MSG_MINOR = "Não gero nudez nem sexo com menor."
 REFERENCE_DENOISE = 0.25
 # Foto enviada pelo usuário. 0.15 segura o rosto; 0.30 já troca a pessoa.
 VISUAL_REFERENCE_DENOISE = 0.15
-MAX_REFERENCES = 3
+MAX_REFERENCES = 6
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"
@@ -269,39 +269,61 @@ def has_reference_image(card: dict) -> bool:
 
 
 def visual_reference_bytes(card: dict) -> bytes | None:
-    """Foto enviada pelo usuário em sheet['reference'], fictícia ou real."""
+    """Primeira foto enviada pelo usuário em sheet['reference']."""
+    images = visual_reference_images(card)
+    return images[0] if images else None
+
+
+def visual_reference_images(card: dict) -> list[bytes]:
+    """Todas as fotos enviadas, na ordem de upload."""
     raw = sheet_of(card).get("reference")
     if not isinstance(raw, dict):
-        return None
-    path = absolute_reference(str(raw.get("image_path") or ""))
-    if path is None:
-        return None
-    return path.read_bytes()
-
-
-def reference_images(cards: list[dict]) -> list[bytes]:
-    """Fotos que travam a pessoa na cena, na ordem dos cards.
-
-    Vale a foto enviada e, se não houver, a referência de pessoa real.
-    O retrato gerado não entra: ele não é a referência. Menor nunca entra.
-    """
-    seen: set[str] = set()
+        return []
+    paths = []
+    if raw.get("image_path"):
+        paths.append(raw["image_path"])
+    for item in raw.get("images") or []:
+        if isinstance(item, dict) and item.get("image_path"):
+            paths.append(item["image_path"])
+        elif isinstance(item, str):
+            paths.append(item)
     found: list[bytes] = []
-    for card in cards:
-        if is_minor(card):
+    seen: set[str] = set()
+    for value in paths:
+        path = absolute_reference(str(value))
+        if path is None:
             continue
-        blob = visual_reference_bytes(card)
-        if blob is None and is_real_person(card):
-            blob = reference_bytes(card)
-        if not blob:
+        try:
+            blob = path.read_bytes()
+        except OSError:
             continue
         digest = hashlib.sha256(blob).hexdigest()
         if digest in seen:
             continue
         seen.add(digest)
         found.append(blob)
-        if len(found) >= MAX_REFERENCES:
-            break
+    return found
+
+
+def reference_images(cards: list[dict]) -> list[bytes]:
+    """Fotos que travam a pessoa na cena, na ordem dos cards e dos uploads."""
+    seen: set[str] = set()
+    found: list[bytes] = []
+    for card in cards:
+        if is_minor(card):
+            continue
+        blobs = visual_reference_images(card)
+        if not blobs and is_real_person(card):
+            single = reference_bytes(card)
+            blobs = [single] if single else []
+        for blob in blobs:
+            digest = hashlib.sha256(blob).hexdigest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            found.append(blob)
+            if len(found) >= MAX_REFERENCES:
+                return found
     return found
 
 
@@ -569,7 +591,8 @@ def _safe_id(card_id: str) -> str:
 def _write_reference(card_id: str, content: bytes, ext: str) -> str:
     folder = references_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    filename = f"{_safe_id(card_id)}{ext}"
+    digest = hashlib.sha256(content).hexdigest()[:12]
+    filename = f"{_safe_id(card_id)}-{digest}{ext}"
     path = folder / filename
     path.write_bytes(content)
     override = os.environ.get("AIDUNGEON_REFERENCES_DIR")
@@ -756,8 +779,21 @@ def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
         raise GameError(400, "invalid_payload", "A referência precisa ser JPEG, PNG ou WebP.")
     rel = _write_reference(card["id"], content, ext)
     sheet = dict(sheet_of(card))
+    previous = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+    images = []
+    seen_paths: set[str] = set()
+    candidates = [previous.get("image_path")]
+    for item in previous.get("images") or []:
+        candidates.append(item.get("image_path") if isinstance(item, dict) else item)
+    for value in candidates:
+        if value and value not in seen_paths:
+            seen_paths.add(value)
+            images.append({"image_path": value})
+    if rel not in seen_paths:
+        images.append({"image_path": rel})
     sheet["reference"] = {
-        "image_path": rel,
+        "image_path": images[0]["image_path"],
+        "images": images,
         "source": "upload",
         "mode": mode,
         "created_at": db.utcnow(),
@@ -783,12 +819,15 @@ def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
 
 
 def clear_reference(conn, card: dict) -> dict:
-    """Apaga a foto enviada e o caminho espelhado no likeness."""
+    """Apaga todas as fotos enviadas e o caminho espelhado no likeness."""
     sheet = dict(sheet_of(card))
     like = dict(likeness_of(card))
     raw_ref = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
     seen: set[Path] = set()
-    for raw in (raw_ref.get("image_path"), like.get("reference_image_path")):
+    paths = [raw_ref.get("image_path"), like.get("reference_image_path")]
+    for item in raw_ref.get("images") or []:
+        paths.append(item.get("image_path") if isinstance(item, dict) else item)
+    for raw in paths:
         path = absolute_reference(str(raw or ""))
         if path is None or path in seen:
             continue
