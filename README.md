@@ -11,6 +11,15 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (v0.12.1)
+
+- **Propriedade e administração**: cenários e clones têm dono; configurações
+  globais exigem admin; aventuras compartilhadas usam clones do proprietário.
+- **Segurança de providers**: downloads de imagem não encaminham Bearer para
+  outra origem; health reprova modelo ausente; clone de voz não bloqueia o loop.
+- **Roadmap do simulador**: [`PLANO.md §12`](PLANO.md) define o caminho F0–F7
+  para vida autônoma, aventura sistêmica e livefeed durável, com gates objetivos.
+
 ## Funcionalidades (v0.12.0)
 
 - **Cancelamento real**: Parar encerra a chamada da narrativa no provider e faz

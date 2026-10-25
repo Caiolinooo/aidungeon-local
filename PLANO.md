@@ -449,3 +449,200 @@ Decisões tomadas durante a execução:
 4. **Ondas revisadas**: 1 arquiteto ✅ · 2 llm-tools + backend ✅ · 3 memória + frontend 🔄 ·
    4 auth · 5 QA (replay E2E com auth) · 6 devops (iniciar.bat + script de deploy da VM) ·
    7 publicação (git push + Vercel).
+
+---
+
+## 12. ROADMAP SISTÊMICO — vida, aventura e livefeed (2026-10-25)
+
+### 12.1 Objetivo e definição de completude
+
+Transformar o AI Dungeon Local em um **simulador de vida e aventura com estado
+autoritativo**, no qual o mundo evolui também sem ações do jogador e toda mudança
+relevante aparece em um livefeed ordenado. “100% completo” não é uma afirmação
+verificável e não será usado como critério de release. O projeto só será chamado
+de simulador sistêmico completo quando todos os gates desta seção estiverem verdes.
+
+Baseline auditada: commit `9d3c5a4`, com 1019 testes e soak de 200 turnos no
+relatório anterior, LLM/voz/imagem saudáveis em produção. O estado atual é um
+**jogo narrativo com motor mecânico lite e Modo Vida reativo**, não um mundo
+autônomo contínuo.
+
+| Gate | Significado verificável |
+|---|---|
+| Estado único | Sim, cards, UI, verificador e narrador leem a mesma posição, posse, presença, relação, morte e relógio. |
+| Atomicidade | Mutação e evento são commitados juntos; falha deixa estado anterior ou posterior válido, nunca parcial. |
+| Autonomia | Relógio e NPCs evoluem em idle, com decisões por necessidades, objetivos, agenda, local e relações. |
+| Livefeed | Todo evento durável pode ser reproduzido por cursor após restart, sem duplicata nem perda silenciosa. |
+| Aventura | Mapa, viagem, economia, quests, facções e combate têm regras executáveis e recompensas idempotentes. |
+| Agência | `do/say` são tentativas; o servidor decide fatos e o LLM narra sem criar outro resultado. |
+| Recuperação | Undo/retry/edição/restart não duplicam nem perdem efeitos; trabalho obsoleto não grava. |
+| Mídia | Voz/imagem reagem ao evento sem bloquear a simulação e sem substituir seu estado por uma descrição visual. |
+| Escala | Ticks mecânicos não chamam LLM; enriquecimento narrativo é assíncrono, limitado e observável. |
+| Operação | Backup restaurável, health real, quotas, métricas, deploy/rollback e acessibilidade têm testes de aceite. |
+
+### 12.2 O que já existe e o que falta
+
+| Área | Implementação atual | Lacuna principal |
+|---|---|---|
+| Narração | Do/Say/Story/Continue, retry, undo, cancelamento, multiplayer e memória | Adjudicação ainda ocorre em mais de uma etapa e pode divergir da mecânica. |
+| Regras | d20/d100, PV/CA/SAN, perícias, inventário, combate por ação e dados no servidor | Não há rodadas completas, presença canônica nem conservação econômica. |
+| Vida | Seis needs, relógio, salário, estações, rotina e relações | Não avança sem comandos; todos seguem a mesma rotina; há duas linhas temporais. |
+| NPCs | Fichas ricas, vínculos, memórias, mente, corpo, humor e iniciativa narrativa | Decisão sistêmica limitada; mortos podem continuar em rotinas/ticks. |
+| Mundo | Cards de locais/facções/itens e world facts | Sem grafo de mapa, posse, quests, reputação executável ou entidade geral. |
+| Eventos | SSE com buffer em memória, stream POST separado e polling | Sem log durável unificado; tokens expulsam eventos; há eventos antes do commit. |
+| Mídia | TTS/STT, clones, avatares, See, retratos e central de jobs | Falta casting por fala, política de custo e mídia dirigida pelo mesmo evento. |
+| Controles | Settings globais e preferências por aventura | Faltam play/pause/velocidade, cadência, explicação de decisões e filtros do feed. |
+| Produção | Uvicorn único, SQLite, backups de deploy, health e rollback de código | Backups não cobrem imagens/off-site; quotas e coordenação multiworker não existem. |
+
+### 12.3 Correções imediatas, antes de expandir o mundo
+
+**Segurança e operação:** propriedade/admin de cenários, settings e clones;
+download de imagem sem Bearer para origem arbitrária; clone assíncrono;
+health/smoke que reprova modelo ausente e banco inválido.
+
+**Consistência que bloqueia novas features:**
+
+1. Uma única linha temporal; `life_day` vira projeção e é removido após migração.
+2. `sim_state`, inventário da UI e relações deixam de divergir; toda projeção é reconstruível.
+3. Mortos/ausentes não executam rotinas, needs, relações, reflexões ou ataques.
+4. Possibilidade é avaliada antes de dano/compra/coleta/tempo; falha do classificador nunca consome recursos arbitrariamente.
+5. Chronicle e memórias registram `source_action_id/source_seq` e são idempotentes.
+6. Todo trabalho assíncrono carrega revisão de origem; undo/retry invalida essa revisão.
+7. Undo restaura `turn_user` quando cabe e não apaga mutações posteriores.
+8. EOF/falha/cancelamento sempre produz estado terminal no backend e na UI.
+
+### 12.4 Arquitetura alvo
+
+```text
+Comando do jogador ou decision tick
+              │
+              ▼
+   Validação + adjudicação única
+              │
+              ▼
+ Motor determinístico (regras, vida, mundo)
+              │ mesma transação
+              ├──────────────► snapshot/revisão do estado
+              └──────────────► transactional outbox / world_events
+                                      │
+                 ┌────────────────────┼────────────────────┐
+                 ▼                    ▼                    ▼
+          SSE/livefeed          projeções/UI         enriquecimento LLM
+        (fatos duráveis)       cards/HUD/mapa       prosa/voz/imagem assíncrona
+
+Tokens de narração: canal efêmero separado, coalescido, fora do event log.
+```
+
+**Regra central:** o LLM propõe classificação ou produz linguagem; ele não
+determina preço, estoque, recompensa, dano, morte, presença ou conclusão. O
+resultado narrado deve ser derivado do evento mecânico persistido.
+
+### 12.5 Event log e revisões
+
+Migration nova após as correções de propriedade. Modelo mínimo:
+
+| Campo | Função |
+|---|---|
+| `adventure_id + event_id` | Sequência estritamente crescente por aventura. |
+| `state_revision` | Versão do estado após a mutação; UI rejeita respostas antigas. |
+| `type + payload_json` | Fato ocorrido e dados necessários à projeção, sem segredos. |
+| `actor/entity_id` | Quem agiu e quem foi afetado; nunca depender apenas do nome. |
+| `turn_seq/generation_id` | Origem narrativa e invalidação por undo/retry. |
+| `causation_id/correlation_id` | Cadeia causal entre comando, regra, evento e mídia. |
+| `sim_day/sim_minute/created_at` | Tempo lógico e tempo real separados. |
+| `idempotency_key` | Impede aplicar duas vezes o mesmo comando/tick/recompensa. |
+
+Snapshots por revisão aceleram reconstrução; o log continua sendo a autoridade
+de auditoria. `actions` mantém prosa e não vira um segundo feed técnico.
+
+**Outbox:** escrita de estado e evento no mesmo commit. Publicação SSE somente
+depois do commit. Cursor expirado responde `reset_required` e snapshot; nunca
+continua silenciosamente. Eventos `generation_failed/cancelled`,
+`life_tick_completed`, `sharing_changed` e `reset_required` são obrigatórios.
+
+### 12.6 Autonomia e tempo
+
+Um scheduler persistente processa adventures ativas com lease por `tick_id`.
+Ele não cria uma thread por NPC nem chama LLM por tick.
+
+- Controles: **play, pause, 1×, 4×, 20×, avançar uma decisão e avançar até**.
+- Dois relógios não podem voltar a divergir; retry nunca repete tempo.
+- Catch-up após restart é paginado, limitado por lote e idempotente.
+- NPCs escolhem intenção por utilidade: necessidade crítica, agenda, profissão,
+  objetivo, personalidade, local, inventário, relações e segurança.
+- Agenda varia por NPC, weekday, estação e necessidade; ação inválida gera motivo.
+- Enriquecimento LLM fica em job separado, com cota e dedupe; nunca bloqueia o tick.
+
+### 12.7 Livefeed e experiência
+
+Uma linha do tempo única, separada da prosa, com filtros e detalhes:
+
+- narrativa, decisão do motor, necessidade crítica, atividade, relação, viagem,
+  transação, quest, combate, cartas, voz/imagem, erro e estado do provider;
+- timestamp lógico e real, entidades, origem e “por que isto aconteceu”;
+- filtros por tipo/NPC/local/severidade, pausa do feed, cursor e reconexão;
+- estado terminal de cada geração e retry/cancelamento visíveis;
+- jobs e mídia aparecem pelo mesmo `correlation_id`, sem polling obrigatório;
+- mapa e inspeção de NPC mostram estado atual e histórico de motivos;
+- leitor de tela anuncia somente eventos finais selecionados, nunca cada token.
+
+Um reducer de UI ordena por `event_id`, valida revisão e ignora GETs antigos.
+Feed usa paginação/virtualização; jobs e aventuras têm paginação no servidor.
+
+### 12.8 Sistemas de vida e aventura
+
+**Vida:** needs com consequências em saúde/regras; corpo e cura; relações
+simétricas e por jogador com motivo/decay; economia com ledger e conservação;
+trabalho, propriedade, estoque, preços, clima e agendas. Relações entre pares são
+avaliadas por cena/grupo, nunca por varredura quadrática global.
+
+**Aventura:** grafo de locais e adjacências, posição/presença persistente,
+viagem com custo; quests com objetivos e recompensa única; filiação/reputação com
+efeito real; combate por rodadas quando o pack exigir. O gerador de cenário cria
+entidades executáveis válidas ou as marca explicitamente como lore.
+
+**Mídia:** casting por fala, um áudio por vez, imagem por evento com seed
+efetiva `(seed, variation)`, orçamento por automação, cache/retenção e métricas
+de TTFA/render/cancelamento. Imagem/avatar nunca bloqueia prosa ou tick.
+
+### 12.9 Fases, dependências e aceites
+
+| Fase | Entrega | Critérios de saída |
+|---|---|---|
+| **F0 — Correções críticas** | Propriedade/admin, SSRF, clone async, health real, OpenAPI e smoke | Dois usuários não acessam recursos proibidos; header nunca vaza; clone lento não bloqueia health/SSE; deploy falha para modelo/banco inválido. |
+| **F1 — Cânone transacional** | Revisão, outbox, IDs, ordem de adjudicação, idempotência e undo | Mesmo `source_action_id` aplicado duas vezes não muda o estado após a 1ª; 20 operações mistas restauram hash lógico; trabalho obsoleto não grava. |
+| **F2 — Livefeed unificado** | Log durável, cursor, reducer, eventos terminais e painel de atividade | Restart entrega `>N` em ordem; 10.000 tokens não apagam replay; evento committed aparece em ≤2 s; EOF nunca deixa spinner. |
+| **F3 — Tempo autônomo** | Scheduler, play/pause/speed, catch-up, agendas e decisões por utilidade | Três ciclos idle alteram relógio/necessidades/atividades e emitem eventos; catch-up de 24h é idempotente e sem LLM; mortos produzem zero ações. |
+| **F4 — Vida sistêmica** | Saúde, relações, economia, trabalho, propriedade, estoque, clima | Necessidade crítica escolhe recuperação válida em ≥95% dos casos seeded ou registra bloqueio; compra/venda/presente/salário balanceiam ledger; relações mudam conduta. |
+| **F5 — Mundo de aventura** | Mapa, viagem, quests, facções, combate e geração executável | Viagem só entre adjacentes; quest conclui/paga uma vez; reputação altera preço ou hostilidade; rodada respeita ordem e mortos/caídos; undo restaura tudo. |
+| **F6 — Mídia e acabamento** | Casting, acessibilidade, virtualização, configuração de cadência e quotas | axe serious/critical=0; 10 mil ações mantêm digitação p95 <100 ms; troca de narrador vale sem reload; uma voz por vez; automações respeitam cota. |
+| **F7 — Produção e completude** | Backup off-site, restore, métricas, CI, staging isolado e release | Restore valida banco+imagens em ≤60 min; health por 2 min alerta; falhas de cópia/migration/restart revertem release; todos os gates desta seção verdes. |
+
+**Dependências:** F1 precede F2/F3. F3 não recebe novos sistemas antes de tempo
+e undo estarem estáveis. F4/F5 só expandem comportamento sobre o event log.
+F6 não esconde inconsistência com apresentação. F7 é obrigatória para declarar
+o simulador sistêmico completo.
+
+### 12.10 Metas de benchmark e testes destrutivos
+
+Metas são alvos de aceite, não resultados atuais:
+
+- 200 NPCs por 720 minutos e 100 NPCs por 30 dias, sem LLM, com memória limitada;
+- 10.000 tokens sem perda de eventos duráveis nem crescimento ilimitado de filas;
+- 20 operações mistas com hash completo após undo, exceto IDs técnicos;
+- injeção de falha em cada fronteira de escrita do tick, sem estado parcial;
+- dois clientes convergem para a mesma revisão após retry/undo/share;
+- exportar→importar preserva sim, UI, cards, memórias, proveniência e mídia referenciada;
+- provider lento mantém health/SSE p95 <500 ms; evento durável chega à UI em ≤2 s;
+- suíte completa, browser E2E desktop/mobile, soak de 200 turnos e restore real antes do deploy.
+
+### 12.11 Restrições de escopo e segurança
+
+- Sem LLM por tick, loop irrestrito por aventura ou segunda fonte de estado.
+- Sem criar itens/dinheiro/quests por uma frase solta do modelo ou do cliente.
+- Sem ressurreição incidental, progresso duplicado ou replay silencioso após gap.
+- Sem expor infraestrutura global a usuário comum nem credenciais a outras origens.
+- Sem multiworker antes de coordenação externa de locks, jobs, breaker e SSE.
+- Pessoa real continua SFW; menor nunca entra em conteúdo sexual; regras de imagem
+  e consentimento permanecem invariantes em qualquer fase.
+- Backups antes de migrations; nenhum rollout sem smoke, rollback e dados de teste isolados.

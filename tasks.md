@@ -118,3 +118,19 @@ Plano: `local://rpg-life-sim-plan.md`. Brief: `outputs/rpg-life-sim-research.md`
 | S7 | Integração no turno e rotas `/sim` | feito |
 | S8 | Frontend Vida/Regras | feito |
 | S9 | Testes, pytest, build, smoke | feito |
+
+## Simulador sistêmico de vida/aventura (PLANO §12)
+
+| ID | Entrega | Status |
+|---|---|---|
+| L0 | Propriedade/admin, SSRF, clone async, health/deploy real | feito |
+| L1 | Cânone transacional, revisões, idempotência e undo completo | pendente |
+| L2 | Event log durável e livefeed unificado com cursor | pendente |
+| L3 | Tempo autônomo, play/pause/speed, catch-up e agendas | pendente |
+| L4 | Necessidades, relações, economia e consequências sistêmicas | pendente |
+| L5 | Mapa, viagem, quests, facções, combate e geração executável | pendente |
+| L6 | Mídia, acessibilidade, virtualização, cadência e quotas | pendente |
+| L7 | Backup off-site, restore, métricas, CI e release completo | pendente |
+
+Dependências: L1 → L2/L3 → L4/L5 → L6 → L7. Não declarar o simulador
+completo enquanto os gates do PLANO §12.1 não estiverem comprovados.

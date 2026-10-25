@@ -170,6 +170,66 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+    patch:
+      tags: [scenarios]
+      summary: Atualizar parcialmente um cenário (dono/admin)
+      operationId: patchScenario
+      parameters:
+        - $ref: '#/components/parameters/ScenarioId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioUpdate'
+      responses:
+        '200':
+          description: Cenário atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+        '403':
+          description: Usuário não é dono nem admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [scenarios]
+      summary: Substituir um cenário (dono/admin)
+      operationId: putScenario
+      parameters:
+        - $ref: '#/components/parameters/ScenarioId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScenarioUpdate'
+      responses:
+        '200':
+          description: Cenário atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scenario'
+        '403':
+          description: Usuário não é dono nem admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [scenarios]
+      summary: Apagar um cenário (dono/admin)
+      operationId: deleteScenario
+      parameters:
+        - $ref: '#/components/parameters/ScenarioId'
+      responses:
+        '200':
+          description: Cenário apagado.
+        '403':
+          description: Usuário não é dono nem admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   # --------------------------------------------------------------- adventures
   /api/adventures:
     post:
@@ -1102,6 +1162,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/jobs/{jobId}/cancel:
     post:
       tags: [assets]
       summary: Cancelar job pelo id, inclusive render em execução
@@ -1362,6 +1423,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LlmSettings'
+        '403':
+          description: Somente admin pode alterar configuração global.
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -1717,6 +1780,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImageSettings'
+        '403':
+          description: Somente admin pode alterar configuração global.
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -1868,6 +1933,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '403':
+          description: Somente admin pode alterar configuração global.
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -2228,6 +2295,9 @@ components:
           type: boolean
           default: false
           description: Narração em 3ª pessoa (padrão AI Dungeon é 2ª pessoa).
+        owner:
+          type: string
+          description: Usuário proprietário; somente ele ou admin pode alterar/apagar.
         created_at:
           type: string
           format: date-time
@@ -2263,6 +2333,35 @@ components:
         third_person:
           type: boolean
           default: false
+
+    ScenarioUpdate:
+      type: object
+      description: Todos os campos são opcionais em PATCH; PUT preserva omissões no backend atual.
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        ai_instructions:
+          type: string
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        opening_text:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        story_cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoryCardUpsert'
+        third_person:
+          type: boolean
+        character_rules:
+          type: string
 
     Adventure:
       type: object
@@ -3483,6 +3582,22 @@ components:
         narrator_voice:
           type: string
           example: M1
+        cloned:
+          type: array
+          description: Clones do próprio usuário; admin vê todos.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              owner:
+                type: string
+              ref_text:
+                type: string
+              seconds:
+                type: number
 
     TtsRequest:
       type: object

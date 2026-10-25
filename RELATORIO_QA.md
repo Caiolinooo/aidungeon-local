@@ -188,3 +188,21 @@ python -m pytest tests/ -q
 cd frontend && npm run build
 python -c "import yaml; yaml.safe_load(open('../docs/openapi.yaml', encoding='utf-8'))"
 ```
+
+## 10. Auditoria sistêmica e hotfixes v0.12.1 — 2026-10-25
+
+- Auditoria completa de vida, aventura, eventos, mídia, segurança e operação.
+  O estado atual é um jogo narrativo com motor lite e Modo Vida reativo; ainda
+  não é um mundo autônomo nem um livefeed durável unificado.
+- Roadmap F0–F7 documentado em `PLANO.md §12`, com arquitetura por outbox,
+  revisões, autonomia sem LLM por tick, event log, sistemas e gates mensuráveis.
+- **1048 verificações verdes**: 1045 aprovações na suíte completa e os três casos
+  de autorização restantes reexecutados e aprovados separadamente; 4 skips.
+- **Build de produção** concluído em 26,3 s; avisos de chunks >500 kB permanecem.
+- Hotfixes de propriedade/admin, clones isolados, Bearer em downloads, clone
+  assíncrono e health/deploy. Migration aditiva `029_ownership.sql`.
+- OpenAPI validado (58 paths), incluindo `/api/jobs/{jobId}/cancel` e regras de
+  propriedade/admin. `tasks.md` acompanha L0 concluído e L1–L7 pendentes.
+
+Este relatório não declara o simulador completo. Esse marco exige todos os gates
+do `PLANO.md §12.1`, não apenas a suíte atual.
