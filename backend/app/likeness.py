@@ -12,6 +12,7 @@ Uma foto de NPC fictício fica em sheet["reference"] e não marca pessoa real.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -33,12 +34,13 @@ log = logging.getLogger("aidungeon.likeness")
 
 CODE_MINOR = "minor"
 MSG_MINOR = "Não gero nudez nem sexo com menor."
-# Retrato de pessoa real, sempre a partir da foto quando ela existe.
+# Retrato de pessoa real vindo da Wikipedia, sempre a partir da foto.
 # Abaixo da âncora fictícia (0.35): 0.45 já é denoise alto demais para o rosto
 # da foto sobreviver a outro enquadramento.
 REFERENCE_DENOISE = 0.25
-# Foto enviada de um NPC fictício: um pouco mais solta que a de pessoa real.
-VISUAL_REFERENCE_DENOISE = 0.3
+# Foto enviada pelo usuário. 0.15 segura o rosto; 0.30 já troca a pessoa.
+VISUAL_REFERENCE_DENOISE = 0.15
+MAX_REFERENCES = 3
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"
@@ -260,20 +262,45 @@ def visual_reference_bytes(card: dict) -> bytes | None:
     return path.read_bytes()
 
 
+def reference_images(cards: list[dict]) -> list[bytes]:
+    """Fotos que travam a pessoa na cena, na ordem dos cards.
+
+    Vale a foto enviada e, se não houver, a referência de pessoa real.
+    O retrato gerado não entra: ele não é a referência. Menor nunca entra.
+    """
+    seen: set[str] = set()
+    found: list[bytes] = []
+    for card in cards:
+        if is_minor(card):
+            continue
+        blob = visual_reference_bytes(card)
+        if blob is None and is_real_person(card):
+            blob = reference_bytes(card)
+        if not blob:
+            continue
+        digest = hashlib.sha256(blob).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        found.append(blob)
+        if len(found) >= MAX_REFERENCES:
+            break
+    return found
+
+
 def portrait_init(card: dict, anchor: bytes | None, *,
                   anchor_denoise: float,
                   force_reference: bool = False) -> tuple[bytes | None, float | None]:
     """Foto enviada, senão a referência de pessoa real, senão a âncora.
 
     `force_reference` ignora a âncora: o retrato novo sai só da foto enviada.
-    Menor real não ganha retrato. O See não usa este caminho.
+    Foto enviada usa o denoise rígido. Menor real não ganha retrato.
     """
     if is_real_person(card) and is_minor(card):
         raise GameError(422, CODE_MINOR, "Não gero retrato de menor.")
     visual = visual_reference_bytes(card)
     if visual:
-        denoise = REFERENCE_DENOISE if is_real_person(card) else VISUAL_REFERENCE_DENOISE
-        return visual, denoise
+        return visual, VISUAL_REFERENCE_DENOISE
     if force_reference:
         return None, None
     if is_real_person(card):

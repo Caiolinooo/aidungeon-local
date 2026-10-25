@@ -5,7 +5,8 @@ Fluxo do /see (contrato docs/openapi.yaml):
    descreve o gesto em inglês, com quem faz o quê;
 2) o primeiro bloco do CLIP abre com o rosto do card (nome, cabelo, pele).
    A frase em inglês da ação vem depois. A prosa crua não entra. Estilo
-   fica depois do BREAK. O retrato não vira img2img;
+   fica depois do BREAK. O retrato gerado não vira img2img; a foto enviada
+   entra como referência rígida do ControlNet;
 3) grava a linha em `images` + action type=see (mesmo seq vinculando);
 4) devolve ImageResult.
 
@@ -366,13 +367,14 @@ def _is_interaction(text: str, names: list[str]) -> bool:
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
-                        transport: Any) -> tuple[str, str, str]:
+                        transport: Any) -> tuple[str, str, str, list]:
     """O momento atual + o rosto do card. Devolve (prompt, negative, caption).
 
     O CLIP pinta o começo de cada bloco. O primeiro bloco abre com o rosto
     do card (cabelo, pele, porte); a frase em inglês vem em seguida. A
     prosa crua não entra. O estilo fica depois do BREAK. caption é a frase
-    limpa gravada na action see. O retrato não entra como img2img.
+    limpa gravada na action see. O retrato gerado não entra como img2img.
+    A foto enviada volta no quarto item, para travar o rosto na cena.
     """
     pb = img_cfg["prompt_builder"]
     visible = [
@@ -432,6 +434,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
                 by_name[title] = card
                 names.append(title)
+                frame.append(card)
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
     sex_bits = []
     seen_sex: set[str] = set()
@@ -556,7 +559,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     caption = sentence or summarized
-    return prompt, negative, caption
+    return prompt, negative, caption, frame
 
 
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
@@ -594,17 +597,20 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
     try:
-        prompt, negative_extra, caption = _build_final_prompt(
+        prompt, negative_extra, caption, frame = _build_final_prompt(
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
+    references = likeness.reference_images(frame)
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
         "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
         "caption": caption,
+        "reference_card_ids": [str(card["id"]) for card in frame if card.get("id")],
         "cache_key": image_client.request_key(
-            img_cfg, prompt, negative_extra=negative_extra, variation=variation),
+            img_cfg, prompt, negative_extra=negative_extra, variation=variation,
+            reference_images=references),
     }
 
 
@@ -658,7 +664,9 @@ def post_see(adventure_id: str, body: SeeRequest,
     try:
         result = image_client.generate_image(
             img_cfg, plan["prompt"], adventure_id=adventure_id, image_id=image_id,
-            transport=transport, negative_extra=plan["negative_extra"])
+            transport=transport, negative_extra=plan["negative_extra"],
+            reference_images=jobs.references_for(
+                adventure_id, plan.get("reference_card_ids") or []))
     except image_client.ImageError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     image = jobs.store_see(adventure_id, plan["caption"], result, image_id=image_id,

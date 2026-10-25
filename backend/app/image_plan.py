@@ -1,8 +1,8 @@
 """Plano de imagem (contrato C4).
 
-O Grok renderiza `face_refs` no provider quando o ControlNet existir (G6).
-Até lá o retrato de pessoa real usa a referência como img2img, e o See
-abre o prompt com o nome e o descritor.
+Foto enviada e referência de pessoa real entram no Forge como ControlNet
+`reference_adain+attn` (See e fundo). O retrato ainda usa a mesma foto
+como img2img, com denoise baixo quando o usuário enviou o arquivo.
 """
 
 from __future__ import annotations

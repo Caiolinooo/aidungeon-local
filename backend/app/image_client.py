@@ -217,27 +217,70 @@ def _first_image(data: dict, what: str) -> bytes:
     return _decode_b64(str(images[0]), what)
 
 
+# Forge Neo: reference_adain+attn não precisa de modelo ControlNet.
+# Fidelidade 0 e peso 1 deixam a foto mandar no rosto; o prompt manda na cena.
+_REFERENCE_MODULE = "reference_adain+attn"
+_REFERENCE_WEIGHT = 1.0
+_REFERENCE_FIDELITY = 0.0
+_MAX_REFERENCES = 3
+
+
+def _reference_unit(image: bytes) -> dict:
+    return {
+        "enabled": True,
+        "module": _REFERENCE_MODULE,
+        "model": "None",
+        "weight": _REFERENCE_WEIGHT,
+        "image": base64.b64encode(image).decode("ascii"),
+        "resize_mode": "Crop and Resize",
+        "processor_res": -1,
+        "threshold_a": _REFERENCE_FIDELITY,
+        "threshold_b": -1,
+        "guidance_start": 0.0,
+        "guidance_end": 1.0,
+        "pixel_perfect": False,
+        "control_mode": "ControlNet is more important",
+    }
+
+
+def _attach_references(payload: dict, references: list[bytes] | None) -> dict:
+    images = [raw for raw in (references or []) if raw][:_MAX_REFERENCES]
+    if not images:
+        return payload
+    payload["alwayson_scripts"] = {
+        "controlnet": {"args": [_reference_unit(raw) for raw in images]},
+    }
+    return payload
+
+
 def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str,
                       width: int | None = None, height: int | None = None,
+                      references: list[bytes] | None = None,
                       ) -> tuple[bytes, int, int]:
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
+    payload = _attach_references(
+        _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height)),
+        references,
+    )
     data = _post_json(client, f"{_sd_base(cfg)}{cfg['txt2img_path']}",
-                      _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height)),
-                      {"Accept": "application/json"}, "txt2img")
+                      payload, {"Accept": "application/json"}, "txt2img")
     return _first_image(data, "txt2img"), width, height
 
 
 def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
                               init_image: bytes, width: int | None,
                               height: int | None,
-                              denoising_strength: float) -> tuple[bytes, int, int]:
+                              denoising_strength: float,
+                              references: list[bytes] | None = None,
+                              ) -> tuple[bytes, int, int]:
     """Pinta a partir de um PNG já salvo. denoising baixo mantém o mesmo rosto."""
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
     payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
     payload["init_images"] = [base64.b64encode(init_image).decode("ascii")]
     payload["denoising_strength"] = denoising_strength
+    payload = _attach_references(payload, references)
     path = cfg.get("img2img_path") or "/sdapi/v1/img2img"
     data = _post_json(client, f"{_sd_base(cfg)}{path}", payload,
                       {"Accept": "application/json"}, "img2img")
@@ -282,7 +325,8 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 height: int | None = None, init_image: bytes | None = None,
                 denoising_strength: float | None = None,
                 negative_extra: str = "",
-                variation: str | int | None = None) -> str:
+                variation: str | int | None = None,
+                reference_images: list[bytes] | None = None) -> str:
     """Hash estável do pedido final. Não inclui api_key e nunca vai para prompt.
 
     Seed e variation só entram quando configurados; assim chaves antigas e o
@@ -326,6 +370,9 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         "extra": extra,
         "init": hashlib.sha256(init_image).hexdigest() if init_image is not None else "",
     }
+    refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
+    if refs:
+        payload["refs"] = [hashlib.sha256(raw).hexdigest() for raw in refs]
     variation_value = cfg.get("variation", 0) if variation is None else variation
     if variation_value not in (None, "", 0, "0"):
         payload["variation"] = str(variation_value)
@@ -339,12 +386,14 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                    width: int | None = None, height: int | None = None,
                    init_image: bytes | None = None,
                    denoising_strength: float | None = None,
-                   negative_extra: str = "") -> dict:
+                   negative_extra: str = "",
+                   reference_images: list[bytes] | None = None) -> dict:
     """Gera a imagem no provider efetivo, salva o PNG e devolve metadados
     {file_path (relativo), width, height, provider}. Levanta ImageError subclasses.
 
     init_image pede img2img (mesmo rosto). Sem endpoint img2img o pedido falha
     em vez de inventar outro personagem em txt2img.
+    reference_images trava a foto enviada via ControlNet, sem substituir a cena.
     """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
@@ -355,6 +404,10 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
             part for part in (cfg.get("negative_prompt") or "", negative_extra) if part
         )
     with _make_client(transport, timeout) as client:
+        refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
+        if refs and provider != "sdwebui":
+            log.warning("referência rígida ignorada: provider %s não tem ControlNet", provider)
+            refs = []
         if init_image is not None:
             if provider != "sdwebui":
                 raise ImageError(
@@ -363,9 +416,11 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 cfg, client, prompt, init_image, width, height,
                 float(denoising_strength if denoising_strength is not None
                       else cfg.get("denoising_strength", 0.35)),
+                references=refs,
             )
         elif provider == "sdwebui":
-            content, width, height = _generate_sdwebui(cfg, client, prompt, width, height)
+            content, width, height = _generate_sdwebui(
+                cfg, client, prompt, width, height, references=refs)
         elif provider == "openai_compatible":
             content, width, height = _generate_openai(cfg, client, prompt)
         else:

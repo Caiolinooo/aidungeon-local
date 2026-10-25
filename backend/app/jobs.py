@@ -14,7 +14,9 @@ Tipos:
   não substitui um retrato que já existe. Pedido explícito de regenerar
   usa img2img a partir dessa âncora, para o rosto fictício continuar o mesmo.
   Pessoa real com arquivo de referência ignora essa âncora e parte da foto
-  (`likeness.portrait_init`, denoise `REFERENCE_DENOISE`).
+  (`likeness.portrait_init`, denoise `REFERENCE_DENOISE`). Foto enviada pelo
+  usuário usa `VISUAL_REFERENCE_DENOISE` e também entra como ControlNet
+  nas cenas (See e fundo), sem virar img2img da cena.
   CUDA out of memory não reenfileira o mesmo card na hora: a UI pede a cena
   de novo a cada poucos segundos, e cada erro virava outro txt2img.
 - `scene_backdrop` — pinta o fundo do lugar atual (payload.prompt já pronto,
@@ -335,6 +337,19 @@ def enqueue_incomplete_sheets(conn, adventure_id: str) -> list[dict]:
     return queued
 
 
+def references_for(adventure_id: str, card_ids: list) -> list[bytes]:
+    """Fotos de referência dos cards, na ordem pedida. Card ou arquivo ausente sai."""
+    if not card_ids:
+        return []
+    cards = []
+    with db.session() as conn:
+        for card_id in card_ids:
+            card = db.get_card(conn, adventure_id, str(card_id))
+            if card:
+                cards.append(card)
+    return likeness.reference_images(cards)
+
+
 def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dict:
     """See assíncrono (C6): grava o job em `preparing` e devolve na hora; `plan`
     (o prompt, via LLM) roda numa thread e completa o payload com `prompt`,
@@ -536,9 +551,11 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     )
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
+    references = likeness.reference_images([card])
     cache_key = state_key or image_client.request_key(
         img_cfg, final, width=init_width, height=init_height,
         init_image=init_bytes, denoising_strength=denoise,
+        reference_images=references,
     )
     with db.session() as conn:
         cached = db.find_cached_image(
@@ -572,6 +589,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         width=init_width, height=init_height,
         init_image=init_bytes,
         denoising_strength=denoise,
+        reference_images=references,
     )
     try:
         with db.session() as conn:
@@ -675,7 +693,8 @@ def backdrop_negative(img_cfg: dict, *, include_people: bool, explicit: bool) ->
 
 
 def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
-                       explicit: bool) -> str:
+                       explicit: bool,
+                       reference_images: list[bytes] | None = None) -> str:
     ban = ""
     if explicit:
         ban = _CAST_NEGATIVE_EXPLICIT
@@ -685,7 +704,7 @@ def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
         ban = _BACKDROP_NEGATIVE
     return image_client.request_key(
         img_cfg, prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
-        negative_extra=ban,
+        negative_extra=ban, reference_images=reference_images,
     )
 
 
@@ -710,9 +729,14 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     negative = ", ".join(
         part for part in (img_cfg["negative_prompt"], ban) if part
     )
-    cache_key = image_client.request_key(
-        img_cfg, prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
-        negative_extra=ban,
+    references = references_for(
+        job["adventure_id"], (payload.get("reference_card_ids") or []),
+    )
+    cache_key = backdrop_cache_key(
+        img_cfg, prompt,
+        include_people=bool(payload.get("include_people")),
+        explicit=bool(payload.get("explicit")),
+        reference_images=references,
     )
     with db.session() as conn:
         cached = db.find_cached_image(
@@ -727,7 +751,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         img_cfg, prompt, adventure_id=job["adventure_id"],
         image_id=image_id, transport=transport,
         width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
-        negative_extra=ban,
+        negative_extra=ban, reference_images=references,
     )
     try:
         with db.session() as conn:
@@ -798,9 +822,14 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     negative_extra = str(payload.get("negative_extra") or "")
-    cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
+    references = references_for(
+        job["adventure_id"], payload.get("reference_card_ids") or [],
+    )
+    cache_key = image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
-        variation=payload.get("variation"))
+        variation=payload.get("variation"), reference_images=references)
+    if not references:
+        cache_key = str(payload.get("cache_key") or "") or cache_key
     with db.session() as conn:
         cached = db.find_cached_image(
             conn, job["adventure_id"], kind="scene", ref_id="",
@@ -821,7 +850,8 @@ def _execute_see(job: dict, transport: Any) -> dict:
     image_id = db.new_id()
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
-        transport=transport, negative_extra=negative_extra)
+        transport=transport, negative_extra=negative_extra,
+        reference_images=references)
     try:
         image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                           image_id=image_id, prompt=prompt,

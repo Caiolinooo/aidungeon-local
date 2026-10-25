@@ -567,9 +567,10 @@ function NpcRow({
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
+          title="Esta foto trava o rosto no retrato e nas cenas. O gerador não inventa outra pessoa."
           className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated"
         >
-          Upload photo
+          Enviar foto de referência
         </button>
         <button
           type="button"

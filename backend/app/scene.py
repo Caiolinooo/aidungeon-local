@@ -287,7 +287,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
                     include_people: bool = False, explicit: bool = False,
-                    cache_key: str = "") -> dict:
+                    cache_key: str = "",
+                    reference_card_ids: list[str] | None = None) -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
     if not current and cache_key:
@@ -317,6 +318,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         "prompt": prompt,
         "include_people": include_people,
         "explicit": explicit,
+        "reference_card_ids": list(reference_card_ids or []),
     }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
     return {"status": "pending", "image": image, "error": None}
 
@@ -371,8 +373,10 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     )
     # Hash do prompt FINAL + config: lugar, clima, elenco, roupa, feridas,
     # estilo e explicit mudam a assinatura; nada disso fica de fora.
+    references = likeness.reference_images(paint_cast) if include_people else []
     cache_key = jobs.backdrop_cache_key(
-        img_cfg, prompt, include_people=include_people, explicit=explicit)
+        img_cfg, prompt, include_people=include_people, explicit=explicit,
+        reference_images=references)
     signature = cache_key[:40]
     ref = f"{adventure_id}:{signature}"
     backdrop = _backdrop_state(
@@ -380,6 +384,10 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
         include_people=include_people,
         explicit=explicit, cache_key=cache_key,
+        reference_card_ids=(
+            [str(card["id"]) for card in paint_cast if card.get("id")]
+            if include_people else []
+        ),
     )
 
     cast = []
