@@ -328,6 +328,16 @@ export default function GamePanel({
     !(packOn && (widget.type === 'stats' || widget.type === 'inventory')),
   )
   const hasRuntime = (state?._hud?.length ?? 0) > 0 || (state?._actions?.length ?? 0) > 0
+
+  useEffect(() => {
+    if (inline || !onClose) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [inline, onClose])
+
   if (widgets.length === 0 && !hasRuntime) return null
 
   if (inline) {
@@ -394,7 +404,7 @@ export default function GamePanel({
   }
 
   return (
-    <div className="max-h-[min(22rem,40vh)] w-full min-w-0 max-w-full shrink-0 overflow-y-auto overscroll-y-contain border-t border-subtle bg-surface/95 backdrop-blur">
+    <div role="region" aria-label="Controles do jogo" className="fixed inset-x-0 bottom-0 z-40 max-h-[70dvh] w-full min-w-0 max-w-full shrink-0 overflow-y-auto overscroll-y-contain border-t border-subtle bg-surface/95 shadow-2xl backdrop-blur lg:static lg:z-auto lg:max-h-full lg:shadow-none">
       <div className="mx-auto w-full max-w-6xl px-3 py-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
