@@ -555,7 +555,7 @@ function NpcRow({
           onChange={(e) => {
             const files = Array.from(e.target.files || [])
             e.target.value = ''
-            files.forEach((file) => onUploadPhoto?.(card, file, photoMode))
+            if (files.length) onUploadPhoto?.(card, files, photoMode)
           }}
         />
         <select
