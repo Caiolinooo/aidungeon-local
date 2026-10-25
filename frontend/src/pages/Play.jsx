@@ -1477,8 +1477,10 @@ export default function Play() {
           </div>
         )}
 
-        {/* Story Prose Feed */}
-        <div className="relative min-h-0 flex-1 bg-canvas">
+        {/* Feed e controles dividem a altura no mobile e a largura no desktop. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+          {/* Story Prose Feed */}
+          <div className="relative min-h-0 min-w-0 flex-1 bg-canvas">
           <main
             ref={feedRef}
             onScroll={onFeedScroll}
@@ -1575,6 +1577,27 @@ export default function Play() {
             />
           </Suspense>
         </div>
+          {panelOpen && !isInspectorDocked && (
+            <aside
+              aria-label="Controles do jogo"
+              className="flex min-h-0 w-full shrink-0 flex-col lg:h-full lg:w-[clamp(24rem,30vw,30rem)] lg:border-l lg:border-subtle [&>div]:lg:h-full [&>div]:lg:max-h-full [&>div]:lg:border-t-0"
+            >
+              <GamePanel
+                profile={uiProfile}
+                state={uiState}
+                disabled={generating || turnBlocked || needsCharacter}
+                regenerating={regeneratingProfile}
+                onStateChange={handleUiStateChange}
+                onSend={sendAction}
+                onInsert={insertToInput}
+                onRegenerate={regenerateProfile}
+                onClose={() => setPanelOpen(false)}
+                adventureId={id}
+                packOn={packOn}
+              />
+            </aside>
+          )}
+        </div>
 
         {/* Suggestion Choices Chips */}
         {showChoices && (
@@ -1637,22 +1660,6 @@ export default function Play() {
           </div>
         )}
 
-        {/* Mobile / Floating GamePanel */}
-        {panelOpen && !isInspectorDocked && (
-          <GamePanel
-            profile={uiProfile}
-            state={uiState}
-            disabled={generating || turnBlocked || needsCharacter}
-            regenerating={regeneratingProfile}
-            onStateChange={handleUiStateChange}
-            onSend={sendAction}
-            onInsert={insertToInput}
-            onRegenerate={regenerateProfile}
-            onClose={() => setPanelOpen(false)}
-            adventureId={id}
-            packOn={packOn}
-          />
-        )}
 
         {needsCharacter && (
           <div className="border-t border-warn-600/40 bg-warn-950/50 px-4 py-2 text-center text-sm text-warn-200">

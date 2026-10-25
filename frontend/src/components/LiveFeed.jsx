@@ -18,6 +18,7 @@ const TYPE_LABELS = {
   turn_done: 'Turno',
   job_progress: 'Mídia',
   job_queued: 'Mídia',
+  backdrop_ready: 'Cenário',
   see_ready: 'Imagem',
   portrait_ready: 'Retrato',
   card_changed: 'Ficha',
@@ -47,6 +48,7 @@ function eventText(event) {
   if (type === 'job_progress') return `${data.type || 'Job'}: ${data.status || 'atualizado'}.`
   if (type === 'job_queued') return `${data.type || 'Job'} entrou na fila.`
   if (type === 'see_ready') return 'Imagem da cena concluída.'
+  if (type === 'backdrop_ready') return 'Fundo da cena atualizado.'
   if (type === 'portrait_ready') return 'Retrato atualizado.'
   if (type === 'generation_failed') return data.message || 'A geração falhou.'
   if (type === 'generation_cancelled') return 'Geração cancelada.'
