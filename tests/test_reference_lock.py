@@ -118,10 +118,10 @@ def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypa
     assert "init_images" not in payload
     unit = _unit(payload)
     assert unit["enabled"] is True
-    assert unit["module"] == "reference_adain+attn"
-    assert unit["model"] == "None"
+    assert unit["module"] == "CLIP-ViT-H (IPAdapter)"
+    assert unit["model"] == "ip-adapter-plus_sdxl_vit-h"
     assert unit["weight"] == 1.0
-    assert unit["threshold_a"] == 0.0
+    assert unit["threshold_a"] == -1
     assert unit["control_mode"] == "ControlNet is more important"
     assert base64.b64decode(unit["image"]) == PNG_BYTES
 

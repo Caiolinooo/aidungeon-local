@@ -215,13 +215,11 @@ def _first_image(data: dict, what: str) -> bytes:
     if not isinstance(images, list) or not images:
         raise ImageError(f"resposta de {what} sem lista 'images'")
     return _decode_b64(str(images[0]), what)
-
-
-# Forge Neo: reference_adain+attn não precisa de modelo ControlNet.
-# Fidelidade 0 e peso 1 deixam a foto mandar no rosto; o prompt manda na cena.
-_REFERENCE_MODULE = "reference_adain+attn"
+# IP-Adapter SDXL: a foto condiciona aparência, não só o estilo do AdaIN.
+# O modelo e o CLIP-ViT-H ficam na instalação do Forge Neo.
+_REFERENCE_MODULE = "CLIP-ViT-H (IPAdapter)"
+_REFERENCE_MODEL = "ip-adapter-plus_sdxl_vit-h"
 _REFERENCE_WEIGHT = 1.0
-_REFERENCE_FIDELITY = 0.0
 _MAX_REFERENCES = 3
 
 
@@ -229,12 +227,12 @@ def _reference_unit(image: bytes) -> dict:
     return {
         "enabled": True,
         "module": _REFERENCE_MODULE,
-        "model": "None",
+        "model": _REFERENCE_MODEL,
         "weight": _REFERENCE_WEIGHT,
         "image": base64.b64encode(image).decode("ascii"),
         "resize_mode": "Crop and Resize",
         "processor_res": -1,
-        "threshold_a": _REFERENCE_FIDELITY,
+        "threshold_a": -1,
         "threshold_b": -1,
         "guidance_start": 0.0,
         "guidance_end": 1.0,
