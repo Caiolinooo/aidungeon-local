@@ -215,12 +215,12 @@ def _first_image(data: dict, what: str) -> bytes:
     if not isinstance(images, list) or not images:
         raise ImageError(f"resposta de {what} sem lista 'images'")
     return _decode_b64(str(images[0]), what)
-# FaceID Plus V2: rosto + CLIP visual para maior fidelidade à referência.
-# O modelo e o InsightFace buffalo_l ficam na instalação do Forge Neo.
-_REFERENCE_MODULE = "InsightFace+CLIP-H (IPAdapter)"
-_REFERENCE_MODEL = "ip-adapter-faceid-plusv2_sdxl"
-_MULTI_REFERENCE_MODEL = "ip-adapter-faceid_sdxl"
-_REFERENCE_WEIGHT = 0.65
+# InstantID: preserva melhor a identidade facial que o FaceID genérico.
+# O modelo e o antelopev2 ficam na instalação do Forge Neo.
+_REFERENCE_MODULE = "InsightFace (InstantID)"
+_REFERENCE_MODEL = "ip-adapter-instantid"
+_MULTI_REFERENCE_MODEL = "ip-adapter-instantid"
+_REFERENCE_WEIGHT = 1.0
 _MAX_REFERENCES = 6
 
 
