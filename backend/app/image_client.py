@@ -219,16 +219,18 @@ def _first_image(data: dict, what: str) -> bytes:
 # O modelo e o InsightFace buffalo_l ficam na instalação do Forge Neo.
 _REFERENCE_MODULE = "InsightFace+CLIP-H (IPAdapter)"
 _REFERENCE_MODEL = "ip-adapter-faceid-plusv2_sdxl"
+_MULTI_REFERENCE_MODEL = "ip-adapter-faceid_sdxl"
 _REFERENCE_WEIGHT = 0.65
 _MAX_REFERENCES = 6
 
 
 def _reference_unit(image: bytes, *, mask: bytes | None = None,
-                    weight: float | None = None) -> dict:
+                    weight: float | None = None,
+                    model: str | None = None) -> dict:
     unit = {
         "enabled": True,
         "module": _REFERENCE_MODULE,
-        "model": _REFERENCE_MODEL,
+        "model": model or _REFERENCE_MODEL,
         "weight": float(weight if weight is not None else _REFERENCE_WEIGHT),
         "image": base64.b64encode(image).decode("ascii"),
         "resize_mode": "Crop and Resize",
@@ -282,6 +284,7 @@ def _attach_references(payload: dict, references: list[bytes] | None,
         units.append(_reference_unit(
             raw, mask=mask,
             weight=_REFERENCE_WEIGHT if len(images) == 1 else 0.55,
+            model=_REFERENCE_MODEL if len(images) == 1 else _MULTI_REFERENCE_MODEL,
         ))
     payload["alwayson_scripts"] = {"controlnet": {"args": units}}
     return payload
