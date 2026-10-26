@@ -175,6 +175,22 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
     assert len(args) == 2
     assert base64.b64decode(args[0]["image"]) == PNG_BYTES
     assert base64.b64decode(args[1]["image"]) == other
+def test_multiple_npcs_use_regional_reference_masks():
+    payload = image_client._attach_references(
+        {"prompt": "two women"},
+        [PNG_BYTES, b"second-face"],
+        width=1344, height=768,
+    )
+    args = payload["alwayson_scripts"]["controlnet"]["args"]
+    assert len(args) == 2
+    assert args[0]["mask_image"] != args[1]["mask_image"]
+    assert args[0]["weight"] == 0.55
+    assert args[1]["weight"] == 0.55
+    assert base64.b64decode(args[0]["mask_image"]) != base64.b64decode(args[1]["mask_image"])
+    # Uma referência sozinha não precisa de máscara regional.
+    single = image_client._attach_references(
+        {"prompt": "one woman"}, [PNG_BYTES], width=1344, height=768)
+    assert "mask_image" not in single["alwayson_scripts"]["controlnet"]["args"][0]
 
 
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):

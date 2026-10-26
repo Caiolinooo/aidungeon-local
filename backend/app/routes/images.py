@@ -541,6 +541,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(", ".join(where))
     if names:
         lead_bits.append("people present: " + ", ".join(who_bits))
+    reference_count = len(likeness.reference_images(frame))
+    if reference_count > 1 and len(names) > 1:
+        positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
+        assignments = ", ".join(
+            f"{name} on the {positions[index] if index < len(positions) else 'center'}"
+            for index, name in enumerate(names)
+        )
+        lead_bits.append(
+            "distinct different people, not the same person, no duplicate faces: " + assignments
+        )
     if _is_interaction(moment, names):
         lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
     from app import consequences

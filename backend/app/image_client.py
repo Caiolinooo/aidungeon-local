@@ -223,12 +223,13 @@ _REFERENCE_WEIGHT = 0.65
 _MAX_REFERENCES = 6
 
 
-def _reference_unit(image: bytes) -> dict:
-    return {
+def _reference_unit(image: bytes, *, mask: bytes | None = None,
+                    weight: float | None = None) -> dict:
+    unit = {
         "enabled": True,
         "module": _REFERENCE_MODULE,
         "model": _REFERENCE_MODEL,
-        "weight": _REFERENCE_WEIGHT,
+        "weight": float(weight if weight is not None else _REFERENCE_WEIGHT),
         "image": base64.b64encode(image).decode("ascii"),
         "resize_mode": "Crop and Resize",
         "processor_res": -1,
@@ -239,15 +240,49 @@ def _reference_unit(image: bytes) -> dict:
         "pixel_perfect": False,
         "control_mode": "ControlNet is more important",
     }
+    if mask is not None:
+        unit["mask_image"] = base64.b64encode(mask).decode("ascii")
+    return unit
 
 
-def _attach_references(payload: dict, references: list[bytes] | None) -> dict:
+def _region_mask(width: int, height: int, index: int, count: int) -> bytes:
+    """Máscara PNG da região atribuída ao NPC."""
+    import io
+    from PIL import Image
+    if count <= 2:
+        x0 = width * index // count
+        x1 = width * (index + 1) // count
+        y0, y1 = 0, height
+    else:
+        col, row = index % 2, index // 2
+        x0, x1 = width * col // 2, width * (col + 1) // 2
+        y0, y1 = height * row // 2, height * (row + 1) // 2
+    image = Image.new("L", (width, height), 0)
+    from PIL import ImageFilter
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            image.putpixel((x, y), 255)
+    image = image.filter(ImageFilter.GaussianBlur(radius=max(8, width // 40)))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _attach_references(payload: dict, references: list[bytes] | None,
+                       *, width: int, height: int) -> dict:
     images = [raw for raw in (references or []) if raw][:_MAX_REFERENCES]
     if not images:
         return payload
-    payload["alwayson_scripts"] = {
-        "controlnet": {"args": [_reference_unit(raw) for raw in images]},
-    }
+    units = []
+    for index, raw in enumerate(images):
+        mask = None
+        if len(images) > 1:
+            mask = _region_mask(width, height, index, len(images))
+        units.append(_reference_unit(
+            raw, mask=mask,
+            weight=_REFERENCE_WEIGHT if len(images) == 1 else 0.55,
+        ))
+    payload["alwayson_scripts"] = {"controlnet": {"args": units}}
     return payload
 
 
@@ -259,7 +294,7 @@ def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str,
     height = int(height or cfg["sdwebui_height"])
     payload = _attach_references(
         _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height)),
-        references,
+        references, width=width, height=height,
     )
     data = _post_json(client, f"{_sd_base(cfg)}{cfg['txt2img_path']}",
                       payload, {"Accept": "application/json"}, "txt2img")
@@ -278,7 +313,7 @@ def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
     payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
     payload["init_images"] = [base64.b64encode(init_image).decode("ascii")]
     payload["denoising_strength"] = denoising_strength
-    payload = _attach_references(payload, references)
+    payload = _attach_references(payload, references, width=width, height=height)
     path = cfg.get("img2img_path") or "/sdapi/v1/img2img"
     data = _post_json(client, f"{_sd_base(cfg)}{path}", payload,
                       {"Accept": "application/json"}, "img2img")
