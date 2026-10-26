@@ -165,16 +165,15 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
     with db.session() as conn:
         saved = db.get_card(conn, adv["id"], card["id"])
     refs = likeness.reference_images([saved])
-    assert refs == [PNG_BYTES, other]
+    assert refs == [PNG_BYTES]
     seen: list[dict] = []
     with db.session() as conn:
         queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True, force_reference=True)
     assert queued is not None
     assert jobs.process_pending(_sd_handler(seen)) == 1
     args = seen[0]["alwayson_scripts"]["controlnet"]["args"]
-    assert len(args) == 2
+    assert len(args) == 1
     assert base64.b64decode(args[0]["image"]) == PNG_BYTES
-    assert base64.b64decode(args[1]["image"]) == other
 def test_multiple_npcs_use_regional_reference_masks():
     payload = image_client._attach_references(
         {"prompt": "two women"},

@@ -306,7 +306,12 @@ def visual_reference_images(card: dict) -> list[bytes]:
 
 
 def reference_images(cards: list[dict]) -> list[bytes]:
-    """Fotos que travam a pessoa na cena, na ordem dos cards e dos uploads."""
+    """Uma referência principal por personagem, na ordem dos cards.
+
+    Várias fotos do mesmo NPC não viram várias unidades: isso estourava a
+    VRAM e fazia a máscara de um NPC cair na posição de outro. A primeira
+    foto da galeria é a referência principal; as demais ficam para variação.
+    """
     seen: set[str] = set()
     found: list[bytes] = []
     for card in cards:
@@ -316,14 +321,16 @@ def reference_images(cards: list[dict]) -> list[bytes]:
         if not blobs and is_real_person(card):
             single = reference_bytes(card)
             blobs = [single] if single else []
-        for blob in blobs:
-            digest = hashlib.sha256(blob).hexdigest()
-            if digest in seen:
-                continue
-            seen.add(digest)
-            found.append(blob)
-            if len(found) >= MAX_REFERENCES:
-                return found
+        if not blobs:
+            continue
+        blob = blobs[0]
+        digest = hashlib.sha256(blob).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        found.append(blob)
+        if len(found) >= MAX_REFERENCES:
+            break
     return found
 
 
