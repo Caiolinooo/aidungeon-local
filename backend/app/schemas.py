@@ -226,11 +226,18 @@ class SeeRequest(BaseModel):
 class ImageSettingsUpdate(BaseModel):
     """Todos os campos opcionais; omitidos permanecem (openai_api_key="" remove)."""
     enabled: bool | None = None
-    provider: Literal["sdwebui", "openai_compatible"] | None = None
+    provider: Literal["sdwebui", "comfyui", "openai_compatible"] | None = None
     sdwebui_base_url: str | None = None
     sdwebui_steps: int | None = Field(default=None, ge=1, le=150)
     sdwebui_width: int | None = Field(default=None, ge=64, le=4096)
     sdwebui_height: int | None = Field(default=None, ge=64, le=4096)
+    comfyui_base_url: str | None = None
+    comfyui_steps: int | None = Field(default=None, ge=1, le=150)
+    comfyui_width: int | None = Field(default=None, ge=64, le=4096)
+    comfyui_height: int | None = Field(default=None, ge=64, le=4096)
+    comfyui_cfg_scale: float | None = Field(default=None, ge=1.0, le=30.0)
+    comfyui_sampler_name: str | None = Field(default=None, min_length=1, max_length=80)
+    comfyui_scheduler: str | None = Field(default=None, min_length=1, max_length=80)
     negative_prompt: str | None = None
     openai_base_url: str | None = None
     openai_api_key: str | None = None

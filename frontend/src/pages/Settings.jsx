@@ -59,6 +59,13 @@ export default function Settings() {
     sdwebui_steps: 20,
     sdwebui_width: 1024,
     sdwebui_height: 1024,
+    comfyui_base_url: 'http://127.0.0.1:8188',
+    comfyui_steps: 15,
+    comfyui_width: 1024,
+    comfyui_height: 1024,
+    comfyui_cfg_scale: 1,
+    comfyui_sampler_name: 'er_sde',
+    comfyui_scheduler: 'simple',
     negative_prompt: '',
     style_suffix: '',
     openai_base_url: 'https://api.openai.com/v1',
@@ -210,6 +217,13 @@ export default function Settings() {
           sdwebui_steps: Number(imageForm.sdwebui_steps),
           sdwebui_width: Number(imageForm.sdwebui_width),
           sdwebui_height: Number(imageForm.sdwebui_height),
+          comfyui_base_url: imageForm.comfyui_base_url,
+          comfyui_steps: Number(imageForm.comfyui_steps),
+          comfyui_width: Number(imageForm.comfyui_width),
+          comfyui_height: Number(imageForm.comfyui_height),
+          comfyui_cfg_scale: Number(imageForm.comfyui_cfg_scale),
+          comfyui_sampler_name: imageForm.comfyui_sampler_name,
+          comfyui_scheduler: imageForm.comfyui_scheduler,
           negative_prompt: imageForm.negative_prompt,
           style_suffix: imageForm.style_suffix,
           openai_base_url: imageForm.openai_base_url,
@@ -533,7 +547,7 @@ export default function Settings() {
                       Geração de imagem
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      SDXL WebUI ou um endpoint compatível com OpenAI, para pinturas de cena e retratos.
+                      FLUX.3 Klein no ComfyUI, SDXL WebUI ou um endpoint compatível com OpenAI, para pinturas de cena e retratos.
                     </p>
                   </div>
 
@@ -561,6 +575,16 @@ export default function Settings() {
                           }`}
                         >
                           SD WebUI (Local)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImageForm({ ...imageForm, provider: 'comfyui' })}
+                          aria-pressed={imageForm.provider === 'comfyui'}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                            imageForm.provider === 'comfyui' ? 'bg-surface text-primary shadow font-semibold' : 'text-secondary'
+                          }`}
+                        >
+                          ComfyUI (FLUX.3)
                         </button>
                         <button
                           type="button"
@@ -644,6 +668,71 @@ export default function Settings() {
                             className={inputCls}
                           />
                         </SettingField>
+                      </div>
+                    ) : imageForm.provider === 'comfyui' ? (
+                      <div className="space-y-4 pt-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <SettingField label="URL base do ComfyUI" labelClassName={labelCls}>
+                            <input
+                              type="text"
+                              value={imageForm.comfyui_base_url}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_base_url: e.target.value })}
+                              placeholder="http://127.0.0.1:8188"
+                              className={inputCls}
+                            />
+                          </SettingField>
+                          <SettingField label="Passos (15 no Klein destilado)" labelClassName={labelCls}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="150"
+                              step="1"
+                              value={imageForm.comfyui_steps}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_steps: e.target.value })}
+                              className={inputCls}
+                            />
+                          </SettingField>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <SettingField label="Largura (1024)" labelClassName={labelCls}>
+                            <input
+                              type="number"
+                              min="64"
+                              max="4096"
+                              step="64"
+                              value={imageForm.comfyui_width}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_width: e.target.value })}
+                              className={inputCls}
+                            />
+                          </SettingField>
+                          <SettingField label="Altura (1024)" labelClassName={labelCls}>
+                            <input
+                              type="number"
+                              min="64"
+                              max="4096"
+                              step="64"
+                              value={imageForm.comfyui_height}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_height: e.target.value })}
+                              className={inputCls}
+                            />
+                          </SettingField>
+                        </div>
+
+                        <SettingField label="Sufixo de estilo" labelClassName={labelCls}>
+                          <input
+                            type="text"
+                            value={imageForm.style_suffix || ''}
+                            onChange={(e) => setImageForm({ ...imageForm, style_suffix: e.target.value })}
+                            placeholder="ex.: fotografia realista, textura de pele natural"
+                            className={inputCls}
+                          />
+                        </SettingField>
+
+                        <p className="text-xs text-secondary">
+                          Modelo, VAE e sampler de edição ficam em <code>settings.json → image.providers.comfyui</code>.
+                          O prompt negativo não é usado com cfg 1.
+                        </p>
                       </div>
                     ) : (
                       <div className="space-y-4 pt-2">

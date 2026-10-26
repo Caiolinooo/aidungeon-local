@@ -150,6 +150,26 @@
         "sd_model_checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
         "note": "Forge Neo (sd-webui-forge-classic, branch neo) em 127.0.0.1:7861, mesma API txt2img/img2img. Checkpoint epiCRealism XL CrystalClear e VAE sdxl-vae-fp16-fix, os dois já no disco do A1111 (/home/caio/sd-webui, porta 7860, rollback). DPM++ 2M Karras, CFG 5, 20 passos. O Neo não tem --medvram: ele usa a VRAM livre ao lado do llama-server. Z-Image-Turbo, FLUX e Wan não entram neste slot. 1024 é o tamanho nativo do arquivo; no ar o retrato usa o override 800x720 e a faixa 1344x768."
       },
+      "comfyui": {
+        "base_url": "http://127.0.0.1:8188",
+        "unet": "flux3-image-klein-int8-convrot.safetensors",
+        "clip": "qwen3vl_4b_int8_convrot.safetensors",
+        "clip_type": "flux3",
+        "clip_device": "cpu",
+        "vae": "flux2-vae.safetensors",
+        "width": 800,
+        "height": 720,
+        "steps": 8,
+        "sampler": "er_sde",
+        "scheduler": "simple",
+        "cfg": 1.0,
+        "edit_shift": 2.77259,
+        "edit_steps": 8,
+        "edit_sampler": "euler",
+        "edit_scheduler": "simple",
+        "poll_interval_s": 1.0,
+        "note": "FLUX.3 Klein destilado INT8 via ComfyUI (porta 8188). Grafo API montado em image_client: UNETLoader + CLIPLoader type=flux3 (Qwen3-VL 4B) + flux2-vae; KSampler er_sde/simple, 8 passos, cfg 1. Edicao (retratos): VAEEncode da foto + ReferenceLatent + ModelSamplingFlux 2.77259, euler/simple, 8 passos, denoise 1. Medido na L4 a 800x720: 46 s txt2img, 54 s edicao. Prompt upsampler Qwen3.5 9B NAO e usado. clip_device='cpu' tira os ~4,9 GB do Qwen3-VL da VRAM e deixa o UNET INT8 + VAE (~6,1 GB) ao lado do narrador. Troque image.provider para 'comfyui' depois de instalar o ComfyUI na VM."
+      },
       "openai_compatible": {
         "base_url": "",
         "api_key_env": "IMAGE_API_KEY",

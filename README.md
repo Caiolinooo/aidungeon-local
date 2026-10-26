@@ -214,7 +214,8 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
   tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o checkpoint
   é o **epiCRealism XL CrystalClear** (SDXL fotorealista, sem filtro): retrato e See em
-  1024×1024, faixa da cena em 1344×768. Provedores: **sdwebui** ou **openai_compatible**.
+  1024×1024, faixa da cena em 1344×768. Provedores: **sdwebui**, **comfyui** (FLUX.3
+  Klein INT8, instalado na VM) ou **openai_compatible**.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
@@ -245,8 +246,8 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
 │  (padrão: llama.cpp na VM; alternativas: KoboldCpp,    │
 │   Ollama, LM Studio — basta trocar llm.base_url)       │
 ├────────────────────────────────────────────────────────┤
-│  IMAGENS   sdwebui (A1111/Forge/SD.Next) ou endpoint   │
-│  OpenAI-compatible de imagens — local, LAN ou VM       │
+│  IMAGENS   sdwebui, comfyui (FLUX.3 Klein) ou endpoint  │
+│  OpenAI-compatible de imagens — local, LAN ou VM        │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -267,10 +268,12 @@ streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime �
   opção local recomendada: um único `.exe`, otimizado para CPU (nosso hardware é
   i5-1145G7 + Iris Xe, sem CUDA) e feito para *storytelling*. Modelos de referência em
   `config/models.json` (Qwen2.5-7B Q4_K_M; fallback 3B "modo rápido").
-- **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN) ou
-  `openai_compatible` (qualquer `POST {base_url}/images/generations` — ex. um servidor
-  de difusão na VM). Endpoint, resolução, steps, negative prompt e estilo são
-  configuráveis pela UI.
+- **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN), `comfyui`
+  (grafo API em `/prompt`, com polling em `/history`; edição por `ReferenceLatent`
+  para manter o rosto) ou `openai_compatible` (qualquer `POST {base_url}/images/generations`
+  — ex. um servidor de difusão na VM). Endpoint, resolução, steps, negative prompt e
+  estilo são configuráveis pela UI; modelo/VAE/sampler do ComfyUI ficam em
+  `config/settings.json`.
 
 Nota Qwen3.x: modelos híbridos exigem `chat_template_kwargs.enable_thinking=false` em
 toda chamada (sem isso `content` volta vazio) — o `llm_client` já envia sempre que

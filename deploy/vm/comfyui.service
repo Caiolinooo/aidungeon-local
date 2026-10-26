@@ -1,0 +1,20 @@
+[Unit]
+Description=ComfyUI (API de imagem, FLUX.3 Klein INT8)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+Group=caio
+WorkingDirectory=/home/caio/ComfyUI
+Environment=PATH=/home/caio/ComfyUI/venv/bin:/home/caio/.local/bin:/usr/local/bin:/usr/bin
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ExecStart=/home/caio/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=15
+MemoryHigh=12G
+MemoryMax=16G
+MemorySwapMax=2G
+
+[Install]
+WantedBy=multi-user.target

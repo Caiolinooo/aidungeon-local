@@ -153,8 +153,9 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 `GET /health` 200.
 
 Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
-do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB),
-FLUX 3 Klein INT8 (~8 GB, outro cliente) e Wan 2.1.
+do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
+Wan 2.1. O FLUX 3 Klein INT8 ganhou cliente próprio (`comfyui`, abaixo); o
+Forge segue instalado como rollback.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
@@ -165,6 +166,84 @@ sudo systemctl enable --now sd-webui.service
 ```
 
 Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
+
+## Imagem: FLUX.3 Klein no ComfyUI
+
+Desde 26 out 2026 o ComfyUI está instalado em `/home/caio/ComfyUI` (`0.42.0`,
+venv com `torch 2.11.0+cu128`) e responde em `http://127.0.0.1:8188`. Roda como
+unit de **usuário** (`~/.config/systemd/user/comfyui.service`, já habilitada):
+`caio` não tem sudo sem senha, então a unit de sistema em
+[`comfyui.service`](comfyui.service) fica pronta para quando houver sudo.
+
+O Forge Neo não conhece FLUX 3 (o README para no FLUX.2 Klein). O cliente
+`image.provider = "comfyui"` em `backend/app/image_client.py` fala a API do
+ComfyUI: `POST /prompt` com o grafo, polling em `GET /history/{id}` e download
+por `GET /view`. Portraits seguem o grafo de edição oficial: `LoadImage →
+ImageScale → VAEEncode → ReferenceLatent → ModelSamplingFlux(2.77259) →
+KSampler(denoise 1)`, então o rosto continua o mesmo.
+
+Arquivos (repo gated `black-forest-labs/flux-3-image-klein-comfy`; a licença
+FLUX Kommunity foi aceita na conta do token HF em 26 out 2026):
+
+```bash
+# /home/caio/ComfyUI/models/
+#   diffusion_models/flux3-image-klein-int8-convrot.safetensors  5.827.874.779 B
+#   text_encoders/qwen3vl_4b_int8_convrot.safetensors            4.858.559.240 B
+#   vae/flux2-vae.safetensors                                      336.211.292 B
+TOKEN=$(cat ~/.cache/huggingface/token)
+BASE=https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main
+for F in diffusion_models/flux3-image-klein-int8-convrot.safetensors \
+         text_encoders/qwen3vl_4b_int8_convrot.safetensors \
+         vae/flux2-vae.safetensors; do
+  curl -L -H "Authorization: Bearer $TOKEN" -o "models/$F" "$BASE/$F"
+done
+```
+
+Os arquivos ficam em subpastas no repo e no ComfyUI (`models/<subpasta>/`).
+Sem a licença aceita o `curl` devolve 403; com licença e caminho errado, 404.
+
+O `config/settings.json` usa `clip_device = "cpu"`: tira os 4,9 GB do
+Qwen3-VL da GPU e deixa o UNET INT8 (5,8 GB) + VAE (0,3 GB) ao lado do narrador
+(~10,6 GB) e do OmniVoice (~1 GB). Text-to-image usa `er_sde` / `simple`, 8
+passos, CFG 1; edição (retratos) usa `euler` / `simple`, 8 passos, denoise 1 e
+`ModelSamplingFlux` 2.77259, como no template oficial. O prompt upsampler
+Qwen3.5 9B (6,7 GB) não é usado porque o LLM do jogo já escreve o prompt.
+
+Medição de 26 out 2026, Forge descarregado por
+`POST /sdapi/v1/unload-checkpoint`, narrador e voz no ar:
+
+| Teste | Resolução | Passos | Tempo | VRAM da placa |
+| --- | --- | ---: | ---: | ---: |
+| txt2img (`er_sde`) | 800×720 | 8 | 46 s | 19,7 GB usados |
+| edição por referência (`euler`) | 800×720 | 8 | 54 s | 19,7 GB usados |
+
+A primeira execução de cada grafo inclui o carregamento do UNET (~20 s); os
+números acima já são execuções completas. Com 15/16 passos eram 84 s e 76 s; a
+qualidade em 8 passos ficou equivalente nas amostras de 26 out. O `qwen3vl` na CPU é o que mantém o
+pico abaixo dos 23 GB da L4. O espaço livre com o Forge carregado era ~2,4 GB;
+por isso os dois **não** rodam juntos: descarregue o checkpoint do Forge antes.
+
+Troca do provider (com o ComfyUI respondendo em `/system_stats`):
+
+```bash
+# nos dois bancos ou via PUT /api/settings/image
+for DB in /home/caio/aidungeon/data/aidungeon.db \
+          /home/caio/aidungeon-staging/data/aidungeon.db; do
+  sqlite3 "$DB" "INSERT INTO settings(key,value) VALUES('image.provider','\"comfyui\"') \
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+  # image.comfyui_base_url = "http://127.0.0.1:8188"
+done
+```
+
+Rollback: `image.provider = "sdwebui"` e `image.sdwebui_base_url =
+"http://127.0.0.1:7861"`; o Forge continua instalado, só não recebe tráfego e
+recarrega o checkpoint no primeiro pedido.
+
+Teste rápido do grafo, sem o app:
+
+```bash
+curl -s http://127.0.0.1:8188/system_stats | head -c 200
+```
 
 ## A1111: memória
 

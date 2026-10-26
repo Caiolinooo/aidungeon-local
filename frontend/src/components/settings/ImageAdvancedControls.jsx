@@ -35,6 +35,19 @@ export default function ImageAdvancedControls({ form, onChange, inputCls, labelC
           </div>
         </>
       )}
+      {form.provider === 'comfyui' && (
+        <>
+          <SettingField label="CFG Scale (1 no Klein destilado)" labelClassName={labelCls}>
+            <input type="number" min="1" max="30" step="0.1" value={form.comfyui_cfg_scale} onChange={(e) => update({ comfyui_cfg_scale: e.target.value })} className={inputCls} />
+          </SettingField>
+          <SettingField label="Sampler (t2i)" labelClassName={labelCls}>
+            <input type="text" value={form.comfyui_sampler_name} onChange={(e) => update({ comfyui_sampler_name: e.target.value })} className={inputCls} />
+          </SettingField>
+          <SettingField label="Scheduler (t2i)" labelClassName={labelCls}>
+            <input type="text" value={form.comfyui_scheduler} onChange={(e) => update({ comfyui_scheduler: e.target.value })} className={inputCls} />
+          </SettingField>
+        </>
+      )}
     </fieldset>
   )
 }
