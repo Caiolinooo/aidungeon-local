@@ -866,13 +866,47 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise
     return {"image": image}
 
+def _execute_location_image(job: dict, transport: Any) -> dict:
+    """Gera a imagem de um local e liga ao card no mapa."""
+    from app import world_map
+    payload = job.get("payload") or {}
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise GameError(500, "generation_failed", "location image job has no prompt")
+    with db.session() as conn:
+        img_cfg = image_client.effective_settings(conn)
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_generation_disabled", "Image generation is disabled")
+    cache_key = str(payload.get("cache_key") or image_client.request_key(
+        img_cfg, prompt, width=1344, height=768))
+    image_id = db.new_id()
+    meta = image_client.generate_image(
+        img_cfg, prompt, adventure_id=job["adventure_id"],
+        image_id=image_id, transport=transport, width=1344, height=768,
+    )
+    with db.session() as conn:
+        image = db.insert_image(
+            conn, adventure_id=job["adventure_id"], action_seq=-1,
+            file_path=meta["file_path"], prompt=prompt,
+            negative_prompt=img_cfg["negative_prompt"],
+            provider=meta["provider"], width=meta["width"], height=meta["height"],
+            image_id=image_id, kind="location", ref_id=job["ref_id"],
+            cache_key=cache_key, job_id=job["id"],
+        )
+        world_map.attach_location_image(
+            conn, job["adventure_id"], job["ref_id"], image["id"],
+            state_key=cache_key[:40],
+        )
+    return {"image": db.image_ref(image), "card_id": job["ref_id"]}
+
+
 
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "character_portrait": _execute_portrait,
     "scene_backdrop": _execute_backdrop,
     "see_image": _execute_see,
     "npc_day_tick": _execute_day_tick,
-    "card_assets": _execute_card_assets,
+    "location_image": _execute_location_image,
 }
 
 

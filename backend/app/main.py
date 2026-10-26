@@ -38,6 +38,7 @@ from app.routes import events as events_routes
 from app.routes import likeness as likeness_routes
 from app.routes import rulesets as rulesets_routes
 from app.routes import sim as sim_routes
+from app.routes import world_map as world_map_routes
 from app.routes import users as users_routes
 
 logging.basicConfig(level=logging.INFO,
@@ -163,6 +164,8 @@ app.include_router(settings.router, prefix="/api", tags=["settings"],
 app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)
 app.include_router(health.router, prefix="/api", tags=["health"],
+                   dependencies=_protected)
+app.include_router(world_map_routes.router, prefix="/api", tags=["world-map"],
                    dependencies=_protected)
 
 # --- Grok (G4): eventos em SSE. Fora do _protected porque o EventSource do

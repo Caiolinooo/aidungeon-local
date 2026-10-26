@@ -266,6 +266,11 @@ export const api = {
     request(`/adventures/${advId}/cards/${cardId}/memories`),
   simulateDay: (advId) =>
     request(`/adventures/${advId}/life/tick`, { method: 'POST' }),
+  getMap: (advId) => request(`/adventures/${advId}/map`),
+  getJournal: (advId, limit = 40) => request(`/adventures/${advId}/journal${qs({ limit })}`),
+  travelTo: (advId, cardId) => request(`/adventures/${advId}/map/travel/${cardId}`, { method: 'POST', body: {} }),
+  generateLocation: (advId, payload) => request(`/adventures/${advId}/map/locations`, { method: 'POST', body: payload }),
+  generateLocationImage: (advId, cardId, reference = '') => request(`/adventures/${advId}/map/locations/${cardId}/image`, { method: 'POST', body: { reference } }),
 
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),

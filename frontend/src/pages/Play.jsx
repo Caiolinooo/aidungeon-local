@@ -16,6 +16,7 @@ import AdventureJobs from '../components/AdventureJobs.jsx'
 import GenerationPreferences from '../components/GenerationPreferences.jsx'
 import LiveFeed from '../components/LiveFeed.jsx'
 import MiniHud from '../components/MiniHud.jsx'
+import WorldMap from '../components/WorldMap.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { useTheme } from '../themeContext.jsx'
 import { bySeq, playerDisplayText } from '../utils.js'
@@ -1289,6 +1290,8 @@ export default function Play() {
     />
   ) : null
 
+  const [mapOpen, setMapOpen] = useState(false)
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-canvas text-primary">
       {/* LEFT COLUMN: Main Story Pane */}
@@ -1420,6 +1423,14 @@ export default function Play() {
                 >
                   <BookOpen className="w-4 h-4 text-accent-pri" />
                 </button>
+                <button
+                  onClick={() => setMapOpen(true)}
+                  title="Mapa, locais e journal do mundo"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+                >
+                  <span className="text-xs font-semibold">Map</span>
+                </button>
+
 
                 {/* Global Settings Link */}
                 <Link
@@ -1811,6 +1822,11 @@ export default function Play() {
             toast('Personagem salvo.', 'ok')
           }}
         />
+      )}
+      {mapOpen && (
+        <div className="fixed inset-0 z-50 flex bg-canvas/95 backdrop-blur sm:left-1/2 sm:w-1/2 sm:border-l sm:border-subtle">
+          <WorldMap adventure={adventure} open={mapOpen} onClose={() => setMapOpen(false)} />
+        </div>
       )}
     </div>
   )
