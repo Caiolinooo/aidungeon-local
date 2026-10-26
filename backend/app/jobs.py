@@ -544,18 +544,22 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         anchor_bytes = _portrait_bytes(anchor)
         init_width, init_height = anchor.get("width"), anchor.get("height")
         final = f"{final}, same person, keep the same face".strip()
+    references = likeness.reference_images([card])
     init_bytes, denoise = likeness.portrait_init(
         card, None if force_reference else anchor_bytes,
         anchor_denoise=PORTRAIT_VARIANT_DENOISE if state_key else PORTRAIT_DENOISE,
         force_reference=force_reference,
     )
     if force_reference:
-        # Nova imagem da mesma pessoa: IP-Adapter trava a identidade, sem
-        # img2img copiar pose, roupa e fundo da foto de referência.
+        # Retrato fiel: img2img com denoise muito baixo preserva a foto.
+        # Para cenas novas, o app usa InstantID em vez de copiar a composição.
         init_bytes, denoise = None, None
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
-    references = likeness.reference_images([card])
+    if force_reference and references:
+        # Retrato fiel: parte da foto original com denoise muito baixo.
+        init_bytes = references[0]
+        denoise = 0.12
     cache_key = state_key or image_client.request_key(
         img_cfg, final, width=init_width, height=init_height,
         init_image=init_bytes, denoising_strength=denoise,

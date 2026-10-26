@@ -142,8 +142,8 @@ def test_new_image_from_photo_uses_identity_not_img2img(client, tmp_path, monkey
     assert jobs.process_pending(_sd_handler(seen)) == 1
     assert len(seen) == 1
     payload = seen[0]
-    assert "init_images" not in payload
-    assert "denoising_strength" not in payload
+    assert payload["init_images"]
+    assert payload["denoising_strength"] == 0.12
     assert base64.b64decode(_unit(payload)["image"]) == PNG_BYTES
 
 def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypatch):
