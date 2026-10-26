@@ -824,6 +824,26 @@ def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
     )
     return _store_sheet(conn, card, sheet)
 
+def set_primary_reference(conn, card: dict, image_path: str) -> dict:
+    """Marca uma foto da galeria como referência principal do NPC."""
+    sheet = dict(sheet_of(card))
+    raw = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+    images = raw.get("images") or []
+    if not images and raw.get("image_path"):
+        images = [{"image_path": raw["image_path"]}]
+    normalized = []
+    for item in images:
+        if isinstance(item, dict):
+            normalized.append(item)
+        elif isinstance(item, str):
+            normalized.append({"image_path": item})
+    if not any(item.get("image_path") == image_path for item in normalized):
+        raise GameError(422, "reference_not_found", "A foto não está na galeria.")
+    raw["image_path"] = image_path
+    raw["images"] = normalized
+    sheet["reference"] = raw
+    return _store_sheet(conn, card, sheet)
+
 
 def clear_reference(conn, card: dict) -> dict:
     """Apaga todas as fotos enviadas e o caminho espelhado no likeness."""
