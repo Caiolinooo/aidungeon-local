@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 import httpx
 
-from app import db, jobs
+from app import db, image_client, jobs
 from conftest import make_adventure
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
@@ -265,7 +266,7 @@ def test_bulk_does_not_replace_an_existing_portrait(client, tmp_path):
     assert again["portrait_anchor_id"] == saved["portrait_anchor_id"]
 
 
-def test_regenerate_portrait_img2img_from_anchor(client, tmp_path):
+def test_regenerate_portrait_img2img_from_anchor(client, tmp_path, monkeypatch):
     adv = make_adventure(image_style="ink sketch")
     npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.",
                    portrait_prompt="scarred veteran captain, oil painting")
@@ -277,21 +278,32 @@ def test_regenerate_portrait_img2img_from_anchor(client, tmp_path):
     assert anchor == card["portrait"]["id"]
     assert first["id"]
 
-    seen: list = []
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+        anchor_bytes = Path(db.get_image(conn, anchor)["file_path"]).read_bytes()
+    seen: list[dict] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/sdapi/v1/img2img"):
-            seen.append(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(200, json={"images": [PNG_B64], "parameters": {}})
-        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
+    def fake_generate(cfg, prompt, *, adventure_id, image_id, **kwargs):
+        seen.append({"prompt": prompt, **kwargs})
+        directory = tmp_path / "imgs" / adventure_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{image_id}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": int(kwargs.get("width") or 1024),
+            "height": int(kwargs.get("height") or 1024),
+            "provider": "comfyui",
+        }
 
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
     second = client.post(f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
     assert second["payload"]["replace"] is True
     assert second["payload"]["init_image_id"] == anchor
-    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
-    assert seen and seen[0]["denoising_strength"] == jobs.PORTRAIT_DENOISE
-    assert jobs.PORTRAIT_DENOISE <= 0.45
-    assert seen[0]["init_images"] and seen[0]["init_images"][0]
+    assert jobs.process_pending(httpx.MockTransport(
+        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
+    assert seen and seen[0]["init_image"] is None
+    assert seen[0]["reference_images"] == [anchor_bytes]
     assert "same face" in seen[0]["prompt"]
 
     updated = client.get(f"/api/adventures/{adv['id']}/cards/{npc['id']}").json()

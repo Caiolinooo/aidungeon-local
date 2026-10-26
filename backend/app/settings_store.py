@@ -18,9 +18,15 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.errors import GameError
 from app import db
 
 SETTINGS_PATH = db.REPO_ROOT / "config" / "settings.json"
+
+_DEFAULT_COMFY_SIGMAS = (
+    1.0, 0.978453, 0.95418, 0.926626, 0.89508,
+    0.845148, 0.704534, 0.414568, 0.0,
+)
 
 OVERRIDE_KEYS = (
     "llm.base_url", "llm.api_key", "llm.model_alias", "llm.context_size",
@@ -267,6 +273,11 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
 
     api_key = _api_key_or_env(
         conn, "image.openai_api_key", openai.get("api_key_env", "IMAGE_API_KEY"))
+    comfyui_steps = int(ov("image.comfyui_steps", comfyui.get("steps", 8)))
+    comfyui_sigmas = [float(value) for value in comfyui.get(
+        "sigmas", _DEFAULT_COMFY_SIGMAS)]
+    if len(comfyui_sigmas) != comfyui_steps + 1:
+        raise ValueError("comfyui.sigmas deve conter comfyui.steps + 1 valores")
 
     return {
         # ---- shape público (ImageSettings) ----
@@ -277,7 +288,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "sdwebui_width": int(ov("image.sdwebui_width", sdwebui.get("width", 512))),
         "sdwebui_height": int(ov("image.sdwebui_height", sdwebui.get("height", 512))),
         "comfyui_base_url": ov("image.comfyui_base_url", comfyui.get("base_url", "")),
-        "comfyui_steps": int(ov("image.comfyui_steps", comfyui.get("steps", 15))),
+        "comfyui_steps": comfyui_steps,
         "comfyui_width": int(ov("image.comfyui_width", comfyui.get("width", 1024))),
         "comfyui_height": int(ov("image.comfyui_height", comfyui.get("height", 1024))),
         "negative_prompt": ov("image.negative_prompt", sdwebui.get("negative_prompt", "")),
@@ -304,11 +315,12 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         # ComfyUI: nomes de arquivo/sampler vêm só do settings.json (internos).
         "comfyui_unet": comfyui.get("unet", ""),
         "comfyui_clip": comfyui.get("clip", ""),
-        "comfyui_clip_type": comfyui.get("clip_type", "qwen_image_2_1"),
+        "comfyui_clip_type": comfyui.get("clip_type", "qwen_image"),
         "comfyui_clip_device": comfyui.get("clip_device", "default"),
         "comfyui_vae": comfyui.get("vae", ""),
         "comfyui_sampler": comfyui.get("sampler", "euler"),
-        "comfyui_scheduler": comfyui.get("scheduler", "normal"),
+        "comfyui_cfg": float(comfyui.get("cfg", 1.0)),
+        "comfyui_sigmas": comfyui_sigmas,
         "comfyui_shift": float(comfyui.get("shift", 1.31)),
         "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 1.0)),
         "prompt_builder": dict(prompt_builder),
@@ -321,6 +333,12 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
     `openai_api_key=""` remove o override (cai para a env); omitir mantém.
     """
     changed: set[str] = set()
+    if update.get("comfyui_steps") is not None:
+        sigmas = load_file_settings().get("image", {}).get(
+            "providers", {}).get("comfyui", {}).get("sigmas", _DEFAULT_COMFY_SIGMAS)
+        if len(sigmas) != int(update["comfyui_steps"]) + 1:
+            raise GameError.bad_request(
+                "validation_error", "comfyui_steps deve ser igual a len(sigmas) - 1")
     for field, key in (("enabled", "image.enabled"), ("provider", "image.provider"),
                        ("sdwebui_base_url", "image.sdwebui_base_url"),
                        ("sdwebui_steps", "image.sdwebui_steps"),

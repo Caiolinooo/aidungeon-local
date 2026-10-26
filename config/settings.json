@@ -135,7 +135,7 @@
   },
   "image": {
     "enabled": true,
-    "provider": "sdwebui",
+    "provider": "comfyui",
     "storage_dir": "data/images",
     "timeout_seconds": 300,
     "providers": {
@@ -154,17 +154,18 @@
         "base_url": "http://127.0.0.1:8188",
         "unet": "fineviewQWEN_qw21TurboFixed_3299367.safetensors",
         "clip": "qwen3vl_8b_int8_convrot.safetensors",
-        "clip_type": "qwen_image_2_1",
+        "clip_type": "qwen_image",
         "clip_device": "cpu",
         "vae": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
-        "width": 800,
-        "height": 720,
+        "width": 1024,
+        "height": 1024,
         "steps": 8,
         "sampler": "euler",
-        "scheduler": "normal",
+        "cfg": 1.0,
+        "sigmas": [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0],
         "shift": 1.31,
         "poll_interval_s": 1.0,
-        "note": "FineView QW2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image_2_1 (Qwen3-VL 8B INT8) + texture-fix VAE. EmptyImageLatent, ModelSamplingAuraFlow shift 1.31, BasicScheduler normal de 8 passos (9 sigmas), SamplerCustomAdvanced euler. Referencias entram em cadeias ReferenceLatent positiva e negativa. clip_device=cpu reserva VRAM para o narrador."
+        "note": "FineView Qwen Image 2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image (Qwen3-VL 8B INT8) + texture-fix VAE. TextEncodeQwenImage21 recebe as referencias; ModelSamplingAuraFlow shift 1.31, ManualSigmas oficial de 8 passos e SamplerCustom euler. clip_device=cpu reserva VRAM para o narrador."
       },
       "openai_compatible": {
         "base_url": "",

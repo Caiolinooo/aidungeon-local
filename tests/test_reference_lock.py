@@ -10,30 +10,39 @@ import httpx
 from app import db, image_client, jobs, likeness
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, override_transport
+from test_scene import _face, pipeline_transport
 from test_v3 import use_tmp_storage
 
 
-def _sd_handler(seen: list):
-    def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path.endswith("/models"):
-            return httpx.Response(200, json={
-                "object": "list",
-                "data": [{"id": "mock-model", "object": "model"}],
-            })
-        if path.endswith("/chat/completions"):
-            return httpx.Response(200, json={
-                "choices": [{"message": {"content": "Clara steps into the rain."}}],
-            })
-        if path.endswith("/sdapi/v1/txt2img") or path.endswith("/sdapi/v1/img2img"):
-            seen.append(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(200, json={
-                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
-                "parameters": {},
-            })
-        return httpx.Response(404, json={"error": f"no mock route: {path}"})
+def _use_comfy() -> None:
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
 
-    return httpx.MockTransport(handler)
+
+def _capture_generate(monkeypatch, tmp_path) -> list[dict]:
+    """Isola o executor. O teste olha kwargs do Qwen e o PNG gravado."""
+    seen: list[dict] = []
+
+    def fake_generate(cfg, prompt, *, adventure_id, image_id, **kwargs):
+        seen.append({"prompt": prompt, **kwargs})
+        directory = tmp_path / "imgs" / adventure_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{image_id}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": int(kwargs.get("width") or 1024),
+            "height": int(kwargs.get("height") or 1024),
+            "provider": "comfyui",
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
+    return seen
+
+
+def _unused_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(404, json={"error": "unused"}))
 
 
 def _upload(client, adv_id: str, card_id: str) -> None:
@@ -43,12 +52,6 @@ def _upload(client, adv_id: str, card_id: str) -> None:
         data={"mode": "reference"},
     )
     assert resp.status_code == 200, resp.text
-
-
-def _unit(payload: dict) -> dict:
-    args = payload["alwayson_scripts"]["controlnet"]["args"]
-    assert len(args) == 1
-    return args[0]
 
 
 def test_first_name_puts_the_reference_card_in_the_scene():
@@ -138,13 +141,12 @@ def test_new_image_from_photo_uses_identity_not_img2img(client, tmp_path, monkey
     with db.session() as conn:
         queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True, force_reference=True)
     assert queued is not None
-    seen: list[dict] = []
-    assert jobs.process_pending(_sd_handler(seen)) == 1
+    _use_comfy()
+    seen = _capture_generate(monkeypatch, tmp_path)
+    assert jobs.process_pending(_unused_transport()) == 1
     assert len(seen) == 1
-    payload = seen[0]
-    assert payload["init_images"]
-    assert payload["denoising_strength"] == 0.12
-    assert base64.b64decode(_unit(payload)["image"]) == PNG_BYTES
+    assert seen[0]["init_image"] is None
+    assert seen[0]["reference_images"] == [PNG_BYTES]
 
 def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
@@ -166,15 +168,14 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
         saved = db.get_card(conn, adv["id"], card["id"])
     refs = likeness.reference_images([saved])
     assert refs == [PNG_BYTES]
-    seen: list[dict] = []
     with db.session() as conn:
         queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True, force_reference=True)
     assert queued is not None
-    assert jobs.process_pending(_sd_handler(seen)) == 1
-    args = seen[0]["alwayson_scripts"]["controlnet"]["args"]
-    assert len(args) == 2
-    assert base64.b64decode(args[0]["image"]) == PNG_BYTES
-    assert base64.b64decode(args[1]["image"]) == other
+    _use_comfy()
+    seen = _capture_generate(monkeypatch, tmp_path)
+    assert jobs.process_pending(_unused_transport()) == 1
+    assert seen[0]["init_image"] is None
+    assert seen[0]["reference_images"] == [PNG_BYTES, other]
 
 
 def test_multiple_npcs_use_regional_reference_masks():
@@ -206,30 +207,30 @@ def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypa
             portrait_prompt="long brown hair, green eyes",
         )
     _upload(client, adv["id"], card["id"])
-    with db.session() as conn:
-        jobs.enqueue_portrait(
-            conn, adv["id"], card["id"], replace=True, force_reference=True)
-    assert jobs.process_pending(_sd_handler([])) == 1
+    portrait = _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "start", "The road is empty.")
     add_action(adv["id"], 1, "continue", "Clara steps into the rain.")
     seen: list[dict] = []
-    override_transport(client, _sd_handler(seen))
+
+    def fake_generate(cfg, prompt, **kwargs):
+        seen.append(kwargs)
+        path = tmp_path / f"{kwargs['image_id']}.png"
+        path.write_bytes(PNG_BYTES)
+        return {"file_path": str(path), "width": 1024, "height": 1024, "provider": "comfyui"}
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
+    override_transport(client, pipeline_transport("Clara steps into the rain."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
     finally:
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     assert len(seen) == 1
-    payload = seen[0]
-    assert "init_images" not in payload
-    unit = _unit(payload)
-    assert unit["enabled"] is True
-    assert unit["module"] == "InsightFace (InstantID)"
-    assert unit["model"] == "ip-adapter-instantid"
-    assert unit["weight"] == 1.0
-    assert unit["threshold_a"] == -1
-    assert unit["control_mode"] == "ControlNet is more important"
-    assert base64.b64decode(unit["image"]) == PNG_BYTES
+    assert seen[0].get("init_image") is None
+    assert seen[0]["reference_images"] == [PNG_BYTES]
+    with db.session() as conn:
+        stored = db.get_card(conn, adv["id"], card["id"])
+    assert stored["portrait_image_id"] == portrait["id"]
 
 
 def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, monkeypatch):
@@ -247,22 +248,33 @@ def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, mon
             }),
         )
     _upload(client, adv["id"], card["id"])
-    with db.session() as conn:
-        jobs.enqueue_portrait(
-            conn, adv["id"], card["id"], replace=True, force_reference=True)
-    assert jobs.process_pending(_sd_handler([])) == 1
+    portrait = _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "continue", "Clara waits by the tavern door.")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert resp.status_code == 200, resp.text
     with db.session() as conn:
         backdrop = next(item for item in db.list_jobs(conn, adv["id"])
                         if item["type"] == "scene_backdrop")
-    assert card["id"] in backdrop["payload"]["reference_card_ids"]
+    assert backdrop["payload"]["cast_card_ids"] == [card["id"]]
+    assert backdrop["payload"]["reference_image_ids"] == [portrait["id"]]
     seen: list[dict] = []
-    assert jobs.process_pending(_sd_handler(seen)) >= 1
+
+    def fake_generate(cfg, prompt, **kwargs):
+        seen.append(kwargs)
+        path = tmp_path / f"{kwargs['image_id']}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": kwargs.get("width") or 1024,
+            "height": kwargs.get("height") or 1024,
+            "provider": "comfyui",
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
+    assert jobs.process_pending(pipeline_transport()) >= 1
     scenes = [item for item in seen if item.get("width") == 1344]
-    assert scenes and "init_images" not in scenes[0]
-    assert base64.b64decode(_unit(scenes[0])["image"]) == PNG_BYTES
+    assert scenes and scenes[0].get("init_image") is None
+    assert scenes[0]["reference_images"] == [PNG_BYTES]
 
 
 def test_cache_key_changes_when_the_reference_changes():

@@ -310,22 +310,32 @@ def test_image_comfyui_settings_roundtrip(client):
     resp = client.put("/api/settings/image", json={
         "provider": "comfyui",
         "comfyui_base_url": "http://127.0.0.1:8188",
-        "comfyui_steps": 12,
-        "comfyui_width": 800,
-        "comfyui_height": 720,
+        "comfyui_steps": 8,
+        "comfyui_width": 1024,
+        "comfyui_height": 1024,
     })
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["provider"] == "comfyui"
-    assert data["comfyui_steps"] == 12
-    assert (data["comfyui_width"], data["comfyui_height"]) == (800, 720)
+    assert data["comfyui_steps"] == 8
+    assert (data["comfyui_width"], data["comfyui_height"]) == (1024, 1024)
 
     with db.session() as conn:
         cfg = settings_store.effective_image_settings(conn)
     # Modelo/VAE/CLIP vêm só do settings.json (internos, não passam pela API).
     assert cfg["comfyui_unet"] == "fineviewQWEN_qw21TurboFixed_3299367.safetensors"
     assert cfg["comfyui_clip"] == "qwen3vl_8b_int8_convrot.safetensors"
-    assert cfg["comfyui_clip_type"] == "qwen_image_2_1"
+    assert cfg["comfyui_clip_type"] == "qwen_image"
     assert cfg["comfyui_vae"] == "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors"
     assert cfg["comfyui_sampler"] == "euler"
     assert cfg["comfyui_shift"] == 1.31
+    assert cfg["comfyui_sigmas"] == [
+        1.0, 0.978453, 0.95418, 0.926626, 0.89508,
+        0.845148, 0.704534, 0.414568, 0.0]
+
+
+def test_comfyui_steps_must_match_sigmas(client):
+    response = client.put("/api/settings/image", json={"comfyui_steps": 12})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "validation_error"
+    assert client.get("/api/settings/image").json()["comfyui_steps"] == 8

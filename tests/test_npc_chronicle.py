@@ -4,9 +4,28 @@ from __future__ import annotations
 
 import json
 
-from app import db, npc_assets, npc_chronicle
+from app import db, image_client, npc_assets, npc_chronicle
 from conftest import add_action, make_adventure
-from test_v2 import make_v2_transport, override_transport
+from test_scene import _face
+from test_v2 import PNG_BYTES, make_v2_transport, override_transport
+
+
+def _stub_painter(monkeypatch, tmp_path) -> None:
+    """O teste olha o prompt. O executor só grava o PNG."""
+
+    def fake_generate(cfg, prompt, *, adventure_id, image_id, **kwargs):
+        directory = tmp_path / "imgs" / adventure_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{image_id}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": int(kwargs.get("width") or 1024),
+            "height": int(kwargs.get("height") or 1024),
+            "provider": "comfyui",
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
 
 
 def test_chronicle_creates_and_updates_without_replacing_the_face(tmp_db):
@@ -85,10 +104,10 @@ def test_character_canon_overrides_the_scene_prose():
     assert "overrides the prose" in canon
 
 
-def test_see_prompt_includes_the_character_canon(client, tmp_path):
+def test_see_prompt_includes_the_character_canon(client, tmp_path, monkeypatch):
     adv = make_adventure(image_style="ink sketch")
     with db.session() as conn:
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Princess Alusair",
             triggers=["Alusair"], entry="Steel Regent of Cormyr.",
             sheet=json.dumps({
@@ -97,9 +116,11 @@ def test_see_prompt_includes_the_character_canon(client, tmp_path):
             }),
         )
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+    _face(adv["id"], card["id"], b"\x89PNG\r\nalusair-canon")
     add_action(adv["id"], 0, "continue",
                "Princess Alusair reclines in a white gown, dark hair loose.")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
@@ -155,7 +176,7 @@ def test_status_and_face_survive_a_long_entry():
     assert rendered.index("long red hair") < rendered.index("x" * 40)
 
 
-def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path):
+def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path, monkeypatch):
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
@@ -163,6 +184,7 @@ def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path):
     add_action(adv["id"], 1, "do", "\n> You open the gate\n")
     add_action(adv["id"], 2, "continue", "Princess Alusair steps into the rain.")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 2})
@@ -180,7 +202,7 @@ def test_see_paints_the_latest_beat_not_the_old_story(client, tmp_path):
     assert "ancient dragon" not in sent.lower()
 
 
-def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path):
+def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path, monkeypatch):
     from test_v2 import PNG_BYTES
 
     adv = make_adventure(plot_essentials="[Name: Caio]", image_style="ink sketch")
@@ -199,15 +221,17 @@ def test_see_keeps_the_face_and_puts_the_beat_before_the_style(client, tmp_path)
             portrait_prompt="long red hair, green eyes, plate armor",
         )
         db.set_card_portrait(conn, alusair["id"], image["id"], anchor_id=image["id"])
-        db.insert_card(
+        caio = db.insert_card(
             conn, adv["id"], type="character", title="Caio",
             triggers=["Caio"], entry="The sorcerer.",
             portrait_prompt="short black hair, leather coat",
         )
+    _face(adv["id"], caio["id"], b"\x89PNG\r\ncaio-face")
     add_action(adv["id"], 0, "start", "An ancient dragon sleeps under the mountain.")
     add_action(adv["id"], 1, "do", "\n> You open the gate\n")
     add_action(adv["id"], 2, "continue", "Princess Alusair steps into the rain.")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 2})
@@ -382,7 +406,7 @@ def test_blank_adventure_grows_place_character_and_plot(tmp_db):
     assert plot_after == plot
 
 
-def test_see_paints_the_refusal_not_the_kiss(client, tmp_path):
+def test_see_paints_the_refusal_not_the_kiss(client, tmp_path, monkeypatch):
     from test_v2 import PNG_BYTES
 
     adv = make_adventure(plot_essentials="[Name: Caio]")
@@ -404,6 +428,7 @@ def test_see_paints_the_refusal_not_the_kiss(client, tmp_path):
     add_action(adv["id"], 0, "start", "You stand with Princess Alusair in the hall.")
     add_action(adv["id"], 1, "do", "\n> You kiss Princess Alusair\n")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(
         client,
         make_v2_transport("Caio kisses Princess Alusair in the hall.", capture=capture),
@@ -426,18 +451,20 @@ def test_see_paints_the_refusal_not_the_kiss(client, tmp_path):
     assert "kiss" in saved["negative_prompt"].lower()
 
 
-def test_see_does_not_paint_an_undress_she_did_not_accept(client, tmp_path):
+def test_see_does_not_paint_an_undress_she_did_not_accept(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Princess Alusair",
             triggers=["Alusair", "princesa"], entry="Steel Regent.",
             portrait_prompt="long red hair, green eyes, plate armor",
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nalusair-clothed")
     add_action(adv["id"], 0, "start", "You stand with Princess Alusair in the hall.")
     add_action(adv["id"], 1, "do", "\n> You undress Princess Alusair until she is naked\n")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
@@ -458,7 +485,7 @@ def test_see_does_not_paint_an_undress_she_did_not_accept(client, tmp_path):
     assert "Do not censor adult nudity" not in sent
 
 
-def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path):
+def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monkeypatch):
     """O card da vampira pálida de cabelo preto liso vem antes do beijo.
 
     A frase hostil descreve outra mulher. Ela não pode liderar o prompt,
@@ -467,7 +494,7 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Selene",
             triggers=["Selene", "vampira"], entry="Vampira gótica.",
             portrait_prompt=(
@@ -484,6 +511,7 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path):
                 "clothing": "Vestido de veludo preto, colar de veludo no pescoço, botas de plataforma",
             }),
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nselene-face")
     add_action(adv["id"], 0, "say", '\n> You say "por que n tira suas roupas amor?"\n')
     add_action(
         adv["id"], 1, "continue",
@@ -491,6 +519,7 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path):
         "lábios vermelhos, e se aproxima do sofá.",
     )
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(
         capture=capture,
         chat_content=(

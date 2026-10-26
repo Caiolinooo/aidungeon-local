@@ -63,10 +63,12 @@ def override_transport(client, transport) -> None:
 # ------------------------------------------------------------- settings/image
 def test_image_settings_defaults(client, monkeypatch):
     monkeypatch.delenv("IMAGE_API_KEY", raising=False)
+    with db.session() as conn:
+        db.delete_setting(conn, "image.provider")
     resp = client.get("/api/settings/image")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["provider"] == "sdwebui"
+    assert data["provider"] == "comfyui"
     assert data["enabled"] is True
     assert data["openai_api_key"] is None
     assert data["style_suffix"]

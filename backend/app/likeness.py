@@ -41,6 +41,9 @@ REFERENCE_DENOISE = 0.25
 # Foto enviada pelo usuário. 0.15 segura o rosto; 0.30 já troca a pessoa.
 VISUAL_REFERENCE_DENOISE = 0.15
 MAX_REFERENCES = 6
+# Elenco de uma cena. Abaixo do teto de dez imagens do FineView.
+CAST_REFERENCE_LIMIT = 4
+PORTRAIT_WAIT = "Aguarde os retratos dos personagens para montar a cena"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"
@@ -334,8 +337,8 @@ def reference_images(cards: list[dict]) -> list[bytes]:
     return found
 
 def portrait_pixels(card: dict, anchor: bytes | None = None) -> list[bytes]:
-    """Até duas referências do NPC, seguidas da âncora canônica deduplicada."""
-    candidates = visual_reference_images(card)[:2]
+    """Até duas referências, reservando um slot para a âncora canônica."""
+    candidates = visual_reference_images(card)[:1 if anchor else 2]
     if not candidates and is_real_person(card):
         reference = reference_bytes(card)
         candidates = [reference] if reference else []
@@ -351,16 +354,99 @@ def portrait_pixels(card: dict, anchor: bytes | None = None) -> list[bytes]:
     return found[:2]
 
 
+def portrait_required() -> GameError:
+    """Cena sem o PNG de alguém do elenco. See síncrono vira 409."""
+    return GameError.conflict("portrait_required", PORTRAIT_WAIT)
+
+
+def reference_image_id(card: dict) -> str:
+    """Âncora canônica, ou o retrato atual quando a âncora ainda não existe.
+
+    Vale para o protagonista (`use_for_character_creation`) como para qualquer
+    NPC. Não há exceção por nome, foto solta ou embedding.
+    """
+    return str(card.get("portrait_anchor_id") or card.get("portrait_image_id") or "")
+
+
+def cast_reference_ids(cast: list[dict]) -> tuple[list[str], list[str]]:
+    """Ids de cards de personagem e imagens, na ordem, no máximo quatro.
+
+    Localizações continuam no prompt, mas não exigem retrato nem ocupam slot de
+    referência. Todo personagem sem PNG mantém posição com id vazio.
+    """
+    card_ids: list[str] = []
+    image_ids: list[str] = []
+    for card in cast:
+        if card.get("type") != "character":
+            continue
+        card_ids.append(str(card.get("id") or ""))
+        image_ids.append(reference_image_id(card))
+        if len(card_ids) >= CAST_REFERENCE_LIMIT:
+            break
+    return card_ids, image_ids
+
+
+def reference_hashes(blobs: list[bytes]) -> list[str]:
+    """SHA-256 de cada PNG, na mesma ordem enviada ao provider."""
+    return [hashlib.sha256(blob).hexdigest() for blob in blobs]
+
+
+def stored_image_path(file_path: str) -> Path:
+    """Path absoluto, ou relativo a `db.REPO_ROOT`.
+
+    Relativo que escapa do repositório não é lido. Absoluto (storage de
+    teste, fora do repo) continua válido.
+    """
+    text = str(file_path or "").strip()
+    if not text:
+        raise FileNotFoundError("empty image path")
+    candidate = Path(text)
+    try:
+        if candidate.is_absolute():
+            return candidate.resolve()
+        root = db.REPO_ROOT.resolve()
+        resolved = (root / candidate).resolve()
+    except OSError as exc:
+        raise FileNotFoundError(text) from exc
+    if not candidate.is_absolute() and resolved != root and root not in resolved.parents:
+        raise FileNotFoundError(text)
+    return resolved
+
+
+def read_stored_image_bytes(image: dict) -> bytes:
+    """Bytes do PNG já gravado. Arquivo ausente ou path inválido falha."""
+    path = stored_image_path(str((image or {}).get("file_path") or ""))
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    return path.read_bytes()
+
+
+def load_reference_images(conn, adventure_id: str, image_ids: list[str]) -> list[bytes]:
+    """PNGs das âncoras, na ordem pedida, todos da mesma aventura.
+
+    Id desconhecido, outra aventura ou arquivo sumido levantam
+    `portrait_required`. Não devolve lista parcial.
+    """
+    blobs: list[bytes] = []
+    for image_id in image_ids:
+        token = str(image_id or "").strip()
+        image = db.get_image(conn, token) if token else None
+        if image is None or str(image.get("adventure_id") or "") != str(adventure_id):
+            raise portrait_required()
+        try:
+            blobs.append(read_stored_image_bytes(image))
+        except OSError:
+            raise portrait_required() from None
+    return blobs
+
+
 def _stored_anchor_bytes(conn, card: dict) -> bytes | None:
     anchor_id = str(card.get("portrait_anchor_id") or "")
     image = db.get_image(conn, anchor_id) if anchor_id else None
     if not image:
         return None
-    path = Path(str(image.get("file_path") or ""))
-    if not path.is_absolute():
-        path = db.REPO_ROOT / path
     try:
-        return path.read_bytes()
+        return read_stored_image_bytes(image)
     except OSError:
         return None
 

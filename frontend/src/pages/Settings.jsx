@@ -54,15 +54,15 @@ export default function Settings() {
   // Image Settings State
   const [imageForm, setImageForm] = useState({
     enabled: true,
-    provider: 'sdwebui',
+    provider: 'comfyui',
     sdwebui_base_url: 'http://127.0.0.1:7860',
     sdwebui_steps: 20,
     sdwebui_width: 1024,
     sdwebui_height: 1024,
     comfyui_base_url: 'http://127.0.0.1:8188',
     comfyui_steps: 8,
-    comfyui_width: 800,
-    comfyui_height: 720,
+    comfyui_width: 1024,
+    comfyui_height: 1024,
     negative_prompt: '',
     style_suffix: '',
     openai_base_url: 'https://api.openai.com/v1',
@@ -689,7 +689,7 @@ export default function Settings() {
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
-                            <label className={labelCls}>Largura (800)</label>
+                            <label className={labelCls}>Largura (1024)</label>
                             <input
                               type="number"
                               value={imageForm.comfyui_width}
@@ -698,7 +698,7 @@ export default function Settings() {
                             />
                           </div>
                           <div>
-                            <label className={labelCls}>Altura (720)</label>
+                            <label className={labelCls}>Altura (1024)</label>
                             <input
                               type="number"
                               value={imageForm.comfyui_height}

@@ -11,12 +11,13 @@ from pathlib import Path
 
 import httpx
 
-from app import db, events, jobs, likeness, npc_assets
+from app import db, events, image_client, jobs, likeness, npc_assets
 from app.routes.images import _plan_see
 from app.schemas import SeeRequest
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
 from test_v3 import use_tmp_storage
+from test_scene import _face, pipeline_transport
 
 _SUMMARY = {
     "type": "standard",
@@ -270,13 +271,15 @@ def _see_failed(adventure_id: str, text: str) -> dict:
     return failed.data
 
 
-def test_see_paints_an_explicit_real_person(client, tmp_path):
+def test_see_paints_an_explicit_real_person(client, tmp_path, monkeypatch):
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-    _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
+    card = _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "do", "Zendaya is naked on the bed.")
-    override_transport(client, make_v2_transport(chat_content="Zendaya lies nude on the bed."))
+    _capture_generate(monkeypatch, tmp_path)
+    override_transport(client, pipeline_transport("Zendaya lies nude on the bed."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     finally:
@@ -319,17 +322,20 @@ def test_worker_see_failed_still_refuses_a_minor(client, monkeypatch):
         assert not thread.is_alive()
 
 
-def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path):
+def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path, monkeypatch):
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-    _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
-               appearance="dark curly hair")
-    _character(adv["id"], "Clara", appearance="long red hair, green eyes")
+    zendaya = _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
+                         appearance="dark curly hair")
+    clara = _character(adv["id"], "Clara", appearance="long red hair, green eyes")
+    _face(adv["id"], zendaya["id"], b"\x89PNG\r\nzendaya-face")
+    _face(adv["id"], clara["id"], b"\x89PNG\r\nclara-face")
     # story = o jogador narra: cânone. A nudez está estabelecida e os dois ficam.
     add_action(adv["id"], 0, "story", "Zendaya and Clara are naked together.")
-    override_transport(client, make_v2_transport(
-        chat_content="Zendaya and Clara stand nude in the room."))
+    _capture_generate(monkeypatch, tmp_path)
+    override_transport(client, pipeline_transport(
+        "Zendaya and Clara stand nude in the room."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     finally:
@@ -343,16 +349,18 @@ def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path):
     assert "clothes off" in folded
 
 
-def test_see_of_a_real_person_opens_with_the_face_and_stays_clothed(client, tmp_path):
+def test_see_of_a_real_person_opens_with_the_face_and_stays_clothed(client, tmp_path, monkeypatch):
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-    _character(
+    card = _character(
         adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
         likeness={"descriptor": "dark curly hair, olive skin, brown eyes"},
     )
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "continue", "Zendaya waves from the stage.")
-    override_transport(client, make_v2_transport(chat_content="Zendaya waves from the stage."))
+    _capture_generate(monkeypatch, tmp_path)
+    override_transport(client, pipeline_transport("Zendaya waves from the stage."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
     finally:
@@ -369,8 +377,9 @@ def test_explicit_backdrop_keeps_a_real_person(client, tmp_path):
     from test_scene import use_tmp_storage
     use_tmp_storage(tmp_path)
     adv = make_adventure()
-    _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
-               appearance="dark curly hair")
+    card = _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
+                      appearance="dark curly hair")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "continue", "Zendaya is naked on the sofa.")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert resp.status_code == 200, resp.text
@@ -381,8 +390,33 @@ def test_explicit_backdrop_keeps_a_real_person(client, tmp_path):
     assert "zendaya" in prompt
 
 
+def _use_comfy() -> None:
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+
+
+def _capture_generate(monkeypatch, tmp_path) -> list[dict]:
+    seen: list[dict] = []
+
+    def fake_generate(cfg, prompt, *, adventure_id, image_id, **kwargs):
+        seen.append({"prompt": prompt, **kwargs})
+        directory = tmp_path / "imgs" / adventure_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{image_id}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": int(kwargs.get("width") or 1024),
+            "height": int(kwargs.get("height") or 1024),
+            "provider": "comfyui",
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
+    return seen
+
+
 def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, monkeypatch):
-    """Sem âncora, o img2img do retrato leva a foto da pessoa real e um denoise baixo."""
+    """Sem âncora, a foto da pessoa real entra em reference_images e init_image fica vazio."""
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
     refs = tmp_path / "refs"
     refs.mkdir()
@@ -400,23 +434,13 @@ def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, m
         })
         queued = jobs.enqueue_portrait(conn, adv["id"], card["id"])
     assert queued is not None
-    seen: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/sdapi/v1/img2img"):
-            seen.append(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(200, json={
-                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
-                "parameters": {},
-            })
-        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
-
-    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
+    _use_comfy()
+    seen = _capture_generate(monkeypatch, tmp_path)
+    assert jobs.process_pending(httpx.MockTransport(
+        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
     assert len(seen) == 1
-    payload = seen[0]
-    assert base64.b64decode(payload["init_images"][0]) == PNG_BYTES
-    assert payload["denoising_strength"] == likeness.REFERENCE_DENOISE
-    assert likeness.REFERENCE_DENOISE <= 0.30
+    assert seen[0]["init_image"] is None
+    assert seen[0]["reference_images"] == [PNG_BYTES]
 
 
 def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, monkeypatch):
@@ -459,8 +483,40 @@ def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, mon
         raise AssertionError("retrato de menor deveria recusar")
 
 
+def test_portrait_pixels_keeps_the_anchor_beside_one_photo(tmp_path, monkeypatch):
+    """Duas fotos e uma âncora: a âncora fica, e só a primeira foto ocupa o outro slot."""
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path))
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    photo = b"\x89PNG\r\nfirst-photo"
+    other = b"\x89PNG\r\nsecond-photo"
+    anchor = b"\x89PNG\r\ncanonical-anchor"
+    first.write_bytes(photo)
+    second.write_bytes(other)
+    card = {"type": "character", "title": "Clara", "sheet": json.dumps({
+        "reference": {
+            "image_path": str(first),
+            "images": [
+                {"image_path": str(first)},
+                {"image_path": str(second)},
+            ],
+        },
+    })}
+
+    pixels = likeness.portrait_pixels(card, anchor)
+    assert pixels[-1] == anchor
+    assert [blob for blob in pixels if blob != anchor] == [photo]
+    assert other not in pixels
+
+    same = likeness.portrait_pixels(card, photo)
+    assert same == [photo]
+
+    both = likeness.portrait_pixels(card, None)
+    assert both == [photo, other]
+
+
 def test_real_person_with_anchor_still_sends_the_reference(client, tmp_path, monkeypatch):
-    """Regenerar pessoa real manda a foto, não o PNG da âncora, no denoise da referência."""
+    """Regenerar pessoa real manda a foto em reference_images; init_image não é a âncora."""
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
     refs = tmp_path / "refs"
     refs.mkdir()
@@ -488,25 +544,16 @@ def test_real_person_with_anchor_still_sends_the_reference(client, tmp_path, mon
         queued = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
     assert queued is not None
     assert queued["payload"]["init_image_id"] == image["id"]
-    seen: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/sdapi/v1/img2img"):
-            seen.append(json.loads(request.content.decode("utf-8")))
-            return httpx.Response(200, json={
-                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
-                "parameters": {},
-            })
-        return httpx.Response(404, json={"error": f"no mock route: {request.url.path}"})
-
-    assert jobs.process_pending(httpx.MockTransport(handler)) == 1
+    _use_comfy()
+    seen = _capture_generate(monkeypatch, tmp_path)
+    assert jobs.process_pending(httpx.MockTransport(
+        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
     assert len(seen) == 1
-    payload = seen[0]
-    sent = base64.b64decode(payload["init_images"][0])
-    assert sent == PNG_BYTES
-    assert sent != anchor_bytes
-    assert payload["denoising_strength"] == likeness.REFERENCE_DENOISE
-    assert payload["denoising_strength"] != jobs.PORTRAIT_DENOISE
+    assert seen[0]["init_image"] is None
+    sent = seen[0]["reference_images"]
+    assert sent[0] == PNG_BYTES
+    assert sent[0] != anchor_bytes
+    assert PNG_BYTES in sent
 
 
 def test_enrich_keeps_the_real_person_flag():
@@ -611,3 +658,45 @@ def test_delete_portrait_is_idempotent(client, tmp_path, monkeypatch):
         stored = db.get_card(conn, adv["id"], card["id"])
     assert stored["portrait_image_id"] in ("", None)
     assert stored["portrait_anchor_id"] in ("", None)
+
+
+def test_load_reference_images_keeps_order_and_rejects_bad_paths(tmp_db, tmp_path):
+    adv = make_adventure()
+    other = make_adventure()
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    first.write_bytes(b"png-one")
+    second.write_bytes(b"png-two")
+    with db.session() as conn:
+        one = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path=str(first), kind="portrait", ref_id="a",
+        )
+        two = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path=str(second), kind="portrait", ref_id="b",
+        )
+        foreign = db.insert_image(
+            conn, adventure_id=other["id"], action_seq=-1,
+            file_path=str(first), kind="portrait", ref_id="c",
+        )
+        escaped = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path="../outside.png", kind="portrait", ref_id="d",
+        )
+        blobs = likeness.load_reference_images(conn, adv["id"], [two["id"], one["id"]])
+        assert blobs == [b"png-two", b"png-one"]
+        for image_id in ("", foreign["id"], escaped["id"], "missing"):
+            try:
+                likeness.load_reference_images(conn, adv["id"], [image_id])
+            except Exception as exc:
+                assert exc.code == "portrait_required"
+            else:
+                raise AssertionError(image_id)
+        second.unlink()
+        try:
+            likeness.load_reference_images(conn, adv["id"], [two["id"]])
+        except Exception as exc:
+            assert exc.code == "portrait_required"
+        else:
+            raise AssertionError("missing file")

@@ -170,28 +170,28 @@ Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
 
 O cliente `image.provider = "comfyui"` em `backend/app/image_client.py` fala a
 API do ComfyUI: `POST /prompt`, polling em `GET /history/{id}` e download por
-`GET /view`. O grafo usa `UNETLoader`, CLIP `qwen_image_2_1`, `ReferenceLatent`
-nas identidades, `ModelSamplingAuraFlow` shift 1.31, `ManualSigmas` com oito
-passos e `SamplerCustomAdvanced` euler. O CLIP fica em CPU.
+`GET /view`. O grafo usa `UNETLoader`, CLIP `qwen_image` e
+`TextEncodeQwenImage21` nas identidades, `ModelSamplingAuraFlow` shift 1.31,
+`ManualSigmas` oficial com oito passos e `SamplerCustom` euler. O CLIP fica em CPU.
 
 Arquivos e hashes obrigatórios:
 
 | Arquivo em `/home/caio/ComfyUI/models/` | Bytes | SHA256 |
 |---|---:|---|
-| `diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors` | 6630098544 | `7ba6c0774c233540ef6ea0ea3971acf3cbf403f70bd3672af57eaca00c33578e` |
+| `diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors` | 7116801326 | `7ba6c0774c233540ef6ea0ea3971acf3cbf403f70bd3672af57eaca00c33578e` |
 | `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 9350798360 | `8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f` |
-| `vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors` | 644229280 | `36f56608b02077a50a08ea3dbcdb88351298ceba49948f41f9f87186378e6908` |
+| `vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors` | 675509688 | `36f56608b02077a50a08ea3dbcdb88351298ceba49948f41f9f87186378e6908` |
 
-Downloads (Civitai exige `CIVITAI_API_KEY`; não usar URL não assinada no curl):
+Downloads (o FineView na Civitai exige `CIVITAI_API_KEY`):
 
 ```bash
 cd /home/caio/ComfyUI
 curl -fL -H "Authorization: Bearer $CIVITAI_API_KEY" \
   -o models/diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors.part \
-  https://civitai.com/api/download/models/2503975
-curl -fL -H "Authorization: Bearer $CIVITAI_API_KEY" \
+  'https://civitai.com/api/download/models/3407540?fileId=3299367'
+curl -fL \
   -o models/vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors.part \
-  https://civitai.com/api/download/models/2660279
+  https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1/resolve/main/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors
 curl -fL \
   -o models/text_encoders/qwen3vl_8b_int8_convrot.safetensors.part \
   https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors
@@ -203,6 +203,12 @@ A unit é `deploy/vm/comfyui.service`, instalada como
 `127.0.0.1:8188`. Antes do primeiro retrato, `GET /system_stats` deve responder
 e os três arquivos precisam ter os hashes acima. `clip_device = "cpu"` mantém o
 Qwen3-VL 8B INT8 fora da VRAM; UNET FP8 e VAE dividem a L4 com narrador e voz.
+
+Antes de `systemctl start comfyui`, verifique `ss -ltnp 'sport = :8188'`. Se um
+ComfyUI manual já estiver escutando, encerre esse processo primeiro; a unit não
+deve ficar reiniciando por `Port 8188 is already in use` enquanto a API responde
+na outra instância. Depois do start, confirme `systemctl is-active comfyui` e
+`/system_stats` novamente.
 
 O provider efetivo pode ser trocado via `PUT /api/settings/image` ou nos dois
 bancos, somente depois dos hashes e do smoke do grafo:

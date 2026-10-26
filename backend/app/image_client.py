@@ -8,13 +8,10 @@ Providers (settings.image.provider, config efetiva de settings_store):
   (openai_api_key, pode ser vazia), JSON {model, prompt, size, response_format:
   "b64_json"}; aceita `data[0].b64_json` ou `data[0].url` (neste caso baixa o
   arquivo da URL).
-- `comfyui`: POST {comfyui_base_url}/prompt com o workflow em formato API
-  (UNETLoader → CLIPLoader flux3 → CLIPTextEncode → EmptyFlux2LatentImage →
-  KSampler → VAEDecode → SaveImage), depois GET /history/{prompt_id} até a
-  execução terminar e GET /view para baixar o PNG. Com init_image o grafo é o
-  de edição do Klein: LoadImage → ImageScale → VAEEncode → ReferenceLatent
-  (condicionamento) → ModelSamplingFlux → KSampler(denoise 1) → VAEDecode,
-  então o rosto continua o mesmo.
+- `comfyui`: POST {comfyui_base_url}/prompt com UNETLoader, CLIPLoader qwen_image,
+  TextEncodeQwenImage21, ModelSamplingAuraFlow, ManualSigmas e SamplerCustom;
+  depois GET /history/{prompt_id} e GET /view. Referências entram no encoder
+  visual; retratos com âncora usam seu latent zero e cenas usam EmptyLatentImage.
 
 O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
@@ -376,66 +373,58 @@ def _comfy_base(cfg: dict) -> str:
     return base
 
 
-_COMFY_SIGMAS = (1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0.0)
+_COMFY_SIGMAS = (
+    1.0, 0.978453, 0.95418, 0.926626, 0.89508,
+    0.845148, 0.704534, 0.414568, 0.0,
+)
 
 
-def _comfy_qwen_graph(cfg: dict, prompt: str, width: int, height: int,
-                      *, reference_names: list[str] | None = None) -> dict:
-    """FineView/Qwen 2.1: referências condicionam o mesmo rosto nos dois lados."""
+def _comfy_qwen_graph(cfg: dict, prompt: str, image_names: list[str],
+                      *, width: int, height: int, edit: bool = False) -> dict:
+    """FineView/Qwen 2.1 com referências no condicionamento nativo."""
+    seed_value = cfg.get("seed")
+    noise_seed = (random.randint(0, 2**31 - 1)
+                  if seed_value is None or int(seed_value) < 0 else int(seed_value))
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {
             "unet_name": cfg.get("comfyui_unet") or "",
             "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {
             "clip_name": cfg.get("comfyui_clip") or "",
-            "type": cfg.get("comfyui_clip_type") or "qwen_image_2_1",
+            "type": cfg.get("comfyui_clip_type") or "qwen_image",
             "device": cfg.get("comfyui_clip_device") or "default"}},
         "3": {"class_type": "VAELoader", "inputs": {
             "vae_name": cfg.get("comfyui_vae") or ""}},
-        "4": {"class_type": "CLIPTextEncode", "inputs": {
-            "text": prompt, "clip": ["2", 0]}},
-        "5": {"class_type": "CLIPTextEncode", "inputs": {
-            "text": cfg.get("negative_prompt") or "", "clip": ["2", 0]}},
-        "6": {"class_type": "EmptyImageLatent", "inputs": {
-            "width": width, "height": height, "batch_size": 1}},
+        "4": {"class_type": "TextEncodeQwenImage21", "inputs": {
+            "clip": ["2", 0], "prompt": prompt,
+            "negative_prompt": cfg.get("negative_prompt") or "",
+            "vae": ["3", 0], "resolution": max(width, height)}},
         "7": {"class_type": "ModelSamplingAuraFlow", "inputs": {
             "model": ["1", 0], "shift": float(cfg.get("comfyui_shift") or 1.31)}},
-    }
-    positive = ["4", 0]
-    negative = ["5", 0]
-    latent = ["6", 0]
-    for index, image_name in enumerate(reference_names or []):
-        base = 20 + index * 10
-        graph[str(base)] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
-        graph[str(base + 1)] = {"class_type": "ImageScale", "inputs": {
-            "image": [str(base), 0], "upscale_method": "lanczos",
-            "width": width, "height": height, "crop": "center"}}
-        graph[str(base + 2)] = {"class_type": "VAEEncode", "inputs": {
-            "pixels": [str(base + 1), 0], "vae": ["3", 0]}}
-        graph[str(base + 3)] = {"class_type": "ReferenceLatent", "inputs": {
-            "conditioning": positive, "latent": [str(base + 2), 0]}}
-        graph[str(base + 4)] = {"class_type": "ReferenceLatent", "inputs": {
-            "conditioning": negative, "latent": [str(base + 2), 0]}}
-        positive = [str(base + 3), 0]
-        negative = [str(base + 4), 0]
-        latent = [str(base + 2), 0]
-    graph.update({
         "10": {"class_type": "ManualSigmas", "inputs": {
-            "sigmas": list(_COMFY_SIGMAS)}},
-        "11": {"class_type": "RandomNoise", "inputs": {
-            "noise_seed": random.randint(0, 2**31 - 1)}},
+            "sigmas": ", ".join(str(value) for value in (
+                cfg.get("comfyui_sigmas") or _COMFY_SIGMAS))}},
         "12": {"class_type": "KSamplerSelect", "inputs": {
             "sampler_name": cfg.get("comfyui_sampler") or "euler"}},
-        "13": {"class_type": "BasicGuider", "inputs": {
-            "model": ["7", 0], "conditioning": positive}},
-        "14": {"class_type": "SamplerCustomAdvanced", "inputs": {
-            "noise": ["11", 0], "guider": ["13", 0], "sampler": ["12", 0],
-            "sigmas": ["10", 0], "latent_image": latent}},
+        "14": {"class_type": "SamplerCustom", "inputs": {
+            "model": ["7", 0], "cfg": float(cfg.get("comfyui_cfg") or 1.0),
+            "positive": ["4", 0], "negative": ["4", 1],
+            "latent_image": ["4", 2] if edit else ["6", 0],
+            "add_noise": True, "noise_seed": noise_seed,
+            "sampler": ["12", 0], "sigmas": ["10", 0]}},
         "15": {"class_type": "VAEDecode", "inputs": {
             "samples": ["14", 0], "vae": ["3", 0]}},
         "16": {"class_type": "SaveImage", "inputs": {
             "images": ["15", 0], "filename_prefix": "aidungeon"}},
-    })
+    }
+    if not edit:
+        graph["6"] = {"class_type": "EmptyLatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1}}
+    for index, image_name in enumerate(image_names):
+        node_id = str(20 + index)
+        graph[node_id] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+        graph["4"]["inputs"].setdefault("images", {})[
+            f"image_{index + 1}"] = [node_id, 0]
     return graph
 
 
@@ -568,7 +557,7 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
         for index, raw in enumerate(references[:_MAX_REFERENCES])
     ]
     content = _comfy_run(cfg, client, _comfy_qwen_graph(
-        cfg, prompt, width, height, reference_names=names))
+        cfg, prompt, names, width=width, height=height, edit=init_image is not None))
     return content, width, height
 
 
@@ -614,15 +603,16 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         extra = {
             "steps": cfg.get("comfyui_steps"),
             "sampler": cfg.get("comfyui_sampler") or "euler",
-            "scheduler": cfg.get("comfyui_scheduler") or "normal",
+            "cfg": float(cfg.get("comfyui_cfg") or 1.0),
             "clip": cfg.get("comfyui_clip") or "",
-            "clip_type": cfg.get("comfyui_clip_type") or "qwen_image_2_1",
+            "clip_type": cfg.get("comfyui_clip_type") or "qwen_image",
             "clip_device": cfg.get("comfyui_clip_device") or "default",
             "vae": cfg.get("comfyui_vae") or "",
             "shift": float(cfg.get("comfyui_shift") or 1.31),
-            "sigmas": list(_COMFY_SIGMAS),
-            "denoise": None if denoising_strength is None else round(float(denoising_strength), 4),
+            "sigmas": list(cfg.get("comfyui_sigmas") or _COMFY_SIGMAS),
         }
+        if cfg.get("seed") is not None:
+            extra["seed"] = int(cfg["seed"])
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -660,7 +650,7 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
 
     init_image pede img2img (mesmo rosto). Sem endpoint img2img o pedido falha
     em vez de inventar outro personagem em txt2img.
-    reference_images trava a foto enviada via ControlNet, sem substituir a cena.
+    reference_images entram no condicionamento visual nativo do Qwen.
     """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
@@ -672,13 +662,10 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         )
     with _make_client(transport, timeout) as client:
         refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
-        if refs and provider not in ("sdwebui", "comfyui"):
-            log.warning("referência rígida ignorada: provider %s não tem suporte", provider)
-            refs = []
+        if refs and provider != "comfyui":
+            raise ImageError("config_error: visual references require ComfyUI Qwen")
         denoise = float(denoising_strength if denoising_strength is not None else 0.35)
         if provider == "comfyui":
-            if init_image is not None or refs:
-                denoise = 1.0
             content, width, height = _generate_comfyui(
                 cfg, client, prompt, width, height,
                 init_image=init_image, reference_images=refs)

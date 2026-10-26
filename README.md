@@ -214,7 +214,7 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   regenerar individual) antes de criar a aventura.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
   tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o modelo
-  é **FineView Qwen Image 2.1 Turbo Fixed FP8** no ComfyUI: retratos 800×720, oito
+  é **FineView Qwen Image 2.1 Turbo Fixed FP8** no ComfyUI: retratos 1024×1024, oito
   passos e identidade por âncoras canônicas. Provedores: **sdwebui**, **comfyui**
   ou **openai_compatible**.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
@@ -270,8 +270,8 @@ streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime �
   i5-1145G7 + Iris Xe, sem CUDA) e feito para *storytelling*. Modelos de referência em
   `config/models.json` (Qwen2.5-7B Q4_K_M; fallback 3B "modo rápido").
 - **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN), `comfyui`
-  (grafo API em `/prompt`, com polling em `/history`; edição por `ReferenceLatent`
-  para manter o rosto) ou `openai_compatible` (qualquer `POST {base_url}/images/generations`
+  (grafo API em `/prompt`, com polling em `/history`; edição pelo condicionamento
+  nativo `TextEncodeQwenImage21` para manter o rosto) ou `openai_compatible`
   — ex. um servidor de difusão na VM). Endpoint, resolução, steps, negative prompt e
   estilo são configuráveis pela UI; modelo/VAE/sampler do ComfyUI ficam em
   `config/settings.json`.

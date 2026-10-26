@@ -29,6 +29,9 @@ def tmp_db(tmp_path, monkeypatch):
     """Banco SQLite isolado por teste (env AIDUNGEON_DB_PATH)."""
     monkeypatch.setenv("AIDUNGEON_DB_PATH", str(tmp_path / "test.db"))
     db.init_db()
+    # A suíte legada mocka SDWebUI; o default FineView é testado explicitamente.
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("sdwebui"))
     return tmp_path / "test.db"
 
 

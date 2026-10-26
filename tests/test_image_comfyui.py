@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from app import image_client
+from app import image_client, jobs
 
 
 def _cfg(tmp_path, **extra):
@@ -16,14 +16,17 @@ def _cfg(tmp_path, **extra):
         "comfyui_base_url": "http://comfy.test:8188",
         "comfyui_unet": "fineviewQWEN_qw21TurboFixed_3299367.safetensors",
         "comfyui_clip": "qwen3vl_8b_int8_convrot.safetensors",
-        "comfyui_clip_type": "qwen_image_2_1",
+        "comfyui_clip_type": "qwen_image",
         "comfyui_clip_device": "cpu",
         "comfyui_vae": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
         "comfyui_steps": 8,
-        "comfyui_width": 800,
-        "comfyui_height": 720,
+        "comfyui_width": 1024,
+        "comfyui_height": 1024,
         "comfyui_sampler": "euler",
-        "comfyui_scheduler": "normal",
+        "comfyui_sigmas": [
+            1.0, 0.978453, 0.95418, 0.926626, 0.89508,
+            0.845148, 0.704534, 0.414568, 0.0,
+        ],
         "comfyui_shift": 1.31,
         "comfyui_cfg": 1.0,
         "comfyui_poll_interval_s": 0.2,
@@ -83,28 +86,51 @@ def test_comfyui_builds_fineview_graph_and_saves_png(tmp_path):
         transport=_transport(capture))
 
     assert result["provider"] == "comfyui"
-    assert (result["width"], result["height"]) == (800, 720)
+    assert (result["width"], result["height"]) == (1024, 1024)
     assert (tmp_path / "adv-1" / "img-1.png").read_bytes() == b"\x89PNG-comfy"
     graph = capture["graph"]
     nodes = _nodes(graph)
-    texts = [node["inputs"]["text"] for node in _of_type(graph, "CLIPTextEncode")]
-    assert texts == ["a knight in the rain", "bad anatomy, extra limbs"]
+    encoder = nodes["TextEncodeQwenImage21"]["inputs"]
+    assert encoder["prompt"] == "a knight in the rain"
+    assert encoder["negative_prompt"] == "bad anatomy, extra limbs"
     assert nodes["UNETLoader"]["inputs"]["unet_name"] == (
         "fineviewQWEN_qw21TurboFixed_3299367.safetensors")
     assert nodes["CLIPLoader"]["inputs"] == {
         "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
-        "type": "qwen_image_2_1", "device": "cpu"}
+        "type": "qwen_image", "device": "cpu"}
     assert nodes["VAELoader"]["inputs"]["vae_name"] == (
         "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors")
-    assert nodes["EmptyImageLatent"]["inputs"]["width"] == 800
+    assert nodes["EmptyLatentImage"]["inputs"]["width"] == 1024
     assert nodes["ModelSamplingAuraFlow"]["inputs"]["shift"] == 1.31
-    assert nodes["ManualSigmas"]["inputs"]["sigmas"] == [
-        1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0.0]
+    assert nodes["ManualSigmas"]["inputs"]["sigmas"] == (
+        "1.0, 0.978453, 0.95418, 0.926626, 0.89508, "
+        "0.845148, 0.704534, 0.414568, 0.0")
     assert nodes["KSamplerSelect"]["inputs"]["sampler_name"] == "euler"
+    sampler = nodes["SamplerCustom"]["inputs"]
+    assert sampler["positive"] == ["4", 0]
+    assert sampler["negative"] == ["4", 1]
+    assert sampler["cfg"] == 1.0
+    assert sampler["add_noise"] is True
     assert capture["view_params"]["filename"] == "aidungeon_0001.png"
 
 
-def test_comfyui_uploads_every_identity_reference_into_both_conditionings(tmp_path):
+def test_comfyui_honors_fixed_seed_and_randomizes_negative_seed(tmp_path, monkeypatch):
+    fixed = _cfg(tmp_path, seed=123)
+    graph = image_client._comfy_qwen_graph(
+        fixed, "same scene", [], width=1024, height=1024)
+    assert _nodes(graph)["SamplerCustom"]["inputs"]["noise_seed"] == 123
+    other = dict(fixed, seed=124)
+    assert image_client.request_key(fixed, "same scene") != image_client.request_key(
+        other, "same scene")
+
+    monkeypatch.setattr(image_client.random, "randint", lambda low, high: 456)
+    random_cfg = _cfg(tmp_path, seed=-1)
+    graph = image_client._comfy_qwen_graph(
+        random_cfg, "same scene", [], width=1024, height=1024)
+    assert _nodes(graph)["SamplerCustom"]["inputs"]["noise_seed"] == 456
+
+
+def test_comfyui_uploads_every_identity_reference_into_native_encoder(tmp_path):
     capture: dict = {}
     image_client.generate_image(
         _cfg(tmp_path), "same person", adventure_id="adv-1", image_id="img-2",
@@ -114,12 +140,31 @@ def test_comfyui_uploads_every_identity_reference_into_both_conditionings(tmp_pa
     assert len(capture["uploads"]) == 2
     graph = capture["graph"]
     assert len(_of_type(graph, "LoadImage")) == 2
-    references = _of_type(graph, "ReferenceLatent")
-    assert len(references) == 4
-    sampler = _nodes(graph)["SamplerCustomAdvanced"]["inputs"]
-    assert sampler["latent_image"] == ["32", 0]
-    assert sampler["guider"] == ["13", 0]
-    assert _nodes(graph)["BasicGuider"]["inputs"]["conditioning"] == ["33", 0]
+    encoder = _nodes(graph)["TextEncodeQwenImage21"]["inputs"]
+    assert encoder["images"]["image_1"] == ["20", 0]
+    assert encoder["images"]["image_2"] == ["21", 0]
+    sampler = _nodes(graph)["SamplerCustom"]["inputs"]
+    assert sampler["latent_image"] == ["6", 0]
+
+
+def test_comfyui_portrait_edit_uses_encoder_latent(tmp_path):
+    capture: dict = {}
+    image_client.generate_image(
+        _cfg(tmp_path), "same person", adventure_id="adv-1", image_id="img-3",
+        init_image=b"\x89PNG-anchor", transport=_transport(capture))
+
+    nodes = _nodes(capture["graph"])
+    assert nodes["SamplerCustom"]["inputs"]["latent_image"] == ["4", 2]
+    assert "EmptyLatentImage" not in nodes
+    assert nodes["TextEncodeQwenImage21"]["inputs"]["images"]["image_1"] == ["20", 0]
+
+
+def test_other_providers_reject_visual_references(tmp_path):
+    with pytest.raises(image_client.ImageError, match="require ComfyUI Qwen"):
+        image_client.generate_image(
+            _cfg(tmp_path, provider="sdwebui"), "same person",
+            adventure_id="adv-1", image_id="img-4",
+            reference_images=[b"\x89PNG-one"])
 
 
 def test_comfyui_execution_error_is_reported(tmp_path):
@@ -140,6 +185,9 @@ def test_request_key_comfyui_tracks_identity_and_sampler_configuration(tmp_path)
         reference_images=[b"one"])
     assert first != image_client.request_key(
         _cfg(tmp_path, comfyui_shift=1.5), "a knight", reference_images=[b"one"])
+    assert first != image_client.request_key(
+        _cfg(tmp_path, comfyui_sigmas=[1.0, 0.0]), "a knight",
+        reference_images=[b"one"])
 
 
 def test_comfyui_health_and_interrupt_use_native_endpoints(tmp_path):
@@ -159,3 +207,14 @@ def test_comfyui_health_and_interrupt_use_native_endpoints(tmp_path):
     assert health["unet"] == "fineviewQWEN_qw21TurboFixed_3299367.safetensors"
     image_client.interrupt_sdwebui(_cfg(tmp_path), transport)
     assert paths == ["/system_stats", "/interrupt"]
+
+def test_jobs_interrupt_running_comfyui_render(client, tmp_path, monkeypatch):
+    called: list[str] = []
+    monkeypatch.setattr(
+        jobs.image_client, "effective_settings", lambda conn: _cfg(tmp_path))
+    monkeypatch.setattr(
+        jobs.image_client, "interrupt_sdwebui",
+        lambda cfg, transport: called.append(cfg["provider"]))
+
+    assert jobs.interrupt_image({"id": "job-1", "type": "see_image"}) is True
+    assert called == ["comfyui"]

@@ -17,6 +17,7 @@ import re
 import unicodedata
 
 from app import db, jobs, likeness, npc_assets, npc_bonds, settings_store, world_facts
+from app.errors import GameError
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
 _ATMOSPHERE = (
@@ -308,11 +309,58 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     return text[:1400], False
 
 
+def cast_reference_plan(conn, adventure_id: str, cast: list[dict]) -> dict:
+    """Âncoras do elenco, em ordem. Sem PNG de alguém, `portrait_required`.
+
+    Lista vazia é cena sem gente: não há referência para exigir.
+    """
+    card_ids, image_ids = likeness.cast_reference_ids(cast)
+    if any(not image_id for image_id in image_ids):
+        raise likeness.portrait_required()
+    blobs = (
+        likeness.load_reference_images(conn, adventure_id, image_ids)
+        if image_ids else []
+    )
+    return {
+        "cast_card_ids": card_ids,
+        "reference_image_ids": image_ids,
+        "reference_hashes": likeness.reference_hashes(blobs),
+        "blobs": blobs,
+    }
+
+
+def _queue_missing_portraits(conn, adventure_id: str, cast: list[dict]) -> None:
+    """Enfileira só personagens do elenco que não têm PNG legível."""
+    if not settings_store.effective_image_settings(conn).get("enabled"):
+        return
+    characters = [card for card in cast if card.get("type") == "character"]
+    for card in characters[:likeness.CAST_REFERENCE_LIMIT]:
+        card_id = str(card.get("id") or "")
+        if not card_id:
+            continue
+        image_id = likeness.reference_image_id(card)
+        if not image_id:
+            jobs.enqueue_portrait(conn, adventure_id, card_id)
+            continue
+        try:
+            likeness.load_reference_images(conn, adventure_id, [image_id])
+        except GameError:
+            jobs.enqueue_portrait(conn, adventure_id, card_id, replace=True)
+
+
+def queue_missing_portraits(adventure_id: str, cast: list[dict]) -> None:
+    """Igual a `_queue_missing_portraits`, numa transação que commita."""
+    with db.session() as conn:
+        _queue_missing_portraits(conn, adventure_id, cast)
+
+
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
                     include_people: bool = False, explicit: bool = False,
                     cache_key: str = "",
-                    reference_card_ids: list[str] | None = None) -> dict:
+                    cast_card_ids: list[str] | None = None,
+                    reference_image_ids: list[str] | None = None,
+                    reference_hashes: list[str] | None = None) -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
     if not current and cache_key:
@@ -348,7 +396,9 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         "include_people": include_people,
         "cache_key": cache_key,
         "explicit": explicit,
-        "reference_card_ids": list(reference_card_ids or []),
+        "cast_card_ids": list(cast_card_ids or []),
+        "reference_image_ids": list(reference_image_ids or []),
+        "reference_hashes": list(reference_hashes or []),
     }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
     return {"status": "pending", "image": image, "error": None}
 
@@ -401,29 +451,52 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
         paint_text,
     )
-    # Hash do prompt FINAL + config: lugar, clima, elenco, roupa, feridas,
-    # estilo e explicit mudam a assinatura; nada disso fica de fora.
-    reference_cards = [
-        card for card in paint_cast
-        if card.get("id") and card.get("portrait_anchor_id")
-    ] if include_people else []
-    references = likeness.reference_pixels(reference_cards, conn)
+    # Hash do prompt FINAL + config + pixels das âncoras, na ordem do elenco.
+    # Trocar a segunda âncora muda só esta chave. Sem o PNG de alguém, o fundo
+    # não entra: cena parcial não é gerada.
     from app import consequences
     visual_effects = consequences.visual_context(adventure)
     if visual_effects:
         prompt = f"{prompt}, {visual_effects}"[:1400]
-    cache_key = jobs.backdrop_cache_key(
-        img_cfg, prompt, include_people=include_people, explicit=explicit,
-        reference_images=references)
+    plan = {
+        "cast_card_ids": [],
+        "reference_image_ids": [],
+        "reference_hashes": [],
+        "blobs": [],
+    }
+    waiting = None
+    if img_cfg.get("enabled") and include_people and paint_cast:
+        try:
+            plan = cast_reference_plan(conn, adventure_id, paint_cast)
+        except GameError as exc:
+            if exc.code != "portrait_required":
+                raise
+            _queue_missing_portraits(conn, adventure_id, paint_cast)
+            current = db.latest_image(conn, adventure_id, "backdrop")
+            waiting = {
+                "status": "pending",
+                "image": db.image_ref(current) if current else None,
+                "error": exc.message,
+            }
+    if waiting is not None:
+        cache_key = jobs.backdrop_cache_key(
+            img_cfg, prompt, include_people=include_people, explicit=explicit)
+        backdrop = waiting
+    else:
+        cache_key = jobs.backdrop_cache_key(
+            img_cfg, prompt, include_people=include_people, explicit=explicit,
+            reference_images=plan["blobs"] or None)
+        ref = f"{adventure_id}:{cache_key[:40]}"
+        backdrop = _backdrop_state(
+            conn, adventure_id, ref,
+            enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
+            include_people=include_people,
+            explicit=explicit, cache_key=cache_key,
+            cast_card_ids=plan["cast_card_ids"],
+            reference_image_ids=plan["reference_image_ids"],
+            reference_hashes=plan["reference_hashes"],
+        )
     signature = cache_key[:40]
-    ref = f"{adventure_id}:{signature}"
-    backdrop = _backdrop_state(
-        conn, adventure_id, ref,
-        enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
-        include_people=include_people,
-        explicit=explicit, cache_key=cache_key,
-        reference_card_ids=[str(card["id"]) for card in reference_cards],
-    )
 
     cast = []
     for card in cast_cards:

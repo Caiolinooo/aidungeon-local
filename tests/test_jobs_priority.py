@@ -15,6 +15,8 @@ import pytest
 from app import auth as auth_core
 from app import db, deps, events, jobs
 from conftest import TEST_AUTH_SECRET, add_action, make_adventure, sse_body
+from test_scene import _face
+from test_v2 import PNG_BYTES
 from test_v3 import PNG_B64, make_npc, use_tmp_storage
 
 
@@ -31,6 +33,7 @@ class _Stack:
         self.llm_fail = False
         self.sd_fail = False
         self.renders = 0
+        self._pids = 0
         self.transport = httpx.MockTransport(self._handle)
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -56,12 +59,49 @@ class _Stack:
             if self.sd_fail:
                 return httpx.Response(500, text="CUDA out of memory")
             return httpx.Response(200, json={"images": [PNG_B64], "parameters": {}})
+        if path.endswith("/upload/image"):
+            return httpx.Response(200, json={
+                "name": "ref.png", "subfolder": "", "type": "input"})
+        if path.endswith("/prompt"):
+            self.renders += 1
+            self.sd_entered.set()
+            self.sd_gate.wait(5)
+            self._pids += 1
+            pid = f"pid-{self._pids}"
+            return httpx.Response(200, json={
+                "prompt_id": pid, "number": 1, "node_errors": {}})
+        if path.startswith("/history/"):
+            pid = path.rstrip("/").rsplit("/", 1)[-1]
+            if self.sd_fail:
+                entry = {
+                    "status": {
+                        "status_str": "error",
+                        "completed": True,
+                        "messages": [[
+                            "execution_error",
+                            {"exception_message": "CUDA out of memory"},
+                        ]],
+                    },
+                    "outputs": {},
+                }
+            else:
+                entry = {
+                    "status": {"status_str": "success", "completed": True},
+                    "outputs": {"16": {"images": [{
+                        "filename": "out.png", "subfolder": "", "type": "output",
+                    }]}},
+                }
+            return httpx.Response(200, json={pid: entry})
+        if path.endswith("/view"):
+            return httpx.Response(200, content=PNG_BYTES)
         return httpx.Response(404, json={"error": f"no mock route: {path}"})
 
 
 @pytest.fixture()
 def stack(client, tmp_path):
     use_tmp_storage(tmp_path)
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
     fake = _Stack()
     client.app.dependency_overrides[deps.get_http_transport] = lambda: fake.transport
     yield fake
@@ -110,8 +150,9 @@ def _tavern() -> dict:
     with db.session() as conn:
         db.insert_card(conn, adv["id"], type="location", title="The Tavern",
                        triggers=["tavern"], entry="A smoky common room with a hearth.")
-        db.insert_card(conn, adv["id"], type="character", title="Ada",
-                       entry="The barkeep.", portrait_prompt="silver-haired barkeep")
+        ada = db.insert_card(conn, adv["id"], type="character", title="Ada",
+                             entry="The barkeep.", portrait_prompt="silver-haired barkeep")
+    _face(adv["id"], ada["id"], b"\x89PNG\r\nada-face")
     add_action(adv["id"], 0, "start", "You enter the tavern at night. Ada smiles.")
     return adv
 
@@ -199,11 +240,11 @@ def test_new_backdrop_cancels_the_stale_pending_one(client, stack):
         assert new["supersede_key"] == f"backdrop:{adv['id']}"
         assert new["priority"] == jobs.PRIORITY_BACKDROP
 
-        assert jobs.process_pending(stack.transport) == 2
+        assert jobs.process_pending(stack.transport) == 1
         ready = _next_of(sub, "backdrop_ready")
     assert ready.data["job_id"] == new["id"]
     assert ready.data["ref_id"] == new["ref_id"]
-    assert stack.renders == 2
+    assert stack.renders == 1
 
 
 def test_backdrop_events_follow_the_job(client, stack):

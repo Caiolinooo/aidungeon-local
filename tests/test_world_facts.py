@@ -5,11 +5,30 @@ from __future__ import annotations
 import json
 
 from app import context_builder as cb
-from app import db, settings_store, world_facts
+from app import db, image_client, settings_store, world_facts
 from app.npc_chronicle import apply_chronicle
 
 from conftest import add_action, make_adventure
-from test_v2 import make_v2_transport, override_transport
+from test_scene import _face
+from test_v2 import PNG_BYTES, make_v2_transport, override_transport
+
+
+def _stub_painter(monkeypatch, tmp_path) -> None:
+    """O teste olha o cânone do prompt. O executor só grava o PNG."""
+
+    def fake_generate(cfg, prompt, *, adventure_id, image_id, **kwargs):
+        directory = tmp_path / "imgs" / adventure_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{image_id}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path),
+            "width": int(kwargs.get("width") or 1024),
+            "height": int(kwargs.get("height") or 1024),
+            "provider": "comfyui",
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
 
 
 def _facts(adv, actions, cards=None):
@@ -29,17 +48,19 @@ def test_elara_is_a_woman_and_caio_is_a_man():
     assert npc_assets.sex_label("Caio", "You place Elara on the bed as Caio watches her.") == ""
 
 
-def test_see_calls_elara_a_woman_before_the_act(client, tmp_path):
+def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="Uma mulher de cabelos negros.",
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nelara-woman")
     add_action(adv["id"], 0, "start", "Elara está no quarto. Ela observa. Caio está vestido. Ele espera.")
     add_action(adv["id"], 1, "continue", "Ela está nua. You place Elara on the bed as Caio watches.")
     # O ato chega ao CLIP pela frase do modelo (prosa crua não entra mais).
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport("Caio places Elara on the bed."))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
@@ -217,7 +238,7 @@ def test_pronoun_order_uses_the_person_already_in_the_scene(tmp_db):
     assert found.absent == []
 
 
-def test_see_ignores_a_narration_that_obeyed_the_blocked_order(client, tmp_path):
+def test_see_ignores_a_narration_that_obeyed_the_blocked_order(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
@@ -225,13 +246,15 @@ def test_see_ignores_a_narration_that_obeyed_the_blocked_order(client, tmp_path)
             conn, adv["id"], type="location", title="The Yard",
             triggers=["yard"], entry="Packed earth and a barred gate.",
         )
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="A woman you just met.",
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nelara-yard")
     add_action(adv["id"], 0, "start", "You stand in the yard. Elara watches you.")
     add_action(adv["id"], 1, "do", "\n> You levar Elara para o quarto\n")
     add_action(adv["id"], 2, "continue", "Elara follows you into the bedroom and closes the door.")
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport())
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 2})
@@ -263,22 +286,32 @@ def test_facts_block_reaches_the_narrator(tmp_db):
     assert "A do or say is an attempt" in built.messages[0]["content"]
 
 
-def test_see_paints_the_refusal_in_the_yard_not_a_bedroom(client, tmp_path):
+def test_see_paints_the_refusal_in_the_yard_not_a_bedroom(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-        db.insert_card(
+        yard = db.insert_card(
             conn, adv["id"], type="location", title="The Yard",
             triggers=["yard"], entry="Packed earth and a barred gate.",
         )
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="A woman you just met.",
             portrait_prompt="black hair, green cloak",
         )
+        caio = db.insert_card(
+            conn, adv["id"], type="character", title="Caio",
+            triggers=["Caio"], entry="The man in the yard.",
+            portrait_prompt="short black hair",
+            use_for_character_creation=True,
+        )
+    _face(adv["id"], yard["id"], b"\x89PNG\r\nyard-anchor")
+    _face(adv["id"], card["id"], b"\x89PNG\r\nelara-cloak")
+    _face(adv["id"], caio["id"], b"\x89PNG\r\ncaio-anchor")
     add_action(adv["id"], 0, "start", "You stand in the yard. Elara watches you.")
     add_action(adv["id"], 1, "do", "\n> You levar Elara para o quarto\n")
     capture: list = []
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
@@ -300,19 +333,21 @@ def test_see_paints_the_refusal_in_the_yard_not_a_bedroom(client, tmp_path):
     assert "bedroom" in image["negative_prompt"].lower()
 
 
-def test_see_keeps_nudity_the_narrator_already_established(client, tmp_path):
+def test_see_keeps_nudity_the_narrator_already_established(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Princess Alusair",
             triggers=["Alusair"], entry="Steel Regent.",
             portrait_prompt="long red hair, green eyes, plate armor",
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nalusair-nude")
     add_action(adv["id"], 0, "start", "Princess Alusair is naked on the bed.")
     capture: list = []
     # A nudez chega ao CLIP pela frase do modelo; prova também que scrub e
     # contradicting_looks não a removem.
+    _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport("Princess Alusair lies naked on the bed.", capture=capture))
     try:
         resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
@@ -334,10 +369,11 @@ def test_scene_notice_names_the_missing_room(client):
             conn, adv["id"], type="location", title="The Yard",
             triggers=["yard"], entry="Open ground.",
         )
-        db.insert_card(
+        card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="A stranger.",
         )
+    _face(adv["id"], card["id"], b"\x89PNG\r\nelara-notice")
     add_action(adv["id"], 0, "start", "You stand in the yard. Elara watches the gate.")
     add_action(adv["id"], 1, "do", "\n> You levar Elara para o quarto\n")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})

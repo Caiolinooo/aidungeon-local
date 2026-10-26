@@ -309,8 +309,11 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
             payload["init_image_id"] = anchor
     if force_reference:
         payload["force_reference"] = True
-    return enqueue(conn, "character_portrait", adventure_id, card_id, payload,
-                   priority=priority)
+    job = enqueue(conn, "character_portrait", adventure_id, card_id, payload,
+                  priority=priority)
+    if job and variant_key:
+        _set_portrait_state(conn, adventure_id, card_id, variant_key, job["id"])
+    return job
 
 
 def enqueue_all_portraits(conn, adventure_id: str) -> list[dict]:
@@ -357,17 +360,29 @@ def enqueue_incomplete_sheets(conn, adventure_id: str) -> list[dict]:
     return queued
 
 
-def references_for(adventure_id: str, card_ids: list) -> list[bytes]:
-    """Fotos de referência dos cards, na ordem pedida. Card ou arquivo ausente sai."""
-    if not card_ids:
+def _reference_blobs(job: dict, *, people: bool) -> list[bytes]:
+    """Recarrega as âncoras persistidas. A ordem e os hashes são os do enqueue.
+
+    Sem a chave no payload, um fundo sem gente segue sem referência. Cena com
+    gente sem ids, arquivo sumido ou pixels diferentes falha: não pinta parcial.
+    """
+    payload = job.get("payload") or {}
+    if "reference_image_ids" not in payload:
+        if people:
+            raise likeness.portrait_required()
         return []
-    cards = []
+    ids = [str(item) for item in (payload.get("reference_image_ids") or [])]
+    if people and not ids:
+        raise likeness.portrait_required()
     with db.session() as conn:
-        for card_id in card_ids:
-            card = db.get_card(conn, adventure_id, str(card_id))
-            if card and card.get("portrait_anchor_id"):
-                cards.append(card)
-        return likeness.reference_pixels(cards, conn)
+        blobs = (
+            likeness.load_reference_images(conn, job["adventure_id"], ids)
+            if ids else []
+        )
+    found = likeness.reference_hashes(blobs)
+    if "reference_hashes" in payload and list(payload.get("reference_hashes") or []) != found:
+        raise likeness.portrait_required()
+    return blobs
 
 
 def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dict:
@@ -427,13 +442,13 @@ def cancel(conn, job_id: str) -> dict | None:
 
 
 def interrupt_image(job: dict, transport: Any = None) -> bool:
-    """Melhor esforço para interromper o render SD de um job running cancelado."""
+    """Melhor esforço para interromper o render de um job running cancelado."""
     if job["type"] not in ("character_portrait", "scene_backdrop", "see_image", "location_image"):
         return False
     try:
         with db.session() as conn:
             cfg = image_client.effective_settings(conn)
-        if (cfg.get("provider") or "sdwebui") != "sdwebui":
+        if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
             return False
         image_client.interrupt_sdwebui(cfg, transport)
     except ImageError as exc:
@@ -498,13 +513,11 @@ def _build_portrait_prompt(adv: dict, card: dict, llm_cfg: dict,
 
 def _portrait_bytes(image: dict) -> bytes:
     """PNG da foto já gravada (caminho relativo ao repo ou absoluto)."""
-    raw = image.get("file_path") or ""
-    path = Path(raw)
-    if not path.is_absolute():
-        path = db.REPO_ROOT / path
-    if not path.is_file():
-        raise GameError(503, "generation_failed", "canonical portrait file is missing")
-    return path.read_bytes()
+    try:
+        return likeness.read_stored_image_bytes(image)
+    except OSError as exc:
+        raise GameError(503, "generation_failed",
+                        "canonical portrait file is missing") from exc
 
 
 def _execute_portrait(job: dict, transport: Any) -> dict:
@@ -785,14 +798,14 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     negative = ", ".join(
         part for part in (img_cfg["negative_prompt"], ban) if part
     )
-    references = references_for(
-        job["adventure_id"], (payload.get("reference_card_ids") or []),
+    references = _reference_blobs(
+        job, people=bool(payload.get("include_people")),
     )
-    cache_key = backdrop_cache_key(
+    cache_key = str(payload.get("cache_key") or "") or backdrop_cache_key(
         img_cfg, prompt,
         include_people=bool(payload.get("include_people")),
         explicit=bool(payload.get("explicit")),
-        reference_images=references,
+        reference_images=references or None,
     )
     with db.session() as conn:
         cached = db.find_cached_image(
@@ -807,7 +820,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         img_cfg, prompt, adventure_id=job["adventure_id"],
         image_id=image_id, transport=transport,
         width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
-        negative_extra=ban, reference_images=references,
+        negative_extra=ban, reference_images=references or None,
     )
     try:
         with db.session() as conn:
@@ -878,14 +891,10 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     negative_extra = str(payload.get("negative_extra") or "")
-    references = references_for(
-        job["adventure_id"], payload.get("reference_card_ids") or [],
-    )
-    cache_key = image_client.request_key(
+    references = _reference_blobs(job, people=False)
+    cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
-        variation=payload.get("variation"), reference_images=references)
-    if not references:
-        cache_key = str(payload.get("cache_key") or "") or cache_key
+        variation=payload.get("variation"), reference_images=references or None)
     with db.session() as conn:
         cached = db.find_cached_image(
             conn, job["adventure_id"], kind="scene", ref_id="",
@@ -907,7 +916,7 @@ def _execute_see(job: dict, transport: Any) -> dict:
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
         transport=transport, negative_extra=negative_extra,
-        reference_images=references)
+        reference_images=references or None)
     try:
         image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                           image_id=image_id, prompt=prompt,

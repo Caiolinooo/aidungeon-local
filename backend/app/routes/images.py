@@ -405,6 +405,20 @@ def _look_clause(frame: list[dict], *, explicit: bool = False) -> str:
     return likeness.opening_clause(frame, explicit=explicit)
 
 
+def _require_cast(adventure_id: str, cast: list[dict]) -> None:
+    """Exige o PNG de cada membro. Na falta, grava o retrato e responde 409."""
+    if not cast:
+        return
+    try:
+        with db.session() as conn:
+            scene.cast_reference_plan(conn, adventure_id, cast)
+    except GameError as exc:
+        if exc.code != "portrait_required":
+            raise
+        scene.queue_missing_portraits(adventure_id, cast)
+        raise
+
+
 def _is_interaction(text: str, names: list[str]) -> bool:
     """Gesto entre pessoas, ou mais de um nome no quadro."""
     folded = (text or "").casefold()
@@ -415,8 +429,11 @@ def _is_interaction(text: str, names: list[str]) -> bool:
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
-                        transport: Any) -> tuple[str, str, str, list]:
-    """O momento atual + o rosto do card. Devolve (prompt, negative, caption).
+                        transport: Any) -> tuple[str, str, str, list, list[str], list[str]]:
+    """O momento atual + o rosto do card.
+
+    Devolve prompt, negative, caption, frame, cast_card_ids e
+    reference_image_ids. Os ids seguem `decision.cast`, protagonista incluso.
 
     O CLIP pinta o começo de cada bloco. O primeiro bloco abre com o rosto
     do card (cabelo, pele, porte); a frase em inglês vem em seguida. A
@@ -451,7 +468,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
     if decision.refusal:
         raise GameError(422, decision.refusal, decision.message)
-    frame = decision.cast
+    frame = list(decision.cast)[:likeness.CAST_REFERENCE_LIMIT]
+    cast_locked = list(frame)
+    _require_cast(adv["id"], cast_locked)
     # A pintura segue a narracao: um pedido do jogador nao veste a cena.
     # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
     explicit = decision.allow_explicit and scene.is_explicit(
@@ -485,7 +504,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                 else:
                     by_name[title] = card
                     names.append(title)
-                    frame.append(card)
+                    if len(frame) < likeness.CAST_REFERENCE_LIMIT:
+                        frame.append(card)
     collapsed: list[str] = []
     for name in names:
         twin = next((other for other in collapsed if _same_person(name, other)), "")
@@ -619,13 +639,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(", ".join(where))
     if names:
         lead_bits.append("people present: " + ", ".join(who_bits))
-    reference_cards = [card for card in frame if likeness.has_reference_image(card)]
-    if len(reference_cards) > 1:
+    locked = frame[:likeness.CAST_REFERENCE_LIMIT]
+    if len(locked) > 1:
         positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
         assignments = ", ".join(
             f"{card.get('title') or 'person'} on the "
             f"{positions[index] if index < len(positions) else 'center'}"
-            for index, card in enumerate(reference_cards)
+            for index, card in enumerate(locked)
         )
         lead_bits.append(
             "distinct different people, not the same person, no duplicate faces: " + assignments
@@ -663,7 +683,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if _is_interaction(moment, names):
         negative = _dedupe_negative(negative, _PORTRAIT_NEGATIVE)
     caption = sentence or summarized
-    return prompt, negative, caption, frame
+    final_cast = frame[:likeness.CAST_REFERENCE_LIMIT]
+    if [card.get("id") for card in final_cast] != [card.get("id") for card in cast_locked]:
+        _require_cast(adv["id"], final_cast)
+        cast_locked = final_cast
+    cast_card_ids, reference_image_ids = likeness.cast_reference_ids(cast_locked)
+    return prompt, negative, caption, frame, cast_card_ids, reference_image_ids
 
 
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
@@ -701,24 +726,34 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
     try:
-        prompt, negative_extra, caption, frame = _build_final_prompt(
-            adv, actions, body, img_cfg, llm_cfg, cards, transport)
+        prompt, negative_extra, caption, frame, cast_card_ids, reference_image_ids = (
+            _build_final_prompt(
+                adv, actions, body, img_cfg, llm_cfg, cards, transport)
+        )
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
-    reference_cards = [
-        card for card in frame if card.get("id") and card.get("portrait_anchor_id")
-    ]
-    with db.session() as conn:
-        references = likeness.reference_pixels(reference_cards, conn)
+    try:
+        with db.session() as conn:
+            references = (
+                likeness.load_reference_images(conn, adv["id"], reference_image_ids)
+                if reference_image_ids else []
+            )
+    except GameError as exc:
+        if exc.code == "portrait_required":
+            scene.queue_missing_portraits(
+                adventure_id, frame[:likeness.CAST_REFERENCE_LIMIT])
+        raise
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
         "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
         "caption": caption,
-        "reference_card_ids": [str(card["id"]) for card in reference_cards],
+        "cast_card_ids": cast_card_ids,
+        "reference_image_ids": reference_image_ids,
+        "reference_hashes": likeness.reference_hashes(references),
         "cache_key": image_client.request_key(
             img_cfg, prompt, negative_extra=negative_extra, variation=variation,
-            reference_images=references),
+            reference_images=references or None),
     }
 
 
@@ -770,11 +805,18 @@ def post_see(adventure_id: str, body: SeeRequest,
         return image
     image_id = db.new_id()
     try:
+        with db.session() as conn:
+            references = (
+                likeness.load_reference_images(
+                    conn, adventure_id, plan.get("reference_image_ids") or [])
+                if plan.get("reference_image_ids") else []
+            )
+        if likeness.reference_hashes(references) != list(plan.get("reference_hashes") or []):
+            raise likeness.portrait_required()
         result = image_client.generate_image(
             img_cfg, plan["prompt"], adventure_id=adventure_id, image_id=image_id,
             transport=transport, negative_extra=plan["negative_extra"],
-            reference_images=jobs.references_for(
-                adventure_id, plan.get("reference_card_ids") or []))
+            reference_images=references or None)
     except image_client.ImageError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     image = jobs.store_see(adventure_id, plan["caption"], result, image_id=image_id,
@@ -792,7 +834,10 @@ def get_image(image_id: str) -> FileResponse:
         image = db.get_image(conn, image_id)
     if not image:
         raise GameError.not_found(f"image {image_id} not found")
-    path = db.REPO_ROOT / image["file_path"]
+    try:
+        path = likeness.stored_image_path(image["file_path"])
+    except OSError:
+        raise GameError.not_found(f"image file for {image_id} not found")
     if not path.is_file():
         raise GameError.not_found(f"image file for {image_id} not found")
     return FileResponse(path, media_type="image/png")

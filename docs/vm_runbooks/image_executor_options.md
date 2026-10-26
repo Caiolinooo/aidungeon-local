@@ -2,7 +2,7 @@
 
 Leitura feita em 19 out 2026 na VM `caio@vm.groupabz.com`. Nada foi instalado. `llama-server`, `sd-webui` e o app não foram reiniciados.
 
-> **26 out 2026.** O provider `comfyui` usa FineView Qwen Image 2.1 Turbo Fixed FP8, CLIP Qwen3-VL 8B INT8 em CPU e texture-fix VAE. O grafo tem oito passos, shift 1.31 e referências por `ReferenceLatent`; downloads e hashes estão em `deploy/vm/README.md`.
+> **26 out 2026.** O provider `comfyui` usa FineView Qwen Image 2.1 Turbo Fixed FP8, CLIP Qwen3-VL 8B INT8 em CPU e texture-fix VAE. O grafo tem oito passos, shift 1.31 e referências por `TextEncodeQwenImage21`; downloads e hashes estão em `deploy/vm/README.md`.
 
 O app fala HTTP com o executor em `backend/app/image_client.py`: `POST {base}/sdapi/v1/txt2img` e, no retrato por foto, `POST /sdapi/v1/img2img`. A resposta usada é `images[0]` em base64. O corpo está fixo em `DPM++ 2M`, scheduler `Karras`, `cfg_scale` 5 — o que o epiCRealism XL pede.
 
