@@ -408,7 +408,7 @@ def cancel(conn, job_id: str) -> dict | None:
 
 def interrupt_image(job: dict, transport: Any = None) -> bool:
     """Melhor esforço para interromper o render SD de um job running cancelado."""
-    if job["type"] not in ("character_portrait", "scene_backdrop", "see_image"):
+    if job["type"] not in ("character_portrait", "scene_backdrop", "see_image", "location_image"):
         return False
     try:
         with db.session() as conn:
