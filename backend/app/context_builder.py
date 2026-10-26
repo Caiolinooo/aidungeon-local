@@ -275,18 +275,36 @@ def _fit_budget(text: str, budget_tokens: int) -> str:
 
 
 # ------------------------------------------------------- formatação ações
+def _unwrap_you(type_: str, text: str) -> str | None:
+    """O jogo grava '> You ...'. Na mesa isso esconde quem agiu."""
+    raw = text.strip()
+    if type_ == "do" and raw.lower().startswith("> you "):
+        return raw[6:].strip()
+    if type_ == "say" and raw.lower().startswith("> you say "):
+        rest = raw[10:].strip()
+        if len(rest) >= 2 and rest[0] in "\"“" and rest[-1] in "\"”":
+            return rest[1:-1].strip()
+    return None
+
+
 def format_action_text(type_: str, text: str, *, actor: str = "",
-                       multiplayer: bool = False) -> str:
+                       multiplayer: bool = False, character: str = "") -> str:
     """Renderiza a ação no formato do modelo. Idempotente p/ textos do backup.
 
-    Com vários jogadores e ator gravado, do/say citam o nome em vez de "You".
-    Texto que já começa com ">" (backup) não é reembrulhado.
+    Com vários jogadores e ator gravado, do/say citam o personagem (ou o
+    login) em vez de "You". O wrapper '> You' que o próprio jogo gravou
+    também entra nessa troca. Outro texto que já começa com ">" (backup)
+    não é reembrulhado.
     """
     if type_ in ("do", "say"):
-        if text.lstrip().startswith(">"):
+        inner = _unwrap_you(type_, text)
+        if inner is None and text.lstrip().startswith(">"):
             return text  # já formatado (ex.: importado do backup)
-        inner = text.strip()
-        who = actor.strip()
+        if inner is None:
+            inner = text.strip()
+        who = (character or "").strip()
+        if multiplayer and actor.strip():
+            who = who or actor.strip()
         if multiplayer and who:
             if type_ == "do":
                 return f"\n> {who}: {inner}\n"
@@ -481,8 +499,17 @@ def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
         if isinstance(stats, dict) and stats:
             bits.append(" ".join(f"{key} {stats[key]}" for key in stats))
         extra = "; ".join(bits)
-        lines.append(f"{username} = {title}" + (f" — {extra}" if extra else ""))
-    return "\n".join(lines)
+        line = f"{username} = {title}" + (f" — {extra}" if extra else "")
+        lines.append(
+            f"{line}. When {username} acts, you/você is only {title}."
+        )
+    if not lines:
+        return ""
+    return (
+        "Each player controls only their own character. "
+        "Do not give one character another's body, powers, voice, or inventory.\n"
+        + "\n".join(lines)
+    )
 
 
 def player_body_block(conn: sqlite3.Connection, adventure: dict) -> str:
@@ -656,10 +683,23 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     # Mesa compartilhada: quem joga e a ficha de cada um. Estável (só muda
     # quando alguém edita o personagem), então fica na system, não no <lore>.
     multiplayer = _is_multiplayer(conn, adventure)
+    from app import db
+    character_names = {
+        card["player_username"]: (card.get("title") or "").strip()
+        for card in db.list_player_characters(conn, adventure["id"])
+        if card.get("player_username")
+    }
     if multiplayer:
         players = _players_block(conn, adventure)
         if players:
-            system_parts.append("[Players]\n" + _fit_budget(players, 400))
+            system_parts.append("[Players]\n" + _fit_budget(players, 500))
+
+    def _render_action(action: dict) -> str:
+        actor = action.get("actor") or ""
+        return format_action_text(
+            action["type"], action["text"], actor=actor,
+            multiplayer=multiplayer, character=character_names.get(actor, ""),
+        )
 
     # Em contextos longos (>32k), os tetos de story_cards, memory_bank e
     # story_summary escalam proporcionalmente (até 3x) para injetar mais
@@ -751,11 +791,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["budgets"]["recent_window"] = base_window_budget
     # Mesma seleção do summarizer: see já saiu, descarte em WINDOW_DROP_CHUNK.
     _narrative, window_kept, _evicted, used = narrative_window(actions, window_budget)
-    chosen = [
-        format_action_text(a["type"], a["text"], actor=a.get("actor") or "",
-                           multiplayer=multiplayer)
-        for a in window_kept
-    ]
+    chosen = [_render_action(a) for a in window_kept]
     messages.extend({"role": "user", "content": text} for text in chosen if text.strip())
     meta["window_action_count"] = len(chosen)
     meta["window_tokens_est"] = used
@@ -767,8 +803,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     if actions:
         last = actions[-1]
         last_txt = _fit_budget(
-            format_action_text(last["type"], last["text"],
-                               actor=last.get("actor") or "", multiplayer=multiplayer),
+            _render_action(last),
             int(budgets.get("last_action", 200)),
         )
     else:

@@ -933,13 +933,36 @@ def portrait_variant_prompt(card: dict) -> str:
     ).strip(" ,;")
 
 
-def portrait_state_key(card: dict) -> str:
+def portrait_state_key(card: dict, img_cfg: dict, *, image_style: str = "",
+                       reference_bytes: bytes = b"") -> str:
+    """Hash da aparência: variante, ficha, âncora, foto, estilo e modelo.
+
+    `request_key` entra com prompt vazio e tamanho 0. O fingerprint é o que
+    essa função inclui (provider, modelo, CLIP, VAE, sampler, shift), sem
+    misturar o texto da cena.
+    """
     import hashlib
-    payload = "\n".join((
-        portrait_variant_prompt(card),
-        str(card.get("portrait_anchor_id") or card.get("portrait_image_id") or ""),
-    ))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    from app import image_client
+
+    raw_sheet = card.get("sheet") or ""
+    if isinstance(raw_sheet, dict):
+        raw_sheet = json.dumps(raw_sheet, ensure_ascii=False)
+    elif not isinstance(raw_sheet, str):
+        raw_sheet = ""
+    blob = bytes(reference_bytes or b"")
+    payload = {
+        "portrait_variant_prompt": portrait_variant_prompt(card),
+        "sheet_context": sheet_context(raw_sheet),
+        "portrait_anchor_id": str(card.get("portrait_anchor_id") or ""),
+        "reference_sha256": hashlib.sha256(blob).hexdigest(),
+        "image_style": str(image_style or ""),
+        "request_key": image_client.request_key(
+            img_cfg, "", width=0, height=0, init_image=blob,
+        ),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def portrait_image_for(card: dict, conn) -> dict | None:
@@ -1183,8 +1206,71 @@ def sex_label(name: str, *blobs: str, card: dict | None = None) -> str:
     return ""
 
 
-def sex_phrase(name: str, label: str, *, explicit: bool) -> str:
+# Espécie vence "adult woman". Esse rótulo no começo do CLIP pinta um humano
+# no epiCRealism, e sem roupa na frase o corpo sai nu.
+_CREATURE_KINDS = (
+    ("salamandra", "salamander"),
+    ("salamander", "salamander"),
+    ("amphibian", "amphibian"),
+    ("anfíbio", "amphibian"),
+    ("anfibio", "amphibian"),
+    ("sapo", "frog"),
+    ("frog", "frog"),
+    ("grilo", "cricket"),
+    ("cricket", "cricket"),
+    ("inseto", "insect"),
+    ("insect", "insect"),
+    ("réptil", "reptile"),
+    ("reptil", "reptile"),
+    ("reptile", "reptile"),
+    ("dragão", "dragon"),
+    ("dragao", "dragon"),
+    ("dragon", "dragon"),
+    ("cobra", "snake"),
+    ("snake", "snake"),
+)
+CLOTHED_LOCK = "fully clothed, wearing clothes, covered torso"
+CREATURE_LOCK = "natural hide covering the body, not bare human skin"
+NUDITY_BAN = (
+    "nude, naked, topless, bottomless, nudity, nipples, genitals, "
+    "undressed, nsfw, bare breasts, exposed chest"
+)
+
+
+def creature_kind(card: dict | None = None, name: str = "") -> str:
+    """Espécie não humana do card. Vazio se a ficha não diz."""
+    sheet = parse_sheet((card or {}).get("sheet") or "") if card else {}
+    parts = [
+        (card or {}).get("title") or "",
+        (card or {}).get("entry") or "",
+        (card or {}).get("portrait_prompt") or "",
+        name or "",
+    ]
+    for key in ("appearance", "class", "body"):
+        value = sheet.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    blob = " ".join(parts)
+    for needle, kind in _CREATURE_KINDS:
+        if re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", blob, re.IGNORECASE):
+            return kind
+    return ""
+
+
+def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
+    """Trava de corpo coberto. Cena nua de propósito não leva isto."""
+    if explicit:
+        return ""
+    if any(creature_kind(card) for card in cards if card):
+        return CREATURE_LOCK
+    return CLOTHED_LOCK
+
+
+def sex_phrase(name: str, label: str, *, explicit: bool, card: dict | None = None) -> str:
     """Frase curta no começo do prompt. O CLIP obedece o início."""
+    kind = creature_kind(card, name)
+    if kind:
+        return f"{name} is a {kind}, creature body, not a human"
     if label == "adult woman" and explicit:
         return f"{name} is an adult woman with a female body, breasts and a feminine face"
     if label == "adult woman":

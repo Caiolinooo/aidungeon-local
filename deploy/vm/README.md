@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
-| Imagem | `sd-webui-forge.service` (Forge Neo) na porta 7861, epiCRealism XL. O A1111 continua em `/home/caio/sd-webui` (unit parada) |
+| Imagem | `comfyui.service` na porta 8188, FineView Qwen Image 2.1 Turbo Fixed FP8; Forge Neo permanece instalado para rollback |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -153,8 +153,8 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 `GET /health` 200.
 
 Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
-do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB),
-FLUX 3 Klein INT8 (~8 GB, outro cliente) e Wan 2.1.
+do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
+Wan 2.1. O FineView roda no ComfyUI; o Forge é o caminho de rollback.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
@@ -165,6 +165,65 @@ sudo systemctl enable --now sd-webui.service
 ```
 
 Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
+
+## Imagem: FineView Qwen Image 2.1 no ComfyUI
+
+O cliente `image.provider = "comfyui"` em `backend/app/image_client.py` fala a
+API do ComfyUI: `POST /prompt`, polling em `GET /history/{id}` e download por
+`GET /view`. O grafo usa `UNETLoader`, CLIP `qwen_image_2_1`, `ReferenceLatent`
+nas identidades, `ModelSamplingAuraFlow` shift 1.31, `ManualSigmas` com oito
+passos e `SamplerCustomAdvanced` euler. O CLIP fica em CPU.
+
+Arquivos e hashes obrigatórios:
+
+| Arquivo em `/home/caio/ComfyUI/models/` | Bytes | SHA256 |
+|---|---:|---|
+| `diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors` | 6630098544 | `7ba6c0774c233540ef6ea0ea3971acf3cbf403f70bd3672af57eaca00c33578e` |
+| `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 9350798360 | `8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f` |
+| `vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors` | 644229280 | `36f56608b02077a50a08ea3dbcdb88351298ceba49948f41f9f87186378e6908` |
+
+Downloads (Civitai exige `CIVITAI_API_KEY`; não usar URL não assinada no curl):
+
+```bash
+cd /home/caio/ComfyUI
+curl -fL -H "Authorization: Bearer $CIVITAI_API_KEY" \
+  -o models/diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors.part \
+  https://civitai.com/api/download/models/2503975
+curl -fL -H "Authorization: Bearer $CIVITAI_API_KEY" \
+  -o models/vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors.part \
+  https://civitai.com/api/download/models/2660279
+curl -fL \
+  -o models/text_encoders/qwen3vl_8b_int8_convrot.safetensors.part \
+  https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors
+# Conferir os três SHA256 da tabela antes de remover o sufixo .part.
+```
+
+A unit é `deploy/vm/comfyui.service`, instalada como
+`/etc/systemd/system/comfyui.service`. O ComfyUI escuta somente em
+`127.0.0.1:8188`. Antes do primeiro retrato, `GET /system_stats` deve responder
+e os três arquivos precisam ter os hashes acima. `clip_device = "cpu"` mantém o
+Qwen3-VL 8B INT8 fora da VRAM; UNET FP8 e VAE dividem a L4 com narrador e voz.
+
+O provider efetivo pode ser trocado via `PUT /api/settings/image` ou nos dois
+bancos, somente depois dos hashes e do smoke do grafo:
+
+```bash
+for DB in /home/caio/aidungeon/data/aidungeon.db \
+          /home/caio/aidungeon-staging/data/aidungeon.db; do
+  sqlite3 "$DB" "INSERT INTO settings(key,value) VALUES('image.provider','\"comfyui\"') \
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+done
+```
+
+Rollback: devolver `image.provider = "sdwebui"`, parar/desabilitar o ComfyUI e
+subir `sd-webui-forge.service` em `127.0.0.1:7861`. Não reiniciar llama-swap nem
+`abz-voice-staging`. Forge e FineView não devem medir VRAM ao mesmo tempo.
+
+Smoke do executor, sem gerar uma imagem:
+
+```bash
+curl -fsS http://127.0.0.1:8188/system_stats
+```
 
 ## A1111: memória
 

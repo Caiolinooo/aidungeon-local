@@ -267,6 +267,8 @@ def test_look_words_from_the_prose_do_not_override_the_card():
         "Princess Alusair stands nude in the doorway.", canon)
     assert "nude" in undressed.lower()
     assert "nude" not in blocked.lower()
+    _eyes, eyes_ban = contradicting_looks("seus olhos compostos piscam", canon)
+    assert "olhos" not in eyes_ban.lower()
 
 
 def test_portrait_beats_a_conflicting_sheet_and_the_prose():

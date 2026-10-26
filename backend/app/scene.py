@@ -244,11 +244,20 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             person,
             npc_assets.sex_label(person, moment, card=card),
             explicit=explicit,
+            card=card,
         )
         if phrase:
             sex_bits.append(phrase)
     sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     sex_line = ". ".join(sex_bits)
+    creature = any(npc_assets.creature_kind(card) for card in cast)
+    style_text = style
+    if creature and "natural skin texture" in style_text:
+        style_text = style_text.replace(
+            "natural skin texture",
+            "scales, hide or fur, not human skin",
+        )
+    lock = npc_assets.coverage_lock(*cast, explicit=explicit)
     if clause:
         # images.py importa scene no topo; o scrub fica aqui por isso.
         from app.routes.images import contradicting_looks
@@ -262,7 +271,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             clause,
             "clothes off, nude, do not restore outfits, uncensored",
             beat[-400:],
-            style,
+            style_text,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face and hair",
             (entry or "")[:400],
@@ -276,7 +285,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         parts = [
             sex_line,
             clause,
-            style,
+            lock,
+            style_text,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face, hair, age and clothing",
             beat,
@@ -322,7 +332,12 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
 
     active = db.find_active_job(conn, "scene_backdrop", ref)
     if active:
-        return {"status": "pending", "image": image, "error": None}
+        active_key = str((active.get("payload") or {}).get("cache_key") or "")
+        if cache_key and active_key != cache_key \
+                and active.get("status") in ("preparing", "pending"):
+            db.cancel_job(conn, active["id"])
+        else:
+            return {"status": "pending", "image": image, "error": None}
 
     previous = db.latest_job(conn, "scene_backdrop", ref)
     if previous and previous["status"] == "error" and not retry:
@@ -331,6 +346,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
     jobs.enqueue(conn, "scene_backdrop", adventure_id, ref, {
         "prompt": prompt,
         "include_people": include_people,
+        "cache_key": cache_key,
         "explicit": explicit,
         "reference_card_ids": list(reference_card_ids or []),
     }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
@@ -387,7 +403,11 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     )
     # Hash do prompt FINAL + config: lugar, clima, elenco, roupa, feridas,
     # estilo e explicit mudam a assinatura; nada disso fica de fora.
-    references = likeness.reference_images(paint_cast) if include_people else []
+    reference_cards = [
+        card for card in paint_cast
+        if card.get("id") and card.get("portrait_anchor_id")
+    ] if include_people else []
+    references = likeness.reference_pixels(reference_cards, conn)
     from app import consequences
     visual_effects = consequences.visual_context(adventure)
     if visual_effects:
@@ -402,10 +422,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
         include_people=include_people,
         explicit=explicit, cache_key=cache_key,
-        reference_card_ids=(
-            [str(card["id"]) for card in paint_cast if card.get("id")]
-            if include_people else []
-        ),
+        reference_card_ids=[str(card["id"]) for card in reference_cards],
     )
 
     cast = []

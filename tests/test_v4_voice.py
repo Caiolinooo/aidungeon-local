@@ -15,6 +15,7 @@ def auth_token(admin_token):
     return admin_token
 
 MP3_BYTES = b"ID3\x04\x00\x00\x00\x00\x00\x21fake-mp3-audio-bytes"
+WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt fake-streaming-wav"
 
 
 def make_voice_transport(capture: list | None = None, fail: str | None = None,
@@ -33,8 +34,12 @@ def make_voice_transport(capture: list | None = None, fail: str | None = None,
                 return httpx.Response(401, json={"error": "unauthorized"})
             if fail == "http500":
                 return httpx.Response(500, text="boom")
+            payload = json.loads(request.content.decode("utf-8"))
             if capture is not None:
-                capture.append(json.loads(request.content.decode("utf-8")))
+                capture.append(payload)
+            if payload["response_format"] == "wav":
+                return httpx.Response(200, content=WAV_BYTES,
+                                      headers={"content-type": "audio/wav"})
             return httpx.Response(200, content=MP3_BYTES,
                                   headers={"content-type": "audio/mpeg"})
         if path.endswith("/audio/transcriptions"):
@@ -93,6 +98,25 @@ def test_tts_explicit_voice(client):
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     assert capture[0]["voice"] == "F2"
+
+
+def test_tts_stream_returns_wav_without_changing_buffered_endpoint(client):
+    capture: list = []
+    override_transport(client, make_voice_transport(capture=capture))
+    try:
+        resp = client.post("/api/tts/stream", json={"text": "A porta range."})
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("audio/wav")
+        assert resp.content == WAV_BYTES
+        assert capture[0]["response_format"] == "wav"
+        assert capture[0]["model"] == "omnivoice"
+
+        buffered = client.post("/api/tts", json={"text": "A porta range."})
+        assert buffered.status_code == 200
+        assert buffered.content == MP3_BYTES
+        assert capture[1]["response_format"] == "mp3"
+    finally:
+        client.app.dependency_overrides.clear()
 
 
 def test_tts_invalid_voice_400(client):

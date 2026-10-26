@@ -2,6 +2,8 @@
 
 Leitura feita em 19 out 2026 na VM `caio@vm.groupabz.com`. Nada foi instalado. `llama-server`, `sd-webui` e o app não foram reiniciados.
 
+> **26 out 2026.** O provider `comfyui` usa FineView Qwen Image 2.1 Turbo Fixed FP8, CLIP Qwen3-VL 8B INT8 em CPU e texture-fix VAE. O grafo tem oito passos, shift 1.31 e referências por `ReferenceLatent`; downloads e hashes estão em `deploy/vm/README.md`.
+
 O app fala HTTP com o executor em `backend/app/image_client.py`: `POST {base}/sdapi/v1/txt2img` e, no retrato por foto, `POST /sdapi/v1/img2img`. A resposta usada é `images[0]` em base64. O corpo está fixo em `DPM++ 2M`, scheduler `Karras`, `cfg_scale` 5 — o que o epiCRealism XL pede.
 
 ## O que a L4 está segurando agora
@@ -40,7 +42,7 @@ Nenhum modelo abaixo foi gerado nesta L4. O número de cada linha é o da fonte,
 | FLUX.2 dev | 32B, ~90 GB mesmo em lowVRAM ([NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-flux-2-comfyui/)) | não cabe na L4 |
 | FLUX.2 Klein 4B destilado | 8 GB em FP16, 4 passos ([Thunder Compute](https://www.thundercompute.com/blog/flux-comfyui-ai-image-generation)) | só com o narrador pausado |
 | FLUX.2 Klein 9B | 29 GB no mesmo guia | não cabe na L4 |
-| FLUX 3 Image Klein INT8 | 5,6B; 8 GB; 1 MP em menos de 9 s numa RTX 4070 ([BFL](https://bfl.ai/blog/flux-3-image-klein)) | só com o narrador pausado |
+| FLUX 3 Image Klein INT8 | 5,6B; 8 GB; 1 MP em menos de 9 s numa RTX 4070 ([BFL](https://bfl.ai/blog/flux-3-image-klein)) | planejado: UNET 5,8 GB + VAE 0,3 GB na GPU, CLIP 4,9 GB na CPU. Não medido |
 | SD 3.5 Large | acima de 18 GB em BF16; 11 GB em FP8 TensorRT ([NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-gtc-paris-tensorrt-rtx-nim-microservices/)) | só com o narrador pausado, e o FP8 ainda passa dos 5,4 GB |
 | SD 3.5 Medium | o cartão não publica GB ([Hugging Face](https://huggingface.co/stabilityai/stable-diffusion-3.5-medium)); um guia cita ~9,9 GB | não trato como cabe |
 | HiDream-I1-Full | estimativa de terceiros: FP8 ~19 GB, INT4 ~9,6 GB ([Aquanode](https://www.aquanode.io/models/hidream-ai/hidream-i1-full)) | só com o narrador pausado, e olhe lá |
@@ -69,13 +71,17 @@ Um guia atribui 4–6 GB ao Wan 2.1 1.3B em GGUF 480p ([WillItRunAI](https://wil
 
 ## O que trocar
 
-**Stills.** Com o narrador no ar, o modelo continua o epiCRealism XL. Nenhum cartão com número oficial de VRAM cabe nos 5,4 GB e ainda promete pele melhor.
+**Stills.** O alvo implementado é **FineView Qwen Image 2.1 Turbo Fixed FP8** no
+**ComfyUI**, com o CLIP Qwen3-VL 8B INT8 na CPU. Retratos usam a âncora
+canônica e fotos de referência como pixels, não mais InstantID/ControlNet no
+caminho ComfyUI. O SDWebUI continua disponível para rollback.
 
-Quando der para pausar o narrador: executor **Forge Neo** ([`Haoming02/sd-webui-forge-classic`](https://github.com/Haoming02/sd-webui-forge-classic)) e modelo **Z-Image-Turbo**. O Neo é um WebUI Forge mantido; o README de outubro lista Z-Image, Flux.2-Klein 4B/9B, Qwen-Image-2.1 e Chroma1-HD. O Forge original marca a API `txt2img` / `img2img` como normal ([README](https://github.com/lllyasviel/stable-diffusion-webui-forge), teste de 29 ago 2024), e um cliente externo ainda chama `/sdapi/v1/txt2img` no Forge ([panel-foundry](https://github.com/cainezen/panel-foundry)). A rota do app pode ficar. O corpo não: o Turbo não usa o CFG 5 nem o negative do epiCRealism, e o cartão pede 8 passos. Os 16 GB oficiais cabem nos ~20 GB liberados, com uns 4 GB de margem — justo, e não medido nesta placa.
+O cliente monta o grafo (`POST /prompt`) porque o ComfyUI não devolve
+`images[0]` em `/sdapi/v1/txt2img`; polling e download ficam em `/history` e
+`/view`. InvokeAI e SwarmUI falam outra API e não têm cliente no app.
 
-Se 16 GB parecer apertado, o mesmo Neo já tem o **FLUX.2 Klein 4B** (8 GB em FP16 no guia da Thunder, também só com o narrador pausado). O README do Neo tem o interruptor `img2img` / `reference` para esse Klein, para o Qwen-Image-2.1 e para o Anima. Não cita o Z-Image nesse interruptor.
-
-O salto de nota publicada é o **FLUX 3 Image Klein INT8** (8 GB, ComfyUI ou Diffusers, até 10 imagens de referência). O README do Neo que li não lista o FLUX 3. Aí o cliente muda: ComfyUI não devolve `images[0]` em `/sdapi/v1/txt2img`; o POST passa a ser o workflow (`/prompt`). InvokeAI e SwarmUI também falam outra API.
+O prompt upsampler oficial fica de fora: o LLM do jogo já entrega o prompt
+detalhado e outro modelo de texto ocuparia RAM/VRAM sem necessidade.
 
 **Clipe.** **Wan 2.1 T2V-1.3B** num worker ComfyUI, **só com o narrador pausado**. São 5 s a 480p e 8,19 GB no README — acima dos 5,4 GB, abaixo dos ~20 GB com o llama fora. O app não tem cliente de vídeo; não reaproveita o `txt2img`. O Neo lista Wan 2.2 **14B**, que não cabe. CogVideoX-2B, SVD, Hunyuan e LTX-2.5 ficam de fora pelo tamanho ou pelo hardware da medição.
 

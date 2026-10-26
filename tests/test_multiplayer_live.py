@@ -116,6 +116,40 @@ def test_multiplayer_context_names_actors_single_stays_you(tmp_db):
     assert "Caio:" not in last
 
 
+def test_prewrapped_you_is_the_acting_character(tmp_db):
+    with db.session() as conn:
+        users.create_user(conn, "ludmilla", "ludmilla-pass")
+        _maria(conn)
+    adv = make_adventure(
+        title="Mesa", owner="ludmilla",
+        plot_essentials="Protagonista — Nome: Sandra",
+    )
+    add_action(adv["id"], 0, "start", "O escritório.")
+    with db.session() as conn:
+        db.share_adventure(conn, adv["id"], "maria")
+        db.upsert_player_character(
+            conn, adv["id"], "ludmilla", title="Sandra, A Salamandra", sheet="{}",
+        )
+        db.upsert_player_character(
+            conn, adv["id"], "maria", title="Ikit - O grilo ladrao", sheet="{}",
+        )
+        db.insert_action(
+            conn, adv["id"], 1, "do",
+            "\n> You tentar pegar os cristais\n", actor="maria",
+        )
+        actions = db.list_actions(conn, adv["id"])
+        fresh = db.get_adventure(conn, adv["id"])
+        cfg = settings_store.runtime_config(conn)
+        built = cb.build_context(fresh, actions, cfg, conn)
+    rendered = "\n".join(message["content"] for message in built.messages)
+    assert "\n> Ikit - O grilo ladrao: tentar pegar os cristais\n" in rendered
+    assert "> You " not in rendered
+    system = built.messages[0]["content"]
+    assert "maria = Ikit - O grilo ladrao" in system
+    assert "you/você is only Ikit - O grilo ladrao" in system
+    assert "ludmilla = Sandra, A Salamandra" in system
+
+
 def test_players_block_tracks_character_edits_only(tmp_db):
     adv = make_adventure(title="Mesa", owner="Caio")
     add_action(adv["id"], 0, "start", "Night.")

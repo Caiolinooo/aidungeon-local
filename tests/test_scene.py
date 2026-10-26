@@ -352,3 +352,46 @@ def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path)
         assert "nude" in folded
         assert "translucent silk and crystal garments" not in folded
 
+
+def test_a_salamander_is_not_painted_as_a_naked_woman(client, tmp_path):
+    """O nome curto do plot não vira uma segunda pessoa humana."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure(
+        plot_essentials="[Name: Sandra; Role: Salamandra; Appearance: escamas âmbar]",
+        image_style="dark fantasy, amphibian characters",
+    )
+    with db.session() as conn:
+        db.insert_card(
+            conn, adv["id"], type="character",
+            title="Sandra, A Salamandra",
+            entry="Realmente uma salamandra que se chama sandra.",
+            use_for_character_creation=True,
+            portrait_prompt="Sandra the Salamander, an ancient amphibian, amber scales, long tail",
+            sheet=json.dumps({"class": "salamandra", "clothing": ""}),
+        )
+    add_action(adv["id"], 0, "start", "Sandra está no escritório pantanoso.")
+    add_action(adv["id"], 1, "do", "> You pular até o teto com os cristais")
+    add_action(adv["id"], 2, "continue",
+               "Sandra salta e a cauda bate na mesa. Ela segura os cristais.")
+    override_transport(client, make_v2_transport(
+        "Sandra leaps to the ceiling clutching the crystals."))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 2})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"].lower()
+    assert "adult woman" not in prompt
+    assert "salamander" in prompt
+    assert "not a human" in prompt
+    assert "natural hide" in prompt
+    assert "nude" not in prompt
+    assert "naked" not in prompt
+    assert "clothes off" not in prompt
+    assert "natural skin texture" not in prompt
+    with db.session() as conn:
+        negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
+    assert "nude" in negative
+    assert "naked" in negative
+    assert "nipples" in negative
+

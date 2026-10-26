@@ -1847,6 +1847,48 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/tts/stream:
+    post:
+      tags: [voice]
+      summary: Sintetizar texto em WAV progressivo (PCM16 mono 24 kHz)
+      operationId: postTtsStream
+      description: |
+        Usa as mesmas validações, voz, clone e emoção de `/api/tts`, mas chama o
+        OmniVoice com `response_format=wav` e transmite os chunks sem esperar o
+        áudio completo. Não usa fallback Drama-3. Cancelamento fecha o HTTP do
+        provider; `/api/tts` continua devolvendo MP3 completo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TtsRequest'
+      responses:
+        '200':
+          description: Stream WAV PCM16 mono 24 kHz.
+          headers:
+            X-Voice-Emotion:
+              description: Emoção escolhida para a fala.
+              schema:
+                type: string
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Validação igual a `/api/tts`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Provider de voz indisponível ou erro antes do stream.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/stt:
     post:
       tags: [voice]
@@ -3605,7 +3647,7 @@ components:
           type: boolean
         provider:
           type: string
-          enum: [sdwebui, openai_compatible]
+          enum: [sdwebui, comfyui, openai_compatible]
         sdwebui_base_url:
           type: string
           example: http://127.0.0.1:7860
@@ -3615,6 +3657,18 @@ components:
           type: integer
         sdwebui_height:
           type: integer
+        comfyui_base_url:
+          type: string
+          example: http://127.0.0.1:8188
+        comfyui_steps:
+          type: integer
+          example: 15
+        comfyui_width:
+          type: integer
+          example: 1024
+        comfyui_height:
+          type: integer
+          example: 1024
         negative_prompt:
           type: string
         openai_base_url:
@@ -3657,7 +3711,7 @@ components:
           type: boolean
         provider:
           type: string
-          enum: [sdwebui, openai_compatible]
+          enum: [sdwebui, comfyui, openai_compatible]
         sdwebui_base_url:
           type: string
         sdwebui_steps:
@@ -3665,6 +3719,14 @@ components:
         sdwebui_width:
           type: integer
         sdwebui_height:
+          type: integer
+        comfyui_base_url:
+          type: string
+        comfyui_steps:
+          type: integer
+        comfyui_width:
+          type: integer
+        comfyui_height:
           type: integer
         negative_prompt:
           type: string

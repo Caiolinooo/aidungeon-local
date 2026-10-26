@@ -150,6 +150,22 @@
         "sd_model_checkpoint": "epicrealismXL_vxviiCrystalclear.safetensors",
         "note": "Forge Neo (sd-webui-forge-classic, branch neo) em 127.0.0.1:7861, mesma API txt2img/img2img. Checkpoint epiCRealism XL CrystalClear e VAE sdxl-vae-fp16-fix, os dois já no disco do A1111 (/home/caio/sd-webui, porta 7860, rollback). DPM++ 2M Karras, CFG 5, 20 passos. O Neo não tem --medvram: ele usa a VRAM livre ao lado do llama-server. Z-Image-Turbo, FLUX e Wan não entram neste slot. 1024 é o tamanho nativo do arquivo; no ar o retrato usa o override 800x720 e a faixa 1344x768."
       },
+      "comfyui": {
+        "base_url": "http://127.0.0.1:8188",
+        "unet": "fineviewQWEN_qw21TurboFixed_3299367.safetensors",
+        "clip": "qwen3vl_8b_int8_convrot.safetensors",
+        "clip_type": "qwen_image_2_1",
+        "clip_device": "cpu",
+        "vae": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+        "width": 800,
+        "height": 720,
+        "steps": 8,
+        "sampler": "euler",
+        "scheduler": "normal",
+        "shift": 1.31,
+        "poll_interval_s": 1.0,
+        "note": "FineView QW2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image_2_1 (Qwen3-VL 8B INT8) + texture-fix VAE. EmptyImageLatent, ModelSamplingAuraFlow shift 1.31, BasicScheduler normal de 8 passos (9 sigmas), SamplerCustomAdvanced euler. Referencias entram em cadeias ReferenceLatent positiva e negativa. clip_device=cpu reserva VRAM para o narrador."
+      },
       "openai_compatible": {
         "base_url": "",
         "api_key_env": "IMAGE_API_KEY",

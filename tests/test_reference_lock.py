@@ -172,8 +172,11 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
     assert queued is not None
     assert jobs.process_pending(_sd_handler(seen)) == 1
     args = seen[0]["alwayson_scripts"]["controlnet"]["args"]
-    assert len(args) == 1
+    assert len(args) == 2
     assert base64.b64decode(args[0]["image"]) == PNG_BYTES
+    assert base64.b64decode(args[1]["image"]) == other
+
+
 def test_multiple_npcs_use_regional_reference_masks():
     payload = image_client._attach_references(
         {"prompt": "two women"},
@@ -203,6 +206,10 @@ def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypa
             portrait_prompt="long brown hair, green eyes",
         )
     _upload(client, adv["id"], card["id"])
+    with db.session() as conn:
+        jobs.enqueue_portrait(
+            conn, adv["id"], card["id"], replace=True, force_reference=True)
+    assert jobs.process_pending(_sd_handler([])) == 1
     add_action(adv["id"], 0, "start", "The road is empty.")
     add_action(adv["id"], 1, "continue", "Clara steps into the rain.")
     seen: list[dict] = []
@@ -240,6 +247,10 @@ def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, mon
             }),
         )
     _upload(client, adv["id"], card["id"])
+    with db.session() as conn:
+        jobs.enqueue_portrait(
+            conn, adv["id"], card["id"], replace=True, force_reference=True)
+    assert jobs.process_pending(_sd_handler([])) == 1
     add_action(adv["id"], 0, "continue", "Clara waits by the tavern door.")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert resp.status_code == 200, resp.text
@@ -249,10 +260,7 @@ def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, mon
     assert card["id"] in backdrop["payload"]["reference_card_ids"]
     seen: list[dict] = []
     assert jobs.process_pending(_sd_handler(seen)) >= 1
-    img2img = [item for item in seen if item.get("init_images")]
     scenes = [item for item in seen if item.get("width") == 1344]
-    assert img2img and img2img[0]["denoising_strength"] == likeness.VISUAL_REFERENCE_DENOISE
-    assert base64.b64decode(_unit(img2img[0])["image"]) == PNG_BYTES
     assert scenes and "init_images" not in scenes[0]
     assert base64.b64decode(_unit(scenes[0])["image"]) == PNG_BYTES
 

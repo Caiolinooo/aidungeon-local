@@ -59,6 +59,10 @@ export default function Settings() {
     sdwebui_steps: 20,
     sdwebui_width: 1024,
     sdwebui_height: 1024,
+    comfyui_base_url: 'http://127.0.0.1:8188',
+    comfyui_steps: 8,
+    comfyui_width: 800,
+    comfyui_height: 720,
     negative_prompt: '',
     style_suffix: '',
     openai_base_url: 'https://api.openai.com/v1',
@@ -223,6 +227,9 @@ export default function Settings() {
           scheduler: imageForm.scheduler,
           denoising_strength: Number(imageForm.denoising_strength),
           sd_model_checkpoint: imageForm.sd_model_checkpoint,
+          comfyui_steps: Number(imageForm.comfyui_steps),
+          comfyui_width: Number(imageForm.comfyui_width),
+          comfyui_height: Number(imageForm.comfyui_height),
         }
         if (imageForm.openai_api_key) payload.openai_api_key = imageForm.openai_api_key
         const updated = await api.putImageSettings(payload)
@@ -533,7 +540,7 @@ export default function Settings() {
                       Geração de imagem
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      SDXL WebUI ou um endpoint compatível com OpenAI, para pinturas de cena e retratos.
+                      FineView Qwen Image 2.1 no ComfyUI, SDXL WebUI ou um endpoint compatível com OpenAI, para pinturas de cena e retratos.
                     </p>
                   </div>
 
@@ -561,6 +568,15 @@ export default function Settings() {
                           }`}
                         >
                           SD WebUI (Local)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImageForm({ ...imageForm, provider: 'comfyui' })}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                            imageForm.provider === 'comfyui' ? 'bg-surface text-primary shadow font-semibold' : 'text-secondary'
+                          }`}
+                        >
+                          ComfyUI (FineView)
                         </button>
                         <button
                           type="button"
@@ -644,6 +660,69 @@ export default function Settings() {
                             className={inputCls}
                           />
                         </SettingField>
+                      </div>
+                    ) : imageForm.provider === 'comfyui' ? (
+                      <div className="space-y-4 pt-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className={labelCls}>URL base do ComfyUI</label>
+                            <input
+                              type="text"
+                              value={imageForm.comfyui_base_url}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_base_url: e.target.value })}
+                              placeholder="http://127.0.0.1:8188"
+                              className={inputCls}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Passos fixos (FineView Turbo)</label>
+                            <input
+                              type="number"
+                              min="8"
+                              max="8"
+                              readOnly
+                              value={imageForm.comfyui_steps}
+                              className={inputCls}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className={labelCls}>Largura (800)</label>
+                            <input
+                              type="number"
+                              value={imageForm.comfyui_width}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_width: Number(e.target.value) })}
+                              className={inputCls}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Altura (720)</label>
+                            <input
+                              type="number"
+                              value={imageForm.comfyui_height}
+                              onChange={(e) => setImageForm({ ...imageForm, comfyui_height: Number(e.target.value) })}
+                              className={inputCls}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className={labelCls}>Sufixo de estilo</label>
+                          <input
+                            type="text"
+                            value={imageForm.style_suffix || ''}
+                            onChange={(e) => setImageForm({ ...imageForm, style_suffix: e.target.value })}
+                            placeholder="e.g. photorealistic photograph, natural skin texture"
+                            className={inputCls}
+                          />
+                        </div>
+
+                        <p className="text-xs text-secondary">
+                          Modelo, VAE e sampler ficam em <code>settings.json → image.providers.comfyui</code>.
+                          O prompt negativo não é usado com cfg 1.
+                        </p>
                       </div>
                     ) : (
                       <div className="space-y-4 pt-2">

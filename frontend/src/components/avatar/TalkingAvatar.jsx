@@ -8,9 +8,9 @@
 //   do TalkingHead faz import() do módulo pelo nome da língua e 404 no vite
 //   (dev server não resolve caminho dentro de node_modules empacotado), então
 //   registramos pt_br (vendored) e en (node_modules) direto no registry.
-// - O AudioContext interno (head.audioCtx) é reutilizado para decodificar o
-//   blob de TTS; browsers suspendem AudioContext criado fora de gesto do
-//   usuário, então speak() tenta resume() (clique no NarrateButton é gesto).
+// - A narração chega como WAV PCM16 (POST /api/tts/stream). streamStart arma
+//   o lipsync; cada frame de 4096 samples vai em streamAudio. O áudio sozinho
+//   não gera visemes — as palavras do texto são estimadas, como no MP3.
 import {
   forwardRef,
   useEffect,
@@ -21,6 +21,7 @@ import { TalkingHead } from '@met4citizen/talkinghead'
 import { LipsyncEn } from '@met4citizen/talkinghead/modules/lipsync-en.mjs'
 import { LipsyncPt_br } from './vendor/lipsync-pt_br.mjs'
 import { avatarUrl } from './avatarConfig.js'
+import { PCM_FRAME_SAMPLES, readPcm16Wav } from '../../pcmStream.js'
 
 // Distribui a duração do áudio entre as palavras proporcionalmente ao
 // tamanho (len+1 p/ contar o espaço): o TalkingHead precisa de words/wtimes/
@@ -44,12 +45,49 @@ function estimateWordTiming(text, durationMs) {
   return { words, wtimes, wdurations }
 }
 
+function abortError() {
+  const err = new Error('Aborted')
+  err.name = 'AbortError'
+  return err
+}
+
+// Duração total estimada antes de conhecer o WAV: (len+1) * 85 ms por palavra.
+// A proporção de áudio já recebido escolhe quantas palavras cabem no frame;
+// o frame final leva o que sobrou. Offsets usam o relógio PCM real.
+function wordsForFrame({ words, cursor, totalMs, emittedMs, frameLength, sampleRate, isFinal }) {
+  const frameMs = (frameLength / sampleRate) * 1000
+  let next = cursor
+  let selected = []
+  if (isFinal) {
+    selected = words.slice(cursor)
+    next = words.length
+  } else if (words.length > 0 && totalMs > 0) {
+    const full = estimateWordTiming(words.join(' '), totalMs)
+    const ratio = (emittedMs + frameMs) / totalMs
+    while (next < full.words.length) {
+      const endRatio = (full.wtimes[next] + full.wdurations[next]) / totalMs
+      if (endRatio <= ratio + 1e-6) next += 1
+      else break
+    }
+    selected = words.slice(cursor, next)
+  }
+  const timing = estimateWordTiming(selected.join(' '), frameMs)
+  return {
+    cursor: next,
+    emittedMs: emittedMs + frameMs,
+    words: timing.words,
+    wtimes: timing.wtimes.map((t) => t + emittedMs),
+    wdurations: timing.wdurations,
+  }
+}
+
 const TalkingAvatar = forwardRef(function TalkingAvatar(
   { cfg, className, view = 'upper' },
   ref,
 ) {
   const containerRef = useRef(null)
   const headRef = useRef(null)
+  const speakGenRef = useRef(0)
   // Promise do showAvatar corrente — resolve true/false conforme o GLB
   // carregou; speak() e setMood() aguardam o avatar estar carregado e
   // verificam o flag para não animarem no vazio (GLB incompatível, ex.
@@ -70,6 +108,7 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
     head.lipsync['en'] = new LipsyncEn()
     headRef.current = head
     return () => {
+      try { head.streamStop() } catch { /* stream ainda não armado */ }
       head.stopSpeaking()
       head.stop()
       headRef.current = null
@@ -113,37 +152,154 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
   }, [mood])
 
   useImperativeHandle(ref, () => ({
-    // Fala o blob de TTS com lipsync pt-BR.
-    // interrupt (default true) corta a fala anterior; false enfileira no
-    // TalkingHead (narração partida em vários mp3).
-    // onended (opcional): enfileirado via speakMarker p/ o chamador saber
-    // quando a fala terminou (NarrateButton volta ao estado idle).
-    async speak({ blob, text, onended, interrupt = true }) {
+    // Fala um WAV PCM16 com lipsync por palavras. O frame mais recente fica
+    // retido; o anterior sai quando o próximo chega, e o EOF manda o retido
+    // como frame final — assim o último bloco é conhecido sem o áudio inteiro.
+    async speak({ response, signal, text, onended, onFirstSample, interrupt = true }) {
       const head = headRef.current
       if (!head) return
+      const gen = ++speakGenRef.current
+      const mine = () => speakGenRef.current === gen && headRef.current === head
       const ok = await headReadyRef.current
-      if (!ok || headRef.current !== head) return // GLB não carregou / avatar trocado
-      if (interrupt) head.stopSpeaking()
+      if (!ok || !mine()) {
+        try { await response?.body?.cancel() } catch { /* corpo já fechado */ }
+        return
+      }
+      if (signal?.aborted) {
+        try { await response?.body?.cancel() } catch { /* corpo já fechado */ }
+        throw abortError()
+      }
+      if (interrupt) {
+        try { head.streamStop() } catch { /* sem stream anterior */ }
+        head.stopSpeaking()
+      }
       try {
         await head.audioCtx.resume()
       } catch {
         // Autoplay policy: sem gesto do usuário o resume falha — os visemes
-        // ainda animam mesmo sem o áudio sair (speakAudio usa o timing).
+        // ainda podem ser enfileirados quando o streamStart segue.
       }
-      const buf = await blob.arrayBuffer()
-      const audioBuffer = await head.audioCtx.decodeAudioData(buf)
-      const { words, wtimes, wdurations } = estimateWordTiming(
-        text,
-        audioBuffer.duration * 1000,
-      )
-      head.speakAudio(
-        { audio: audioBuffer, words, wtimes, wdurations },
-        { lipsyncLang: 'pt_br' },
-      )
-      if (typeof onended === 'function') head.speakMarker(onended)
+
+      const words = String(text || '').trim().split(/\s+/).filter(Boolean)
+      const totalMs = words.reduce((sum, word) => sum + (word.length + 1) * 85, 0)
+      let cursor = 0
+      let emittedMs = 0
+      let sampleRate = 24000
+      let started = false
+      let noted = false
+      let held = null
+      let stash = new Int16Array(0)
+      let failed = false
+      let settled = false
+      let resolveDone
+      const done = new Promise((resolve) => {
+        resolveDone = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+      })
+
+      const dispatch = (frame, isFinal) => {
+        if (!mine()) return
+        const timing = wordsForFrame({
+          words,
+          cursor,
+          totalMs,
+          emittedMs,
+          frameLength: frame.length,
+          sampleRate,
+          isFinal,
+        })
+        cursor = timing.cursor
+        emittedMs = timing.emittedMs
+        head.streamAudio({
+          audio: frame,
+          words: timing.words,
+          wtimes: timing.wtimes,
+          wdurations: timing.wdurations,
+        })
+      }
+
+      const pushSamples = (buffer) => {
+        const incoming = new Int16Array(buffer)
+        if (incoming.length === 0) return
+        if (!stash.length) stash = incoming
+        else {
+          const merged = new Int16Array(stash.length + incoming.length)
+          merged.set(stash, 0)
+          merged.set(incoming, stash.length)
+          stash = merged
+        }
+        while (stash.length >= PCM_FRAME_SAMPLES) {
+          const frame = stash.slice(0, PCM_FRAME_SAMPLES)
+          stash = stash.slice(PCM_FRAME_SAMPLES)
+          if (held) dispatch(held, false)
+          held = frame
+        }
+      }
+
+      const onAbort = () => {
+        if (!mine()) return
+        try { head.streamStop() } catch { /* stream já parado */ }
+        resolveDone()
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+
+      try {
+        await readPcm16Wav(response, {
+          onFormat: async (fmt) => {
+            if (!mine()) return
+            sampleRate = fmt.sampleRate
+            await head.streamStart({
+              sampleRate,
+              lipsyncLang: navigator.language.toLowerCase().startsWith('pt') ? 'pt_br' : 'en',
+              lipsyncType: 'words',
+            }, null, () => {
+              if (mine() && !failed && !signal?.aborted && typeof onended === 'function') {
+                try { onended() } catch { /* o botão trata o fim */ }
+              }
+              resolveDone()
+            })
+            started = true
+          },
+          onSamples: (buffer) => {
+            if (!mine() || signal?.aborted) return
+            if (!noted) {
+              noted = true
+              try { onFirstSample?.() } catch { /* estado do botão */ }
+            }
+            pushSamples(buffer)
+          },
+        })
+        if (!mine() || signal?.aborted) throw abortError()
+        if (stash.length) {
+          if (held) dispatch(held, false)
+          held = stash
+          stash = new Int16Array(0)
+        }
+        if (held) dispatch(held, true)
+        held = null
+        if (started && mine()) head.streamNotifyEnd()
+        await done
+        if (!mine() || signal?.aborted) throw abortError()
+      } catch (err) {
+        failed = true
+        if (mine()) {
+          try { head.streamStop() } catch { /* stream já parado */ }
+        }
+        resolveDone()
+        throw err
+      } finally {
+        signal?.removeEventListener('abort', onAbort)
+      }
     },
     stop() {
-      headRef.current?.stopSpeaking()
+      speakGenRef.current += 1
+      const head = headRef.current
+      if (!head) return
+      try { head.streamStop() } catch { /* sem stream */ }
+      try { head.stopSpeaking() } catch { /* fila já vazia */ }
     },
   }))
 

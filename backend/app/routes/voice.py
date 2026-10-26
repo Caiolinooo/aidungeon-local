@@ -26,7 +26,7 @@ from collections.abc import Coroutine
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from starlette.requests import ClientDisconnect
 
 
@@ -145,10 +145,8 @@ def _may_use_clone(conn, username: str, cloned: dict, adventure_id: str) -> bool
 
 
 # ----------------------------------------------------------------------- /tts
-@router.post("/tts")
-async def post_tts(request: Request, body: TtsRequest,
-                   info: auth.AuthInfo = Depends(auth.require_auth),
-                   transport: Any = Depends(get_http_transport)) -> Response:
+async def _prepare_tts(request: Request, body: TtsRequest,
+                       info: auth.AuthInfo, transport: Any) -> tuple[dict, str, str, str]:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
     if not cfg["enabled"]:
@@ -161,9 +159,12 @@ async def post_tts(request: Request, body: TtsRequest,
         raise GameError.bad_request(
             "text_too_long",
             f"text exceeds max_text_chars ({cfg['max_text_chars']})")
-    # voice omitida (null) → narrator_voice; string vazia é inválida (400)
     voice = cfg["narrator_voice"] if body.voice is None else body.voice
     adventure_id = (body.adventure_id or "").strip()
+    narrator = cfg["narrator_voice"] or ""
+    if adventure_id and narrator.startswith("cv_") \
+            and voice in {"M1", "M2", "M3", "F1", "F2", "F3"}:
+        voice = narrator
     with db.session() as conn:
         if not voice or not _known_voice(conn, voice):
             raise GameError.bad_request(
@@ -188,6 +189,14 @@ async def post_tts(request: Request, body: TtsRequest,
                 npc_emotion = npc_bonds.npc_emotion_for_line(cards, text)
     emotion = voice_emotion.choose_emotion(
         text, npc_emotion=npc_emotion, hint=body.emotion)
+    return cfg, text, voice, emotion
+
+
+@router.post("/tts")
+async def post_tts(request: Request, body: TtsRequest,
+                   info: auth.AuthInfo = Depends(auth.require_auth),
+                   transport: Any = Depends(get_http_transport)) -> Response:
+    cfg, text, voice, emotion = await _prepare_tts(request, body, info, transport)
     try:
         audio = await _await_until_disconnect(
             request,
@@ -198,6 +207,36 @@ async def post_tts(request: Request, body: TtsRequest,
         raise GameError(502, exc.code, exc.message) from exc
     return Response(content=audio, media_type="audio/mpeg",
                     headers={"X-Voice-Emotion": emotion})
+
+
+@router.post("/tts/stream")
+async def post_tts_stream(request: Request, body: TtsRequest,
+                          info: auth.AuthInfo = Depends(auth.require_auth),
+                          transport: Any = Depends(get_http_transport)) -> StreamingResponse:
+    cfg, text, voice, emotion = await _prepare_tts(request, body, info, transport)
+    try:
+        speech = await _await_until_disconnect(
+            request, asyncio.to_thread(
+                voice_client.open_speech_stream,
+                cfg, text, voice, emotion=emotion, transport=transport),
+        )
+    except voice_client.VoiceError as exc:
+        raise GameError(502, exc.code, exc.message) from exc
+
+    async def chunks():
+        try:
+            while True:
+                chunk = await _await_until_disconnect(
+                    request, asyncio.to_thread(voice_client.next_speech_chunk, speech))
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            await asyncio.to_thread(speech.close)
+
+    return StreamingResponse(
+        chunks(), media_type="audio/wav",
+        headers={"X-Voice-Emotion": emotion, "Cache-Control": "no-store"})
 
 
 # ----------------------------------------------------------------------- /stt

@@ -50,6 +50,35 @@ function qs(params) {
   return s ? `?${s}` : ''
 }
 
+function ttsPayload(text, voice, extra) {
+  const body = { text }
+  if (voice) body.voice = voice
+  if (extra && typeof extra === 'object') {
+    if (extra.emotion) body.emotion = extra.emotion
+    if (extra.adventureId) body.adventure_id = extra.adventureId
+  }
+  return body
+}
+
+async function postTts(path, text, voice, extra) {
+  try {
+    return await fetch(`${API_BASE}/api${path}`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(ttsPayload(text, voice, extra)),
+      signal: extra?.signal,
+    })
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+  }
+}
+
+function isWavContentType(contentType) {
+  const ct = (contentType || '').toLowerCase()
+  return ct.includes('audio/wav') || ct.includes('audio/x-wav') || ct.includes('audio/wave')
+}
+
 async function parseError(res) {
   let code = 'http_error'
   let message = `Request failed (${res.status})`
@@ -427,33 +456,27 @@ export const api = {
     remove: (id, { signal } = {}) => request(`/voices/${id}`, { method: 'DELETE', signal }),
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
-    // extra: { emotion, adventureId } — a emoção da linha e, se a linha
+    // extra: { emotion, adventureId, signal } — a emoção da linha e, se a linha
     // não disser, a ficha do NPC citado nessa aventura.
     tts: async (text, voice, extra) => {
-      const body = { text }
-      if (voice) body.voice = voice
-      if (extra && typeof extra === 'object') {
-        if (extra.emotion) body.emotion = extra.emotion
-        if (extra.adventureId) body.adventure_id = extra.adventureId
-      }
-      let res
-      try {
-        res = await fetch(`${API_BASE}/api/tts`, {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify(body),
-          signal: extra?.signal,
-        })
-      } catch (e) {
-        if (e.name === 'AbortError') throw e
-        throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
-      }
+      const res = await postTts('/tts', text, voice, extra)
       const contentType = res.headers.get('content-type') || ''
       if (!res.ok || !contentType.includes('audio/mpeg')) {
         if (res.status === 401) notifyUnauthorized()
         throw await parseError(res)
       }
       return res.blob()
+    },
+    // POST /tts/stream: mesmo body de tts, Response audio/wav incremental.
+    // O corpo fica por ler (PCM16 mono). extra.signal aborta o fetch.
+    ttsStream: async (text, voice, extra) => {
+      const res = await postTts('/tts/stream', text, voice, extra)
+      const contentType = res.headers.get('content-type') || ''
+      if (!res.ok || !isWavContentType(contentType)) {
+        if (res.status === 401) notifyUnauthorized()
+        throw await parseError(res)
+      }
+      return res
     },
     // POST /stt: multipart (campo 'file') → {"text": "..."}.
     // O nome acompanha o mime real (webm/mp4/ogg) — mandar tudo como

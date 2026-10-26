@@ -33,6 +33,8 @@ OVERRIDE_KEYS = (
     # imagem (v2; storage_dir é interno — não sai no PUT)
     "image.enabled", "image.provider", "image.sdwebui_base_url",
     "image.sdwebui_steps", "image.sdwebui_width", "image.sdwebui_height",
+    "image.comfyui_base_url", "image.comfyui_steps", "image.comfyui_width",
+    "image.comfyui_height",
     "image.negative_prompt", "image.openai_base_url", "image.openai_api_key",
     "image.openai_model", "image.openai_size", "image.style_suffix",
     "image.storage_dir", "image.timeout_seconds", "image.seed", "image.variation",
@@ -116,6 +118,12 @@ def _api_key_or_env(conn: sqlite3.Connection, key: str, env_name: str) -> str | 
     return resolve_env_value(env_name) or None
 
 
+def _usable_secret(value: Any) -> str | None:
+    if isinstance(value, str) and value and value.isascii() and value.isprintable():
+        return value
+    return None
+
+
 def _apply_key(conn: sqlite3.Connection, key: str, value: str | None) -> bool:
     """Grava a chave ("" apaga). A chave vira header HTTP: a mascarada que o
     front reenvia ("sk-…1234") e qualquer valor fora de ASCII imprimível são
@@ -125,7 +133,7 @@ def _apply_key(conn: sqlite3.Connection, key: str, value: str | None) -> bool:
     if value == "":
         db.delete_setting(conn, key)
         return True
-    if not (value.isascii() and value.isprintable()):
+    if _usable_secret(value) is None:
         return False
     _set_override(conn, key, value)
     return True
@@ -249,6 +257,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
     cfg = load_file_settings()
     image = cfg.get("image", {})
     sdwebui = image.get("providers", {}).get("sdwebui", {})
+    comfyui = image.get("providers", {}).get("comfyui", {})
     openai = image.get("providers", {}).get("openai_compatible", {})
     prompt_builder = image.get("prompt_builder", {})
 
@@ -267,6 +276,10 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "sdwebui_steps": int(ov("image.sdwebui_steps", sdwebui.get("steps", 20))),
         "sdwebui_width": int(ov("image.sdwebui_width", sdwebui.get("width", 512))),
         "sdwebui_height": int(ov("image.sdwebui_height", sdwebui.get("height", 512))),
+        "comfyui_base_url": ov("image.comfyui_base_url", comfyui.get("base_url", "")),
+        "comfyui_steps": int(ov("image.comfyui_steps", comfyui.get("steps", 15))),
+        "comfyui_width": int(ov("image.comfyui_width", comfyui.get("width", 1024))),
+        "comfyui_height": int(ov("image.comfyui_height", comfyui.get("height", 1024))),
         "negative_prompt": ov("image.negative_prompt", sdwebui.get("negative_prompt", "")),
         "openai_base_url": ov("image.openai_base_url", openai.get("base_url", "")),
         "openai_api_key": api_key,
@@ -288,6 +301,16 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "img2img_path": sdwebui.get("img2img_path", "/sdapi/v1/img2img"),
         "sd_model_checkpoint": ov(
             "image.sd_model_checkpoint", sdwebui.get("sd_model_checkpoint", "")),
+        # ComfyUI: nomes de arquivo/sampler vêm só do settings.json (internos).
+        "comfyui_unet": comfyui.get("unet", ""),
+        "comfyui_clip": comfyui.get("clip", ""),
+        "comfyui_clip_type": comfyui.get("clip_type", "qwen_image_2_1"),
+        "comfyui_clip_device": comfyui.get("clip_device", "default"),
+        "comfyui_vae": comfyui.get("vae", ""),
+        "comfyui_sampler": comfyui.get("sampler", "euler"),
+        "comfyui_scheduler": comfyui.get("scheduler", "normal"),
+        "comfyui_shift": float(comfyui.get("shift", 1.31)),
+        "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 1.0)),
         "prompt_builder": dict(prompt_builder),
     }
 
@@ -303,6 +326,10 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
                        ("sdwebui_steps", "image.sdwebui_steps"),
                        ("sdwebui_width", "image.sdwebui_width"),
                        ("sdwebui_height", "image.sdwebui_height"),
+                       ("comfyui_base_url", "image.comfyui_base_url"),
+                       ("comfyui_steps", "image.comfyui_steps"),
+                       ("comfyui_width", "image.comfyui_width"),
+                       ("comfyui_height", "image.comfyui_height"),
                        ("negative_prompt", "image.negative_prompt"),
                        ("openai_base_url", "image.openai_base_url"),
                        ("openai_model", "image.openai_model"),

@@ -1,0 +1,24 @@
+# /etc/systemd/system/comfyui.service
+# ComfyUI para o provider `comfyui` do app (FineView Qwen Image 2.1 FP8).
+# Loopback 8188. Não reserva VRAM: carrega o UNET no primeiro /prompt.
+# O settings.json deixa o CLIP Qwen3-VL 8B INT8 na CPU para caber ao lado do
+# llama-server (~10,6 GB) e do OmniVoice (~1,4 GB).
+[Unit]
+Description=ComfyUI (API de imagem, FineView Qwen Image 2.1 FP8)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+WorkingDirectory=/home/caio/ComfyUI
+Environment=PATH=/home/caio/ComfyUI/venv/bin:/home/caio/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ExecStart=/home/caio/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=15
+MemoryHigh=12G
+MemoryMax=16G
+MemorySwapMax=2G
+
+[Install]
+WantedBy=multi-user.target

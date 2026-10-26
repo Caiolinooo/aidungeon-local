@@ -333,6 +333,55 @@ def reference_images(cards: list[dict]) -> list[bytes]:
             break
     return found
 
+def portrait_pixels(card: dict, anchor: bytes | None = None) -> list[bytes]:
+    """Até duas referências do NPC, seguidas da âncora canônica deduplicada."""
+    candidates = visual_reference_images(card)[:2]
+    if not candidates and is_real_person(card):
+        reference = reference_bytes(card)
+        candidates = [reference] if reference else []
+    if anchor:
+        candidates.append(anchor)
+    found: list[bytes] = []
+    seen: set[str] = set()
+    for blob in candidates:
+        digest = hashlib.sha256(blob).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            found.append(blob)
+    return found[:2]
+
+
+def _stored_anchor_bytes(conn, card: dict) -> bytes | None:
+    anchor_id = str(card.get("portrait_anchor_id") or "")
+    image = db.get_image(conn, anchor_id) if anchor_id else None
+    if not image:
+        return None
+    path = Path(str(image.get("file_path") or ""))
+    if not path.is_absolute():
+        path = db.REPO_ROOT / path
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def reference_pixels(cards: list[dict], conn) -> list[bytes]:
+    """Pixels por card/âncora para Qwen; cards sem retrato canônico não entram."""
+    found: list[bytes] = []
+    seen: set[str] = set()
+    for card in cards:
+        if not card.get("portrait_anchor_id") or is_minor(card):
+            continue
+        for blob in portrait_pixels(card, _stored_anchor_bytes(conn, card)):
+            digest = hashlib.sha256(blob).hexdigest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            found.append(blob)
+            if len(found) >= MAX_REFERENCES:
+                return found
+    return found
+
 
 def portrait_init(card: dict, anchor: bytes | None, *,
                   anchor_denoise: float,

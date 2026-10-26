@@ -78,7 +78,7 @@ PORTRAIT_VARIANT_DENOISE = 0.5
 _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, figure"
 # Cena vestida: o fundo recusa nudez. Sem isso a pintura trocava a roupa do
 # card e a fada saía nua no painel enquanto o See mostrava o vestido.
-_NUDITY_BAN = "nude, naked, undressed, topless, bottomless, nudity"
+_NUDITY_BAN = npc_assets.NUDITY_BAN
 # Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
 _CAST_NEGATIVE = (
     "extra person, crowd, duplicate face, wrong hair, different outfit, costume change, "
@@ -242,6 +242,23 @@ def cuda_oom_hold(conn, type_: str, ref_id: str, *, explicit: bool = False,
     return None
 
 
+def _portrait_request_state(conn, adventure_id: str, card: dict,
+                            *, force_reference: bool = False) -> str:
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    img_cfg = image_client.effective_settings(conn)
+    anchor_id = "" if force_reference else str(
+        card.get("portrait_anchor_id") or card.get("portrait_image_id") or "")
+    anchor_row = db.get_image(conn, anchor_id) if anchor_id else None
+    anchor_bytes = _portrait_bytes(anchor_row) if anchor_row else None
+    reference_bytes, _ = likeness.portrait_init(
+        card, anchor_bytes, anchor_denoise=PORTRAIT_VARIANT_DENOISE,
+        force_reference=force_reference)
+    return npc_assets.portrait_state_key(
+        card, img_cfg, image_style=adventure.get("image_style") or "",
+        reference_bytes=reference_bytes or b"",
+    )
+
+
 def enqueue_portrait(conn, adventure_id: str, card_id: str,
                      *, replace: bool = False,
                      priority: int = PRIORITY_PRESENT_PORTRAIT,
@@ -256,15 +273,18 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
     o botão, passado o prazo, ainda tenta. A cena, no teto, para.
     """
     card = db.get_card(conn, adventure_id, card_id)
+    if card and not variant_key:
+        variant_key = _portrait_request_state(
+            conn, adventure_id, card, force_reference=force_reference)
     if card and card.get("portrait_image_id") and not replace and not variant_key:
         return None
     active = db.find_active_job(conn, "character_portrait", card_id)
     if active:
         active_key = str((active.get("payload") or {}).get("state_key") or "")
-        if variant_key and active_key and active_key != variant_key \
+        if variant_key and active_key != variant_key \
                 and active.get("status") in ("preparing", "pending"):
             db.cancel_job(conn, active["id"])
-        else:
+        elif active_key == variant_key:
             return db.raise_job_priority(conn, active["id"], priority)
     held = cuda_oom_hold(conn, "character_portrait", card_id, explicit=replace)
     if held:
@@ -345,9 +365,9 @@ def references_for(adventure_id: str, card_ids: list) -> list[bytes]:
     with db.session() as conn:
         for card_id in card_ids:
             card = db.get_card(conn, adventure_id, str(card_id))
-            if card:
+            if card and card.get("portrait_anchor_id"):
                 cards.append(card)
-    return likeness.reference_images(cards)
+        return likeness.reference_pixels(cards, conn)
 
 
 def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dict:
@@ -521,15 +541,19 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             if not anchor:
                 raise GameError(503, "generation_failed",
                                 "canonical portrait image is missing")
+    if (not str(card.get("portrait_prompt") or "").strip()
+            and not anchor_id and not likeness.reference_images([card])):
+        card["portrait_prompt"] = _build_portrait_prompt(
+            adv, card, llm_cfg, transport)
     state_key = str(payload.get("state_key") or "")
-    if state_key:
-        prompt = npc_assets.portrait_variant_prompt(card)
-    else:
-        prompt = _build_portrait_prompt(adv, card, llm_cfg, transport)
+    prompt = (npc_assets.portrait_variant_prompt(card) if anchor_id
+              else str(card.get("portrait_prompt") or "").strip()
+              or npc_assets.portrait_variant_prompt(card))
     final = " ".join(p for p in (adv.get("image_style") or "",
                                  prompt,
                                  img_cfg["style_suffix"] or "") if p).strip()
-    prefix = likeness.real_person_prefix(card)
+    prefix = (likeness.real_person_prefix(card)
+              if img_cfg.get("provider") == "sdwebui" else "")
     if prefix:
         final = f"{prefix}, {final}" if final else prefix
     look = npc_assets.sheet_context(card.get("sheet") or "")
@@ -538,35 +562,52 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             final = f"{final}. Current look, follow the story: {look}"
         else:
             final = f"{final}. Mandatory appearance, do not contradict: {look}"
+    from app.scene import is_explicit as _scene_explicit
+    portrait_ban = ""
+    if not _scene_explicit(final):
+        kind = npc_assets.creature_kind(card)
+        if kind and "natural skin texture" in final:
+            final = final.replace(
+                "natural skin texture",
+                "scales, hide or fur, not human skin",
+            )
+        if kind:
+            final = f"{final}, {kind}, {npc_assets.CREATURE_LOCK}"
+        else:
+            final = f"{final}, {npc_assets.CLOTHED_LOCK}"
+        portrait_ban = _NUDITY_BAN
     init_width = init_height = None
     anchor_bytes = None
     if anchor:
         anchor_bytes = _portrait_bytes(anchor)
         init_width, init_height = anchor.get("width"), anchor.get("height")
         final = f"{final}, same person, keep the same face".strip()
-    references = likeness.reference_images([card])
+    references = likeness.portrait_pixels(
+        card, None if force_reference else anchor_bytes)
     init_bytes, denoise = likeness.portrait_init(
         card, None if force_reference else anchor_bytes,
-        anchor_denoise=PORTRAIT_VARIANT_DENOISE if state_key else PORTRAIT_DENOISE,
+        anchor_denoise=PORTRAIT_DENOISE if replace else PORTRAIT_VARIANT_DENOISE,
         force_reference=force_reference,
     )
+    identity_bytes = init_bytes
     if force_reference:
-        # Retrato fiel: img2img com denoise muito baixo preserva a foto.
-        # Para cenas novas, o app usa InstantID em vez de copiar a composição.
         init_bytes, denoise = None, None
     if init_bytes and not anchor:
         final = f"{final}, same person, keep the same face".strip()
-    if force_reference and references:
-        # Retrato fiel: parte da foto original com denoise muito baixo.
+    if img_cfg.get("provider") == "comfyui":
+        init_bytes = None
+        denoise = 1.0 if references else None
+    elif force_reference and references:
         init_bytes = references[0]
         denoise = 0.12
-    cache_key = state_key or image_client.request_key(
-        img_cfg, final, width=init_width, height=init_height,
-        init_image=init_bytes, denoising_strength=denoise,
-        reference_images=references,
-    )
+    if not state_key:
+        state_key = npc_assets.portrait_state_key(
+            card, img_cfg, image_style=adv.get("image_style") or "",
+            reference_bytes=identity_bytes or b"",
+        )
+    cache_key = state_key
     with db.session() as conn:
-        cached = db.find_cached_image(
+        cached = None if replace else db.find_cached_image(
             conn, adv["id"], kind="portrait", ref_id=card["id"],
             cache_key=cache_key,
         )
@@ -585,12 +626,6 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     image_id = db.new_id()
     stale = False
     stored_key = state_key
-    if not stored_key:
-        stored_key = npc_assets.portrait_state_key({
-            **card,
-            "portrait_image_id": image_id,
-            "portrait_anchor_id": anchor_id or image_id,
-        })
     meta = image_client.generate_image(
         img_cfg, final, adventure_id=adv["id"],
         image_id=image_id, transport=transport,
@@ -598,13 +633,26 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         init_image=init_bytes,
         denoising_strength=denoise,
         reference_images=references,
+        negative_extra=portrait_ban,
     )
+    if not anchor_id:
+        generated = _portrait_bytes({"file_path": meta["file_path"]})
+        anchored_card = {**card, "portrait_anchor_id": image_id,
+                         "portrait_image_id": image_id}
+        next_reference, _ = likeness.portrait_init(
+            anchored_card, generated, anchor_denoise=PORTRAIT_VARIANT_DENOISE)
+        stored_key = npc_assets.portrait_state_key(
+            anchored_card, img_cfg, image_style=adv.get("image_style") or "",
+            reference_bytes=next_reference or b"",
+        )
     try:
         with db.session() as conn:
             image = db.insert_image(
                 conn, adventure_id=adv["id"], action_seq=-1,
                 file_path=meta["file_path"], prompt=final,
-                negative_prompt=img_cfg["negative_prompt"],
+                negative_prompt=", ".join(
+                    part for part in (img_cfg["negative_prompt"], portrait_ban) if part
+                ),
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
                 image_id=image_id, kind="portrait", ref_id=card["id"],
                 cache_key=stored_key, job_id=job["id"],
@@ -907,6 +955,7 @@ def _execute_location_image(job: dict, transport: Any) -> dict:
 
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "character_portrait": _execute_portrait,
+    "card_assets": _execute_card_assets,
     "scene_backdrop": _execute_backdrop,
     "see_image": _execute_see,
     "npc_day_tick": _execute_day_tick,

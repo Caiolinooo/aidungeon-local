@@ -79,6 +79,73 @@ def _base(cfg: dict) -> str:
     return base
 
 
+class SpeechStream:
+    """Resposta WAV aberta; fecha response e client inclusive ao cancelar."""
+
+    def __init__(self, client: httpx.Client, response: httpx.Response):
+        self._client = client
+        self._response = response
+        self._iterator = response.iter_bytes()
+
+    def __enter__(self) -> SpeechStream:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def iter_bytes(self):
+        return self._iterator
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._client.close()
+
+
+def open_speech_stream(cfg: dict, text: str, voice: str, *,
+                       emotion: str | None = None,
+                       transport: httpx.BaseTransport | None = None) -> SpeechStream:
+    """Abre OmniVoice WAV sem buffering nem fallback para Drama-3."""
+    voice = voice or cfg["narrator_voice"]
+    instruction = direction_for(emotion) if emotion else None
+    payload = {
+        "model": cfg["tts_model"], "voice": voice, "input": text,
+        "response_format": "wav",
+    }
+    if instruction:
+        payload["instructions"] = instruction
+    timeout = float(cfg.get("timeout_seconds", 60))
+    client = _make_client(transport, timeout)
+    try:
+        response = client.send(client.build_request(
+            "POST", f"{_base(cfg)}/audio/speech", json=payload,
+            headers=_headers(cfg)), stream=True)
+        if response.status_code in (401, 403):
+            response.read()
+            raise VoiceAuthError(
+                f"auth_error: HTTP {response.status_code} em audio/speech")
+        if response.status_code != 200:
+            response.read()
+            raise VoiceError(
+                f"HTTP {response.status_code} em audio/speech: {response.text[:200]}")
+        return SpeechStream(client, response)
+    except httpx.TransportError as exc:
+        client.close()
+        raise VoiceUnreachable(
+            f"voice provider unreachable: {type(exc).__name__}") from exc
+    except Exception:
+        client.close()
+        raise
+
+
+def next_speech_chunk(stream: SpeechStream) -> bytes | None:
+    """Lê um chunk em thread; None representa EOF sem vazar StopIteration."""
+    try:
+        return next(stream.iter_bytes())
+    except StopIteration:
+        return None
+
 # ------------------------------------------------------------------ público
 def _post_speech(cfg: dict, payload: dict, *,
                  transport: httpx.BaseTransport | None) -> bytes:

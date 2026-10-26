@@ -8,6 +8,13 @@ Providers (settings.image.provider, config efetiva de settings_store):
   (openai_api_key, pode ser vazia), JSON {model, prompt, size, response_format:
   "b64_json"}; aceita `data[0].b64_json` ou `data[0].url` (neste caso baixa o
   arquivo da URL).
+- `comfyui`: POST {comfyui_base_url}/prompt com o workflow em formato API
+  (UNETLoader → CLIPLoader flux3 → CLIPTextEncode → EmptyFlux2LatentImage →
+  KSampler → VAEDecode → SaveImage), depois GET /history/{prompt_id} até a
+  execução terminar e GET /view para baixar o PNG. Com init_image o grafo é o
+  de edição do Klein: LoadImage → ImageScale → VAEEncode → ReferenceLatent
+  (condicionamento) → ModelSamplingFlux → KSampler(denoise 1) → VAEDecode,
+  então o rosto continua o mesmo.
 
 O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
@@ -25,6 +32,9 @@ import binascii
 import hashlib
 import json
 import logging
+import random
+import time
+import uuid
 from typing import Any
 
 import httpx
@@ -358,6 +368,210 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
     return content, width, height
 
 
+# ---------------------------------------------------------------- comfyui
+def _comfy_base(cfg: dict) -> str:
+    base = str(cfg.get("comfyui_base_url") or "").rstrip("/")
+    if not base:
+        raise ImageError("config_error: image.providers.comfyui.base_url vazio")
+    return base
+
+
+_COMFY_SIGMAS = (1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125, 0.0)
+
+
+def _comfy_qwen_graph(cfg: dict, prompt: str, width: int, height: int,
+                      *, reference_names: list[str] | None = None) -> dict:
+    """FineView/Qwen 2.1: referências condicionam o mesmo rosto nos dois lados."""
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {
+            "unet_name": cfg.get("comfyui_unet") or "",
+            "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": cfg.get("comfyui_clip") or "",
+            "type": cfg.get("comfyui_clip_type") or "qwen_image_2_1",
+            "device": cfg.get("comfyui_clip_device") or "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": cfg.get("comfyui_vae") or ""}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": prompt, "clip": ["2", 0]}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": cfg.get("negative_prompt") or "", "clip": ["2", 0]}},
+        "6": {"class_type": "EmptyImageLatent", "inputs": {
+            "width": width, "height": height, "batch_size": 1}},
+        "7": {"class_type": "ModelSamplingAuraFlow", "inputs": {
+            "model": ["1", 0], "shift": float(cfg.get("comfyui_shift") or 1.31)}},
+    }
+    positive = ["4", 0]
+    negative = ["5", 0]
+    latent = ["6", 0]
+    for index, image_name in enumerate(reference_names or []):
+        base = 20 + index * 10
+        graph[str(base)] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+        graph[str(base + 1)] = {"class_type": "ImageScale", "inputs": {
+            "image": [str(base), 0], "upscale_method": "lanczos",
+            "width": width, "height": height, "crop": "center"}}
+        graph[str(base + 2)] = {"class_type": "VAEEncode", "inputs": {
+            "pixels": [str(base + 1), 0], "vae": ["3", 0]}}
+        graph[str(base + 3)] = {"class_type": "ReferenceLatent", "inputs": {
+            "conditioning": positive, "latent": [str(base + 2), 0]}}
+        graph[str(base + 4)] = {"class_type": "ReferenceLatent", "inputs": {
+            "conditioning": negative, "latent": [str(base + 2), 0]}}
+        positive = [str(base + 3), 0]
+        negative = [str(base + 4), 0]
+        latent = [str(base + 2), 0]
+    graph.update({
+        "10": {"class_type": "ManualSigmas", "inputs": {
+            "sigmas": list(_COMFY_SIGMAS)}},
+        "11": {"class_type": "RandomNoise", "inputs": {
+            "noise_seed": random.randint(0, 2**31 - 1)}},
+        "12": {"class_type": "KSamplerSelect", "inputs": {
+            "sampler_name": cfg.get("comfyui_sampler") or "euler"}},
+        "13": {"class_type": "BasicGuider", "inputs": {
+            "model": ["7", 0], "conditioning": positive}},
+        "14": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["11", 0], "guider": ["13", 0], "sampler": ["12", 0],
+            "sigmas": ["10", 0], "latent_image": latent}},
+        "15": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["14", 0], "vae": ["3", 0]}},
+        "16": {"class_type": "SaveImage", "inputs": {
+            "images": ["15", 0], "filename_prefix": "aidungeon"}},
+    })
+    return graph
+
+
+def _comfy_upload(client: httpx.Client, base: str, content: bytes,
+                  filename: str) -> str:
+    """Sobe o PNG de referência para /upload/image; devolve o nome no input."""
+    try:
+        resp = client.post(
+            f"{base}/upload/image",
+            files={"image": (filename, content, "image/png")},
+            data={"overwrite": "true", "type": "input"},
+            headers={"Accept": "application/json"},
+        )
+    except httpx.TransportError as exc:
+        raise ImageUnreachable(
+            f"image provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em upload/image")
+    if resp.status_code != 200:
+        raise ImageError(
+            f"HTTP {resp.status_code} em upload/image (ComfyUI): {resp.text[:200]}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ImageError("resposta de upload/image não é JSON") from exc
+    if not isinstance(data, dict):
+        raise ImageError("resposta de upload/image inválida (não é objeto JSON)")
+    name = str(data.get("name") or filename)
+    subfolder = str(data.get("subfolder") or "").strip("/")
+    return f"{subfolder}/{name}" if subfolder else name
+
+
+def _comfy_status_message(status: dict) -> str:
+    for item in reversed(status.get("messages") or []):
+        if isinstance(item, list) and len(item) > 1 and isinstance(item[1], dict):
+            detail = item[1].get("exception_message") or item[1].get("message")
+            if detail:
+                return str(detail)[:200]
+    return "erro sem detalhe"
+
+
+def _comfy_fetch_image(client: httpx.Client, base: str, outputs: dict) -> bytes:
+    images: list[dict] = []
+    for output in outputs.values():
+        if not isinstance(output, dict):
+            continue
+        for item in output.get("images") or []:
+            if isinstance(item, dict) and item.get("filename"):
+                images.append(item)
+    if not images:
+        raise ImageError("histórico do ComfyUI sem imagens de saída")
+    chosen = next((item for item in images if item.get("type") == "output"),
+                  images[0])
+    params = {"filename": str(chosen["filename"]),
+              "type": str(chosen.get("type") or "output")}
+    if chosen.get("subfolder"):
+        params["subfolder"] = str(chosen["subfolder"])
+    try:
+        resp = client.get(f"{base}/view", params=params)
+    except httpx.TransportError as exc:
+        raise ImageUnreachable(
+            f"image provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em view")
+    if resp.status_code != 200:
+        raise ImageError(f"HTTP {resp.status_code} em view (ComfyUI): {resp.text[:200]}")
+    return resp.content
+
+
+def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
+    """Enfileira o grafo, espera a execução e devolve o PNG."""
+    base = _comfy_base(cfg)
+    submitted = _post_json(
+        client, f"{base}/prompt",
+        {"prompt": graph, "client_id": uuid.uuid4().hex},
+        {"Accept": "application/json"}, "prompt (ComfyUI)")
+    prompt_id = str(submitted.get("prompt_id") or "")
+    if not prompt_id:
+        raise ImageError("resposta de /prompt sem prompt_id")
+    if submitted.get("node_errors"):
+        raise ImageError(
+            f"workflow recusado pelo ComfyUI: {str(submitted['node_errors'])[:200]}")
+
+    timeout = float(cfg.get("timeout_seconds", 300))
+    interval = max(0.2, float(cfg.get("comfyui_poll_interval_s") or 1.0))
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            resp = client.get(f"{base}/history/{prompt_id}")
+        except httpx.TransportError as exc:
+            raise ImageUnreachable(
+                f"image provider unreachable: {type(exc).__name__}") from exc
+        if resp.status_code in (401, 403):
+            raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em history")
+        if resp.status_code != 200:
+            raise ImageError(
+                f"HTTP {resp.status_code} em history (ComfyUI): {resp.text[:200]}")
+        try:
+            history = resp.json()
+        except ValueError as exc:
+            raise ImageError("resposta de history não é JSON") from exc
+        entry = history.get(prompt_id) if isinstance(history, dict) else None
+        if entry:
+            status = entry.get("status") or {}
+            if status.get("status_str") == "error":
+                raise ImageError(
+                    f"execução falhou no ComfyUI: {_comfy_status_message(status)}")
+            outputs = entry.get("outputs") or {}
+            if outputs:
+                return _comfy_fetch_image(client, base, outputs)
+        if time.monotonic() >= deadline:
+            raise ImageError(f"timeout ({timeout:g}s) aguardando o ComfyUI")
+        time.sleep(interval)
+
+
+def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
+                      width: int | None = None, height: int | None = None,
+                      *, init_image: bytes | None = None,
+                      reference_images: list[bytes] | None = None,
+                      ) -> tuple[bytes, int, int]:
+    width = int(width or cfg.get("comfyui_width") or 1024)
+    height = int(height or cfg.get("comfyui_height") or 1024)
+    base = _comfy_base(cfg)
+    references = ([init_image] if init_image is not None else []) + list(reference_images or [])
+    names = [
+        _comfy_upload(
+            client, base, raw,
+            f"aidungeon-{index}-{hashlib.sha256(raw).hexdigest()[:16]}.png",
+        )
+        for index, raw in enumerate(references[:_MAX_REFERENCES])
+    ]
+    content = _comfy_run(cfg, client, _comfy_qwen_graph(
+        cfg, prompt, width, height, reference_names=names))
+    return content, width, height
+
+
 def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 height: int | None = None, init_image: bytes | None = None,
                 denoising_strength: float | None = None,
@@ -393,6 +607,22 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         }
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
+    elif provider == "comfyui":
+        model = cfg.get("comfyui_unet") or ""
+        size = [int(width or cfg.get("comfyui_width") or 0),
+                int(height or cfg.get("comfyui_height") or 0)]
+        extra = {
+            "steps": cfg.get("comfyui_steps"),
+            "sampler": cfg.get("comfyui_sampler") or "euler",
+            "scheduler": cfg.get("comfyui_scheduler") or "normal",
+            "clip": cfg.get("comfyui_clip") or "",
+            "clip_type": cfg.get("comfyui_clip_type") or "qwen_image_2_1",
+            "clip_device": cfg.get("comfyui_clip_device") or "default",
+            "vae": cfg.get("comfyui_vae") or "",
+            "shift": float(cfg.get("comfyui_shift") or 1.31),
+            "sigmas": list(_COMFY_SIGMAS),
+            "denoise": None if denoising_strength is None else round(float(denoising_strength), 4),
+        }
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -442,22 +672,26 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         )
     with _make_client(transport, timeout) as client:
         refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
-        if refs and provider != "sdwebui":
-            log.warning("referência rígida ignorada: provider %s não tem ControlNet", provider)
+        if refs and provider not in ("sdwebui", "comfyui"):
+            log.warning("referência rígida ignorada: provider %s não tem suporte", provider)
             refs = []
-        if init_image is not None:
-            if provider != "sdwebui":
+        denoise = float(denoising_strength if denoising_strength is not None else 0.35)
+        if provider == "comfyui":
+            if init_image is not None or refs:
+                denoise = 1.0
+            content, width, height = _generate_comfyui(
+                cfg, client, prompt, width, height,
+                init_image=init_image, reference_images=refs)
+        elif init_image is not None:
+            if provider == "sdwebui":
+                content, width, height = _generate_sdwebui_img2img(
+                    cfg, client, prompt, init_image, width, height, denoise, refs)
+            else:
                 raise ImageError(
                     "cannot keep the same face: this image provider has no img2img")
-            content, width, height = _generate_sdwebui_img2img(
-                cfg, client, prompt, init_image, width, height,
-                float(denoising_strength if denoising_strength is not None
-                      else cfg.get("denoising_strength", 0.35)),
-                references=refs,
-            )
         elif provider == "sdwebui":
             content, width, height = _generate_sdwebui(
-                cfg, client, prompt, width, height, references=refs)
+                cfg, client, prompt, width, height, refs)
         elif provider == "openai_compatible":
             content, width, height = _generate_openai(cfg, client, prompt)
         else:
@@ -490,6 +724,14 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 data = _get_json(client, f"{_sd_base(cfg)}/sdapi/v1/options",
                                  {"Accept": "application/json"}, "options")
                 result["checkpoint"] = str(data.get("sd_model_checkpoint") or "") or None
+            elif provider == "comfyui":
+                base = str(cfg.get("comfyui_base_url") or "").rstrip("/")
+                if not base:
+                    raise ImageError(
+                        "config_error: image.providers.comfyui.base_url vazio")
+                _get_json(client, f"{base}/system_stats",
+                          {"Accept": "application/json"}, "system_stats")
+                result["unet"] = cfg.get("comfyui_unet") or None
             elif provider == "openai_compatible":
                 base = str(cfg.get("openai_base_url") or "").rstrip("/")
                 if not base:
@@ -526,12 +768,15 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
 
 
 def interrupt_sdwebui(cfg: dict, transport: httpx.BaseTransport | None = None) -> None:
-    """Pede interrupção cooperativa ao WebUI; não gera nem exige corpo JSON."""
+    """Pede interrupção cooperativa ao provider; não gera nem exige corpo JSON."""
     timeout = min(float(cfg.get("timeout_seconds", 300)), 10.0)
+    if cfg.get("provider") == "comfyui":
+        url = f"{str(cfg.get('comfyui_base_url') or '').rstrip('/')}/interrupt"
+    else:
+        url = f"{_sd_base(cfg)}/sdapi/v1/interrupt"
     with _make_client(transport, timeout) as client:
         try:
-            resp = client.post(f"{_sd_base(cfg)}/sdapi/v1/interrupt", json={},
-                               headers={"Accept": "application/json"})
+            resp = client.post(url, json={}, headers={"Accept": "application/json"})
         except httpx.TransportError as exc:
             raise ImageUnreachable(
                 f"image provider unreachable: {type(exc).__name__}") from exc

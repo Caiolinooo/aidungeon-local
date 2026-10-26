@@ -58,7 +58,7 @@ OpenAI-compatível.
 
 - **HUD vivo**: o passe de crônica reescreve o painel a cada turno (`_hud`, `_actions`, `_seq`), publica `ui_changed` e a tela mostra um mini HUD com escala `--ui-scale`.
 - **Retrato no estado da história**: a variante do retrato segue a situação atual (denoise 0.5) em vez de travar o cânone.
-- **Voz OmniVoice**: o TTS do jogo é o OmniVoice Q8 na GPU (`tts_model=omnivoice`). Dá para gravar ou enviar um áudio, salvar a voz e usá-la no narrador ou num personagem.
+- **Voz OmniVoice**: TTS Q8 na GPU com WAV PCM progressivo em `/api/tts/stream`; `/api/tts` mantém MP3. Dá para gravar ou enviar um áudio, salvar a voz e usá-la no narrador ou num personagem.
 
 ## Funcionalidades (v0.10.0)
 
@@ -185,10 +185,11 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
 - **Celular**: a altura acompanha a área visível (o teclado não cobre o campo)
   e os botões da barra têm área de toque maior.
 - **Voz (TTS/STT)**: narração e falas de NPC em áudio via stack OpenAI-compatível
-  da VM — **Supertonic** (TTS, vozes M1–M3/F1–F3) e **Whisper** (STT, fale a ação
-  pelo microfone). `POST /api/tts` devolve bytes `audio/mpeg` em passthrough;
-  `POST /api/stt` recebe multipart e devolve `{"text": ...}`. Voz por NPC na ficha
-  (aba NPCs), voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
+  da VM — **OmniVoice** (TTS, vozes M1–M3/F1–F3 e clones) e **Whisper** (STT,
+  fale a ação pelo microfone). `POST /api/tts` devolve MP3 completo;
+  `POST /api/tts/stream` devolve WAV PCM16 mono 24 kHz progressivamente;
+  `POST /api/stt` recebe multipart e devolve `{"text": ...}`. Voz por NPC na
+  ficha (aba NPCs), voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
   (chave via `VOICE_API_KEY` no `.env`, sempre mascarada na API).
 - **Avatares 3D (TalkingHead)**: aba "Avatars" no painel lateral — avatar GLB
   (Ready Player Me / VRoid convertido, via `@met4citizen/talkinghead` sobre
@@ -212,9 +213,10 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   note, abertura em 2ª pessoa, tags e 3–8 story cards. Revise cada campo (com botão de
   regenerar individual) antes de criar a aventura.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
-  tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o checkpoint
-  é o **epiCRealism XL CrystalClear** (SDXL fotorealista, sem filtro): retrato e See em
-  1024×1024, faixa da cena em 1344×768. Provedores: **sdwebui** ou **openai_compatible**.
+  tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o modelo
+  é **FineView Qwen Image 2.1 Turbo Fixed FP8** no ComfyUI: retratos 800×720, oito
+  passos e identidade por âncoras canônicas. Provedores: **sdwebui**, **comfyui**
+  ou **openai_compatible**.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
@@ -245,8 +247,8 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
 │  (padrão: llama.cpp na VM; alternativas: KoboldCpp,    │
 │   Ollama, LM Studio — basta trocar llm.base_url)       │
 ├────────────────────────────────────────────────────────┤
-│  IMAGENS   sdwebui (A1111/Forge/SD.Next) ou endpoint   │
-│  OpenAI-compatible de imagens — local, LAN ou VM       │
+│  IMAGENS   sdwebui, comfyui (FineView Qwen 2.1) ou      │
+│  OpenAI-compatible de imagens — local, LAN ou VM        │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -267,10 +269,12 @@ streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime �
   opção local recomendada: um único `.exe`, otimizado para CPU (nosso hardware é
   i5-1145G7 + Iris Xe, sem CUDA) e feito para *storytelling*. Modelos de referência em
   `config/models.json` (Qwen2.5-7B Q4_K_M; fallback 3B "modo rápido").
-- **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN) ou
-  `openai_compatible` (qualquer `POST {base_url}/images/generations` — ex. um servidor
-  de difusão na VM). Endpoint, resolução, steps, negative prompt e estilo são
-  configuráveis pela UI.
+- **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN), `comfyui`
+  (grafo API em `/prompt`, com polling em `/history`; edição por `ReferenceLatent`
+  para manter o rosto) ou `openai_compatible` (qualquer `POST {base_url}/images/generations`
+  — ex. um servidor de difusão na VM). Endpoint, resolução, steps, negative prompt e
+  estilo são configuráveis pela UI; modelo/VAE/sampler do ComfyUI ficam em
+  `config/settings.json`.
 
 Nota Qwen3.x: modelos híbridos exigem `chat_template_kwargs.enable_thinking=false` em
 toda chamada (sem isso `content` volta vazio) — o `llm_client` já envia sempre que

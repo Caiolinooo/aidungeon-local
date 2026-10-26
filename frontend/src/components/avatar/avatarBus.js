@@ -2,18 +2,20 @@
 //
 // O ChatAvatarDock registra um speaker enquanto há um avatar montado; o
 // NarrateButton do FeedItem chama speakNarration() e, se nenhum speaker
-// estiver registrado (dock fechado, sem NPC na cena), cai no fallback de
-// Audio() simples.
+// estiver registrado (dock fechado, sem NPC na cena), cai no player PCM.
+// Com dock, o Response WAV é consumido só pelo avatar — o botão não toca
+// de novo.
 //
 // Contrato do speaker (objeto):
-//   speak: async ({ blob, text, onended, interrupt }) => undefined
-//     - blob: audio/mpeg retornado pelo POST /api/tts
-//     - text: texto narrado (usado p/ gerar visemes via lipsync module)
-//     - onended: callback opcional chamado quando a fala termina
-//       (TalkingHead: enfileirar speakMarker(onended) após o speakAudio)
-//     - interrupt: true (default) para a fala anterior; false enfileira
-//       (narração em vários pedaços)
-//   stop: () => undefined  (interrompe a fala em andamento)
+//   speak: async ({ response, signal, text, onended, onFirstSample, interrupt }) => undefined
+//     - response: Response audio/wav de POST /api/tts/stream (corpo ainda não lido)
+//     - signal: AbortSignal da narração; abort chama streamStop
+//     - text: texto narrado (visemes via lipsync por palavras)
+//     - onFirstSample: primeiro bloco PCM recebido (estado playing)
+//     - onended: callback opcional quando a reprodução termina
+//     - interrupt: true (default) corta a fala anterior; false segue
+//       depois que o pedaço anterior já acabou
+//   stop: () => undefined  (streamStop + fila de fala)
 
 let speaker = null
 
@@ -30,12 +32,18 @@ export function registerSpeaker(spk) {
   }
 }
 
-// Tenta falar pelo avatar. Retorna true se um speaker tratou (o chamador
-// NÃO deve tocar o áudio de novo), false se não há avatar disponível.
-export async function speakNarration({ blob, text, onended, interrupt = true }) {
-  if (!speaker) return false
-  await speaker.speak({ blob, text, onended, interrupt })
-  return true
+// Com avatar, devolve a Promise da reprodução. Sem avatar, null — o
+// chamador usa o player PCM e não há segundo áudio no dock.
+export function speakNarration({
+  response,
+  signal,
+  text,
+  onended,
+  onFirstSample,
+  interrupt = true,
+} = {}) {
+  if (!speaker) return null
+  return speaker.speak({ response, signal, text, onended, onFirstSample, interrupt })
 }
 
 // Para a fala em andamento no avatar. Retorna true se havia speaker

@@ -12,20 +12,16 @@ import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
 import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
+import { createPcmPlayer, readPcm16Wav } from '../pcmStream.js'
 import { emotionForLine, splitNarration } from '../ttsText.js'
 import { loosenProse } from '../prose.js'
 import { Edit2, Volume2, Square, Loader2, Eye, EyeOff } from 'lucide-react'
 
-// Cache em módulo da voz do narrador (v0.4.0): narrator_voice é estável
-// durante a sessão — evita um GET /api/voices a cada clique no 🔊.
-let narratorVoiceCache = null
-
+// Sem cache: a voz do narrador muda quando o clone é gravado, e a página
+// aberta não pode ficar presa em M1–F3.
 async function getNarratorVoice() {
-  if (narratorVoiceCache === null) {
-    const { narrator_voice } = await api.voice.list()
-    narratorVoiceCache = narrator_voice
-  }
-  return narratorVoiceCache
+  const { narrator_voice } = await api.voice.list()
+  return narrator_voice
 }
 
 function playerLabel(type, actor) {
@@ -118,48 +114,38 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
   )
 }
 
-// Botão 🔊 das entradas narrativas da IA. O texto vai em pedaços curtos
-// (splitNarration): o primeiro mp3 começa a tocar enquanto o próximo ainda
-// está sendo sintetizado, e textos acima de 2000 caracteres não batem no
-// teto da rota. Avatar no dock (avatarBus) fala com lip-sync, enfileirando
-// os pedaços; senão, cada mp3 toca via Audio() em sequência.
+function abortError() {
+  const err = new Error('Aborted')
+  err.name = 'AbortError'
+  return err
+}
+
+// Botão 🔊 das entradas narrativas da IA. O texto vai em pedaços de 4096
+// caracteres (teto da API): cada um é um WAV PCM e toca até o fim antes do
+// próximo — sem prefetch de MP3. Uma narração comum é uma carga só do
+// OmniVoice. Avatar no dock consome o Response; senão o player PCM toca.
+// `playing` começa no primeiro bloco, não no download completo.
 // Clique durante loading/play = stop.
 function NarrateButton({ text, actionId, adventureId = '' }) {
   const toast = useToast()
   const [state, setState] = useState('idle') // idle | loading | playing
-  const audioRef = useRef(null)
-  const urlRef = useRef(null)
-  const audioDoneRef = useRef(null)
+  const playerRef = useRef(null)
   // true enquanto a fala está a cargo do avatar (stop delegado ao bus).
   const viaAvatarRef = useRef(false)
   // Incrementar invalida o loop de pedaços em andamento (stop / unmount).
   const tokenRef = useRef(0)
-  // Um controlador por reprodução cancela o pedaço atual e o prefetch.
+  // Um AbortController por narração: para o fetch, o player e o avatar.
   const requestControllerRef = useRef(null)
-
-  const releaseAudio = () => {
-    audioDoneRef.current?.()
-    audioDoneRef.current = null
-    if (audioRef.current) {
-      audioRef.current.onended = null
-      audioRef.current.onerror = null
-      audioRef.current.pause()
-      audioRef.current = null
-    }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current)
-      urlRef.current = null
-    }
-  }
 
   const stop = () => {
     tokenRef.current += 1
     requestControllerRef.current?.abort()
+    playerRef.current?.stop()
+    playerRef.current = null
     if (viaAvatarRef.current) {
       viaAvatarRef.current = false
       stopNarration()
     }
-    releaseAudio()
     setState('idle')
   }
 
@@ -169,95 +155,105 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
     return () => {
       tokenRef.current += 1
       requestControllerRef.current?.abort()
+      playerRef.current?.stop()
       if (viaAvatarRef.current) stopNarration()
-      releaseAudio()
     }
   }, [])
 
-  const playBlob = (blob) =>
-    new Promise((resolve, reject) => {
-      releaseAudio()
-      const url = URL.createObjectURL(blob)
-      urlRef.current = url
-      const audio = new Audio(url)
-      audioRef.current = audio
-      audioDoneRef.current = () => {
-        audioDoneRef.current = null
-        resolve()
-      }
-      audio.onended = () => audioDoneRef.current?.()
-      audio.onerror = () => {
-        audioDoneRef.current = null
-        reject(new Error('Não foi possível reproduzir a narração.'))
-      }
-      audio.play().catch((err) => {
-        audioDoneRef.current = null
-        reject(err)
-      })
+  const playPcm = async (response, signal, onFirstSample) => {
+    let resolveEnded
+    const ended = new Promise((resolve) => {
+      resolveEnded = resolve
     })
+    const player = createPcmPlayer({ onEnded: resolveEnded })
+    playerRef.current = player
+    let noted = false
+    try {
+      await readPcm16Wav(response, {
+        onFormat: (fmt) => player.start(fmt.sampleRate),
+        onSamples: (pcm) => {
+          if (!noted) {
+            noted = true
+            onFirstSample?.()
+          }
+          player.write(pcm)
+        },
+      })
+      if (signal.aborted) throw abortError()
+      player.finish()
+      await ended
+      if (signal.aborted) throw abortError()
+    } finally {
+      player.stop()
+      if (playerRef.current === player) playerRef.current = null
+    }
+  }
 
   const play = async () => {
+    tokenRef.current += 1
     requestControllerRef.current?.abort()
+    playerRef.current?.stop()
+    if (viaAvatarRef.current) {
+      viaAvatarRef.current = false
+      stopNarration()
+    }
     const controller = new AbortController()
     requestControllerRef.current = controller
-    const token = ++tokenRef.current
+    const token = tokenRef.current
     const alive = () => tokenRef.current === token
     setState('loading')
     try {
       const voice = await getNarratorVoice()
       if (!alive()) return
-      const parts = splitNarration(text)
+      const parts = splitNarration(text, 4096)
       if (parts.length === 0) {
         setState('idle')
         return
       }
-      const speakPart = (part) => {
-        const request = api.voice.tts(part, voice, {
-          emotion: emotionForLine(part),
+      let useAvatar = null
+      for (let i = 0; i < parts.length; i++) {
+        if (!alive()) return
+        const response = await api.voice.ttsStream(parts[i], voice, {
+          emotion: emotionForLine(parts[i]),
           adventureId,
           signal: controller.signal,
         })
-        // O prefetch pode falhar enquanto o áudio anterior ainda toca; o await
-        // do loop continua recebendo o erro, sem rejeição não tratada.
-        request.catch(() => {})
-        return request
-      }
-      let upcoming = speakPart(parts[0])
-      let useAvatar = null
-      for (let i = 0; i < parts.length; i++) {
-        const blob = await upcoming
-        if (!alive()) return
-        if (i + 1 < parts.length) upcoming = speakPart(parts[i + 1])
+        if (!alive()) {
+          try { await response.body?.cancel() } catch { /* corpo já fechado */ }
+          return
+        }
         const last = i === parts.length - 1
         const finish = last
           ? () => {
               if (alive()) stop()
             }
           : undefined
+        const onFirstSample = () => {
+          if (alive()) setState('playing')
+        }
         if (useAvatar !== false) {
-          const took = await speakNarration({
-            blob,
+          const playback = speakNarration({
+            response,
+            signal: controller.signal,
             text: parts[i],
             interrupt: i === 0,
             onended: finish,
+            onFirstSample,
           })
-          if (!alive()) return
-          if (took) {
+          if (playback) {
             useAvatar = true
             viaAvatarRef.current = true
-            setState('playing')
+            await playback
+            if (!alive()) return
             continue
           }
           useAvatar = false
+          viaAvatarRef.current = false
         }
-        setState('playing')
-        await playBlob(blob)
+        await playPcm(response, controller.signal, onFirstSample)
         if (!alive()) return
       }
-      if (useAvatar === false && alive()) {
-        releaseAudio()
-        setState('idle')
-      }
+      if (alive()) setState('idle')
     } catch (e) {
       if (!alive()) return
       stop()

@@ -39,6 +39,8 @@ One English sentence, present tense, under 40 words. Its main verb is the player
 Keep the place. Do not paint an earlier scene and do not invent a new one.
 Name only the people listed. Include the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
+Do not add nudity, sex, or bare skin. If the moment does not undress anyone, they stay covered.
+A salamander, frog, insect, or other creature stays that creature, not a human.
 Do not turn the moment into a portrait or a close-up of one face.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add a person who is not listed.
@@ -83,7 +85,10 @@ _APPEARANCE_TOKENS = {
     "pele", "barba", "cicatriz", "preto", "pretos", "preta", "loiro", "loira",
     "ruivo", "ruiva", "liso", "lisos", "cacheado", "cacheados",
 }
-_BODY_NOUNS = {"skin", "hair", "haired", "eye", "eyes", "beard", "scar"}
+_BODY_NOUNS = {
+    "skin", "hair", "haired", "eye", "eyes", "beard", "scar",
+    "olho", "olhos", "cabelo", "cabelos", "pele", "barba", "cicatriz",
+}
 _GLUE = {"and", "the", "with", "her", "his", "its", "from", "into", "over"}
 
 
@@ -149,6 +154,21 @@ def _phrase_agrees(phrase: str, canon_l: str) -> bool:
     )
 
 
+def _conflicts_with_canon(phrase: str, canon_l: str) -> bool:
+    """Só cor e roupa que o card não confirma viram negative.
+
+    "olhos compostos" não está no card em inglês, mas não é contradição:
+    jogar isso no negative manda o modelo evitar o olhar certo.
+    """
+    tokens = [
+        token for token in re.findall(r"[^\W\d_]{3,}", phrase.casefold())
+        if token not in _GLUE and token in _APPEARANCE_TOKENS and token not in _BODY_NOUNS
+    ]
+    if not tokens:
+        return False
+    return any(not _token_in_canon(token, canon_l) for token in tokens)
+
+
 def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
     """Tira o visual que o card não confirma. Devolve (texto limpo, negative).
 
@@ -172,7 +192,8 @@ def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
         phrase = " ".join(match.group(0).split())
         if _phrase_agrees(phrase, canon_l):
             return match.group(0)
-        banned.append(phrase)
+        if _conflicts_with_canon(phrase, canon_l):
+            banned.append(phrase)
         return " "
 
     cleaned = pattern.sub(scrub, text)
@@ -240,6 +261,10 @@ def _image_settings_response(conn) -> dict:
         "sdwebui_steps": cfg["sdwebui_steps"],
         "sdwebui_width": cfg["sdwebui_width"],
         "sdwebui_height": cfg["sdwebui_height"],
+        "comfyui_base_url": cfg["comfyui_base_url"],
+        "comfyui_steps": cfg["comfyui_steps"],
+        "comfyui_width": cfg["comfyui_width"],
+        "comfyui_height": cfg["comfyui_height"],
         "negative_prompt": cfg["negative_prompt"],
         "openai_base_url": cfg["openai_base_url"],
         "openai_api_key": settings_store.mask_api_key(cfg["openai_api_key"]),
@@ -321,6 +346,27 @@ def _protagonist_name(plot: str) -> str:
     return " ".join(match.group(1).split()) if match else ""
 
 
+def _same_person(left: str, right: str) -> bool:
+    """'Sandra' e 'Sandra, A Salamandra' são a mesma pessoa."""
+    a = " ".join((left or "").split()).casefold()
+    b = " ".join((right or "").split()).casefold()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    a_head = a.split(",")[0].strip()
+    b_head = b.split(",")[0].strip()
+    return (a_head == b and "," in a) or (b_head == a and "," in b)
+
+
+def _card_named(cards: list[dict], name: str) -> dict | None:
+    for card in cards:
+        title = card.get("title") or ""
+        if title and _same_person(name, title):
+            return card
+    return None
+
+
 def _player_card(cards: list[dict], name: str) -> dict | None:
     """Card do protagonista. O texto diz 'you'; o título muitas vezes não aparece."""
     named = name.casefold()
@@ -330,6 +376,8 @@ def _player_card(cards: list[dict], name: str) -> dict | None:
                 continue
             labels = [card.get("title") or "", *(card.get("triggers") or [])]
             if any(label.strip().casefold() == named for label in labels if label and label.strip()):
+                return card
+            if _same_person(name, card.get("title") or ""):
                 return card
     for card in cards:
         if (card.get("type") or "") == "character" and card.get("use_for_character_creation"):
@@ -422,7 +470,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         names = [card.get("title") for card in scene._cast(cards, raw_moment) if card.get("title")]
     player_name = _protagonist_name(adv.get("plot_essentials") or "") or "the player character"
     you = re.search(r"(?<!\w)you(?!\w)", raw_moment or "", re.IGNORECASE)
-    if you and not any(name.casefold() == player_name.casefold() for name in names):
+    if you and not any(_same_person(player_name, name) for name in names):
         names.insert(0, player_name)
     story_blob = "\n".join(
         (action.get("text") or "") for action in visible if (action.get("text") or "").strip()
@@ -432,25 +480,48 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         title = (card.get("title") or "").strip()
         if title and npc_assets._mentioned(raw_moment, title) and title not in by_name:
             if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
-                by_name[title] = card
-                names.append(title)
-                frame.append(card)
+                if any(_same_person(title, name) for name in names):
+                    by_name.setdefault(title, card)
+                else:
+                    by_name[title] = card
+                    names.append(title)
+                    frame.append(card)
+    collapsed: list[str] = []
+    for name in names:
+        twin = next((other for other in collapsed if _same_person(name, other)), "")
+        if twin:
+            if len(name) > len(twin):
+                collapsed[collapsed.index(twin)] = name
+            continue
+        collapsed.append(name)
+    names = collapsed
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
+    # Criatura não vira "adult woman": isso pinta um humano nu.
     sex_bits = []
     seen_sex: set[str] = set()
+    resolved: dict[str, dict | None] = {}
     for name in names:
         key = name.casefold()
         if key in seen_sex:
             continue
         seen_sex.add(key)
-        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
-        phrase = npc_assets.sex_phrase(name, label, explicit=explicit)
+        card = by_name.get(name) or _card_named(cards, name)
+        resolved[name] = card
+        kind = npc_assets.creature_kind(card, name)
+        label = "" if kind else npc_assets.sex_label(
+            name, story_blob, moment, card=card)
+        phrase = npc_assets.sex_phrase(name, label, explicit=explicit, card=card)
         if phrase:
             sex_bits.append(phrase)
     sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     who_bits = []
     for name in names:
-        label = npc_assets.sex_label(name, story_blob, moment, card=by_name.get(name))
+        card = resolved.get(name) or by_name.get(name) or _card_named(cards, name)
+        kind = npc_assets.creature_kind(card, name)
+        if kind:
+            who_bits.append(f"{name} ({kind})")
+            continue
+        label = npc_assets.sex_label(name, story_blob, moment, card=card)
         who_bits.append(f"{name} ({label})" if label else name)
     canon = ""
     if clause and explicit:
@@ -525,11 +596,18 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # frente pintava um casal genérico.
     if sex_bits:
         lead_bits.append(". ".join(sex_bits))
+    creature = any(
+        npc_assets.creature_kind(resolved.get(name) or _card_named(cards, name), name)
+        for name in names
+    )
     refusal = world_facts.REFUSAL_IMAGE in assessment.image_directive
     if refusal:
         lead_bits.append(sentence)
     if clause:
         lead_bits.append(clip_words(clause, 420))
+    if not explicit:
+        # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
+        lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
     if sentence and not refusal:
         lead_bits.append(sentence)
     if order:
@@ -553,22 +631,33 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             "distinct different people, not the same person, no duplicate faces: " + assignments
         )
     if _is_interaction(moment, names):
-        lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
+        if explicit:
+            lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
+        else:
+            lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
     from app import consequences
     visual_effects = consequences.visual_context(adv)
     if visual_effects:
         lead_bits.append(visual_effects)
     lead = ", ".join(lead_bits)
+    suffix = img_cfg["style_suffix"] or ""
+    if creature and not explicit and "natural skin texture" in suffix:
+        suffix = suffix.replace(
+            "natural skin texture",
+            "scales, hide or fur, not human skin",
+        )
     tail = ", ".join(part for part in (
         (entry or "")[:160] if location and location != "the current scene" else "",
         adv.get("image_style") or "",
-        img_cfg["style_suffix"],
+        suffix,
     ) if part)
     if lead and tail:
         prompt = f"{lead} BREAK {tail}"
     else:
         prompt = lead or tail
     negative = _dedupe_negative(neg_summary, neg_moment, assessment.image_negative)
+    if not explicit:
+        negative = _dedupe_negative(negative, npc_assets.NUDITY_BAN)
     if clause:
         negative = _dedupe_negative(negative, npc_assets.IDENTITY_NEGATIVE)
     if _is_interaction(moment, names):
@@ -616,13 +705,17 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
-    references = likeness.reference_images(frame)
+    reference_cards = [
+        card for card in frame if card.get("id") and card.get("portrait_anchor_id")
+    ]
+    with db.session() as conn:
+        references = likeness.reference_pixels(reference_cards, conn)
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
         "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
         "caption": caption,
-        "reference_card_ids": [str(card["id"]) for card in frame if card.get("id")],
+        "reference_card_ids": [str(card["id"]) for card in reference_cards],
         "cache_key": image_client.request_key(
             img_cfg, prompt, negative_extra=negative_extra, variation=variation,
             reference_images=references),

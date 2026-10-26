@@ -52,6 +52,14 @@ def test_api_key_is_masked_and_never_plain(client):
     assert "sk-secret-1234" not in json.dumps(again)
 
 
+def test_stored_masked_voice_key_falls_through_to_env(monkeypatch):
+    monkeypatch.setenv("VOICE_API_KEY", "sk-real-voice-key-9999")
+    with db.session() as conn:
+        db.set_setting(conn, "voice.api_key", json.dumps("sk-…9999"))
+        cfg = settings_store.effective_voice_settings(conn)
+    assert cfg["api_key"] == "sk-real-voice-key-9999"
+
+
 def test_api_key_empty_string_removes_it(client):
     client.put("/api/settings/llm", json={"api_key": "sk-secret-1234"})
     resp = client.put("/api/settings/llm", json={"api_key": ""})
@@ -296,3 +304,28 @@ def test_scripting_settings_endpoint(client):
     assert "def modify(action)" in put_resp.json()["input_modifier"]
     assert "def modify(text)" in put_resp.json()["output_modifier"]
 
+
+
+def test_image_comfyui_settings_roundtrip(client):
+    resp = client.put("/api/settings/image", json={
+        "provider": "comfyui",
+        "comfyui_base_url": "http://127.0.0.1:8188",
+        "comfyui_steps": 12,
+        "comfyui_width": 800,
+        "comfyui_height": 720,
+    })
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["provider"] == "comfyui"
+    assert data["comfyui_steps"] == 12
+    assert (data["comfyui_width"], data["comfyui_height"]) == (800, 720)
+
+    with db.session() as conn:
+        cfg = settings_store.effective_image_settings(conn)
+    # Modelo/VAE/CLIP vêm só do settings.json (internos, não passam pela API).
+    assert cfg["comfyui_unet"] == "fineviewQWEN_qw21TurboFixed_3299367.safetensors"
+    assert cfg["comfyui_clip"] == "qwen3vl_8b_int8_convrot.safetensors"
+    assert cfg["comfyui_clip_type"] == "qwen_image_2_1"
+    assert cfg["comfyui_vae"] == "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors"
+    assert cfg["comfyui_sampler"] == "euler"
+    assert cfg["comfyui_shift"] == 1.31
