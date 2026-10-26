@@ -122,11 +122,13 @@ def _passage(conn, adventure_id: str) -> str:
     return text[-2000:]
 
 
-def mind_prompt(cards: list[dict], memories: list[dict], *, reason: str) -> list[dict]:
+def mind_prompt(cards: list[dict], memories: list[dict], *, reason: str,
+                adventure: dict | None = None) -> list[dict]:
     by_card: dict[str, list[dict]] = {}
     for row in memories:
         by_card.setdefault(row.get("card_id") or "", []).append(row)
     blocks: list[str] = []
+    from app import consequences
     for card in cards:
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
         bonds = npc_bonds.read_bonds(sheet)
@@ -140,6 +142,13 @@ def mind_prompt(cards: list[dict], memories: list[dict], *, reason: str) -> list
         condition_text = body_state.condition_context(state, limit=8)
         if condition_text:
             lines.append("Conditions:\n" + condition_text)
+        if adventure:
+            effects = consequences.effect_context(adventure, target=card.get("title") or "")
+            if effects:
+                lines.append(effects)
+            private = consequences.private_facts_for(adventure, card.get("title") or "")
+            if private:
+                lines.append("Private knowledge: " + " | ".join(private[-4:]))
         if own:
             lines.append("Recent memories:")
             for row in own[:3]:
@@ -234,7 +243,7 @@ def run_mind(adventure_id: str, transport: Any = None) -> dict:
             llm_cfg = settings_store.effective_llm_settings(conn)
             day = int(adventure.get("life_day") or 0)
             passage = _passage(conn, adventure_id)
-        messages = mind_prompt(cards, memories, reason="turn")
+        messages = mind_prompt(cards, memories, reason="turn", adventure=adventure)
         if passage:
             messages[1]["content"] += f"\n\nPassage:\n{passage}"
         content = llm_client.chat_completion(

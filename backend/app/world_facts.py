@@ -93,7 +93,8 @@ _POWER_RE = re.compile(
 _YIELD_RE = re.compile(
     r"(?i)(?:"
     r"obeys you|loyal to you|serves you|your willing servant|"
-    r"te obedece|obedece a voc[eê]|leal a voc[eê]|a (?:seu|teu) servi[cç]o|"
+    r"te obedece|obedece a voc[eê]|obediente|leal a voc[eê]|a (?:seu|teu) servi[cç]o|"
+    r"lacaio|servo|serva|subordinad[oa]|instru[cç][aã]o mental|"
     r"enfeiti[cç]ad[oa]|charmed|magically compelled|"
     r"aceita ir|concorda em (?:ir|acompanhar)|disse que sim|diz que sim|"
     r"consente|consents|willingly follows|quer acompanhar|"
@@ -303,6 +304,19 @@ def _yields(name: str, card: dict | None, blob: str) -> bool:
         sentences = re.split(r"(?<=[.!?])\s+", blob)
         chunks.extend(sentence for sentence in sentences if _last_index(sentence, name) >= 0)
     return _YIELD_RE.search(" ".join(chunks)) is not None
+
+def obedience_of(card: dict) -> str:
+    """Vínculo de obediência declarado na ficha: compelled, ally ou free."""
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    text = " ".join(str(part) for part in (
+        card.get("entry") or "", sheet.get("personality") or "",
+        sheet.get("notes") or "", sheet.get("goals") or "",
+    ) if part)
+    if _YIELD_RE.search(text):
+        return "obedient_compelled"
+    if sheet.get("alignment") == "aliado":
+        return "ally"
+    return "free_willed"
 
 
 def _present_names(cards: list[dict], recent: str) -> list[str]:

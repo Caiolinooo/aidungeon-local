@@ -43,6 +43,13 @@ RULES:
 - NPCs are not puppets. Each one can refuse, negotiate, partially comply, lie,
   attack, help, flee, or act on their own motive. Consent, fear, loyalty, shame,
   anger, duty and self-preservation all matter.
+- `profile.obedience = obedient_compelled` means the person is already a loyal
+  servant, minion, thrall or mentally compelled subordinate. They obey unless
+  the story explicitly breaks that control. Fear changes trembling, hesitation
+  or desperation, not sudden rebellion. Do not invent a new defiance.
+- Persistent consequences in `adventure.consequences` are canon: altered reality,
+  perception, memory, injuries and social knowledge must shape every decision.
+  A person only knows what they witnessed or learned; do not give them omniscience.
 - The player controls only their own attempt, never NPC reactions.
 - Physical consequences must be plausible. Small visible wounds can appear on the
   face/hands/neck for a bust portrait; hidden wounds stay covered by clothing.
@@ -67,6 +74,11 @@ Reply STRICT JSON only:
   "initiative": {"npc": "exact name", "card_id": "exact id", "line": "optional self-initiated action"} or null,
   "cue": "short instruction to the narrator about tone, consequences and what must not be contradicted"
 }"""
+
+
+def _obedience_context(card: dict) -> str:
+    from app import world_facts
+    return world_facts.obedience_of(card)
 
 
 def plain(text: str) -> str:
@@ -206,6 +218,7 @@ def _card_context(card: dict, *, present: bool) -> dict:
             "notes": sheet.get("notes") or "",
             "entry": card.get("entry") or "",
             "alignment": sheet.get("alignment") or "neutro",
+            "obedience": _obedience_context(card),
         },
         "body": {
             "pain": state.get("pain"),
@@ -318,6 +331,8 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
         "adventure": {
             "title": adventure.get("title") or "",
             "premise": adventure.get("premise") or "",
+            "plot_essentials": adventure.get("plot_essentials") or "",
+            "consequences": __import__("app.consequences", fromlist=["effect_context"]).effect_context(adventure),
         },
         "player": player,
         "people": roster,

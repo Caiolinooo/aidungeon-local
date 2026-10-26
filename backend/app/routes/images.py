@@ -543,6 +543,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append("people present: " + ", ".join(who_bits))
     if _is_interaction(moment, names):
         lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
+    from app import consequences
+    visual_effects = consequences.visual_context(adv)
+    if visual_effects:
+        lead_bits.append(visual_effects)
     lead = ", ".join(lead_bits)
     tail = ", ".join(part for part in (
         (entry or "")[:160] if location and location != "the current scene" else "",

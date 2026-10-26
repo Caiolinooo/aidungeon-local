@@ -387,6 +387,10 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
     # Hash do prompt FINAL + config: lugar, clima, elenco, roupa, feridas,
     # estilo e explicit mudam a assinatura; nada disso fica de fora.
     references = likeness.reference_images(paint_cast) if include_people else []
+    from app import consequences
+    visual_effects = consequences.visual_context(adventure)
+    if visual_effects:
+        prompt = f"{prompt}, {visual_effects}"[:1400]
     cache_key = jobs.backdrop_cache_key(
         img_cfg, prompt, include_people=include_people, explicit=explicit,
         reference_images=references)
@@ -413,7 +417,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
             "title": card.get("title") or "",
             "portrait": card.get("portrait"),
             "mood": _mood_near(text, card.get("title") or ""),
-            "stance": npc_bonds.stance_of(npc_bonds.read_bonds(sheet)),
+            "stance": npc_bonds.stance_of(
+                npc_bonds.read_bonds(sheet),
+                obedience=world_facts.obedience_of(card),
+            ),
+            "private_facts": consequences.private_facts_for(
+                adventure, card.get("title") or "",
+            ),
         })
 
     return {

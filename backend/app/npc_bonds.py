@@ -152,13 +152,17 @@ def apply_deltas(bonds: dict[str, int], text: str) -> dict[str, int]:
     return current
 
 
-def stance_of(bonds: dict[str, int]) -> str:
-    """Postura diante do jogador, só pelos números."""
+def stance_of(bonds: dict[str, int], *, obedience: str = "") -> str:
+    """Postura diante do jogador: números + vínculo hierárquico declarado."""
     trust = bonds["trust"]
     fear = bonds["fear"]
     desire = bonds["desire"]
     boldness = bonds["boldness"]
     relationship = bonds["relationship"]
+    if obedience == "obedient_compelled":
+        # Controle mental ou lealdade absoluta: medo muda a forma de obedecer,
+        # não transforma o lacaio em rebelde sem uma ruptura explícita.
+        return "help"
     if fear >= 70 and boldness < 55:
         return "flee"
     if fear >= 60 and trust <= 25:
@@ -330,7 +334,7 @@ def _moment_line(card: dict, text: str) -> str:
         want, stance = "stay out of the scene", "flee"
     else:
         emotion = emotion_for_card(card, text, bonds)
-        stance = stance_of(bonds)
+        stance = stance_of(bonds, obedience=_obedience_of(card))
         want = _WANTS[stance]
     numbers = " ".join(f"{key} {bonds[key]}" for key in BOND_KEYS)
     alignment = str(sheet.get("alignment") or "").strip()
@@ -346,6 +350,10 @@ def format_moment(cards: list[dict], scene_text: str) -> str:
     lines = [f"{MOMENT_MARKER} {_MOMENT_CUE}"]
     lines.extend(_moment_line(card, scene_text) for card in present)
     return "\n".join(lines)
+
+def _obedience_of(card: dict) -> str:
+    from app import world_facts
+    return world_facts.obedience_of(card)
 
 
 def moment_for(conn, adventure_id: str, scene_text: str) -> str:

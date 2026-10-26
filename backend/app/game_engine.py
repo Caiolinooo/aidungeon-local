@@ -54,6 +54,7 @@ from app import (
     scripting,
     settings_store,
     web_search as web_search_mod,
+    world_facts,
 )
 from app.errors import GameError
 
@@ -206,6 +207,30 @@ def _prime_memory_query(adventure_id: str) -> None:
             query_chars=int(mem_cfg.get("query_chars", mod.DEFAULT_QUERY_CHARS)))
     except Exception:
         pass
+def _evaluate_consequences(adventure_id: str, transport: Any = None) -> None:
+    """Registra magia, percepção e fatos sociais do último trecho canônico."""
+    try:
+        from app import consequences
+        with db.session() as conn:
+            adventure = db.get_adventure(conn, adventure_id)
+            if not adventure:
+                return
+            actions = db.list_actions(conn, adventure_id)
+            cards = db.list_cards(conn, adventure_id)
+            llm_cfg = settings_store.effective_llm_settings(conn)
+        passage = "\n".join(
+            (action.get("text") or "") for action in actions[-3:]
+            if action.get("type") in world_facts.CANON_TYPES
+        )
+        if not passage.strip():
+            return
+        evaluation = consequences.evaluate_passage(
+            llm_cfg, passage, cards, adventure, transport=transport,
+        )
+        with db.session() as conn:
+            consequences.apply_evaluation(conn, adventure_id, evaluation)
+    except Exception:
+        log.warning("consequences: avaliação falhou", exc_info=True)
 
 
 def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
@@ -225,6 +250,7 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
         with _post_turn_lock_for(adventure_id):
             try:
                 npc_chronicle.update_from_turn(adventure_id, transport)
+                _evaluate_consequences(adventure_id, transport)
                 from app import jobs, npc_life
                 npc_life.run_mind(adventure_id, transport)
                 life = settings_store.load_file_settings().get("life") or {}
