@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-
+from pydantic import BaseModel
 from app import db, likeness, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -57,6 +57,18 @@ def put_reference(adventure_id: str, card_id: str,
         updated = likeness.apply_visual_card(
             conn, updated, content, llm_cfg=llm_cfg, transport=transport,
         )
+        return db.attach_portrait(conn, updated)
+
+class PrimaryReferenceRequest(BaseModel):
+    image_path: str
+
+
+@router.post("/adventures/{adventure_id}/cards/{card_id}/reference/primary")
+def set_primary_reference(adventure_id: str, card_id: str, body: PrimaryReferenceRequest) -> dict:
+    card = _card_or_404(adventure_id, card_id)
+    with db.session() as conn:
+        current = db.get_card(conn, adventure_id, card_id) or card
+        updated = likeness.set_primary_reference(conn, current, body.image_path)
         return db.attach_portrait(conn, updated)
 
 
