@@ -51,6 +51,21 @@ def post_travel(adventure_id: str, card_id: str) -> dict:
             raise GameError(409, "travel_not_allowed", str(exc)) from exc
         return result
 
+class WorldTypeRequest(BaseModel):
+    world_type: str
+
+
+@router.post("/adventures/{adventure_id}/map/world-type")
+def post_world_type(adventure_id: str, body: WorldTypeRequest) -> dict:
+    with db.session() as conn:
+        if not db.get_adventure(conn, adventure_id):
+            raise GameError.not_found("adventure not found")
+        try:
+            world_map.set_world_type(conn, adventure_id, body.world_type)
+        except ValueError as exc:
+            raise GameError(422, "invalid_world_type", str(exc)) from exc
+        return {"world_type": body.world_type}
+
 
 @router.post("/adventures/{adventure_id}/map/locations")
 def post_generate_location(adventure_id: str, body: LocationGenerateRequest,

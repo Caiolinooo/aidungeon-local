@@ -50,6 +50,11 @@ RULES:
 - Persistent consequences in `adventure.consequences` are canon: altered reality,
   perception, memory, injuries and social knowledge must shape every decision.
   A person only knows what they witnessed or learned; do not give them omniscience.
+- Levels and unlocked skills change what is possible. Do not let a character use
+  an ability they have not unlocked, and let higher-level characters perform
+  stronger actions when the established rules allow it.
+- Relationships between NPCs matter: allies may help each other, rivals may
+  undermine each other, and fear can change who acts first.
 - The player controls only their own attempt, never NPC reactions.
 - Physical consequences must be plausible. Small visible wounds can appear on the
   face/hands/neck for a bust portrait; hidden wounds stay covered by clothing.
@@ -228,6 +233,7 @@ def _card_context(card: dict, *, present: bool) -> dict:
             "visual_scene": body_state.visual_prompt(state, portrait=False),
         },
         "bonds": bonds,
+        "progression": __import__("app.progression", fromlist=["progression_of"]).progression_of(sheet),
         "relationships": sheet.get("relations") if isinstance(sheet.get("relations"), dict) else {},
         "power": scale,
         "memories": [],
@@ -253,6 +259,7 @@ def _player_context(card: dict | None, username: str) -> dict:
             "expression": sheet.get("expression") or "",
             "conditions": body_state.condition_context(state, limit=10),
         },
+        "progression": __import__("app.progression", fromlist=["progression_of"]).progression_of(sheet),
         "power": scales_of(sheet, _blob(card)),
     }
 
@@ -336,6 +343,7 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
         },
         "player": player,
         "people": roster,
+        "relationships_between_npcs": __import__("app.progression", fromlist=["relationship_context"]).relationship_context(living),
         "language": "pt-BR",
     }
     return payload, roster

@@ -47,6 +47,74 @@ def set_current_location(conn, adventure_id: str, card_id: str) -> dict:
     )
     return card
 
+WORLD_TYPES = ("real", "fictional", "franchise", "alternate_history")
+
+
+def world_type_of(adventure: dict) -> str:
+    state = adventure.get("ui_state") or {}
+    if isinstance(state, dict):
+        return str(state.get("world_type") or "real")
+    return "real"
+
+
+def set_world_type(conn, adventure_id: str, world_type: str) -> None:
+    if world_type not in WORLD_TYPES:
+        raise ValueError("invalid_world_type")
+    adventure = db.get_adventure(conn, adventure_id)
+    if not adventure:
+        return
+    state = adventure.get("ui_state") or {}
+    if not isinstance(state, dict):
+        state = {}
+    state["world_type"] = world_type
+    db.update_adventure_ui_state(conn, adventure_id, state)
+
+
+def location_hierarchy(card: dict) -> dict:
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    return {
+        "world": str(sheet.get("world") or ""),
+        "region": str(sheet.get("region") or ""),
+        "city": str(sheet.get("city") or ""),
+        "district": str(sheet.get("district") or ""),
+        "coordinates": sheet.get("coordinates") if isinstance(sheet.get("coordinates"), dict) else {},
+    }
+
+
+def coherent_location_context(conn, adventure_id: str, card: dict) -> str:
+    """Contexto geográfico para gerar locais que fazem sentido no mundo."""
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    world_type = world_type_of(adventure)
+    hierarchy = location_hierarchy(card)
+    current = current_location(conn, adventure_id)
+    current_hierarchy = location_hierarchy(current) if current else {}
+    parts = [
+        f"World type: {world_type}",
+        f"World: {adventure.get('title') or ''}",
+        f"Plot: {adventure.get('plot_essentials') or ''}",
+    ]
+    if current_hierarchy:
+        parts.append(
+            "Current geography: "
+            + " / ".join(
+                value for value in (
+                    current_hierarchy.get("world"), current_hierarchy.get("region"),
+                    current_hierarchy.get("city"), current_hierarchy.get("district"),
+                ) if value
+            )
+        )
+    if hierarchy:
+        parts.append(
+            "Location hierarchy: "
+            + " / ".join(
+                value for value in (
+                    hierarchy.get("world"), hierarchy.get("region"),
+                    hierarchy.get("city"), hierarchy.get("district"),
+                ) if value
+            )
+        )
+    return "\n".join(part for part in parts if part and not part.endswith(": "))
+
 
 def ensure_link(conn, adventure_id: str, from_id: str, to_id: str, *,
                 travel_text: str = "", travel_cost: str = "",
@@ -116,6 +184,7 @@ def travel(conn, adventure_id: str, to_card_id: str) -> dict:
 
 
 def map_payload(conn, adventure_id: str) -> dict:
+    adventure = db.get_adventure(conn, adventure_id) or {}
     locations = _location_cards(conn, adventure_id)
     current = current_location(conn, adventure_id)
     nodes = []
@@ -128,11 +197,19 @@ def map_payload(conn, adventure_id: str) -> dict:
             "current": bool(current and current["id"] == card["id"]),
             "image": image,
             "links": links_for(conn, adventure_id, card["id"]),
+            "hierarchy": location_hierarchy(card),
         })
+    player = db.player_character(conn, adventure_id, adventure.get("owner") or "")
+    from app import progression
     return {
         "current": current,
+        "world_type": world_type_of(adventure),
         "locations": nodes,
         "journal": journal_for(conn, adventure_id),
+        "progression": progression.progression_of(
+            npc_assets.parse_sheet((player or {}).get("sheet") or "")
+        ),
+        "npc_relations": progression.relationship_context(locations),
     }
 
 
@@ -232,17 +309,17 @@ def generate_location(conn, adventure_id: str, *, name: str,
         research = result.get("context_block") or ""
         sources = result.get("sources") or []
     current = current_location(conn, adventure_id)
-    story = (
-        f"World: {adventure.get('title') or ''}\n"
-        f"Plot: {adventure.get('plot_essentials') or ''}\n"
-        f"Current location: {(current or {}).get('title') or ''}"
-    )
+    story = coherent_location_context(conn, adventure_id, current or {})
+    if current:
+        story += f"\nCurrent location: {current.get('title') or ''}"
     result = assistant.generate_single_card(
         llm_cfg or {}, concept=f"{name} {reference}".strip(),
         card_type=card_type, story_context=story + ("\n" + research if research else ""),
         instruction=(
             "Create a location with concrete geography, atmosphere, sensory detail, "
-            "visual landmarks and story hooks. Preserve the reference's identity."
+            "visual landmarks and story hooks. Preserve the reference's identity. "
+            "Respect the world type and geographic hierarchy; do not invent a place "
+            "that contradicts the established world or region."
         ),
         web_search=False, language="pt", transport=transport,
     )

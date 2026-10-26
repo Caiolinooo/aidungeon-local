@@ -486,14 +486,15 @@ def _players_block(conn: sqlite3.Connection, adventure: dict) -> str:
 
 
 def player_body_block(conn: sqlite3.Connection, adventure: dict) -> str:
-    """Corpo/dor/expressão dos personagens-jogador, sempre presente."""
-    from app import body_state, db, npc_assets
+    """Corpo/dor/expressão e progressão dos personagens-jogador."""
+    from app import body_state, db, npc_assets, progression
     lines: list[str] = []
     for card in db.list_player_characters(conn, adventure["id"]):
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
         state = body_state.body_state_of(sheet)
+        progress_text = progression.progression_context(sheet)
         name = card.get("title") or card.get("player_username") or "Jogador"
-        bits = []
+        bits = [progress_text]
         if state.get("pain"):
             bits.append(f"pain {state['pain']}/10")
         if sheet.get("expression"):

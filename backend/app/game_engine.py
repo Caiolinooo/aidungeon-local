@@ -232,6 +232,17 @@ def _evaluate_consequences(adventure_id: str, transport: Any = None) -> None:
     except Exception:
         log.warning("consequences: avaliação falhou", exc_info=True)
 
+def _apply_progression(adventure_id: str, user: str) -> None:
+    """XP por turno canônico do jogador."""
+    try:
+        from app import progression
+        with db.session() as conn:
+            player = db.player_character(conn, adventure_id, user)
+            if player:
+                progression.apply_turn_progression(conn, adventure_id, player["id"], 5)
+    except Exception:
+        log.warning("progression: falha ao aplicar XP", exc_info=True)
+
 
 def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
     """Fora dos testes, roda em background, depois do done e com o lock da
@@ -251,6 +262,7 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
             try:
                 npc_chronicle.update_from_turn(adventure_id, transport)
                 _evaluate_consequences(adventure_id, transport)
+                _apply_progression(adventure_id, user)
                 from app import jobs, npc_life
                 npc_life.run_mind(adventure_id, transport)
                 life = settings_store.load_file_settings().get("life") or {}

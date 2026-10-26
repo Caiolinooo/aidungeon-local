@@ -541,12 +541,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(", ".join(where))
     if names:
         lead_bits.append("people present: " + ", ".join(who_bits))
-    reference_count = len(likeness.reference_images(frame))
-    if reference_count > 1 and len(names) > 1:
+    reference_cards = [card for card in frame if likeness.has_reference_image(card)]
+    if len(reference_cards) > 1:
         positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
         assignments = ", ".join(
-            f"{name} on the {positions[index] if index < len(positions) else 'center'}"
-            for index, name in enumerate(names)
+            f"{card.get('title') or 'person'} on the "
+            f"{positions[index] if index < len(positions) else 'center'}"
+            for index, card in enumerate(reference_cards)
         )
         lead_bits.append(
             "distinct different people, not the same person, no duplicate faces: " + assignments

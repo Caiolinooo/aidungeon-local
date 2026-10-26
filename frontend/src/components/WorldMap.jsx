@@ -105,6 +105,7 @@ export default function WorldMap({ adventure, open = true, onClose }) {
   const [name, setName] = useState('')
   const [reference, setReference] = useState('')
   const [webSearch, setWebSearch] = useState(true)
+  const [worldType, setWorldType] = useState('real')
 
   const load = useCallback(async () => {
     if (!adventure?.id) return
@@ -119,6 +120,20 @@ export default function WorldMap({ adventure, open = true, onClose }) {
   }, [adventure?.id, toast])
 
   useEffect(() => { if (open) load() }, [open, load])
+  useEffect(() => {
+    if (data?.world_type) setWorldType(data.world_type)
+  }, [data?.world_type])
+
+  const changeWorldType = async (value) => {
+    setWorldType(value)
+    try {
+      await api.setWorldType(adventure.id, value)
+      await load()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
 
   const travel = async (cardId) => {
     setBusy(true)
@@ -184,6 +199,23 @@ export default function WorldMap({ adventure, open = true, onClose }) {
           <button onClick={onClose} className="rounded-md px-2 text-secondary">✕</button>
         </div>
       </div>
+      {data?.progression && (
+        <div className="border-b border-subtle p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs text-secondary">
+              <span>Nível {data.progression.level}</span>
+              <span>XP {data.progression.xp}</span>
+              <span>Skills: {(data.progression.unlocked || []).slice(-4).join(', ') || 'inicial'}</span>
+            </div>
+            <select value={worldType} onChange={(e) => changeWorldType(e.target.value)} className="rounded-md border border-subtle bg-surface px-2 py-1 text-xs text-secondary">
+              <option value="real">Mundo real</option>
+              <option value="fictional">Mundo fictício</option>
+              <option value="franchise">Universo de história</option>
+              <option value="alternate_history">História alternativa</option>
+            </select>
+          </div>
+        </div>
+      )}
       {showGenerate && (
         <div className="space-y-2 border-b border-subtle p-3">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome do local real ou fictício" className="w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm" />

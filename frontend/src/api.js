@@ -271,6 +271,7 @@ export const api = {
   travelTo: (advId, cardId) => request(`/adventures/${advId}/map/travel/${cardId}`, { method: 'POST', body: {} }),
   generateLocation: (advId, payload) => request(`/adventures/${advId}/map/locations`, { method: 'POST', body: payload }),
   generateLocationImage: (advId, cardId, reference = '') => request(`/adventures/${advId}/map/locations/${cardId}/image`, { method: 'POST', body: { reference } }),
+  setWorldType: (advId, worldType) => request(`/adventures/${advId}/map/world-type`, { method: 'POST', body: { world_type: worldType } }),
 
   // ---------------------------------------------------------------- memory
   getMemory: (advId) => request(`/adventures/${advId}/memory`),
