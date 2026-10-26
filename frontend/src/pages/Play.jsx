@@ -312,6 +312,7 @@ export default function Play() {
   const [rulesChips, setRulesChips] = useState({})
   const [simVersion, setSimVersion] = useState(0)
   const [pendingCheck, setPendingCheck] = useState(null)
+  const [mapOpen, setMapOpen] = useState(false)
 
   const abortRef = useRef(null)
   const seenIdsRef = useRef(new Set())
@@ -1289,8 +1290,6 @@ export default function Play() {
       packOn={packOn}
     />
   ) : null
-
-  const [mapOpen, setMapOpen] = useState(false)
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-canvas text-primary">
