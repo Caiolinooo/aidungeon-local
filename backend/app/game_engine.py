@@ -401,6 +401,7 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
                        out_script: str | None,
                        extra_flags: list[str] | None = None,
                        adjudication: dict | None = None,
+                       adventure_id: str = "",
                        cancel=None) -> tuple[str, list[str]]:
     """Um retry silencioso quando a prosa viola as regras. Empate fica com a segunda."""
     expected = "pt" if output_sanitizer.looks_portuguese(player_text) else ""
@@ -408,6 +409,12 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
     for flag in extra_flags or []:
         if flag not in flags:
             flags.append(flag)
+    if adventure_id:
+        from app import death_rules
+        with db.session() as conn:
+            cards = db.list_cards(conn, adventure_id)
+        if death_rules.dead_acting_alive(cards, text) and "dead_acting_alive" not in flags:
+            flags.append("dead_acting_alive")
     if not flags or retry_of is not None:
         return text, flags
     log.info("narrator quality flags %s — one corrective retry", flags)
@@ -426,6 +433,12 @@ def _correct_narration(text: str, *, player_text: str, retry_of, built,
             " The action was refused: do not write the NPC obeying, "
             "undressing, kissing back, or leaving with the player. "
             "Show their own refusal/reaction instead."
+        )
+    if "dead_acting_alive" in flags:
+        note += (
+            " A dead character was shown alive. Dead people cannot speak, act, "
+            "move, smile, adjust objects or keep working. Describe only the corpse "
+            "or the living people's reaction. Do not invent resurrection."
         )
     if retry_messages:
         last = retry_messages[-1]
@@ -652,6 +665,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 out_script=out_script,
                 extra_flags=compliance,
                 adjudication=adjudication,
+                adventure_id=adventure_id,
                 cancel=cancel,
             )
             beat = (adjudication or {}).get("initiative") or {}

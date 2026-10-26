@@ -197,8 +197,9 @@ def _location(cards: list[dict], text: str) -> tuple[str, str]:
 
 
 def _cast(cards: list[dict], text: str) -> list[dict]:
+    from app import death_rules
     ranked: list[tuple[int, dict]] = []
-    for card in cards:
+    for card in death_rules.living_cast(cards):
         if (card.get("type") or "") != "character":
             continue
         names = _mention_names(card)
