@@ -248,7 +248,8 @@ def _reference_unit(image: bytes, *, mask: bytes | None = None,
 def _region_mask(width: int, height: int, index: int, count: int) -> bytes:
     """Máscara PNG da região atribuída ao NPC."""
     import io
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFilter
+    width, height = int(width), int(height)
     if count <= 2:
         x0 = width * index // count
         x1 = width * (index + 1) // count
@@ -257,11 +258,11 @@ def _region_mask(width: int, height: int, index: int, count: int) -> bytes:
         col, row = index % 2, index // 2
         x0, x1 = width * col // 2, width * (col + 1) // 2
         y0, y1 = height * row // 2, height * (row + 1) // 2
+    x0, x1 = max(0, x0), min(width, x1)
+    y0, y1 = max(0, y0), min(height, y1)
     image = Image.new("L", (width, height), 0)
-    from PIL import ImageFilter
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            image.putpixel((x, y), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((x0, y0, max(x0, x1 - 1), max(y0, y1 - 1)), fill=255)
     image = image.filter(ImageFilter.GaussianBlur(radius=max(8, width // 40)))
     output = io.BytesIO()
     image.save(output, format="PNG")
