@@ -867,9 +867,10 @@ paths:
       description: |
         Substitui a última action `continue` por uma nova geração (mesmo
         contexto anterior a ela). Se a última ação não for da IA, responde 409.
-        Não emite `adjudication`, não reaplica memória, relação ou visual e
-        não dispara o pós-turno. O `done` traz a action `continue` substituta
-        (mesmo `seq`, novo `id`), sem `relation_changes` novo.
+        Não emite um frame `adjudication` novo, não reaplica memória, relação
+        ou visual e não dispara o pós-turno. O `done` traz a action `continue`
+        substituta (mesmo `seq`, novo `id`) e preserva a adjudicação anterior,
+        sem `relation_changes` novo.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
       responses:
@@ -4942,6 +4943,8 @@ components:
           type: string
           format: date-time
           nullable: true
+        adjudication:
+          $ref: '#/components/schemas/TurnAdjudication'
         image:
           type: object
           nullable: true
@@ -5581,7 +5584,7 @@ components:
         - `token`: `data: {"token": "<trecho>"}` — um por token gerado;
         - `done`: `player_action`?, `action`, `action_check`?, `rules`?,
           `adjudication`? (`TurnAdjudication`, com `relation_changes` observáveis).
-          `story` e `retry` não trazem adjudicação nova;
+          `story` não traz adjudicação; `retry` preserva a anterior sem novo delta;
         - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
           Resposta que fica sem prosa depois da limpeza (só blocos de contexto
           copiados pelo narrador) também vira `error`, sem gravar o `continue`.

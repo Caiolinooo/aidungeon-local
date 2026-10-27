@@ -428,6 +428,17 @@ def _action_resolution(row: sqlite3.Row) -> dict | None:
         return None
     return resolution
 
+def _action_adjudication(row: sqlite3.Row) -> dict | None:
+    """Resultado público do turno; snapshots privados continuam fora da API."""
+    if "rules_json" not in row.keys():
+        return None
+    payload = _loads(row["rules_json"], None)
+    if not isinstance(payload, dict):
+        return None
+    adjudication = payload.get("adjudication")
+    return adjudication if isinstance(adjudication, dict) and adjudication else None
+
+
 
 def action_to_dict(row: sqlite3.Row) -> dict:
     return {
@@ -439,6 +450,7 @@ def action_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "edited_at": row["edited_at"],
         "actor": (row["actor"] if "actor" in row.keys() else "") or "",
+        "adjudication": _action_adjudication(row),
         "rules": _action_resolution(row),
         "quality_flags": _action_quality_flags(row),
         # imagem vinculada (actions type=see) — preenchido por list/get_action

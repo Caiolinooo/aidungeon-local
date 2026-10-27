@@ -371,7 +371,7 @@ def test_compliance_follows_refuse_and_partial():
     assert game_engine._compliance_flag(obeys, None) == []
 
 
-def test_turn_emits_reaction_once_retry_and_story_do_not(adventure, monkeypatch):
+def test_turn_persists_reaction_once_retry_and_story_do_not_reapply(adventure, monkeypatch):
     import json
 
     from app import npc_bonds, npc_gate
@@ -464,6 +464,12 @@ def test_turn_emits_reaction_once_retry_and_story_do_not(adventure, monkeypatch)
     assert done["relation_changes"][0]["target"] == "player"
     blob = json.dumps(done, ensure_ascii=False)
     assert "secret" not in blob and "motivação oculta" not in blob and "hidden_score" not in blob
+    assert _done(events)["action"]["adjudication"] == done
+    with db.session() as conn:
+        saved = db.get_action(conn, _done(events)["action"]["id"])
+        rules = db.get_action_rules(conn, saved["id"])
+    assert saved["adjudication"] == done
+    assert "cue" not in rules["adjudication"]
     assert seen["roster"][0]["name"] == "Mira"
     assert applied == [{
         "seq": 2, "player_text": "I attack Mira", "actor_name": "hero",
@@ -481,7 +487,8 @@ def test_turn_emits_reaction_once_retry_and_story_do_not(adventure, monkeypatch)
     retried = _collect(game_engine.handle_retry(
         adventure["id"], transport=make_llm_transport(tokens=("Mira recusa outra vez.",))))
     assert [event["event"] for event in retried if event["event"] == "adjudication"] == []
-    assert "adjudication" not in _done(retried)
+    assert _done(retried)["adjudication"] == done
+    assert _done(retried)["action"]["adjudication"] == done
     assert len(applied) == 1
     assert spawned == ["hero"]
     with db.session() as conn:

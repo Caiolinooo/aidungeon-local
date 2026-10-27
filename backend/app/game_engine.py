@@ -953,11 +953,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                         db.merge_action_rules(
                             conn, player_action["id"], {"quality_flags": quality})
                         player_action["quality_flags"] = quality
-                events_bus.record(
-                    conn, adventure_id, "action", action,
-                    actor="assistant", entity_id=str(action["id"]),
-                    turn_seq=action["seq"], generation_id=generation_id,
-                )
+                # O evento público sai depois que a action já contém a reação.
                 # Relação e visual no mesmo commit da prosa. Falha não apaga
                 # a narração. Story e retry não entram: um turno aplica uma vez.
                 if social_turn:
@@ -982,6 +978,23 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                         npc_gate.remember(conn, adventure_id, adjudication)
                     except Exception:
                         log.warning("npc_gate: histórico não gravado", exc_info=True)
+                persisted = None
+                if retry_of is not None:
+                    persisted = retry_of.get("adjudication")
+                elif isinstance(adjudication, dict) or relation_changes:
+                    persisted = _public_adjudication(
+                        adjudication if isinstance(adjudication, dict) else {
+                            "decision": "allow", "outcome": "", "reactions": [],
+                            "initiative": None,
+                        }, relation_changes, include_changes=True)
+                if persisted:
+                    db.merge_action_rules(conn, action["id"], {"adjudication": persisted})
+                    action["adjudication"] = persisted
+                events_bus.record(
+                    conn, adventure_id, "action", action,
+                    actor="assistant", entity_id=str(action["id"]),
+                    turn_seq=action["seq"], generation_id=generation_id,
+                )
                 new_turn = _advance_committed_turn(conn, adventure_id, player_action, user)
                 if new_turn is not None:
                     events_bus.record(
@@ -1005,15 +1018,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 data["action_check"] = verdict.to_dict()
             if resolution is not None:
                 data["rules"] = resolution
-            if isinstance(adjudication, dict) or relation_changes:
-                base = adjudication if isinstance(adjudication, dict) else {
-                    "decision": "allow",
-                    "outcome": "",
-                    "reactions": [],
-                    "initiative": None,
-                }
-                data["adjudication"] = _public_adjudication(
-                    base, relation_changes, include_changes=True)
+            if action.get("adjudication"):
+                data["adjudication"] = action["adjudication"]
 
             # Libera o lock antes de emitir 'done' para que chamadas imediatas do
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.

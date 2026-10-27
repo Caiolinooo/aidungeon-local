@@ -81,6 +81,8 @@ OpenAI-compatível.
 - **Interação com consequência visível**: o adjudicador emite reação, fala,
   emoção, pose e iniciativa antes da prosa; o turno mostra o resultado e as
   mudanças de relação sem expor instruções ou motivos privados.
+  A adjudicação pública fica na `Action`: reload e retry restauram reação, motivo
+  e deltas sem reaplicá-los; o `cue` interno não é persistido nem exposto.
 - **Relações com evidência**: deltas direcionais NPC→jogador e NPC→NPC usam
   fatos materiais do turno, com limites, histórico e idempotência por `seq`.
   Conversa trivial não altera vínculo; romance só avança com reciprocidade.
