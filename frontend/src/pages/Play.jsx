@@ -9,7 +9,7 @@ import FeedItem from '../components/FeedItem.jsx'
 import TurnBeat from '../components/TurnBeat.jsx'
 import {
   adjudicationMode,
-  dropBeats,
+  beatsFromActions,
   mergeBeat,
   presentAdjudication,
   spotlightIds,
@@ -433,6 +433,9 @@ export default function Play() {
       setPendingCheck(null)
       setAdventure(st)
       setActions(list)
+      setBeatsBySeq(beatsFromActions(list))
+      liveBeatRef.current = null
+      setLiveBeat(null)
       setUiProfile(st.ui_profile ?? null)
       setUiState(st.ui_state ?? {})
       setLive('')
@@ -459,6 +462,10 @@ export default function Play() {
       if (!replaceActions) return st
       if (genRef.current && !forceActions) return st
       const list = [...(st.actions ?? [])].sort(bySeq)
+      const restored = beatsFromActions(list)
+      setBeatsBySeq((prev) => Object.entries(restored).reduce(
+        (next, [seq, beat]) => storeBeat(next, seq, beat), prev,
+      ))
       setActions((prev) => {
         const next = reconcileActions(prev ?? [], list, baseline, forceActions)
         seenIdsRef.current = new Set(next.map((a) => a.id).filter((x) => x != null))

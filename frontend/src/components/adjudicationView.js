@@ -181,6 +181,16 @@ export function storeBeat(bySeq, seq, incoming) {
   return { ...bySeq, [key]: merged }
 }
 
+export function beatsFromActions(actions) {
+  let beats = {}
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.seq == null) continue
+    const beat = presentAdjudication(action.adjudication, { includeDeltas: true })
+    if (beat) beats = storeBeat(beats, action.seq, beat)
+  }
+  return beats
+}
+
 export function dropBeats(bySeq, seqs) {
   const next = { ...bySeq }
   let changed = false
