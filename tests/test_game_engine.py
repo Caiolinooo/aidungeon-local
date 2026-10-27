@@ -359,3 +359,142 @@ def test_web_research_goes_inside_the_lore(adventure, monkeypatch):
         f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
         "\n> You inspect the gate\n" + NEUTRAL_GATE
     )
+
+
+def test_compliance_follows_refuse_and_partial():
+    obeys = "Ela obedece e sai com o jogador."
+    refuses = "Ela recusa e se afasta."
+    assert game_engine._compliance_flag(obeys, {"decision": "refuse"}) == ["compliance"]
+    assert game_engine._compliance_flag(obeys, {"decision": "partial"}) == ["compliance"]
+    assert game_engine._compliance_flag(refuses, {"decision": "refuse"}) == []
+    assert game_engine._compliance_flag(obeys, {"decision": "allow"}) == []
+    assert game_engine._compliance_flag(obeys, None) == []
+
+
+def test_turn_emits_reaction_once_retry_and_story_do_not(adventure, monkeypatch):
+    import json
+
+    from app import npc_bonds, npc_gate
+
+    with db.session() as conn:
+        npc = db.insert_card(
+            conn, adventure["id"], title="Mira", type="character", entry="A scout.",
+            sheet=json.dumps({
+                "status": "alive",
+                "bonds": {
+                    "relationship": 40, "trust": 40, "distrust": 30,
+                    "fear": 15, "desire": 15, "boldness": 40,
+                },
+            }),
+        )
+    card_id = npc["id"]
+    gate = {
+        "decision": "refuse",
+        "outcome": "Mira recusa.",
+        "reactions": [{
+            "npc": "Mira",
+            "card_id": card_id,
+            "reaction": "recua",
+            "line": "Não.",
+            "emotion": "anger",
+            "pose": "step back",
+        }],
+        "initiative": None,
+        "cue": "Mostre a recusa.",
+        "relation_updates": [{
+            "card_id": card_id,
+            "target": "player",
+            "delta": {"trust": -4, "hidden_score": 9},
+            "reason": "Mira recusa o golpe",
+            "evidence": "Ela recusa.",
+            "secret": "motivação oculta: quer o trono",
+        }],
+    }
+    monkeypatch.setattr(npc_gate, "decide", lambda *args, **kwargs: gate)
+    seen = {}
+    real_cue = npc_gate.cue_block
+
+    def cue(result, roster=None):
+        seen["roster"] = roster
+        return real_cue(result, roster)
+
+    monkeypatch.setattr(npc_gate, "cue_block", cue)
+    synced: list[str] = []
+    monkeypatch.setattr(
+        "app.portrait_sync.sync_card",
+        lambda conn, adventure_id, card_id, force=False: synced.append(card_id),
+    )
+    applied: list[dict] = []
+    real_apply = npc_bonds.apply_adjudication
+
+    def spy(session, adventure_id, adjudication, seq, player_text="", actor_name=""):
+        applied.append({
+            "seq": seq, "player_text": player_text, "actor_name": actor_name,
+            "decision": (adjudication or {}).get("decision"),
+        })
+        return real_apply(
+            session, adventure_id, adjudication, seq,
+            player_text=player_text, actor_name=actor_name,
+        )
+
+    monkeypatch.setattr(npc_bonds, "apply_adjudication", spy)
+    spawned: list[str] = []
+    real_spawn = game_engine._spawn_post_turn
+
+    def spawn(adventure_id, transport=None, user=""):
+        spawned.append(user)
+        return real_spawn(adventure_id, transport, user)
+
+    monkeypatch.setattr(game_engine, "_spawn_post_turn", spawn)
+
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "I attack Mira", transport=make_llm_transport(
+            tokens=("Mira recusa e se afasta.",)), user="hero"))
+    kinds = [event["event"] for event in events]
+    assert kinds.index("adjudication") < kinds.index("token")
+    visible = next(event["data"] for event in events if event["event"] == "adjudication")
+    assert set(visible) == {"decision", "outcome", "reactions", "initiative"}
+    assert visible["decision"] == "refuse"
+    assert visible["reactions"][0]["emotion"] == "anger"
+    assert visible["reactions"][0]["pose"] == "step back"
+    assert "relation_changes" not in visible
+    done = _done(events)["adjudication"]
+    assert done["relation_changes"][0]["delta"] == {"trust": -4}
+    assert done["relation_changes"][0]["evidence"] == "Ela recusa."
+    assert done["relation_changes"][0]["target"] == "player"
+    blob = json.dumps(done, ensure_ascii=False)
+    assert "secret" not in blob and "motivação oculta" not in blob and "hidden_score" not in blob
+    assert seen["roster"][0]["name"] == "Mira"
+    assert applied == [{
+        "seq": 2, "player_text": "I attack Mira", "actor_name": "hero",
+        "decision": "refuse",
+    }]
+    assert synced == [card_id]
+    assert spawned == ["hero"]
+    with db.session() as conn:
+        sheet = json.loads(db.get_card(conn, adventure["id"], card_id)["sheet"])
+    assert sheet["bonds"]["trust"] == 36
+    assert sheet["visual_state"]["emotion"] == "anger"
+    assert sheet["visual_state"]["seq"] == 2
+    assert sheet["expression"] == "angry"
+
+    retried = _collect(game_engine.handle_retry(
+        adventure["id"], transport=make_llm_transport(tokens=("Mira recusa outra vez.",))))
+    assert [event["event"] for event in retried if event["event"] == "adjudication"] == []
+    assert "adjudication" not in _done(retried)
+    assert len(applied) == 1
+    assert spawned == ["hero"]
+    with db.session() as conn:
+        again = json.loads(db.get_card(conn, adventure["id"], card_id)["sheet"])
+    assert again["bonds"]["trust"] == 36
+
+    story = _collect(game_engine.handle_action(
+        adventure["id"], "story", "rain falls on the empty yard tonight",
+        transport=make_llm_transport(tokens=("The yard stays quiet.",)), user="hero"))
+    assert [event["event"] for event in story if event["event"] == "adjudication"] == []
+    assert "adjudication" not in _done(story)
+    assert len(applied) == 1
+    assert spawned == ["hero", "hero"]
+    with db.session() as conn:
+        after_story = json.loads(db.get_card(conn, adventure["id"], card_id)["sheet"])
+    assert after_story["bonds"]["trust"] == 36

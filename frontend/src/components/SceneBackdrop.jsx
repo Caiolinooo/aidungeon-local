@@ -58,6 +58,7 @@ export default function SceneBackdrop({
   const [scene, setScene] = useState(null)
   const [urls, setUrls] = useState({})
   const urlsRef = useRef([])
+  const lastSyncRef = useRef(0)
   const [reacting, setReacting] = useState(false)
   const [line, setLine] = useState('')
 
@@ -68,6 +69,12 @@ export default function SceneBackdrop({
 
     const started = Date.now()
     const tick = async () => {
+      const now = Date.now()
+      if (now - lastSyncRef.current < 500) {
+        timer = window.setTimeout(tick, 4000)
+        return
+      }
+      lastSyncRef.current = now
       try {
         const next = await api.syncScene(adventureId)
         if (dead) return
@@ -95,10 +102,24 @@ export default function SceneBackdrop({
       const detail = ev.detail || {}
       if (detail.adventureId !== adventureId) return
       if (detail.type !== 'backdrop_ready' && detail.type !== 'portrait_ready') return
+      const now = Date.now()
+      if (now - lastSyncRef.current < 500) return
+      lastSyncRef.current = now
+      api.syncScene(adventureId).then((next) => setScene(next)).catch(() => {})
+    }
+    const onSync = (ev) => {
+      if ((ev.detail || {}).adventureId !== adventureId) return
+      const now = Date.now()
+      if (now - lastSyncRef.current < 500) return
+      lastSyncRef.current = now
       api.syncScene(adventureId).then((next) => setScene(next)).catch(() => {})
     }
     window.addEventListener('aidungeon-live', onLive)
-    return () => window.removeEventListener('aidungeon-live', onLive)
+    window.addEventListener('aidungeon-cards-sync', onSync)
+    return () => {
+      window.removeEventListener('aidungeon-live', onLive)
+      window.removeEventListener('aidungeon-cards-sync', onSync)
+    }
   }, [adventureId])
 
   // Ação do jogador: a faixa pisca, a frase aparece, o NPC citado reage.

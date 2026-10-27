@@ -28,7 +28,12 @@ def test_cancel_during_stream_rolls_back_player_action(monkeypatch, tmp_db):
 
     monkeypatch.setattr(game_engine.llm_client, "stream_chat_completion", stream)
     events = game_engine.handle_action(adv["id"], "do", "abrir a porta", cancel=cancel)
-    assert next(events)["event"] == "token"
+    first = next(events)
+    if first["event"] == "adjudication":
+        assert "relation_changes" not in first["data"]
+        assert "cue" not in first["data"]
+        first = next(events)
+    assert first["event"] == "token"
     cancel.set()
     rest = list(events)
 

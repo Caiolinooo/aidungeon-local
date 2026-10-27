@@ -16,17 +16,24 @@ Semânticas do contrato:
 - `undo` remove o último turno (resposta da IA + ação do jogador que a
   originou) e NUNCA remove `start` (409 `nothing_to_undo`).
 - `PATCH` marca `edited_at`.
-- Pós-turno (G3), depois do `done` e com o lock já solto: choices pré-geradas
-  (C7, slot 1) em paralelo com npc_chronicle e, depois dele,
-  `memory.summarizer.maybe_update()` (slot 2), best-effort. Ação nova cancela
+- Pós-turno (G3), depois do `done` e com o lock já solto, só em turno novo
+  (retry não dispara): choices pré-geradas (C7, slot 1) em paralelo com a
+  série chronicle → consequências → XP → mente → tick e, depois,
+  `memory.summarizer.maybe_update()` (slot 2), best-effort. Falha do chronicle
+  não cancela o resto. A mente não regrava os vínculos. Ação nova cancela
   choices e summary pendentes, nunca o chronicle.
 
 Eventos emitidos pelo gerador (a rota serializa em SSE):
+    {"event": "rules_roll", "data": {resolution}}
     {"event": "action_check", "data": {"possible": bool, "blockers": [], "risks": [], "notes": "", "cost": "", "consequence": ""}}
+    {"event": "adjudication", "data": {"decision", "outcome", "reactions", "initiative"}}
     {"event": "token", "data": {"token": "..."}}
-    {"event": "done",  "data": {"player_action"?: Action, "action": Action, "action_check"?: object}}
+    {"event": "done",  "data": {"player_action"?: Action, "action": Action, "action_check"?: object, "adjudication"?: object}}
     {"event": "error", "data": {"message": "..."}}
-Antes do `done`, `turn_done {action_id, seq}` sai em `events` (C2).
+`adjudication` sai antes dos tokens e não traz `relation_changes`. Esses só
+entram no `done`, já filtrados para fatos observáveis. Retry e story não
+emitem nem reaplicam. Antes do `done`, `turn_done {action_id, seq}` sai em
+`events` (C2).
 """
 
 from __future__ import annotations
@@ -50,6 +57,7 @@ from app import (
     meta_commands,
     npc_bonds,
     npc_chronicle,
+    npc_life,
     output_sanitizer,
     scripting,
     settings_store,
@@ -244,10 +252,36 @@ def _apply_progression(adventure_id: str, user: str) -> None:
         log.warning("progression: falha ao aplicar XP", exc_info=True)
 
 
-def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
+def _guard_post(label: str, fn) -> None:
+    """Um passo do pós-turno. Falha fica no log e não corta o seguinte."""
+    try:
+        fn()
+    except Exception:
+        log.warning("post-turn %s falhou", label, exc_info=True)
+
+
+
+def _maybe_auto_tick(adventure_id: str) -> None:
+    from app import jobs
+    life = settings_store.load_file_settings().get("life") or {}
+    if not life.get("auto_tick", True):
+        return
+    every = int(life.get("tick_every_turns", 5) or 5)
+    with db.session() as conn:
+        adventure = db.get_adventure(conn, adventure_id) or {}
+        actions = db.list_actions(conn, adventure_id)
+        seq = max((int(action["seq"]) for action in actions), default=0)
+        last = int(adventure.get("life_tick_seq") or 0)
+        life_clock = ((adventure.get("sim_state") or {}).get("life") or {})
+        if every > 0 and seq - last >= every and not life_clock.get("enabled"):
+            jobs.enqueue_day_tick(conn, adventure_id, reason="auto")
+
+
+def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -> None:
     """Fora dos testes, roda em background, depois do done e com o lock da
     aventura já solto: choices pré-geradas, o vetor da cena das memórias e,
-    em série, npc_chronicle + summarizer."""
+    em série, chronicle, consequências, XP, mente e tick, depois o summarizer.
+    Retry não chama esta função."""
     if os.environ.get("AIDUNGEON_CHRONICLE", "1") == "0":
         # Modo de teste determinístico: summarizer roda síncrono e chronicle fica desligado
         _maybe_update_memory(adventure_id)
@@ -259,25 +293,11 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None) -> None:
 
     def _bg() -> None:
         with _post_turn_lock_for(adventure_id):
-            try:
-                npc_chronicle.update_from_turn(adventure_id, transport)
-                _evaluate_consequences(adventure_id, transport)
-                _apply_progression(adventure_id, user)
-                from app import jobs, npc_life
-                npc_life.run_mind(adventure_id, transport)
-                life = settings_store.load_file_settings().get("life") or {}
-                if life.get("auto_tick", True):
-                    every = int(life.get("tick_every_turns", 5) or 5)
-                    with db.session() as conn:
-                        adventure = db.get_adventure(conn, adventure_id) or {}
-                        actions = db.list_actions(conn, adventure_id)
-                        seq = max((int(action["seq"]) for action in actions), default=0)
-                        last = int(adventure.get("life_tick_seq") or 0)
-                        life_clock = ((adventure.get("sim_state") or {}).get("life") or {})
-                        if every > 0 and seq - last >= every and not life_clock.get("enabled"):
-                            jobs.enqueue_day_tick(conn, adventure_id, reason="auto")
-            except Exception:
-                pass
+            _guard_post("chronicle", lambda: npc_chronicle.update_from_turn(adventure_id, transport))
+            _guard_post("consequences", lambda: _evaluate_consequences(adventure_id, transport))
+            _guard_post("progression", lambda: _apply_progression(adventure_id, user))
+            _guard_post("mind", lambda: npc_life.run_mind(adventure_id, transport))
+            _guard_post("tick", lambda: _maybe_auto_tick(adventure_id))
             if not cancel.is_set():
                 _maybe_update_memory(adventure_id, cancel)
         _finish_post_turn(adventure_id, cancel)
@@ -341,33 +361,117 @@ def _advance_committed_turn(conn: sqlite3.Connection, adventure_id: str,
     return db.advance_turn(conn, adv)
 
 
-def _prepare_action_check(conn: sqlite3.Connection, adventure: dict, actions: list[dict],
-                          player_action: dict | None, raw_text: str,
-                          user: str) -> tuple[str, str, dict, dict | None]:
-    """Estado da checagem, ou None quando este turno não passa por ela."""
+def _prepare_action_check(player_action: dict | None, raw_text: str,
+                          ) -> tuple[str, str, dict]:
+    """Texto, tipo e config quando este turno passa pela checagem.
+
+    O retrato do mundo é lido depois, com o sim já resolvido.
+    """
     if player_action is None or player_action.get("type") not in ("do", "say"):
-        return "", "", {}, None
+        return "", "", {}
     try:
         file_cfg = settings_store.load_file_settings().get("action_check") or {}
     except Exception:
         log.warning("action_check: configuração indisponível", exc_info=True)
-        return "", "", {}, None
+        return "", "", {}
     if not isinstance(file_cfg, dict) or file_cfg.get("enabled") is not True:
-        return "", "", {}, None
+        return "", "", {}
     text = (raw_text or "").strip()
     try:
         min_words = int(file_cfg.get("min_words", 4))
     except (TypeError, ValueError):
         min_words = 4
     if len(text.split()) < min_words:
-        return "", "", {}, None
+        return "", "", {}
+    return text, player_action.get("type") or "", file_cfg
+
+
+def _public_sim(adventure: dict, resolution: dict | None) -> dict | None:
+    """Recorte do sim já gravado. Sem RNG e sem bloco interno do narrador."""
+    from app.sim import state as sim_state
+    loaded = sim_state.load(adventure if isinstance(adventure, dict) else {})
+    actors_raw = loaded.get("actors") if isinstance(loaded.get("actors"), dict) else {}
+    foes_raw = loaded.get("foes") if isinstance(loaded.get("foes"), dict) else {}
+    if resolution is None and not loaded.get("pack") and not actors_raw and not foes_raw:
+        return None
+
+    def row(item: dict) -> dict:
+        return {
+            "name": item.get("name") or "",
+            "hp": item.get("hp"),
+            "hp_max": item.get("hp_max"),
+            "dead": bool(item.get("dead")),
+        }
+
+    view: dict[str, Any] = {
+        "pack": loaded.get("pack") or "",
+        "actors": [row(item) for item in actors_raw.values() if isinstance(item, dict)],
+        "foes": [row(item) for item in foes_raw.values() if isinstance(item, dict)],
+    }
+    if isinstance(resolution, dict):
+        changes = []
+        for change in resolution.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            changes.append({
+                "who": change.get("who") or "",
+                "what": change.get("what") or "",
+                "from": change.get("from"),
+                "to": change.get("to"),
+            })
+        view["changes"] = changes
+    return view
+
+
+def _action_check_state(adventure_id: str, user: str,
+                        resolution: dict | None) -> dict | None:
+    """Mundo depois que o sim commitou status, PV e fatos do turno."""
     try:
-        cards = db.list_cards(conn, adventure["id"])
-        state = action_check.collect_state(conn, adventure, actions, cards, user)
+        with db.session() as conn:
+            adventure = db.get_adventure(conn, adventure_id)
+            if not adventure:
+                return None
+            actions = db.list_actions(conn, adventure_id)
+            cards = db.list_cards(conn, adventure_id)
+            state = action_check.collect_state(conn, adventure, actions, cards, user)
+        sim_view = _public_sim(adventure, resolution)
+        if sim_view is not None:
+            state["sim"] = sim_view
+            # O sim é autoridade para PV/morte; a ficha ainda pode dizer "alive".
+            foes = sim_view.get("foes") or []
+            for row in (sim_view.get("actors") or []) + foes:
+                name = str(row.get("name") or "").strip().casefold()
+                if not name:
+                    continue
+                status = "dead" if row.get("dead") else "alive"
+                hp = row.get("hp")
+                targets = list(state.get("present_npcs") or [])
+                player = state.get("player")
+                if isinstance(player, dict):
+                    targets.append(player)
+                matched = False
+                for target in targets:
+                    if str(target.get("name") or "").strip().casefold() != name:
+                        continue
+                    matched = True
+                    target["status"] = status
+                    if hp is not None:
+                        target["hp"] = hp
+                        stats = target.get("stats")
+                        if isinstance(stats, dict):
+                            stats["hp"] = hp
+                if not matched and row in foes:
+                    state.setdefault("present_npcs", []).append({
+                        "name": row.get("name") or "", "status": status, "hp": hp,
+                    })
+                state["absent"] = [
+                    item for item in state.get("absent") or []
+                    if str(item).strip().casefold() != name
+                ]
+        return state
     except Exception:
         log.warning("action_check: estado indisponível", exc_info=True)
-        return "", "", {}, None
-    return text, player_action.get("type") or "", file_cfg, state
+        return None
 
 
 def _apply_action_check(built, text: str, type_: str, state: dict | None,
@@ -395,17 +499,136 @@ def _apply_action_check(built, text: str, type_: str, state: dict | None,
     return verdict
 
 
-def _compliance_flag(verdict, text: str) -> list[str]:
-    """O narrador escreveu obediência numa ação que o mundo já recusou."""
-    if verdict is None or getattr(verdict, "possible", True):
-        return []
-    blockers = getattr(verdict, "blockers", None) or []
-    if not any("recusa" in (item or "").casefold() for item in blockers):
+def _compliance_flag(text: str, adjudication: dict | None) -> list[str]:
+    """O narrador obedeceu a uma decisão refuse/partial."""
+    decision = str((adjudication or {}).get("decision") or "").strip().lower()
+    if decision not in ("refuse", "partial"):
         return []
     from app import world_facts
     if world_facts.narration_lacks_refusal(text):
         return ["compliance"]
     return []
+
+
+def _living_roster(adventure_id: str) -> list[dict]:
+    """NPCs vivos para o cue. Morto, missing e o jogador ficam de fora."""
+    from app import npc_assets
+    roster = []
+    with db.session() as conn:
+        for card in db.list_cards(conn, adventure_id):
+            if (card.get("type") or "") != "character" or card.get("player_username"):
+                continue
+            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+            if not npc_bonds._living(sheet):
+                continue
+            name = (card.get("title") or "").strip()
+            if not name:
+                continue
+            roster.append({"name": name, "card_id": card.get("id")})
+    return roster
+
+
+def _visual_map(conn: sqlite3.Connection, adventure_id: str) -> dict[str, str]:
+    from app import npc_assets
+    snap: dict[str, str] = {}
+    for card in db.list_cards(conn, adventure_id):
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        visual = sheet.get("visual_state")
+        snap[str(card["id"])] = (
+            json.dumps(visual, sort_keys=True, ensure_ascii=False)
+            if isinstance(visual, dict) else ""
+        )
+    return snap
+
+
+def _sync_visual_changes(conn: sqlite3.Connection, adventure_id: str,
+                         before: dict[str, str]) -> None:
+    """Enfileira retrato só de quem mudou `visual_state`. O job segue assíncrono."""
+    from app import portrait_sync
+    after = _visual_map(conn, adventure_id)
+    for card_id, visual in after.items():
+        if before.get(card_id) == visual:
+            continue
+        try:
+            portrait_sync.sync_card(conn, adventure_id, card_id)
+        except Exception:
+            log.warning("portrait_sync: card %s não sincronizado", card_id, exc_info=True)
+
+
+def _public_reaction(raw: dict) -> dict:
+    item = {
+        "npc": raw.get("npc") or "",
+        "card_id": raw.get("card_id") or "",
+        "reaction": raw.get("reaction") or "",
+        "line": raw.get("line") or "",
+    }
+    for key in ("emotion", "pose"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            item[key] = value.strip()
+    return item
+
+
+def _public_relation_changes(changes) -> list[dict]:
+    """Só o fato observável. Motivação oculta não atravessa reason/evidence."""
+    public = []
+    for raw in changes or []:
+        if not isinstance(raw, dict):
+            continue
+        delta_raw = raw.get("delta") if isinstance(raw.get("delta"), dict) else {}
+        delta = {}
+        for key, value in delta_raw.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            delta[str(key)] = value
+        public.append({
+            "card_id": str(raw.get("card_id") or ""),
+            "name": str(raw.get("name") or ""),
+            "target": str(raw.get("target") or ""),
+            "delta": delta,
+            "reason": str(raw.get("reason") or ""),
+            "evidence": str(raw.get("evidence") or ""),
+        })
+    return public
+
+
+def _public_adjudication(adjudication: dict | None,
+                         relation_changes=None, *,
+                         include_changes: bool = False) -> dict | None:
+    """SSE: decision/outcome/reactions/initiative. `done` soma relation_changes."""
+    if not isinstance(adjudication, dict):
+        return None
+    reactions = []
+    for raw in adjudication.get("reactions") or []:
+        if isinstance(raw, dict):
+            reactions.append(_public_reaction(raw))
+    initiative = None
+    raw_beat = adjudication.get("initiative")
+    if isinstance(raw_beat, dict):
+        initiative = {
+            "npc": raw_beat.get("npc") or "",
+            "card_id": raw_beat.get("card_id") or "",
+            "line": raw_beat.get("line") or "",
+        }
+        if not initiative["npc"] and not initiative["line"]:
+            initiative = None
+    public = {
+        "decision": str(adjudication.get("decision") or "allow"),
+        "outcome": str(adjudication.get("outcome") or ""),
+        "reactions": reactions,
+        "initiative": initiative,
+    }
+    if include_changes:
+        public["relation_changes"] = _public_relation_changes(relation_changes)
+    return public
+
+
+def _actor_name(conn: sqlite3.Connection, adventure_id: str, user: str) -> str:
+    if not user:
+        return ""
+    card = db.player_character(conn, adventure_id, user)
+    title = ((card or {}).get("title") or "").strip()
+    return title or user
 
 
 def _correct_narration(text: str, *, player_text: str, retry_of, built,
@@ -503,6 +726,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
         try:
             verdict = None
             adjudication = None
+            relation_changes: list[dict] = []
             check_state = None
             check_cfg: dict = {}
             check_text = ""
@@ -535,8 +759,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     step = float(sampler.get("retry_temperature_step", 0.05))
                     max_t = float(sampler.get("max_retry_temperature", 1.15))
                     sampler["temperature"] = round(min(base_t + step * retry_count, max_t), 4)
-                check_text, check_type, check_cfg, check_state = _prepare_action_check(
-                    conn, adventure, actions, player_action, raw_query_text, user)
+                check_text, check_type, check_cfg = _prepare_action_check(
+                    player_action, raw_query_text)
 
             from app.sim import engine as sim_engine
             if player_action is not None and retry_of is None:
@@ -609,6 +833,8 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 yield {"event": "rules_roll", "data": rolled}
                 _publish_live(adventure_id, "rules_roll", rolled)
 
+            if check_text:
+                check_state = _action_check_state(adventure_id, user, resolution)
             verdict = _apply_action_check(
                 built, check_text, check_type, check_state, llm_cfg, transport, check_cfg,
                 cancel=cancel)
@@ -623,11 +849,13 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     live["seq"] = player_action.get("seq")
                 _publish_live(adventure_id, "action_check", live)
 
-            if retry_of is None and (
+            social_turn = retry_of is None and (
                 player_action is None or player_action.get("type") in ("do", "say")
-            ):
+            )
+            if social_turn:
+                from app import npc_gate
+                roster = _living_roster(adventure_id)
                 try:
-                    from app import npc_gate
                     if player_action is None:
                         adjudication = npc_gate.own_beat(
                             adventure_id, llm_cfg, transport, cancel=cancel)
@@ -646,13 +874,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 except Exception:
                     log.warning("npc_gate: adjudicador indisponível", exc_info=True)
                     adjudication = None
-                cue = npc_gate.cue_block(adjudication)
+                cue = npc_gate.cue_block(adjudication, roster)
                 if cue and built.messages:
                     last = built.messages[-1]
                     built.messages[-1] = {
                         "role": last["role"],
                         "content": (last.get("content") or "") + "\n" + cue,
                     }
+                visible = _public_adjudication(adjudication)
+                if visible is not None:
+                    yield {"event": "adjudication", "data": visible}
+                    _publish_live(adventure_id, "adjudication", visible)
 
             stream_state = llm_client.StreamState()
             for token in llm_client.stream_chat_completion(
@@ -670,7 +902,7 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
             if out_script:
                 text = scripting.run_output_modifier(out_script, text)
             player_text = (player_action or {}).get("text") or raw_query_text or ""
-            compliance = _compliance_flag(verdict, text)
+            compliance = _compliance_flag(text, adjudication)
             text, quality = _correct_narration(
                 text, player_text=player_text, retry_of=retry_of, built=built,
                 llm_cfg=llm_cfg, sampler=sampler, transport=transport,
@@ -726,18 +958,30 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     actor="assistant", entity_id=str(action["id"]),
                     turn_seq=action["seq"], generation_id=generation_id,
                 )
-                # Pesos no mesmo commit da prosa: o turno seguinte já lê
-                # os números novos. Falha aqui não apaga a narração.
-                try:
-                    player_text = (player_action or {}).get("text") or ""
-                    npc_bonds.apply_turn(conn, adventure_id, player_text, text)
-                except Exception:
-                    log.warning("npc_bonds: pesos não atualizados", exc_info=True)
-                try:
-                    from app import npc_gate
-                    npc_gate.remember(conn, adventure_id, adjudication)
-                except Exception:
-                    log.warning("npc_gate: histórico não gravado", exc_info=True)
+                # Relação e visual no mesmo commit da prosa. Falha não apaga
+                # a narração. Story e retry não entram: um turno aplica uma vez.
+                if social_turn:
+                    try:
+                        before_visual = _visual_map(conn, adventure_id)
+                        social_text = raw_query_text if player_action is not None else ""
+                        raw_changes = npc_bonds.apply_adjudication(
+                            conn,
+                            adventure_id,
+                            adjudication or {},
+                            int(action["seq"]),
+                            player_text=social_text,
+                            actor_name=_actor_name(conn, adventure_id, user),
+                        )
+                        relation_changes = raw_changes if isinstance(raw_changes, list) else []
+                        _sync_visual_changes(conn, adventure_id, before_visual)
+                    except Exception:
+                        log.warning("npc_bonds: adjudicação não aplicada", exc_info=True)
+                        relation_changes = []
+                    try:
+                        from app import npc_gate
+                        npc_gate.remember(conn, adventure_id, adjudication)
+                    except Exception:
+                        log.warning("npc_gate: histórico não gravado", exc_info=True)
                 new_turn = _advance_committed_turn(conn, adventure_id, player_action, user)
                 if new_turn is not None:
                     events_bus.record(
@@ -761,12 +1005,22 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 data["action_check"] = verdict.to_dict()
             if resolution is not None:
                 data["rules"] = resolution
+            if isinstance(adjudication, dict) or relation_changes:
+                base = adjudication if isinstance(adjudication, dict) else {
+                    "decision": "allow",
+                    "outcome": "",
+                    "reactions": [],
+                    "initiative": None,
+                }
+                data["adjudication"] = _public_adjudication(
+                    base, relation_changes, include_changes=True)
 
             # Libera o lock antes de emitir 'done' para que chamadas imediatas do
             # cliente (ex.: /choices no onDone) nunca tomem 409 por corrida de thread.
             release_generation_lock(adventure_id)
             lock_released = True
-            _spawn_post_turn(adventure_id, transport)
+            if retry_of is None:
+                _spawn_post_turn(adventure_id, transport, user)
             yield {"event": "done", "data": data}
         except llm_client.LlmCancelled as exc:
             _revert_applied_rules(adventure_id, applied_action_id)

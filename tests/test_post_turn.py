@@ -393,6 +393,37 @@ def test_deferred_summary_writes_nothing(tmp_db, error):
     assert all(call["cancel"] is cancel for call in llm.calls)
 
 
+def test_chronicle_failure_still_runs_mind_xp_and_tick(tmp_db, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_CHRONICLE", "1")
+    adv = _adventure()
+    order: list[object] = []
+
+    def boom(adventure_id, transport=None):
+        order.append("chronicle")
+        raise RuntimeError("chronicle down")
+
+    monkeypatch.setattr(npc_chronicle, "update_from_turn", boom)
+    monkeypatch.setattr(game_engine, "_evaluate_consequences",
+                        lambda *args, **kwargs: order.append("consequences"))
+    monkeypatch.setattr(game_engine, "_apply_progression",
+                        lambda adventure_id, user: order.append(("xp", user)))
+    monkeypatch.setattr("app.npc_life.run_mind",
+                        lambda adventure_id, transport: order.append("mind"))
+    monkeypatch.setattr(game_engine, "_maybe_auto_tick",
+                        lambda adventure_id: order.append("tick"))
+    monkeypatch.setattr(game_engine, "_maybe_update_memory",
+                        lambda adventure_id, cancel=None: order.append("summary"))
+    monkeypatch.setattr(game_engine, "_prime_memory_query", lambda adventure_id: None)
+    monkeypatch.setattr(choices_service, "start", lambda *args, **kwargs: None)
+    game_engine._spawn_post_turn(adv["id"], None, user="hero")
+    deadline = time.monotonic() + 5
+    while "summary" not in order and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert order == ["chronicle", "consequences", ("xp", "hero"), "mind", "tick", "summary"]
+
+
+
+
 def test_cancel_during_the_memory_bank_skips_the_story_summary(tmp_db):
     adv = make_adventure()
     _long_story(adv["id"])

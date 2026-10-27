@@ -763,6 +763,19 @@ paths:
         O veredito também volta em `data.action_check` do evento `done`.
         Quando a checagem não roda (ação curta, tipo `story`, LLM fora do ar),
         o evento simplesmente não é emitido.
+
+        Em `do`, `say` e `continue`, o stream emite **antes** dos tokens a
+        decisão visível (`AdjudicationEvent`):
+        ```
+        event: adjudication
+        data: {"decision":"refuse","outcome":"Mira recusa.","reactions":[{"npc":"Mira","card_id":"…","reaction":"recua","line":"Não.","emotion":"anger","pose":"step back"}],"initiative":null}
+        ```
+        Esse frame não traz `relation_changes` nem motivo oculto.
+        O `done` repete a decisão como `TurnAdjudication`, com
+        `relation_changes`. Cada mudança tem `card_id`, `name`, `target`,
+        `delta`, `reason` e `evidence`: só o fato observável. Não existe campo
+        de motivação oculta. `story` não adjudica. `retry` não emite o evento,
+        não reaplica relação, visual ou memória e não dispara o pós-turno.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
       requestBody:
@@ -824,8 +837,10 @@ paths:
       operationId: postContinue
       description: |
         Gera a continuação sem nova entrada do jogador. Mesmo formato SSE de
-        `/action`; o evento `done` traz apenas `{"action": {Action}}`
-        (a action `continue` persistida).
+        `/action`. Pode emitir `adjudication` antes dos tokens quando alguém
+        age por conta própria. O `done` traz `{"action": {Action}}` e, se houve
+        decisão, `adjudication` (`TurnAdjudication`) com `relation_changes`
+        observáveis.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
       responses:
@@ -852,8 +867,9 @@ paths:
       description: |
         Substitui a última action `continue` por uma nova geração (mesmo
         contexto anterior a ela). Se a última ação não for da IA, responde 409.
-        Mesmo formato SSE de `/action`; o evento `done` traz a action
-        `continue` substituta (mesmo `seq`, novo `id`).
+        Não emite `adjudication`, não reaplica memória, relação ou visual e
+        não dispara o pós-turno. O `done` traz a action `continue` substituta
+        (mesmo `seq`, novo `id`), sem `relation_changes` novo.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
       responses:
@@ -1071,7 +1087,7 @@ paths:
   /api/adventures/{adventureId}/scene:
     post:
       tags: [assets]
-      summary: Fundo e elenco da cena atual (enfileira a pintura se o lugar ou o clima mudou)
+      summary: Fundo e elenco da cena atual (enfileira quando lugar, clima, elenco ou estado visual muda)
       operationId: syncScene
       parameters:
         - $ref: '#/components/parameters/AdventureId'
@@ -1089,7 +1105,9 @@ paths:
         '200':
           description: |
             Lugar, clima, elenco (retratos) e estado do fundo
-            (none/pending/ready/error/disabled). Não bloqueia na geração.
+            (none/pending/ready/error/disabled). O estado visual atual do elenco
+            entra no backdrop; números de vínculo sozinhos não geram outra imagem.
+            Não bloqueia na geração.
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1128,10 +1146,13 @@ paths:
         Enfileira um job character_portrait. A primeira foto vira a âncora
         (portrait_anchor_id) e passa a ser a cara do NPC na cena, no dock e na ficha.
         Se o card já tem retrato, o job é img2img a partir desse PNG (o rosto não
-        é sorteado de novo). Geração automática (cena, "gerar todos", nova aventura)
-        não substitui um retrato existente. Se o card não tiver portrait_prompt,
-        o LLM escreve um a partir de entry + contexto da aventura (e o persiste no
-        card). Prompt final = image_style da aventura + portrait_prompt + style_suffix.
+        é sorteado de novo). Geração automática não substitui um retrato existente.
+        As variantes do turno usam a ação, emoção, pose e estágio de relação de
+        sheet.visual_state, sempre com a mesma âncora de identidade; a sequência
+        do turno isolada não força GPU.
+        Se o card não tiver portrait_prompt, o LLM escreve um a partir de entry
+        + contexto da aventura (e o persiste no card). Prompt final = image_style
+        da aventura + portrait_prompt + style_suffix.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
         - $ref: '#/components/parameters/CardId'
@@ -5019,7 +5040,8 @@ components:
           default: ''
           description: Config do avatar 3D do NPC (JSON de serializeAvatarConfig —
             modelo GLB/corpo/mood do TalkingHead; nome da coluna mantido por
-            compatibilidade de schema).
+            compatibilidade de schema). Poses e gestos reagem ao turno na malha
+            configurada; o sistema não gera uma malha nova a partir do retrato.
         sheet:
           type: string
           default: ''
@@ -5551,13 +5573,102 @@ components:
     SseStream:
       type: string
       description: |
-        Fluxo `text/event-stream`. Eventos possíveis:
+        Fluxo `text/event-stream`. Eventos possíveis, nesta ordem quando existem:
+        - `rules_roll`: resolução mecânica, antes dos tokens;
+        - `action_check`: veredito de viabilidade, antes dos tokens;
+        - `adjudication`: `AdjudicationEvent` (decisão, desfecho, reações,
+          iniciativa). Antes dos tokens. Sem `relation_changes` e sem motivo oculto;
         - `token`: `data: {"token": "<trecho>"}` — um por token gerado;
-        - `done`:  `data: {"player_action"?: {Action}, "action": {Action}}` —
-          fim da geração, com a(s) action(s) persistida(s);
+        - `done`: `player_action`?, `action`, `action_check`?, `rules`?,
+          `adjudication`? (`TurnAdjudication`, com `relation_changes` observáveis).
+          `story` e `retry` não trazem adjudicação nova;
         - `error`: `data: {"message": "<motivo>"}` — falha; o stream encerra.
           Resposta que fica sem prosa depois da limpeza (só blocos de contexto
           copiados pelo narrador) também vira `error`, sem gravar o `continue`.
+
+    AdjudicationEvent:
+      type: object
+      required: [decision, outcome, reactions, initiative]
+      description: |
+        Decisão visível emitida antes dos tokens. Não inclui `relation_changes`.
+      properties:
+        decision:
+          type: string
+          enum: [allow, partial, refuse, own_beat]
+        outcome:
+          type: string
+        reactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/NpcReaction'
+        initiative:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/NpcInitiative'
+
+    NpcReaction:
+      type: object
+      required: [npc, card_id, reaction, line]
+      properties:
+        npc:
+          type: string
+        card_id:
+          type: string
+        reaction:
+          type: string
+        line:
+          type: string
+        emotion:
+          type: string
+        pose:
+          type: string
+
+    NpcInitiative:
+      type: object
+      required: [npc, card_id, line]
+      properties:
+        npc:
+          type: string
+        card_id:
+          type: string
+        line:
+          type: string
+
+    RelationChange:
+      type: object
+      required: [card_id, name, target, delta, reason, evidence]
+      description: |
+        Fato observável do commit. `reason` e `evidence` descrevem o que a cena
+        mostrou. Não carregam motivação oculta, segredo ou pensamento não dito.
+      properties:
+        card_id:
+          type: string
+        name:
+          type: string
+        target:
+          type: string
+          description: '`player` ou o card_id de outro NPC.'
+        delta:
+          type: object
+          additionalProperties:
+            type: integer
+        reason:
+          type: string
+          description: Fato observável. Sem motivação oculta.
+        evidence:
+          type: string
+          description: Trecho observável que sustenta o delta.
+
+    TurnAdjudication:
+      allOf:
+        - $ref: '#/components/schemas/AdjudicationEvent'
+        - type: object
+          required: [relation_changes]
+          properties:
+            relation_changes:
+              type: array
+              items:
+                $ref: '#/components/schemas/RelationChange'
 
     # ------------------------------------------------------- v2: assistant/images
     ChoicesResponse:

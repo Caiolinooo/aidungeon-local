@@ -5,6 +5,8 @@ import { useToast } from '../Toast.jsx'
 import VoiceCloneModal from '../VoiceCloneModal.jsx'
 import { useConfirm } from '../../confirm.jsx'
 import { CORE_STATS, roll4d6DropLowest } from '../../utils.js'
+import { formatDelta, targetLabel } from '../adjudicationView.js'
+import { bondGlance, STANCE_LABEL } from './npcBondView.js'
 
 const EMPTY_CARD = {
   type: 'character',
@@ -105,15 +107,18 @@ const REGEN_FIELDS = new Set([
 ])
 const STAT_KEYS = CORE_STATS.map(([key]) => key)
 // Mesmos nomes e ponto de partida de backend/app/npc_bonds.py.
-const BOND_KEYS = ['relationship', 'trust', 'fear', 'desire', 'boldness']
+const BOND_KEYS = ['relationship', 'trust', 'distrust', 'fear', 'desire', 'boldness']
 const BOND_LABELS = {
-  relationship: 'Relation',
-  trust: 'Trust',
-  fear: 'Fear',
-  desire: 'Desire',
-  boldness: 'Bold',
+  relationship: 'Relação',
+  trust: 'Confiança',
+  distrust: 'Desconf.',
+  fear: 'Medo',
+  desire: 'Desejo',
+  boldness: 'Ousadia',
 }
-const BOND_DEFAULTS = { relationship: 40, trust: 40, fear: 15, desire: 15, boldness: 40 }
+const BOND_DEFAULTS = {
+  relationship: 40, trust: 40, distrust: 30, fear: 15, desire: 15, boldness: 40,
+}
 
 // sheet armazenada (JSON string) → dict editável (''/inválido → {}).
 function parseSheet(raw) {
@@ -132,7 +137,12 @@ function sheetHasContent(sheet) {
     Object.keys(sheet.stats || {}).length > 0 ||
     Object.keys(sheet.bonds || {}).length > 0 ||
     Object.keys(sheet.body_state || {}).length > 0 ||
-    Boolean(sheet.expression)
+    Boolean(sheet.expression) ||
+    Boolean(sheet.alignment) ||
+    Boolean(sheet.stance) ||
+    (Array.isArray(sheet.bond_log) && sheet.bond_log.length > 0) ||
+    Object.keys(sheet.relations || {}).length > 0 ||
+    Boolean(sheet.visual_state)
 }
 
 // Painel da ficha estruturada (v0.5.0): exibição + edição mínima dos campos.
@@ -303,10 +313,10 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
           Bonds
         </span>
         <p className="text-[10px] text-muted">Atualizado a cada turno, a partir do que você faz.</p>
-        <div className="mt-1 grid grid-cols-1 gap-1">
+        <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-1 sm:grid-cols-3">
           {BOND_KEYS.map((key) => (
             <label key={key} className="flex min-w-0 items-center gap-2">
-              <span className="w-16 shrink-0 text-[10px] uppercase text-muted" title={key}>
+              <span className="w-14 shrink-0 truncate text-[10px] uppercase text-muted" title={key}>
                 {BOND_LABELS[key]}
               </span>
               <input
@@ -325,8 +335,58 @@ function SheetPanel({ sheet, onChange, onRegenerateField }) {
 }
 
 // Linha de um NPC: retrato + campos editáveis inline + ações.
+function BondGlance({ sheet, peers }) {
+  const names = {}
+  for (const peer of peers || []) names[peer.id] = peer.title || 'NPC'
+  const glance = bondGlance(sheet, names)
+  return (
+    <div className="mt-2 min-w-0 break-words rounded-lg border border-subtle bg-elevated/40 p-2 text-xs text-secondary">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Vínculo</p>
+      <p className="mt-1 text-primary">
+        {glance.alignmentLabel}
+        <span className="text-muted"> · {glance.stage}</span>
+        <span> · {STANCE_LABEL[glance.stance] || glance.stance}</span>
+      </p>
+      <p className="mt-0.5 tabular-nums">
+        Desconf. {glance.bonds.distrust}
+        <span className="text-muted"> · conf. {glance.bonds.trust} · medo {glance.bonds.fear}</span>
+      </p>
+      {glance.emotion ? (
+        <p className="text-[11px] text-muted">Agora: {glance.emotion}{glance.pose ? ` · ${glance.pose}` : ''}</p>
+      ) : null}
+      {glance.log.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {glance.log.map((entry, index) => (
+            <li key={`${entry.seq}-${index}`} className="text-[11px] leading-snug">
+              <span className="text-muted">{targetLabel(entry)}</span>
+              {Object.keys(entry.delta || {}).length > 0 ? (
+                <span className="tabular-nums text-accent-pri"> {formatDelta(entry.delta)}</span>
+              ) : null}
+              {entry.reason ? <span> — {entry.reason}</span> : null}
+              {entry.evidence ? <span className="text-muted"> · {entry.evidence}</span> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      {glance.relations.length > 0 && (
+        <ul className="mt-1 space-y-0.5 border-t border-subtle/70 pt-1">
+          {glance.relations.map((relation) => (
+            <li key={relation.id} className="text-[11px] leading-snug">
+              <span className="font-medium text-primary">{relation.name}</span>
+              <span className="tabular-nums text-muted">
+                {' '}conf. {relation.trust ?? '—'} · medo {relation.fear ?? '—'} · afin. {relation.affinity ?? '—'}
+              </span>
+              {relation.reason ? <span> — {relation.reason}</span> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function NpcRow({
-  card, job, adventureId, onSave, onRegenerate, onEnrich, onDelete,
+  card, job, adventureId, peers, onSave, onRegenerate, onEnrich, onDelete,
   onRegenerateField, onRegenerateAll, onUploadPhoto, onDeleteReference,
   onDeletePortrait, onPortraitFromPhoto, saving, enriching, regenerating,
   clonedVoices, onVoiceSaved, onVoiceDeleted,
@@ -545,6 +605,7 @@ function NpcRow({
           </ul>
         )}
       </div>
+      <BondGlance sheet={form.sheet} peers={peers} />
       <div className="mt-2 flex w-full min-w-0 flex-wrap items-center gap-1">
         <input
           ref={fileRef}
@@ -684,8 +745,16 @@ export default function NpcsTab({ adventure }) {
         && detail.type !== 'card_changed') return
       reload()
     }
+    const onSync = (ev) => {
+      if ((ev.detail || {}).adventureId !== adventure.id) return
+      reload()
+    }
     window.addEventListener('aidungeon-live', onLive)
-    return () => window.removeEventListener('aidungeon-live', onLive)
+    window.addEventListener('aidungeon-cards-sync', onSync)
+    return () => {
+      window.removeEventListener('aidungeon-live', onLive)
+      window.removeEventListener('aidungeon-cards-sync', onSync)
+    }
   }, [adventure.id, reload])
 
   // Fallback: fila de jobs. Retrato pronto também recarrega se o evento SSE faltar.
@@ -1004,6 +1073,7 @@ export default function NpcsTab({ adventure }) {
                 card={c}
                 job={job}
                 adventureId={adventure.id}
+                peers={npcs}
                 saving={savingId === c.id}
                 enriching={enrichingId === c.id}
                 regenerating={regeneratingId === c.id}

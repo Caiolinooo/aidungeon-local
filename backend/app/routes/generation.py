@@ -1,7 +1,10 @@
 """Router de geração (SSE): /action, /continue, /retry.
 
-Responde `text/event-stream` com eventos `token` → `done` | `error`.
-409 (JSON Error) quando já há geração em andamento para a aventura.
+Responde `text/event-stream`. Antes dos tokens podem sair `rules_roll`,
+`action_check` e `adjudication` (decisão, desfecho, reações, iniciativa).
+O stream encerra em `done` ou `error`. `done.adjudication.relation_changes`
+só fecha turno do/say/continue; retry e story não reaplicam relação, visual
+nem pós-turno. 409 (JSON Error) quando já há geração em andamento.
 """
 
 from __future__ import annotations

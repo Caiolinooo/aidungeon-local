@@ -8,8 +8,9 @@ pronta: números entram como contexto, nunca como sentença.
 Saída canônica (JSON):
     decision: allow | partial | refuse | own_beat
     outcome: o que de fato aconteceu, em uma ou duas frases
-    reactions[]: {npc, card_id, reaction, line}
-    initiative: {npc, card_id, line} | null
+    reactions[]: {npc, card_id, reaction, line, emotion?, pose?}
+    initiative: {npc, card_id, line, emotion?, pose?} | null
+    relation_updates[]: {card_id, target, delta, reason, evidence}
     cue: instrução curta para o narrador, sem prosa pronta para o jogador
 
 O chronicle continua sendo a autoridade única sobre ferimentos/dor; aqui o
@@ -24,6 +25,7 @@ import re
 from typing import Any
 
 from app import body_state, db, llm_client, npc_assets, npc_bonds, npc_life
+from app.voice_emotion import canonical_emotion
 
 log = logging.getLogger("aidungeon.npc_gate")
 
@@ -67,6 +69,24 @@ RULES:
   are physical facts: do not override them, but you still decide how people react.
 - Never mention rules, JSON, fields, numbers, "allow", "partial" or "refuse" to
   the player.
+- Each reaction may include emotion (joy, anger, fear, sadness, tenderness,
+  surprise, disgust, neutral) and pose (a short visible body position). Omit
+  either when the beat does not show it. Reactions stay valid when initiative
+  is null. Do not invent an emotion for the player.
+- relation_updates change how the NPC feels. card_id is a living NPC from
+  people. target is "player" or another living NPC card_id. Never use the
+  player card id. Never update the player as if they were an NPC.
+- Toward the player the delta keys are relationship, trust, distrust, fear,
+  desire, boldness. Toward another NPC the keys are only trust, fear, affinity.
+  Direction is card_id's feeling toward target. Keep each integer between -20
+  and 20. One update per directed pair.
+- Emit a delta only for a material fact: harm, help, a gift, a betrayal, an
+  insult that lands, a rescue, or romance both people accept in this beat.
+  Small talk, greetings, looking, and standing nearby get no update. Desire
+  rises only when the other person explicitly reciprocates. A refusal lowers
+  trust; it does not raise desire.
+- reason and evidence state only what was observable. Never put hidden motives,
+  private goals, secrets, or the cue into reason or evidence.
 
 Reply STRICT JSON only:
 {
@@ -74,9 +94,15 @@ Reply STRICT JSON only:
   "outcome": "1-2 sentences in the language of the action, concrete and specific",
   "reactions": [
     {"npc": "exact name", "card_id": "exact id", "reaction": "what they do/feel",
-     "line": "optional short spoken line, or empty"}
+     "line": "optional short spoken line, or empty",
+     "emotion": "optional canonical emotion, or empty",
+     "pose": "optional short visible pose, or empty"}
   ],
-  "initiative": {"npc": "exact name", "card_id": "exact id", "line": "optional self-initiated action"} or null,
+  "initiative": {"npc": "exact name", "card_id": "exact id", "line": "optional self-initiated action", "emotion": "", "pose": ""} or null,
+  "relation_updates": [
+    {"card_id": "exact npc id", "target": "player or exact other card_id",
+     "delta": {"trust": -6}, "reason": "observable fact", "evidence": "what was seen or done"}
+  ],
   "cue": "short instruction to the narrator about tone, consequences and what must not be contradicted"
 }"""
 
@@ -290,6 +316,7 @@ def _neutral_decision(payload: dict) -> dict:
         "outcome": outcome,
         "reactions": [],
         "initiative": None,
+        "relation_updates": [],
         "cue": outcome,
     }
 
@@ -319,6 +346,7 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
                         "outcome": {"type": "string"},
                         "reactions": {"type": "array", "items": {"type": "object"}},
                         "initiative": {"type": ["object", "null"]},
+                        "relation_updates": {"type": "array", "items": {"type": "object"}},
                         "cue": {"type": "string"},
                     },
                 },
@@ -427,15 +455,43 @@ def own_beat(adventure_id: str, llm_cfg: dict | None = None, transport=None,
     payload["mode"] = "continue"
     payload["instruction"] = (
         "No player action this beat. Decide whether a present NPC acts on their own "
-        "motive. If nobody acts, use decision=allow, empty reactions, initiative=null."
+        "motive. Reactions can stand without initiative. If nobody acts, use "
+        "decision=allow, empty reactions, empty relation_updates, initiative=null."
     )
     data = _call(llm_cfg or {}, payload, transport, cancel=cancel)
     result = _normalize_payload(data, payload)
     if result is None:
         return None
-    if result.get("decision") == "allow" and result.get("initiative") is None:
+    if (
+        result.get("decision") == "allow"
+        and not result.get("reactions")
+        and result.get("initiative") is None
+        and not result.get("relation_updates")
+    ):
         return None
     return result
+
+
+def _visual_fields(raw: dict) -> dict[str, str]:
+    extra: dict[str, str] = {}
+    emotion = canonical_emotion(str(raw.get("emotion") or ""))
+    pose = " ".join(str(raw.get("pose") or "").split())[:120]
+    if emotion:
+        extra["emotion"] = emotion
+    if pose:
+        extra["pose"] = pose
+    return extra
+
+
+def _roster_ids(payload: dict) -> tuple[set[str], set[str]]:
+    people = payload.get("people") if isinstance(payload.get("people"), list) else []
+    roster = {
+        str(item.get("card_id")) for item in people
+        if isinstance(item, dict) and item.get("card_id")
+    }
+    player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
+    players = {str(player.get("card_id"))} if player.get("card_id") else set()
+    return roster - players, players
 
 
 def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
@@ -464,6 +520,7 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
             "card_id": person.get("card_id"),
             "reaction": reaction,
             "line": line,
+            **_visual_fields(raw),
         })
     initiative = None
     raw_beat = data.get("initiative")
@@ -472,19 +529,32 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
             str(raw_beat.get("npc") or "").casefold())
         line = " ".join(str(raw_beat.get("line") or "").split())[:300]
         if person and line:
-            initiative = {"npc": person.get("name") or "Alguém",
-                          "card_id": person.get("card_id"), "line": line}
+            initiative = {
+                "npc": person.get("name") or "Alguém",
+                "card_id": person.get("card_id"),
+                "line": line,
+                **_visual_fields(raw_beat),
+            }
     outcome = " ".join(str(data.get("outcome") or "").split())[:900]
     cue = " ".join(str(data.get("cue") or "").split())[:900]
     if not cue:
         cue = outcome
-    if not cue and not reactions and initiative is None:
+    roster_ids, player_ids = _roster_ids(payload)
+    relation_updates = npc_bonds.normalize_relation_updates(
+        data.get("relation_updates"),
+        roster_ids,
+        player_ids,
+        player_text=str(payload.get("action") or ""),
+        hidden=cue,
+    )
+    if not cue and not reactions and initiative is None and not relation_updates:
         return None
     return {
         "decision": decision,
         "outcome": outcome,
         "reactions": reactions,
         "initiative": initiative,
+        "relation_updates": relation_updates,
         "cue": cue,
     }
 
@@ -521,16 +591,49 @@ def cue_block(result: dict | None, roster: list[dict] | None = None) -> str:
     return "\n".join(lines)
 
 
+def _memory_text(parts: list[str], cue: str) -> str:
+    text = " ".join(part for part in parts if part)
+    text = " ".join(text.split())
+    secret = " ".join((cue or "").split())
+    if secret and len(secret) >= 12 and secret.casefold() in text.casefold():
+        text = re.sub(re.escape(secret), " ", text, flags=re.IGNORECASE)
+        text = " ".join(text.split())
+    return text[:240]
+
+
 def remember(conn, adventure_id: str, result: dict | None) -> int:
-    """Guarda reações recusadas/parciais como memória; não mexe nos vínculos."""
-    if not result or result.get("decision") not in ("refuse", "partial"):
+    """Uma memória por NPC para allow, partial, refuse e own_beat.
+
+    Reação e iniciativa do mesmo card viram um fato só. O cue não entra.
+    """
+    if not result or result.get("decision") not in DECISIONS:
         return 0
-    saved = 0
+    cue = str(result.get("cue") or "")
+    grouped: dict[str, list[str]] = {}
+
+    def add(card_id, text: str) -> None:
+        cleaned = " ".join(str(text or "").split())
+        if not card_id or not cleaned or cleaned in grouped.get(card_id, []):
+            return
+        grouped.setdefault(card_id, []).append(cleaned)
+
     for reaction in result.get("reactions") or []:
-        card_id = reaction.get("card_id")
-        text = (reaction.get("reaction") or reaction.get("line") or "").strip()
-        if not card_id or not text:
+        if not isinstance(reaction, dict):
             continue
-        npc_life.add_memory(conn, adventure_id, card_id, "event", text[:240], "")
+        reaction_text = " ".join(str(reaction.get("reaction") or "").split())
+        line = " ".join(str(reaction.get("line") or "").split())
+        spoken = reaction_text
+        if line and line not in reaction_text:
+            spoken = (reaction_text + " " + line).strip()
+        add(reaction.get("card_id"), spoken or line)
+    beat = result.get("initiative")
+    if isinstance(beat, dict):
+        add(beat.get("card_id"), beat.get("line") or "")
+    saved = 0
+    for card_id, parts in grouped.items():
+        text = _memory_text(parts, cue)
+        if not text:
+            continue
+        npc_life.add_memory(conn, adventure_id, card_id, "event", text, "")
         saved += 1
     return saved

@@ -1,8 +1,8 @@
-"""Vínculo vivo do NPC: emoção, o que quer agora, e o lado em relação ao jogador.
+"""Vínculo vivo do NPC: emoção, intenção e relação com o jogador e outros NPCs.
 
-Não é um segundo motor de regras. Cinco inteiros na ficha (0–100) mudam
-com a ação do jogador, por regras fixas, e o turno seguinte mostra o
-resultado só na user final — o prefixo cacheado da janela não se mexe.
+O commit do turno chama `apply_adjudication`: deltas pequenos, teto por campo,
+clamp 0–100 e log de seq/evidência. O turno seguinte mostra o resultado só na
+user final — o prefixo cacheado da janela não se mexe.
 
 Pesos: relationship, trust, distrust, fear, desire, boldness.
 Postura: help, resist, flirt, flee, attack.
@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 import re
 
-from app import db, npc_assets
-from app.voice_emotion import emotion_from_text
+from app import db, npc_assets, progression
+from app.voice_emotion import canonical_emotion, emotion_from_text
 
 BOND_KEYS = ("relationship", "trust", "distrust", "fear", "desire", "boldness")
 DEFAULTS = {
@@ -38,33 +38,6 @@ _WANTS = {
     "attack": "attack the player",
 }
 
-# (nome, agulhas, delta). "*" no fim é prefixo. Várias regras no mesmo
-# texto somam; o clamp fica no fim.
-RULES: tuple[tuple[str, tuple[str, ...], dict[str, int]], ...] = (
-    ("kindness", (
-        "thank", "thanks", "obrigad*", "agradec*", "gentil", "comfort*",
-        "heal", "heals", "healed", "protege*", "protect*", "kindness", "acolh*",
-    ), {"trust": 8, "relationship": 5, "fear": -4, "distrust": -6}),
-    ("threat", (
-        "threat*", "kill*", "matar", "attack*", "atacar", "ataco",
-        "ataca", "atacou", "soco", "punch*", "ameac*",
-    ), {"fear": 18, "trust": -10, "relationship": -6, "distrust": 10}),
-    ("gift", (
-        "gift", "presente", "moeda", "moedas", "recompensa",
-        "give you", "gives you", "gave you", "te dou", "lhe dou",
-    ), {"desire": 6, "relationship": 8, "trust": 3, "distrust": -4}),
-    ("flirt", (
-        "flirt*", "kiss*", "beij*", "seduc*", "te amo", "love you",
-    ), {"desire": 10, "relationship": 4, "boldness": 2}),
-    ("insult", (
-        "insult*", "idiota", "stupid", "shut up", "cala a boca", "imbecil",
-    ), {"relationship": -8, "trust": -6, "boldness": 4, "fear": 2, "distrust": 8}),
-    ("assault", (
-        "cascud*", "soco", "socar", "soca", "chute", "chutar", "chuto",
-        "esfaque*", "estrangul*", "matar", "mato", "kill*", "punch*",
-        "defec*", "cagar", "cago", "mij*", "cuspir", "cuspo",
-    ), {"fear": 22, "trust": -16, "relationship": -14, "boldness": 8, "distrust": 14}),
-)
 
 MOMENT_MARKER = "[NPC moment]"
 _SCENE_LIMIT = 4
@@ -78,18 +51,6 @@ _MOMENT_CUE = (
     "stance help: they help the task, not surrender. "
     "Narrate the cost and the consequence. The scene must change."
 )
-_TURNED_DOWN = re.compile(
-    r"(?i)\b(recus\w*|refus\w*|afast\w*|n[aã]o deixa|n[aã]o cede|n[aã]o obedece|"
-    r"segura o pr[oó]prio espa[cç]o|d[aá] um passo para tr[aá]s)\b"
-)
-REFUSAL_DELTA = {
-    "trust": -6,
-    "relationship": -4,
-    "fear": 6,
-    "desire": -8,
-    "boldness": 2,
-    "distrust": 8,
-}
 
 
 def clamp(value: int) -> int:
@@ -118,38 +79,420 @@ def write_bonds(sheet: dict, bonds: dict[str, int]) -> dict:
     return updated
 
 
-def _hit(text: str, needle: str) -> bool:
-    prefix = needle.endswith("*")
-    word = needle[:-1] if prefix else needle
-    if not word:
-        return False
-    if prefix:
-        pattern = rf"(?<!\w){re.escape(word)}"
-    else:
-        pattern = rf"(?<!\w){re.escape(word)}(?!\w)"
-    return re.search(pattern, text) is not None
+# Mesmos tetos do histórico NPC↔NPC em progression.update_relation.
+PLAYER_TARGET = "player"
+NPC_RELATION_KEYS = ("trust", "fear", "affinity")
+MAX_DELTA_PER_FIELD = 20
+MAX_RELATION_UPDATES = 12
+BOND_LOG_CAP = 8
+EVIDENCE_CAP = 240
+PUBLIC_CHANGE_KEYS = ("card_id", "name", "target", "delta", "reason", "evidence")
+
+_EXPRESSION_FOR = {
+    "joy": "smiling",
+    "anger": "angry",
+    "fear": "afraid",
+    "sadness": "sad",
+    "tenderness": "tender",
+    "surprise": "surprised",
+    "disgust": "disgusted",
+    "neutral": "neutral",
+}
+_MATERIAL = re.compile(
+    r"(?i)(?<!\w)(soco\w*|golpe\w*|ferid\w*|sangr\w*|ataqu\w*|attack\w*|threat\w*|"
+    r"amea[cç]\w*|matar|mato|kill\w*|punch\w*|presente\w*|gift\w*|beij\w*|kiss\w*|"
+    r"recus\w*|refus\w*|trai\w*|salv\w*|proteg\w*|protect\w*|insult\w*|"
+    r"empurr\w*|faca|facada|cusp\w*|ajud\w*|thank\w*|obrigad\w*|heal\w*|"
+    r"roub\w*|steal\w*|mentir\w*|lied|betray\w*|agress\w*|wound\w*|"
+    r"esfaque\w*|estrangul\w*|chute\w*|chutar|apanh\w*|hurt\w*)(?!\w)"
+)
+_SMALL_TALK = re.compile(
+    r"(?i)(?<!\w)(oi|ol[aá]|hey|hi|hello|tudo bem|como vai|bom dia|boa tarde|"
+    r"boa noite|how are you|nice weather|small talk|conversa fiada|cumpriment\w*|"
+    r"acena\w*|waves?|looks at|olha para|fica perto|standing near|stands near|"
+    r"aproxim\w*|por perto)(?!\w)"
+)
+_RECIPROCAL = re.compile(
+    r"(?i)(?<!\w)(retribu\w*|correspond\w*|beija de volta|kisses back|"
+    r"aceita o beijo|accepts the kiss|reciproc\w*|devolve o beijo|"
+    r"ambos querem|beija tamb[eé]m|kisses too)(?!\w)"
+)
+_HIDDEN = re.compile(
+    r"(?i)(motiva[cç][aã]o oculta|hidden motive|private knowledge|"
+    r"segredo\s*:|secret\s*:|\[npc moment\]|\[adjudica)"
+)
 
 
-def deltas_for(text: str) -> dict[str, int]:
-    """Soma as regras que a frase dispara. Sem regra, dict vazio."""
-    folded = (text or "").casefold()
-    if not folded.strip():
+def alignment_from_bonds(bonds: dict[str, int]) -> str:
+    """Lado diante do jogador, só a partir dos pesos. Não lê o rótulo antigo."""
+    trust = int(bonds.get("trust", 0))
+    relationship = int(bonds.get("relationship", 0))
+    distrust = int(bonds.get("distrust", 0))
+    fear = int(bonds.get("fear", 0))
+    if relationship <= 25 and distrust >= 55 and trust <= 30:
+        return "oposto"
+    if distrust >= 55 or (trust <= 30 and distrust >= 40) or (fear >= 55 and trust <= 35):
+        return "desconfiado"
+    if trust >= 60 and relationship >= 55 and distrust <= 40 and fear < 60:
+        return "aliado"
+    return "neutro"
+
+
+def _expression_for(emotion: str, current: str) -> str:
+    mapped = _EXPRESSION_FOR.get(emotion or "")
+    if not mapped:
+        return current
+    if emotion == "neutral" and current.strip():
+        return current
+    return mapped
+
+
+def _limit_delta(raw, allowed: tuple[str, ...]) -> dict[str, int]:
+    if not isinstance(raw, dict):
         return {}
-    total: dict[str, int] = {}
-    for _name, needles, delta in RULES:
-        if not any(_hit(folded, needle) for needle in needles):
+    limited: dict[str, int] = {}
+    for key in allowed:
+        if key not in raw or isinstance(raw[key], bool):
             continue
-        for key, value in delta.items():
-            total[key] = total.get(key, 0) + value
-    return total
+        try:
+            value = int(raw[key])
+        except (TypeError, ValueError):
+            continue
+        if value == 0:
+            continue
+        limited[key] = max(-MAX_DELTA_PER_FIELD, min(MAX_DELTA_PER_FIELD, value))
+    return limited
 
 
-def apply_deltas(bonds: dict[str, int], text: str) -> dict[str, int]:
-    """Aplica as regras e corta em 0–100. Não grava."""
-    current = read_bonds({"bonds": bonds})
-    for key, value in deltas_for(text).items():
-        current[key] = clamp(current[key] + value)
-    return current
+def _public_text(text: str, hidden: str = "") -> str:
+    cleaned = " ".join(str(text or "").split())
+    secret = " ".join(str(hidden or "").split())
+    if secret and len(secret) >= 12 and secret.casefold() in cleaned.casefold():
+        cleaned = re.sub(re.escape(secret), " ", cleaned, flags=re.IGNORECASE)
+        cleaned = " ".join(cleaned.split())
+    if _HIDDEN.search(cleaned):
+        return ""
+    return cleaned[:EVIDENCE_CAP]
+
+
+def _immaterial(own: str, evidence: str, action: str = "") -> bool:
+    """Small talk e proximidade não movem vínculo. Fato material no próprio update, sim."""
+    if _MATERIAL.search(own or ""):
+        return False
+    if _SMALL_TALK.search(own or ""):
+        return True
+    if _SMALL_TALK.search(action or "") and not _MATERIAL.search(action or ""):
+        return True
+    if not " ".join(str(evidence or "").split()) and not _MATERIAL.search(action or ""):
+        return True
+    return False
+
+
+def normalize_relation_updates(raw, roster_ids: set[str], player_ids: set[str], *,
+                               player_text: str = "", hidden: str = "") -> list[dict]:
+    """Valida alvos contra o roster e limita o delta por par no turno.
+
+    Alvo inexistente, o card do jogador e auto-alvo saem. Small talk e
+    proximidade sem fato material saem. Desejo só sobe com reciprocidade
+    explícita. O resultado só tem campos públicos.
+    """
+    if not isinstance(raw, list):
+        return []
+    roster = {str(item) for item in roster_ids if item}
+    players = {str(item) for item in player_ids if item}
+    merged: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+    for item in raw[: MAX_RELATION_UPDATES * 2]:
+        if not isinstance(item, dict):
+            continue
+        card_id = str(item.get("card_id") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if card_id not in roster or card_id in players:
+            continue
+        if target.casefold() == PLAYER_TARGET:
+            target = PLAYER_TARGET
+        elif target in players or target not in roster or target == card_id:
+            continue
+        allowed = BOND_KEYS if target == PLAYER_TARGET else NPC_RELATION_KEYS
+        delta = _limit_delta(item.get("delta"), allowed)
+        reason = _public_text(item.get("reason"), hidden)
+        evidence = _public_text(item.get("evidence"), hidden)
+        action = player_text if target == PLAYER_TARGET else ""
+        if delta.get("desire", 0) > 0 and not _RECIPROCAL.search(
+            " ".join((action, reason, evidence))
+        ):
+            delta.pop("desire", None)
+        if _immaterial(f"{reason} {evidence}", evidence, action) or not delta:
+            continue
+        key = (card_id, target)
+        slot = merged.get(key)
+        if slot is None:
+            slot = {
+                "card_id": card_id,
+                "target": target,
+                "delta": {},
+                "reason": reason,
+                "evidence": evidence,
+            }
+            merged[key] = slot
+            order.append(key)
+        elif reason and not slot["reason"]:
+            slot["reason"] = reason
+        if evidence and slot["evidence"] == "":
+            slot["evidence"] = evidence
+        for field, value in delta.items():
+            total = slot["delta"].get(field, 0) + value
+            total = max(-MAX_DELTA_PER_FIELD, min(MAX_DELTA_PER_FIELD, total))
+            if total:
+                slot["delta"][field] = total
+            else:
+                slot["delta"].pop(field, None)
+    found = []
+    for key in order:
+        item = merged[key]
+        if not item["delta"]:
+            continue
+        found.append({field: item[field] for field in PUBLIC_CHANGE_KEYS if field != "name"})
+        if len(found) >= MAX_RELATION_UPDATES:
+            break
+    return found
+
+
+def _seq_of(seq: int) -> int:
+    try:
+        return int(seq)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _already_logged(log, seq: int, target: str) -> bool:
+    for entry in log or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("seq") == seq and entry.get("target") == target:
+            return True
+    return False
+
+
+def _applied_move(before: dict[str, int], delta: dict[str, int],
+                  keys: tuple[str, ...]) -> dict[str, int]:
+    applied: dict[str, int] = {}
+    for key in keys:
+        if key not in delta:
+            continue
+        after = clamp(int(before.get(key, 0)) + int(delta[key]))
+        moved = after - int(before.get(key, 0))
+        if moved:
+            applied[key] = moved
+    return applied
+
+
+def _public_change(card: dict, target: str, delta: dict[str, int],
+                   reason: str, evidence: str) -> dict:
+    return {
+        "card_id": card.get("id"),
+        "name": " ".join(str(card.get("title") or "Alguém").split()) or "Alguém",
+        "target": target,
+        "delta": dict(delta),
+        "reason": reason,
+        "evidence": evidence,
+    }
+
+
+def _reaction_action(raw: dict) -> str:
+    action = " ".join(str(raw.get("reaction") or "").split())
+    line = " ".join(str(raw.get("line") or "").split())
+    if line and line not in action:
+        action = (action + " " + line).strip()
+    return action[:EVIDENCE_CAP]
+
+
+def _player_pose(adjudication: dict) -> str:
+    actor = adjudication.get("actor")
+    if isinstance(actor, dict):
+        pose = " ".join(str(actor.get("pose") or "").split())
+        if pose:
+            return pose[:120]
+    return " ".join(str(adjudication.get("actor_pose") or "").split())[:120]
+
+
+def _action_text(player_text: str) -> str:
+    from app.npc_gate import plain
+    return plain(player_text)[:EVIDENCE_CAP]
+
+
+def apply_adjudication(session, adventure_id: str, adjudication: dict, seq: int,
+                       player_text: str = "", actor_name: str = "") -> list[dict]:
+    """Único escritor dos deltas e de `sheet.visual_state` no commit.
+
+    Devolve só `{card_id, name, target, delta, reason, evidence}`.
+    O mesmo `seq` não soma outra vez. O card do jogador não entra como NPC.
+    """
+    adjudication = adjudication if isinstance(adjudication, dict) else {}
+    seq_i = _seq_of(seq)
+    cards = db.list_cards(session, adventure_id)
+    player_ids = {
+        card.get("id") for card in cards
+        if card.get("player_username") and card.get("id")
+    }
+    by_id: dict[str, dict] = {}
+    for card in cards:
+        if (card.get("type") or "") != "character" or card.get("id") in player_ids:
+            continue
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        if _living(sheet):
+            by_id[card["id"]] = card
+    updates = normalize_relation_updates(
+        adjudication.get("relation_updates"),
+        set(by_id),
+        player_ids,
+        player_text=player_text,
+        hidden=str(adjudication.get("cue") or ""),
+    )
+    dirty: dict[str, dict] = {}
+
+    def sheet_of(card: dict) -> dict:
+        current = dirty.get(card["id"])
+        if current is None:
+            current = npc_assets.parse_sheet(card.get("sheet") or "")
+            dirty[card["id"]] = current
+        return current
+
+    public: list[dict] = []
+    for update in updates:
+        card = by_id.get(update["card_id"])
+        if card is None:
+            continue
+        sheet = sheet_of(card)
+        target = update["target"]
+        if target == PLAYER_TARGET:
+            log = sheet.get("bond_log") if isinstance(sheet.get("bond_log"), list) else []
+            if _already_logged(log, seq_i, target):
+                continue
+            before = read_bonds(sheet)
+            applied = _applied_move(before, update["delta"], BOND_KEYS)
+            if not applied:
+                continue
+            bonds = dict(before)
+            for key, value in applied.items():
+                bonds[key] = clamp(before[key] + value)
+            sheet = write_bonds(sheet, bonds)
+            sheet["alignment"] = alignment_from_bonds(read_bonds(sheet))
+            entry = {
+                "seq": seq_i,
+                "target": target,
+                "delta": applied,
+                "evidence": (update.get("evidence") or "")[:EVIDENCE_CAP],
+            }
+            sheet["bond_log"] = [
+                item for item in log if isinstance(item, dict)
+            ][-BOND_LOG_CAP + 1:] + [entry]
+            dirty[card["id"]] = sheet
+        else:
+            if target not in by_id:
+                continue
+            relation = progression.relation_with(sheet, target)
+            if any(str(item).startswith(f"seq {seq_i} ") for item in relation["history"]):
+                continue
+            before = {key: relation[key] for key in NPC_RELATION_KEYS}
+            applied = _applied_move(before, update["delta"], NPC_RELATION_KEYS)
+            if not applied:
+                continue
+            evidence = update.get("evidence") or ""
+            event = (
+                f"seq {seq_i} | {json.dumps(applied, ensure_ascii=False)} | {evidence}"
+            )[:EVIDENCE_CAP]
+            sheet = progression.update_relation(
+                sheet, target,
+                trust=applied.get("trust", 0),
+                fear=applied.get("fear", 0),
+                affinity=applied.get("affinity", 0),
+                event=event,
+            )
+            dirty[card["id"]] = sheet
+        public.append(_public_change(
+            card, target, applied,
+            update.get("reason") or "",
+            update.get("evidence") or "",
+        ))
+
+    visuals: dict[str, dict[str, str]] = {}
+    for reaction in adjudication.get("reactions") or []:
+        if not isinstance(reaction, dict):
+            continue
+        card_id = str(reaction.get("card_id") or "")
+        if card_id not in by_id:
+            continue
+        visuals[card_id] = {
+            "action": _reaction_action(reaction),
+            "emotion": canonical_emotion(str(reaction.get("emotion") or "")) or "",
+            "pose": " ".join(str(reaction.get("pose") or "").split())[:120],
+        }
+    beat = adjudication.get("initiative")
+    if isinstance(beat, dict):
+        card_id = str(beat.get("card_id") or "")
+        if card_id in by_id:
+            current = visuals.get(card_id, {"action": "", "emotion": "", "pose": ""})
+            line = " ".join(str(beat.get("line") or "").split())[:EVIDENCE_CAP]
+            if line:
+                current["action"] = line
+            emotion = canonical_emotion(str(beat.get("emotion") or ""))
+            if emotion:
+                current["emotion"] = emotion
+            pose = " ".join(str(beat.get("pose") or "").split())[:120]
+            if pose:
+                current["pose"] = pose
+            visuals[card_id] = current
+    for card_id, visual in visuals.items():
+        if not (visual["action"] or visual["emotion"] or visual["pose"]):
+            continue
+        sheet = sheet_of(by_id[card_id])
+        sheet["visual_state"] = {
+            "action": visual["action"],
+            "emotion": visual["emotion"],
+            "pose": visual["pose"],
+            "seq": seq_i,
+        }
+        if visual["emotion"]:
+            sheet["expression"] = _expression_for(
+                visual["emotion"], str(sheet.get("expression") or ""),
+            )
+
+    action = _action_text(player_text) if player_text else ""
+    actor = adjudication.get("actor") if isinstance(adjudication.get("actor"), dict) else {}
+    if not action:
+        action = " ".join(str(actor.get("action") or "").split())[:EVIDENCE_CAP]
+    pose = _player_pose(adjudication)
+    if action or pose:
+        candidates = [card for card in cards if card.get("id") in player_ids]
+        player = None
+        if actor_name:
+            wanted = " ".join(actor_name.split()).casefold()
+            player = next((
+                card for card in candidates
+                if " ".join(str(card.get("title") or "").split()).casefold() == wanted
+            ), None)
+        if player is None and candidates:
+            player = candidates[0]
+        if player is not None:
+            sheet = npc_assets.parse_sheet(player.get("sheet") or "")
+            sheet["visual_state"] = {
+                "action": action,
+                "emotion": "",
+                "pose": pose,
+                "seq": seq_i,
+            }
+            db.update_card(session, adventure_id, player["id"], {
+                "sheet": json.dumps(sheet, ensure_ascii=False),
+            })
+
+    for card_id, sheet in dirty.items():
+        db.update_card(session, adventure_id, card_id, {
+            "sheet": json.dumps(sheet, ensure_ascii=False),
+        })
+    return public
+
+
 
 
 def stance_of(bonds: dict[str, int], *, obedience: str = "") -> str:
@@ -281,43 +624,6 @@ def _living(sheet: dict) -> bool:
     return sheet.get("status") not in ("dead", "missing")
 
 
-def apply_turn(conn, adventure_id: str, player_text: str, narration: str) -> int:
-    """Atualiza os pesos de quem a ação tocou. Devolve quantos cards mudaram.
-
-    A ação do jogador manda quando ela mesma dispara uma regra. Sem isso,
-    vale a narração (um continue, por exemplo). Quem tem nome na ação do
-    jogador é o alvo; sem nome, todo NPC vivo citado na narração.
-    """
-    player_text = player_text or ""
-    narration = narration or ""
-    player_delta = deltas_for(player_text)
-    source = player_text if player_delta else narration
-    delta = player_delta or deltas_for(narration)
-    # Um beijo recusado não pode subir desejo: a tentativa falhou.
-    # Medo e queda de confiança de uma agressão ficam.
-    if player_delta and delta.get("desire", 0) > 0 and _TURNED_DOWN.search(narration or ""):
-        delta = dict(REFUSAL_DELTA)
-    if not delta:
-        return 0
-    cards = db.list_cards(conn, adventure_id)
-    if player_delta:
-        targets = characters_in_text(cards, player_text) or characters_in_text(cards, narration)
-    else:
-        targets = characters_in_text(cards, source)
-    changed = 0
-    for card in targets:
-        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-        if not _living(sheet):
-            continue
-        bonds = read_bonds(sheet)
-        for key, value in delta.items():
-            bonds[key] = clamp(bonds[key] + value)
-        updated = write_bonds(sheet, bonds)
-        db.update_card(conn, adventure_id, card["id"], {
-            "sheet": json.dumps(updated, ensure_ascii=False),
-        })
-        changed += 1
-    return changed
 
 
 def _moment_line(card: dict, text: str) -> str:

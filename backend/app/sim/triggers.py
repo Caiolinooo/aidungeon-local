@@ -274,14 +274,18 @@ def install_hooks() -> None:
         travel._sim_quest_hook = True
         world_map.travel = travel
 
-    if not getattr(npc_bonds.apply_turn, "_sim_quest_hook", False):
-        original_apply = npc_bonds.apply_turn
+    if not getattr(npc_bonds.apply_adjudication, "_sim_quest_hook", False):
+        original_apply = npc_bonds.apply_adjudication
 
-        def apply_turn(conn, adventure_id: str, player_text: str, narration: str) -> int:
-            changed = original_apply(conn, adventure_id, player_text, narration)
+        def apply_adjudication(session, adventure_id: str, adjudication: dict, seq: int,
+                               player_text: str = "", actor_name: str = "") -> list[dict]:
+            changed = original_apply(
+                session, adventure_id, adjudication, seq,
+                player_text=player_text, actor_name=actor_name,
+            )
             if changed:
-                _refresh_saved(conn, adventure_id)
+                _refresh_saved(session, adventure_id)
             return changed
 
-        apply_turn._sim_quest_hook = True
-        npc_bonds.apply_turn = apply_turn
+        apply_adjudication._sim_quest_hook = True
+        npc_bonds.apply_adjudication = apply_adjudication

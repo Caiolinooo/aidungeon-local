@@ -331,6 +331,15 @@ a,
   animation: npc-step 0.8s ease-out;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .scene-react,
+  .npc-react,
+  .turn-beat,
+  .streaming-cursor::after {
+    animation: none;
+  }
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

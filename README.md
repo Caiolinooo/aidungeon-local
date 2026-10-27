@@ -78,6 +78,16 @@ OpenAI-compatível.
 - **HUD vivo**: o passe de crônica reescreve o painel a cada turno (`_hud`, `_actions`, `_seq`), publica `ui_changed` e a tela mostra um mini HUD com escala `--ui-scale`.
 - **Retrato no estado da história**: a variante do retrato segue a situação atual (denoise 0.5) em vez de travar o cânone.
 - **Voz OmniVoice**: TTS Q8 na GPU com WAV PCM progressivo em `/api/tts/stream`; `/api/tts` mantém MP3. Dá para gravar ou enviar um áudio, salvar a voz e usá-la no narrador ou num personagem.
+- **Interação com consequência visível**: o adjudicador emite reação, fala,
+  emoção, pose e iniciativa antes da prosa; o turno mostra o resultado e as
+  mudanças de relação sem expor instruções ou motivos privados.
+- **Relações com evidência**: deltas direcionais NPC→jogador e NPC→NPC usam
+  fatos materiais do turno, com limites, histórico e idempotência por `seq`.
+  Conversa trivial não altera vínculo; romance só avança com reciprocidade.
+- **Retrato, cena e avatar reativos**: ação, emoção, pose e estágio da relação
+  atualizam variantes FineView e o backdrop sem trocar a âncora de identidade.
+  O avatar usa a malha GLB configurada, com poses/gestos locais e reduced motion;
+  não apresenta uma imagem 2D como modelo 3D nem gera uma malha nova do retrato.
 
 ## Funcionalidades (v0.10.0)
 

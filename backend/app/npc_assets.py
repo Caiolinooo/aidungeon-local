@@ -903,10 +903,79 @@ def visual_bits(card: dict) -> list[str]:
     return bits
 
 
+_VISUAL_STATE_KEYS = ("action", "emotion", "pose")
+_ALIGNMENT_STAGES = ("aliado", "neutro", "desconfiado", "oposto")
+_ALIGNMENT_LOOK = {
+    "aliado": "warm allied stance",
+    "neutro": "neutral stance",
+    "desconfiado": "wary guarded stance",
+    "oposto": "hostile opposing stance",
+}
+
+
+def _sheet_dict(card: dict) -> dict:
+    """Ficha do card, seja dict já parseado ou JSON armazenado."""
+    raw = card.get("sheet") if isinstance(card, dict) else None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return parse_sheet(raw)
+    return {}
+
+
+def visual_reaction(sheet: dict | None) -> dict[str, str]:
+    """Ação, emoção e pose observáveis. Sem seq e sem números de vínculo."""
+    if not isinstance(sheet, dict):
+        return {}
+    raw = sheet.get("visual_state")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, str] = {}
+    for key in _VISUAL_STATE_KEYS:
+        raw_value = raw.get(key)
+        if not isinstance(raw_value, str):
+            continue
+        text = _clip(" ".join(raw_value.split()), 120)
+        if text:
+            found[key] = text
+    return found
+
+
+def alignment_stage(sheet: dict | None) -> str:
+    """Estágio público: aliado, neutro, desconfiado ou oposto. Sem o inteiro."""
+    if not isinstance(sheet, dict):
+        return ""
+    raw = sheet.get("alignment")
+    if isinstance(raw, dict):
+        raw = raw.get("stage") or raw.get("alignment") or ""
+    if not isinstance(raw, str):
+        return ""
+    stage = " ".join(raw.split()).casefold()
+    if stage in _ALIGNMENT_STAGES:
+        return stage
+    return ""
+
+
+def _reaction_bits(sheet: dict) -> list[str]:
+    bits: list[str] = []
+    reaction = visual_reaction(sheet)
+    for key in _VISUAL_STATE_KEYS:
+        if reaction.get(key):
+            bits.append(f"{key}: {reaction[key]}")
+    stage = alignment_stage(sheet)
+    if stage:
+        bits.append(f"alignment stage: {stage}, {_ALIGNMENT_LOOK[stage]}")
+    return bits
+
+
 def portrait_variant_prompt(card: dict) -> str:
-    """Prompt do retrato do estado atual, mantendo o enquadramento original."""
+    """Prompt do retrato do estado atual, mantendo identidade, enquadramento e âncora.
+
+    Ação, emoção, pose e o estágio de alignment entram quando existem.
+    O texto base (busto, rosto, cabelo) continua no fim, preso à âncora.
+    """
     base = " ".join(str(card.get("portrait_prompt") or "").split())
-    sheet = parse_sheet(card.get("sheet") or "")
+    sheet = _sheet_dict(card)
     bits: list[str] = []
     if not base:
         for key in ("appearance", "body", "clothing"):
@@ -924,6 +993,7 @@ def portrait_variant_prompt(card: dict) -> str:
     wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=True)
     if wounds:
         bits.append(wounds + ", visible in portrait")
+    bits.extend(_reaction_bits(sheet))
     if not bits:
         return base
     return (
@@ -939,17 +1009,22 @@ def portrait_state_key(card: dict, img_cfg: dict, *, image_style: str = "",
 
     `request_key` entra com prompt vazio e tamanho 0. O fingerprint é o que
     essa função inclui (provider, modelo, CLIP, VAE, sampler, shift), sem
-    misturar o texto da cena.
+    misturar o texto da cena. `visual_state` entra só com ação, emoção e
+    pose; `alignment_stage` é o rótulo, nunca o inteiro de bonds. Um tick
+    numérico sem estágio novo não muda a chave e não pede GPU.
     """
     import hashlib
 
     from app import image_client
 
+    sheet = _sheet_dict(card)
     raw_sheet = card.get("sheet") or ""
     if isinstance(raw_sheet, dict):
         raw_sheet = json.dumps(raw_sheet, ensure_ascii=False)
     elif not isinstance(raw_sheet, str):
         raw_sheet = ""
+    reaction = visual_reaction(sheet)
+    stage = alignment_stage(sheet)
     blob = bytes(reference_bytes or b"")
     payload = {
         "portrait_variant_prompt": portrait_variant_prompt(card),
@@ -961,6 +1036,11 @@ def portrait_state_key(card: dict, img_cfg: dict, *, image_style: str = "",
             img_cfg, "", width=0, height=0, init_image=blob,
         ),
     }
+    # Ausentes ficam de fora: a chave antiga continua válida e não pede GPU.
+    if reaction:
+        payload["visual_state"] = {key: reaction[key] for key in _VISUAL_STATE_KEYS if reaction.get(key)}
+    if stage:
+        payload["alignment_stage"] = stage
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

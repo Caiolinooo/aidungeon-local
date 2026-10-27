@@ -16,11 +16,13 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from 'react'
 import { TalkingHead } from '@met4citizen/talkinghead'
 import { LipsyncEn } from '@met4citizen/talkinghead/modules/lipsync-en.mjs'
 import { LipsyncPt_br } from './vendor/lipsync-pt_br.mjs'
 import { avatarUrl } from './avatarConfig.js'
+import { prefersReducedMotion, resolveAvatarMotion } from './avatarMotion.js'
 import { PCM_FRAME_SAMPLES, readPcm16Wav } from '../../pcmStream.js'
 
 // Distribui a duração do áudio entre as palavras proporcionalmente ao
@@ -82,7 +84,7 @@ function wordsForFrame({ words, cursor, totalMs, emittedMs, frameLength, sampleR
 }
 
 const TalkingAvatar = forwardRef(function TalkingAvatar(
-  { cfg, className, view = 'upper' },
+  { cfg, className, view = 'upper', visual = null },
   ref,
 ) {
   const containerRef = useRef(null)
@@ -140,16 +142,44 @@ const TalkingAvatar = forwardRef(function TalkingAvatar(
       })
   }, [url, body]) // mood inicial entra no showAvatar; mudanças vão pelo efeito abaixo
 
-  // Aplica o mood persistido quando muda (após o avatar estar pronto).
+  // Mood do GLB. visual_state.emotion substitui o mood salvo quando o
+  // TalkingHead conhece esse humor. Pose e gesto só entram se forem
+  // templates locais — playPose com nome solto tenta baixar um FBX.
+  // prefers-reduced-motion: fica o humor do rosto, sem pose/gesto.
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion)
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const onChange = () => setReducedMotion(query.matches)
+    onChange()
+    query.addEventListener?.('change', onChange)
+    return () => query.removeEventListener?.('change', onChange)
+  }, [])
+  const motion = resolveAvatarMotion(visual, mood)
+  const motionKey = `${motion.mood || ''}|${motion.pose || ''}|${motion.gesture || ''}|${visual?.seq ?? ''}|${reducedMotion ? 1 : 0}`
   useEffect(() => {
     let cancelled = false
     headReadyRef.current.then((ok) => {
-      if (!cancelled && ok && headRef.current) headRef.current.setMood(mood)
+      if (cancelled || !ok || !headRef.current) return
+      const head = headRef.current
+      if (motion.mood) {
+        try { head.setMood(motion.mood) } catch { /* humor fora de animMoods */ }
+      }
+      if (reducedMotion) {
+        try { head.stopGesture() } catch { /* gesto ainda não armado */ }
+        return
+      }
+      if (motion.pose) {
+        try { head.playPose(motion.pose) } catch { /* pose fora do template */ }
+      }
+      if (motion.gesture) {
+        try { head.playGesture(motion.gesture, 3, false, 800) } catch { /* gesto fora do template */ }
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [mood])
+  }, [motionKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(ref, () => ({
     // Fala um WAV PCM16 com lipsync por palavras. O frame mais recente fica

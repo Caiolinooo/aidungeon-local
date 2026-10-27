@@ -237,6 +237,110 @@ def test_cue_block_never_invents_player_prose():
     assert "Fale" not in cue or "Fala possível" in cue
 
 
+def test_decide_parses_visuals_and_rejects_bad_relation_targets(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Vínculo")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda.")
+        player = db.insert_card(
+            conn, adv["id"], title="Caio", type="character",
+            player_username="caio", entry="Protagonista.")
+    _capture(monkeypatch, json.dumps({
+        "decision": "partial",
+        "outcome": "Elara apanha e não cai.",
+        "reactions": [{
+            "npc": "Elara", "card_id": elara["id"],
+            "reaction": "Ela segura o rosto.", "line": "",
+            "emotion": "fear", "pose": "hand on cheek",
+        }],
+        "initiative": None,
+        "relation_updates": [
+            {"card_id": elara["id"], "target": "player",
+             "delta": {"fear": 50, "trust": -4, "affinity": 9},
+             "reason": "apanhou", "evidence": "o soco no rosto"},
+            {"card_id": "ninguem", "target": "player",
+             "delta": {"trust": -8}, "reason": "golpe", "evidence": "o soco"},
+            {"card_id": elara["id"], "target": player["id"],
+             "delta": {"trust": -8}, "reason": "golpe", "evidence": "o soco"},
+            {"card_id": player["id"], "target": "player",
+             "delta": {"fear": 8}, "reason": "golpe", "evidence": "o soco"},
+        ],
+        "cue": "Mostre o golpe.",
+    }))
+    result = npc_gate.decide(adv["id"], "Eu soco Elara.", {}, None, user="caio")
+    assert result["reactions"][0]["emotion"] == "fear"
+    assert result["reactions"][0]["pose"] == "hand on cheek"
+    assert result["initiative"] is None
+    assert len(result["relation_updates"]) == 1
+    update = result["relation_updates"][0]
+    assert update["card_id"] == elara["id"]
+    assert update["target"] == "player"
+    assert update["delta"] == {"fear": 20, "trust": -4}
+    assert "affinity" not in update["delta"]
+
+
+def test_own_beat_keeps_reactions_without_initiative(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Sem iniciativa")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda inquieta.")
+        db.insert_action(conn, adv["id"], 0, "start", "Elara está aqui.")
+    _capture(monkeypatch, json.dumps({
+        "decision": "allow",
+        "outcome": "Elara observa.",
+        "reactions": [{
+            "npc": "Elara", "card_id": elara["id"],
+            "reaction": "Ela aperta a lança.", "line": "",
+            "emotion": "anger",
+        }],
+        "initiative": None,
+        "cue": "Deixe Elara presente.",
+    }))
+    result = npc_gate.own_beat(adv["id"], {}, None)
+    assert result is not None
+    assert result["decision"] == "allow"
+    assert result["initiative"] is None
+    assert result["reactions"][0]["npc"] == "Elara"
+    assert result["reactions"][0]["emotion"] == "anger"
+
+
+def test_remember_one_memory_per_npc_without_the_cue(tmp_db):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Memória única")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda.")
+        bram = db.insert_card(conn, adv["id"], title="Bram", type="character",
+                              entry="Mercador.")
+    cue = "Não revele o plano secreto do porto"
+    result = {
+        "decision": "allow",
+        "cue": cue,
+        "reactions": [
+            {"npc": "Elara", "card_id": elara["id"],
+             "reaction": "Ela ergue a lança. " + cue, "line": "Pare."},
+            {"npc": "Elara", "card_id": elara["id"],
+             "reaction": "Ela ergue a lança. " + cue, "line": "Pare."},
+            {"npc": "Bram", "card_id": bram["id"],
+             "reaction": "Bram recua.", "line": ""},
+        ],
+        "initiative": {"npc": "Elara", "card_id": elara["id"],
+                       "line": "Ela fecha o portão."},
+    }
+    with db.session() as conn:
+        saved = npc_gate.remember(conn, adv["id"], result)
+        elara_mem = __import__("app.npc_life", fromlist=["list_memories"]).list_memories(
+            conn, adv["id"], elara["id"])
+        bram_mem = __import__("app.npc_life", fromlist=["list_memories"]).list_memories(
+            conn, adv["id"], bram["id"])
+    assert saved == 2
+    assert len(elara_mem) == 1
+    assert "lança" in elara_mem[0]["text"]
+    assert "portão" in elara_mem[0]["text"]
+    assert "secreto" not in elara_mem[0]["text"]
+    assert cue not in elara_mem[0]["text"]
+    assert bram_mem[0]["text"] == "Bram recua."
+
+
 def test_gate_retries_once_with_legacy_budget_when_json_is_truncated(monkeypatch):
     responses = iter([
         '{"decision":"allow","reactions":[',

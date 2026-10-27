@@ -9,6 +9,11 @@ retrato entra na fila de portraits que já existe.
 A pintura em si é o job `scene_backdrop` (app/jobs.py) — esta função só
 decide e enfileira, para o POST /scene responder na hora. Fundo novo cancela
 o pendente antigo da mesma aventura (`supersede_key`, contrato C5).
+
+`sheet.visual_state` (ação, emoção, pose) entra no mood do elenco e no
+prompt do fundo quando a pessoa já está na cena. Seq e números de bonds
+ficam de fora: não há job por token nem por tick numérico. Prioridade
+e cancelamento do backdrop não mudam.
 """
 
 from __future__ import annotations
@@ -181,6 +186,14 @@ def _mood_near(text: str, name: str) -> str | None:
     return best[1] if best else None
 
 
+def _cast_mood(text: str, name: str, sheet: dict) -> str | None:
+    """Emoção já commitada. Sem ela, a palavra de mood mais perto do nome."""
+    emotion = npc_assets.visual_reaction(sheet).get("emotion") or ""
+    if emotion:
+        return emotion
+    return _mood_near(text, name)
+
+
 def _location(cards: list[dict], text: str) -> tuple[str, str]:
     """(título, entry) do card de lugar mencionado por último. Sem card, usa a prosa."""
     best: tuple[int, str, str] | None = None
@@ -211,6 +224,31 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
     return [card for _, card in ranked[-_CAST_LIMIT:]]
 
 
+def _reaction_clause(cast: list[dict]) -> str:
+    """Ação, emoção e pose do elenco. Sem seq, sem bonds, sem motivo oculto."""
+    bits: list[str] = []
+    for card in cast:
+        raw_sheet = card.get("sheet") or ""
+        if isinstance(raw_sheet, dict):
+            sheet = raw_sheet
+        else:
+            sheet = npc_assets.parse_sheet(raw_sheet if isinstance(raw_sheet, str) else "")
+        reaction = npc_assets.visual_reaction(sheet)
+        if not reaction:
+            continue
+        name = " ".join(str(card.get("title") or "").split()) or "character"
+        parts = [
+            f"{key} {reaction[key]}"
+            for key in ("action", "emotion", "pose")
+            if reaction.get(key)
+        ]
+        if parts:
+            bits.append(name + ": " + ", ".join(parts))
+    if not bits:
+        return ""
+    return "current reaction, " + "; ".join(bits)
+
+
 def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     """Rosto travado de quem está na cena. Vazio se ninguém tem visual ainda.
 
@@ -238,6 +276,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         cast = decision.cast
         explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
+    reaction = _reaction_clause(cast) if clause else ""
     sex_bits = []
     for card in cast:
         person = (card.get("title") or "").strip()
@@ -270,6 +309,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         parts = [
             sex_line,
             clause,
+            reaction,
             "clothes off, nude, do not restore outfits, uncensored",
             beat[-400:],
             style_text,
@@ -286,6 +326,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         parts = [
             sex_line,
             clause,
+            reaction,
             lock,
             style_text,
             f"wide cinematic shot of {title}, only the characters named above, "
@@ -508,7 +549,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             "id": card["id"],
             "title": card.get("title") or "",
             "portrait": card.get("portrait"),
-            "mood": _mood_near(text, card.get("title") or ""),
+            "mood": _cast_mood(text, card.get("title") or "", sheet),
             "stance": npc_bonds.stance_of(
                 npc_bonds.read_bonds(sheet),
                 obedience=world_facts.obedience_of(card),

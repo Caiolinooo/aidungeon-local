@@ -5,8 +5,8 @@
 //
 // Diferenças da era VRM: sem tints por cor (avatar é um GLB completo, ver
 // avatarConfig.js) e sem o botão 🎨 de sync do retrato; o mood exibido é o
-// persistido em card.vrm_id (o auto-emotion "follow the story" mora na
-// AvatarsTab, não no dock).
+// persistido em card.vrm_id. O humor do turno vem de sheet.visual_state.
+// O corpo 3D é o GLB já escolhido; o retrato é só uma miniatura de referência.
 //
 // Narração: registra UM speaker no avatarBus — o PRIMEIRO avatar visível
 // fala pela cena inteira (NarrateButton → speakNarration → speaker.speak).
@@ -21,6 +21,7 @@ import TalkingAvatar from './TalkingAvatar.jsx'
 import { parseAvatarConfig } from './avatarConfig.js'
 import { registerSpeaker } from './avatarBus.js'
 import { mentionsNpc } from './emotionDetect.js'
+import { mergedVisual, visualStateOf } from './avatarMotion.js'
 
 function PortraitCover({ imageId }) {
   const [src, setSrc] = useState(null)
@@ -39,7 +40,14 @@ function PortraitCover({ imageId }) {
     }
   }, [imageId])
   if (!src) return null
-  return <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
+  return (
+    <img
+      src={src}
+      alt=""
+      title="Retrato de referência. O corpo 3D é o GLB do avatar, não uma malha gerada desta foto."
+      className="absolute bottom-1 right-1 z-10 h-6 w-6 rounded-full border border-white/40 object-cover"
+    />
+  )
 }
 
 function readSheet(card) {
@@ -54,23 +62,24 @@ function readSheet(card) {
   }
 }
 
-function DockAvatar({ card, avatarRef }) {
+function DockAvatar({ card, avatarRef, visual }) {
   const cfg = parseAvatarConfig(card.vrm_id)
   const status = readSheet(card)?.status || ''
   const marked = status === 'dead' || status === 'missing' || status === 'injured'
+  const moodLabel = visual?.emotion || cfg?.mood
   return (
     <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-24">
       <div className="relative h-20 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-32 sm:w-24">
-        <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" />
+        <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" visual={visual} />
         <PortraitCover imageId={card.portrait?.id} />
         {card.voice && (
           <span className="absolute right-1 top-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-bold uppercase text-accent-pri">
             {card.voice}
           </span>
         )}
-        {cfg?.mood && (
+        {moodLabel && (
           <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[8px] font-medium capitalize text-zinc-200">
-            {cfg.mood}
+            {moodLabel}
           </span>
         )}
       </div>
@@ -88,7 +97,14 @@ function dockStartsCollapsed() {
   return typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
 }
 
-export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
+function seqMatches(visual, beatSeqs) {
+  if (visual?.seq == null || !Array.isArray(beatSeqs)) return false
+  return beatSeqs.some((seq) => seq != null && String(seq) === String(visual.seq))
+}
+
+export default function ChatAvatarDock({
+  adventureId, storyText, refreshKey, spotlightIds = [], beatSeqs = [], visualHints = {},
+}) {
   const [cards, setCards] = useState([])
   // No celular o retrato cobre o texto; começa fechado.
   const [collapsed, setCollapsed] = useState(dockStartsCollapsed)
@@ -103,18 +119,36 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
 
   useEffect(() => {
     reload()
-    // O card novo chega depois da resposta, quando o passe dos NPCs termina.
-    const soon = window.setTimeout(reload, 8000)
-    const later = window.setTimeout(reload, 16000)
-    return () => {
-      window.clearTimeout(soon)
-      window.clearTimeout(later)
-    }
   }, [reload, refreshKey, storyText])
 
-  const present = cards.filter(
-    (c) => c.type === 'character' && mentionsNpc(storyText, [c.title, ...(c.triggers || [])]),
-  )
+  useEffect(() => {
+    const onLive = (ev) => {
+      const detail = ev.detail || {}
+      if (detail.adventureId !== adventureId) return
+      if (detail.type !== 'portrait_ready' && detail.type !== 'card_changed') return
+      reload()
+    }
+    const onSync = (ev) => {
+      if ((ev.detail || {}).adventureId !== adventureId) return
+      reload()
+    }
+    window.addEventListener('aidungeon-live', onLive)
+    window.addEventListener('aidungeon-cards-sync', onSync)
+    return () => {
+      window.removeEventListener('aidungeon-live', onLive)
+      window.removeEventListener('aidungeon-cards-sync', onSync)
+    }
+  }, [adventureId, reload])
+
+  const spotlight = new Set(spotlightIds.filter(Boolean))
+  const present = cards.filter((card) => {
+    if (card.type !== 'character') return false
+    const visual = mergedVisual(card, visualHints) || visualStateOf(card)
+    const player = Boolean(card.player_username)
+    if (player) return Boolean(visual && (visual.emotion || visual.pose || visual.action))
+    if (spotlight.has(card.id) || seqMatches(visual, beatSeqs)) return true
+    return mentionsNpc(storyText, [card.title, ...(card.triggers || [])])
+  })
 
   // Um speaker por dock: fala sempre pelo primeiro avatar visível (índice 0
   // da lista `present`). O registro é estável — lê o Map de refs na hora.
@@ -144,6 +178,7 @@ export default function ChatAvatarDock({ adventureId, storyText, refreshKey }) {
             <DockAvatar
               key={c.id}
               card={c}
+              visual={mergedVisual(c, visualHints)}
               avatarRef={(el) => {
                 if (el) avatarRefs.current.set(c.id, el)
                 else avatarRefs.current.delete(c.id)

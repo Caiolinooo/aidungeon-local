@@ -24,14 +24,15 @@ Output STRICT JSON (no markdown) with exactly this shape:
    "memory": "what happened to them, 1-2 sentences, from the passage",
    "mood": "a word or short phrase",
    "activity": "what they are doing now",
-   "expression": "short English expression for the face, or empty if unchanged",
-   "sentiments": "how they feel about who is in the scene, starting with the player, at most 240 characters",
-   "bonds": {"relationship": 0-100, "trust": 0-100, "distrust": 0-100, "fear": 0-100, "desire": 0-100, "boldness": 0-100}}
+   "expression": "short English expression for the face, compatible with the visible emotion, or empty if unchanged",
+   "sentiments": "how they feel about who is in the scene, starting with the player, at most 240 characters"}
 ]}
-Use the canonical name. Bonds are absolute values, not deltas. Omit a bond key you are not changing.
+Use the canonical name. Bond numbers in the user message are read-only context.
+Do not output bonds, trust, fear, affinity or any relationship value.
 Do not change who the person is. Pain, injuries and conditions come from the
 chronicle; read them and let them shape mood/expression, but do not invent or
-heal a wound here. expression must be short and visual (English).
+heal a wound here. expression must be short and visual (English) and must not
+contradict the visible emotion.
 Output ONLY the JSON object."""
 
 _TICK_SYSTEM = """You invent one off-screen day for one character in an interactive story.
@@ -204,16 +205,6 @@ def _apply_mind_item(conn, adventure_id: str, card: dict, item: dict, *,
     expression = " ".join(str(item.get("expression") or "").split())[:80]
     if expression:
         sheet["expression"] = expression
-    raw_bonds = item.get("bonds") if isinstance(item.get("bonds"), dict) else {}
-    bonds = npc_bonds.read_bonds(sheet)
-    for key in npc_bonds.BOND_KEYS:
-        if key not in raw_bonds:
-            continue
-        try:
-            bonds[key] = npc_bonds.clamp(int(raw_bonds[key]))
-        except (TypeError, ValueError):
-            continue
-    sheet = npc_bonds.write_bonds(sheet, bonds)
     if sheet != npc_assets.parse_sheet(card.get("sheet") or ""):
         _remember_snapshot(conn, adventure_id, card, before)
     db.update_card(conn, adventure_id, card["id"], {

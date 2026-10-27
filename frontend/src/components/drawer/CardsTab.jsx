@@ -102,8 +102,16 @@ export default function CardsTab({ adventure }) {
         && detail.type !== 'card_changed') return
       reload()
     }
+    const onSync = (ev) => {
+      if ((ev.detail || {}).adventureId !== adventure.id) return
+      reload()
+    }
     window.addEventListener('aidungeon-live', onLive)
-    return () => window.removeEventListener('aidungeon-live', onLive)
+    window.addEventListener('aidungeon-cards-sync', onSync)
+    return () => {
+      window.removeEventListener('aidungeon-live', onLive)
+      window.removeEventListener('aidungeon-cards-sync', onSync)
+    }
   }, [adventure.id, reload])
 
   // Filtered Cards

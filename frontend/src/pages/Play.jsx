@@ -6,6 +6,16 @@ import { streamGeneration } from '../sse.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
+import TurnBeat from '../components/TurnBeat.jsx'
+import {
+  adjudicationMode,
+  dropBeats,
+  mergeBeat,
+  presentAdjudication,
+  spotlightIds,
+  storeBeat,
+  visualHints,
+} from '../components/adjudicationView.js'
 import InputBar from '../components/InputBar.jsx'
 import ShareModal from '../components/ShareModal.jsx'
 import PublicationModal from '../components/PublicationModal.jsx'
@@ -246,10 +256,11 @@ function ActionCheckNote({ check }) {
 const FEED_PAGE_SIZE = 100
 
 const StoryFeedItem = memo(function StoryFeedItem({
-  action, check, rules, onEdit, disabled, isLatest, adventureId,
+  action, check, rules, beat, onEdit, disabled, isLatest, adventureId,
 }) {
   return (
     <div className="min-w-0">
+      {beat ? <TurnBeat beat={beat} /> : null}
       <FeedItem
         action={action}
         onEdit={onEdit}
@@ -316,6 +327,8 @@ export default function Play() {
   const [intents, setIntents] = useState([])
   const [actionChecks, setActionChecks] = useState({})
   const [rulesChips, setRulesChips] = useState({})
+  const [liveBeat, setLiveBeat] = useState(null)
+  const [beatsBySeq, setBeatsBySeq] = useState({})
   const [simVersion, setSimVersion] = useState(0)
   const [pendingCheck, setPendingCheck] = useState(null)
   const [mapOpen, setMapOpen] = useState(false)
@@ -324,6 +337,9 @@ export default function Play() {
   const seenIdsRef = useRef(new Set())
   const readyRef = useRef(false)
   const genRef = useRef(null)
+  const liveBeatRef = useRef(null)
+  const streamMetaRef = useRef({ type: '' })
+  liveBeatRef.current = liveBeat
   const openCharacterRef = useRef(() => {})
   const currentUserRef = useRef('')
   const isDmRef = useRef(false)
@@ -588,6 +604,12 @@ export default function Play() {
       if (seenIdsRef.current.has(data.id)) return
       seenIdsRef.current.add(data.id)
       if (isPlayerAction(data)) livePlayerIdsRef.current.add(data.id)
+      if (data.type === 'continue' && data.seq != null && liveBeatRef.current) {
+        const pending = liveBeatRef.current
+        setBeatsBySeq((prev) => storeBeat(prev, data.seq, pending))
+        liveBeatRef.current = null
+        setLiveBeat(null)
+      }
       setActions((prev) => {
         const list = prev ?? []
         if (list.some((a) => a.id === data.id)) return list
@@ -605,6 +627,15 @@ export default function Play() {
     const onCheck = (ev) => {
       const data = parse(ev)
       handleCheckData(data)
+    }
+    const onAdjudication = (ev) => {
+      if (genRef.current) return
+      const view = presentAdjudication(parse(ev), { includeDeltas: false })
+      if (!view) return
+      const next = mergeBeat(liveBeatRef.current, view)
+      liveBeatRef.current = next
+      setLiveBeat(next)
+      fan('adjudication', view)
     }
     const fan = (type, data) => {
       window.dispatchEvent(new CustomEvent('aidungeon-live', {
@@ -712,6 +743,7 @@ export default function Play() {
     es.addEventListener('token', onToken)
     es.addEventListener('action', onAction)
     es.addEventListener('action_check', onCheck)
+    es.addEventListener('adjudication', onAdjudication)
     es.addEventListener('turn_done', onTurnDone)
     es.addEventListener('choices_ready', onChoices)
     es.addEventListener('choices_failed', onChoicesFailed)
@@ -754,6 +786,7 @@ export default function Play() {
       es.removeEventListener('token', onToken)
       es.removeEventListener('action', onAction)
       es.removeEventListener('action_check', onCheck)
+      es.removeEventListener('adjudication', onAdjudication)
       es.removeEventListener('turn_done', onTurnDone)
       es.removeEventListener('choices_ready', onChoices)
       es.removeEventListener('choices_failed', onChoicesFailed)
@@ -958,6 +991,10 @@ export default function Play() {
       setLive('')
       setChoices([])
       setWebSources([])
+      if (adjudicationMode(streamMetaRef.current.type) === 'ignore') {
+        liveBeatRef.current = null
+        setLiveBeat(null)
+      }
       const fail = (msg, meta) => {
         if (abortRef.current !== ctrl) return
         genRef.current = null
@@ -991,6 +1028,19 @@ export default function Play() {
           if (name === 'rules_roll' && data?.action_id != null) {
             setRulesChips((prev) => ({ ...prev, [String(data.action_id)]: data }))
             setSimVersion((v) => v + 1)
+          }
+          if (name === 'adjudication') {
+            if (adjudicationMode(streamMetaRef.current.type) === 'ignore') return
+            const view = presentAdjudication(data, { includeDeltas: false })
+            if (!view) return
+            setLiveBeat((prev) => {
+              const next = mergeBeat(prev, view)
+              liveBeatRef.current = next
+              return next
+            })
+            window.dispatchEvent(new CustomEvent('aidungeon-live', {
+              detail: { type: 'adjudication', adventureId: id, data: view },
+            }))
           }
           if (name === 'refused') {
             const actionId = data?.action_id
@@ -1033,13 +1083,24 @@ export default function Play() {
             setPendingCheck(null)
             setActionChecks((prev) => ({ ...prev, [String(bakedId)]: baked }))
           }
+          const metaType = streamMetaRef.current.type
+          if (adjudicationMode(metaType) === 'apply' && data.action?.seq != null) {
+            const committed = presentAdjudication(data.adjudication, { includeDeltas: true })
+            const view = mergeBeat(liveBeatRef.current, committed)
+            if (view) setBeatsBySeq((prev) => storeBeat(prev, data.action.seq, view))
+          }
+          liveBeatRef.current = null
+          setLiveBeat(null)
           genRef.current = null
           setGen(null)
           setLive('')
+          window.dispatchEvent(new CustomEvent('aidungeon-cards-sync', {
+            detail: { adventureId: id },
+          }))
           if (Array.isArray(data.web_sources) && data.web_sources.length) {
             setWebSources(data.web_sources)
           }
-          if (data.action?.type === 'continue') {
+          if (kind !== 'retry' && data.action?.type === 'continue') {
             const preferences = generationPrefsRef.current
             if (preferences.auto_narrate) {
               window.setTimeout(() => window.dispatchEvent(new CustomEvent('aidl:auto-narrate', {
@@ -1103,6 +1164,7 @@ export default function Play() {
       return
     }
     if (turnBlocked) return
+    streamMetaRef.current = { type }
     if (type === 'do' || type === 'say' || type === 'story') {
       awaitingCheckRef.current = true
       awaitingBaselineRef.current = lastPlayerAction(actionsRef.current)?.id ?? null
@@ -1117,6 +1179,7 @@ export default function Play() {
 
   const approveIntent = (intent) => {
     if (!intent?.id || generating) return
+    streamMetaRef.current = { type: 'do' }
     return runStream(
       'action',
       `/adventures/${id}/intents/${encodeURIComponent(intent.id)}/approve`,
@@ -1141,6 +1204,7 @@ export default function Play() {
       return
     }
     if (turnBlocked) return
+    streamMetaRef.current = { type: 'continue' }
     return runStream('continue', `/adventures/${id}/continue`, null, (prev, data) =>
       data.action ? [...prev, data.action] : prev,
     )
@@ -1152,6 +1216,9 @@ export default function Play() {
       return
     }
     if (turnBlocked) return
+    streamMetaRef.current = { type: 'retry' }
+    setLiveBeat(null)
+    liveBeatRef.current = null
     return runStream('retry', `/adventures/${id}/retry`, null, (prev, data) => {
       if (!data.action) return prev
       return prev.map((a) => (a.seq === data.action.seq ? data.action : a))
@@ -1190,6 +1257,12 @@ export default function Play() {
       for (const removedId of removedIds) livePlayerIdsRef.current.delete(removedId)
       setChoices([])
       setWebSources([])
+      setLiveBeat(null)
+      liveBeatRef.current = null
+      setBeatsBySeq((prev) => dropBeats(prev, (res.removed ?? []).map((action) => action.seq)))
+      window.dispatchEvent(new CustomEvent('aidungeon-cards-sync', {
+        detail: { adventureId: id },
+      }))
       toast('Último turno desfeito.', 'ok')
     } catch (e) {
       toast(e.message)
@@ -1645,6 +1718,7 @@ export default function Play() {
                     action={a}
                     check={check}
                     rules={rules}
+                    beat={a?.type === 'continue' && a.seq != null ? beatsBySeq[String(a.seq)] : null}
                     onEdit={setEditing}
                     disabled={generating}
                     isLatest={a.id === lastAiTextId}
@@ -1652,6 +1726,8 @@ export default function Play() {
                   />
                 )
               })}
+
+              {generating && liveBeat ? <TurnBeat beat={liveBeat} /> : null}
 
               {/* Streaming Cursor Block */}
               {generating && (
@@ -1698,6 +1774,18 @@ export default function Play() {
               adventureId={id}
               storyText={latestStoryText}
               refreshKey={dockRefresh}
+              spotlightIds={[
+                ...spotlightIds(liveBeat),
+                ...spotlightIds(beatsBySeq[String(lastMatchingAction(actions, (action) => action?.type === 'continue')?.seq)]),
+              ]}
+              beatSeqs={[
+                lastPlayer?.seq,
+                lastMatchingAction(actions, (action) => action?.type === 'continue')?.seq,
+              ]}
+              visualHints={{
+                ...visualHints(beatsBySeq[String(lastMatchingAction(actions, (action) => action?.type === 'continue')?.seq)]),
+                ...visualHints(liveBeat),
+              }}
             />
           </Suspense>
         </div>

@@ -21,6 +21,7 @@ const TYPE_LABELS = {
   backdrop_ready: 'Cenário',
   see_ready: 'Imagem',
   portrait_ready: 'Retrato',
+  adjudication: 'Reação',
   card_changed: 'Ficha',
   undo: 'Desfazer',
   generation_failed: 'Erro',
@@ -68,6 +69,13 @@ function eventText(event) {
   if (type === 'see_ready') return 'Imagem da cena concluída.'
   if (type === 'backdrop_ready') return 'Fundo da cena atualizado.'
   if (type === 'portrait_ready') return 'Retrato atualizado.'
+  if (type === 'adjudication') {
+    const outcome = typeof data.outcome === 'string' ? data.outcome : ''
+    const names = Array.isArray(data.reactions)
+      ? data.reactions.map((row) => row?.npc).filter(Boolean).slice(0, 3).join(', ')
+      : ''
+    return [outcome, names].filter(Boolean).join(' · ') || 'Reação do turno.'
+  }
   if (type === 'generation_failed') return data.message || 'A geração falhou.'
   if (type === 'generation_cancelled') return 'Geração cancelada.'
   if (type === 'undo') return 'O último turno foi desfeito.'

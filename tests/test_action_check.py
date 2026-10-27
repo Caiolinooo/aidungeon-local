@@ -271,3 +271,41 @@ def test_verdict_reaches_the_event_bus_with_the_action_id(tmp_db):
     assert data["risks"] == VERDICT["risks"]
     assert data["action_id"] is not None
     assert data["seq"] is not None
+
+
+def test_check_reads_world_after_sim_resolution(tmp_db, monkeypatch):
+    def resolve(adventure_id, adventure, player_action, actions, user,
+                llm_cfg, cfg, transport, cancel=None):
+        with db.session() as conn:
+            for card in db.list_cards(conn, adventure_id):
+                if card.get("title") != "Mira":
+                    continue
+                sheet = json.loads(card["sheet"])
+                sheet["status"] = "dead"
+                db.update_card(conn, adventure_id, card["id"], {
+                    "sheet": json.dumps(sheet),
+                })
+            row = db.get_adventure(conn, adventure_id) or {}
+            sim = dict(row.get("sim_state") or {})
+            sim["pack"] = "d20"
+            sim["foes"] = {"mira": {"name": "Mira", "hp": 0, "hp_max": 8, "dead": True}}
+            db.set_sim_state(conn, adventure_id, sim)
+        return {"resolution": {
+            "changes": [{"who": "Mira", "what": "PV", "from": 8, "to": 0}],
+            "block": "",
+        }}
+
+    monkeypatch.setattr("app.sim.engine.run_turn", resolve)
+    narrator = _Narrator()
+    events = _play(_rich()["id"], narrator, "wait quietly by the gate", user="hero")
+    kinds = [event["event"] for event in events]
+    assert kinds.index("rules_roll") < kinds.index("action_check") < kinds.index("token")
+    checks = [
+        call for call in narrator.aux_calls()
+        if "você verifica" in (call["messages"][0]["content"] or "").casefold()
+    ]
+    assert len(checks) == 1
+    portrait = checks[0]["messages"][-1]["content"]
+    assert '"status": "dead"' in portrait
+    assert '"hp": 0' in portrait
+    assert '"what": "PV"' in portrait

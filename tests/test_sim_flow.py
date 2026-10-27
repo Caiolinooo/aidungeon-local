@@ -120,6 +120,16 @@ def test_attack_emits_rules_roll_before_tokens_and_matches_state(tmp_db, monkeyp
     stream = next(call for call in narrator.calls if call.get("stream"))
     blob = json.dumps(stream["messages"], ensure_ascii=False)
     assert "Resolução mecânica" in blob
+    assert names.index("rules_roll") < names.index("action_check") < names.index("token")
+    checks = [
+        call for call in narrator.calls
+        if not call.get("stream")
+        and "você verifica" in ((call.get("messages") or [{}])[0].get("content") or "").casefold()
+    ]
+    assert checks
+    portrait = checks[0]["messages"][-1]["content"]
+    assert '"status": "dead"' in portrait
+    assert '"hp": 0' in portrait
 
 
 def test_retry_reuses_the_block_without_changing_state(tmp_db, monkeypatch):

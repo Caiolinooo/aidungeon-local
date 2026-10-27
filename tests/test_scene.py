@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from app import db, image_client, jobs
+from app import db, image_client, jobs, scene
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, override_transport
 from test_v3 import use_tmp_storage
@@ -693,4 +693,129 @@ def test_missing_reference_file_fails_the_backdrop_job(client, tmp_path):
         assert job["status"] == "error"
         assert job["result"]["code"] == "portrait_required"
         assert image["id"] in job["payload"]["reference_image_ids"]
+
+
+def test_prompt_mood_follow_visual_state_not_bond_numbers():
+    card = {
+        "title": "Ada",
+        "type": "character",
+        "portrait_prompt": "silver hair, bust portrait",
+        "sheet": json.dumps({
+            "visual_state": {
+                "action": "raises a lantern",
+                "emotion": "wary",
+                "pose": "half turned",
+                "seq": 4,
+            },
+            "alignment": "desconfiado",
+            "bonds": {"trust": 42, "relationship": 40},
+        }),
+    }
+    prompt, people = scene._prompt(
+        "The Tavern", "A smoky room.", "", "night", [card], "Ada waits.")
+    folded = prompt.lower()
+    assert people is True
+    assert "raises a lantern" in folded
+    assert "wary" in folded
+    assert "half turned" in folded
+    assert "current reaction" in folded
+    assert "42" not in prompt
+    assert "trust" not in folded
+    assert scene._cast_mood("Ada smiles, happy to see you.", "Ada", json.loads(card["sheet"])) == "wary"
+    assert scene._cast_mood("Ada smiles, happy to see you.", "Ada", {}) == "happy"
+
+    bare = {
+        "title": "Ada",
+        "type": "character",
+        "entry": "Barkeep.",
+        "sheet": json.dumps({
+            "visual_state": {"action": "waves", "emotion": "wary", "seq": 1},
+        }),
+    }
+    empty, include = scene._prompt("The Tavern", "", "", "night", [bare], "Ada waits at night.")
+    assert include is False
+    assert "waves" not in empty.lower()
+    assert "no people" in empty.lower()
+
+
+def test_visual_state_paints_the_backdrop_once_until_it_changes(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    sheet = {
+        "appearance": "silver hair",
+        "visual_state": {
+            "action": "raises a lantern",
+            "emotion": "wary",
+            "pose": "half turned",
+            "seq": 2,
+        },
+        "alignment": "desconfiado",
+        "bonds": {
+            "relationship": 40, "trust": 40, "distrust": 30,
+            "fear": 15, "desire": 15, "boldness": 40,
+        },
+    }
+    with db.session() as conn:
+        ada = db.insert_card(
+            conn, adv["id"], type="character", title="Ada", triggers=["Ada"],
+            entry="Barkeep.", portrait_prompt="silver hair, bust portrait",
+            sheet=json.dumps(sheet),
+        )
+    image = _face(adv["id"], ada["id"], b"\x89PNG\r\nada-live")
+    add_action(
+        adv["id"], 0, "continue",
+        "Ada smiles, happy to see you. The tavern is quiet at night.",
+    )
+    resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["cast"][0]["mood"] == "wary"
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+        stored = db.get_card(conn, adv["id"], ada["id"])
+    prompt = job["payload"]["prompt"].lower()
+    assert "raises a lantern" in prompt
+    assert "wary" in prompt
+    assert "half turned" in prompt
+    assert "trust" not in prompt
+    assert job["priority"] == jobs.PRIORITY_BACKDROP
+    assert stored["portrait_anchor_id"] == image["id"]
+    signature = body["signature"]
+
+    sheet["bonds"]["trust"] = 44
+    sheet["visual_state"]["seq"] = 9
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], ada["id"], {"sheet": json.dumps(sheet)})
+    again = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert again.status_code == 200, again.text
+    assert again.json()["signature"] == signature
+    assert again.json()["cast"][0]["mood"] == "wary"
+    with db.session() as conn:
+        backs = [item for item in db.list_jobs(conn, adv["id"])
+                 if item["type"] == "scene_backdrop"]
+    assert len(backs) == 1
+    assert backs[0]["id"] == job["id"]
+    assert backs[0]["status"] == "pending"
+    assert backs[0]["priority"] == jobs.PRIORITY_BACKDROP
+
+    sheet["visual_state"]["action"] = "draws a sword"
+    sheet["visual_state"]["emotion"] = "angry"
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], ada["id"], {"sheet": json.dumps(sheet)})
+    changed = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["signature"] != signature
+    assert changed.json()["cast"][0]["mood"] == "angry"
+    with db.session() as conn:
+        backs = [item for item in db.list_jobs(conn, adv["id"])
+                 if item["type"] == "scene_backdrop"]
+        stored = db.get_card(conn, adv["id"], ada["id"])
+    live = [item for item in backs if item["status"] != "canceled"]
+    assert len(live) == 1
+    assert len(backs) == 2
+    assert live[0]["priority"] == jobs.PRIORITY_BACKDROP
+    assert "draws a sword" in live[0]["payload"]["prompt"].lower()
+    assert "angry" in live[0]["payload"]["prompt"].lower()
+    assert stored["portrait_anchor_id"] == image["id"]
 

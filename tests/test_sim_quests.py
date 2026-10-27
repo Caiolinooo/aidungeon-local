@@ -268,13 +268,16 @@ def test_resolve_travel_and_relation_fire_triggers(client):
         }],
     )
     with db.session() as conn:
-        db.insert_card(conn, adv["id"], type="character", title="Mira", entry="amiga")
-        changed = npc_bonds.apply_turn(conn, adv["id"], "obrigado Mira", "Mira sorri.")
-        assert changed == 1
-        changed_again = npc_bonds.apply_turn(
-            conn, adv["id"], "obrigado Mira", "Mira sorri de novo.",
-        )
-        assert changed_again == 1
+        mira = db.insert_card(conn, adv["id"], type="character", title="Mira", entry="amiga")
+        update = {"card_id": mira["id"], "target": "player", "delta": {"trust": 8}}
+        changed = npc_bonds.apply_adjudication(conn, adv["id"], {
+            "relation_updates": [update],
+        }, 1, player_text="obrigado Mira", actor_name="Hero")
+        assert len(changed) == 1
+        changed_again = npc_bonds.apply_adjudication(conn, adv["id"], {
+            "relation_updates": [update],
+        }, 2, player_text="obrigado Mira", actor_name="Hero")
+        assert len(changed_again) == 1
     listed = client.get(f"/api/adventures/{adv['id']}/sim/quests")
     trust = next(quest for quest in listed.json()["quests"] if quest["title"] == "Confiança")
     assert trust["status"] == "available"

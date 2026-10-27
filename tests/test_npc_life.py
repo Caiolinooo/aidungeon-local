@@ -53,6 +53,7 @@ def test_run_mind_stores_memory_mood_and_trust_and_keeps_humor(tmp_db, monkeypat
             "mood": "wary",
             "activity": "watching the door",
             "sentiments": "does not trust the player",
+            "expression": "wary glance",
             "bonds": {"trust": 77},
         }]})
 
@@ -66,8 +67,10 @@ def test_run_mind_stores_memory_mood_and_trust_and_keeps_humor(tmp_db, monkeypat
     assert memories[0]["kind"] == "event"
     assert memories[0]["text"] == "Ada hid the compass."
     assert stored["life"]["mood"] == "wary"
-    assert stored["bonds"]["trust"] == 77
+    assert stored["bonds"]["trust"] == 10
+    assert stored["expression"] == "wary glance"
     assert stored["humor"] == "dry jokes"
+    assert "absolute" not in npc_life._MIND_SYSTEM
 
 
 def test_tick_day_advances_and_reflects_after_six_memories(tmp_db, monkeypatch):

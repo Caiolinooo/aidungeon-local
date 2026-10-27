@@ -1,9 +1,11 @@
 """Sincroniza o retrato exibido com o estado atual da ficha.
 
-O rosto é a âncora (`portrait_anchor_id`); roupa, expressão e feridas
-visíveis geram uma variante img2img. A chave inclui a variante, a ficha,
-a âncora, os bytes de `likeness.portrait_init`, o estilo da aventura e o
-fingerprint do modelo. Cache por `portrait_state_key` evita regerar.
+O rosto é a âncora (`portrait_anchor_id`); roupa, expressão, feridas,
+ação, emoção, pose e o estágio de alignment geram uma variante img2img.
+A chave inclui a variante, esse estado visual, o estágio (não o inteiro
+de bonds), a âncora, os bytes de `likeness.portrait_init`, o estilo da
+aventura e o fingerprint do modelo. Cache por `portrait_state_key`
+evita regerar: tick numérico sem estágio novo não pede GPU.
 
 Job `running` com outra chave fica na GPU: a chave nova é gravada e o
 sync segue para `enqueue_portrait`. O resultado antigo não substitui a
