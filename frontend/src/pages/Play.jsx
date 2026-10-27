@@ -51,7 +51,7 @@ import {
   X,
 } from 'lucide-react'
 
-// Avatar dock (lazy to keep three.js out of main bundle)
+// Dock de retratos 2D, carregado sob demanda.
 const ChatAvatarDock = lazy(() => import('../components/avatar/ChatAvatarDock.jsx'))
 
 function unwrapCharacter(res) {
@@ -670,6 +670,9 @@ export default function Play() {
     const onBackdrop = (ev) => {
       fan('backdrop_ready', parse(ev))
     }
+    const onClip = (ev) => {
+      fan('clip_ready', parse(ev))
+    }
     const onSee = (ev) => {
       const data = parse(ev)
       if (!data?.job_id || !seeJobRef.current || String(data.job_id) === seeJobRef.current) {
@@ -756,6 +759,7 @@ export default function Play() {
     es.addEventListener('choices_failed', onChoicesFailed)
     es.addEventListener('portrait_ready', onPortrait)
     es.addEventListener('backdrop_ready', onBackdrop)
+    es.addEventListener('clip_ready', onClip)
     es.addEventListener('see_ready', onSee)
     es.addEventListener('card_assets_ready', onCardAssets)
     es.addEventListener('job_progress', onJobChanged)
@@ -799,6 +803,7 @@ export default function Play() {
       es.removeEventListener('choices_failed', onChoicesFailed)
       es.removeEventListener('portrait_ready', onPortrait)
       es.removeEventListener('backdrop_ready', onBackdrop)
+      es.removeEventListener('clip_ready', onClip)
       es.removeEventListener('see_ready', onSee)
       es.removeEventListener('job_progress', onJobChanged)
       es.removeEventListener('job_queued', onJobChanged)
@@ -1929,7 +1934,6 @@ export default function Play() {
           <InspectorPane
             adventure={adventure}
             onAdventureChange={setAdventure}
-            storyText={latestStoryText}
             tab={inspectorTab}
             setTab={setInspectorTab}
             onClose={() => setIsInspectorDocked(false)}
@@ -1949,7 +1953,6 @@ export default function Play() {
         }}
         adventure={adventure}
         onAdventureChange={setAdventure}
-        storyText={latestStoryText}
         tab={inspectorTab}
         setTab={setInspectorTab}
         controlsComponent={controlsContent}

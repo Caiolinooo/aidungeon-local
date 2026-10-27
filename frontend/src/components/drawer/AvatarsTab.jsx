@@ -1,51 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
-import TalkingAvatar from '../avatar/TalkingAvatar.jsx'
-import {
-  AVATARS,
-  DEFAULT_AVATAR_CONFIG,
-  MOODS,
-  parseAvatarConfig,
-  sameAvatarConfig,
-  serializeAvatarConfig,
-} from '../avatar/avatarConfig.js'
-import { detectEmotion } from '../avatar/emotionDetect.js'
+import PortraitAvatar2D from '../avatar/PortraitAvatar2D.jsx'
+import { parseSheet, visualStateOf } from '../avatar/avatarMotion.js'
 
-// Quanto tempo um mood escolhido manualmente vence o auto-detect.
-const MANUAL_OVERRIDE_MS = 60_000
-
-const MOOD_LABELS = {
-  neutral: 'Neutral',
-  happy: 'Happy',
-  angry: 'Angry',
-  sad: 'Sad',
-  fear: 'Fear',
-  disgust: 'Disgust',
-  love: 'Love',
-  sleep: 'Sleep',
+function fieldText(value) {
+  const text = String(value ?? '').trim()
+  return text || '—'
 }
 
-// Aba Avatars: viewer 3D (TalkingHead/GLB) por NPC, com seleção de modelo,
-// corpo e mood persistidos em card.vrm_id (JSON — ver avatarConfig.js; nome
-// da coluna mantido por compatibilidade de schema).
-//
-// Prop opcional `storyText`: texto narrativo mais recente da aventura
-// (quem renderiza o Drawer pode passar o último texto do feed). Quando
-// presente e "Follow the story" está ligado, emotionDetect procura menções
-// do NPC perto de palavras de emoção e aplica o mood automaticamente.
-// Override manual vence por 60s, depois volta ao auto. Sem a prop, o
-// auto-detect simplesmente não dispara e os moods ficam 100% manuais.
-export default function AvatarsTab({ adventure, storyText }) {
+// Galeria 2D dos retratos reais. Selecionar um personagem mostra o portrait,
+// a ação, a emoção e a pose que já estão na ficha. Nada aqui escolhe malha,
+// corpo ou humor manual.
+export default function AvatarsTab({ adventure }) {
   const toast = useToast()
   const [cards, setCards] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
-  const [cfg, setCfg] = useState({ ...DEFAULT_AVATAR_CONFIG })
-  const [autoMood, setAutoMood] = useState(null)
-  const [followStory, setFollowStory] = useState(true)
-  const [manualUntil, setManualUntil] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const overrideTimer = useRef(0)
 
   const reload = useCallback(async () => {
     try {
@@ -59,213 +29,102 @@ export default function AvatarsTab({ adventure, storyText }) {
     reload()
   }, [reload])
 
-  const npcs = (cards || []).filter((c) => c.type === 'character')
-  const selected = npcs.find((c) => c.id === selectedId) || npcs[0] || null
-
-  // Carrega a config persistida do NPC selecionado (parse tolerante —
-  // legado VRM de cores cai nos defaults automaticamente).
   useEffect(() => {
-    if (!selected) return
-    setCfg(parseAvatarConfig(selected.vrm_id))
-    setAutoMood(null)
-    setManualUntil(0)
-    clearTimeout(overrideTimer.current)
-  }, [selected?.id, selected?.vrm_id]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-detect "seguindo a história": roda quando o feed chega pela prop.
-  useEffect(() => {
-    if (!followStory || !storyText || !selected) return
-    if (Date.now() < manualUntil) return // override manual ainda valendo
-    const hit = detectEmotion(storyText, selected.title)
-    setAutoMood(hit ? hit.emotion : null)
-  }, [storyText, followStory, selected, manualUntil])
+    const onLive = (ev) => {
+      const detail = ev.detail || {}
+      if (detail.adventureId !== adventure.id) return
+      if (detail.type !== 'portrait_ready' && detail.type !== 'card_changed') return
+      reload()
+    }
+    const onSync = (ev) => {
+      if ((ev.detail || {}).adventureId !== adventure.id) return
+      reload()
+    }
+    window.addEventListener('aidungeon-live', onLive)
+    window.addEventListener('aidungeon-cards-sync', onSync)
+    return () => {
+      window.removeEventListener('aidungeon-live', onLive)
+      window.removeEventListener('aidungeon-cards-sync', onSync)
+    }
+  }, [adventure.id, reload])
 
   if (cards === null) return <p className="text-sm text-muted">Carregando…</p>
 
+  const npcs = cards.filter((c) => c.type === 'character')
   if (npcs.length === 0) {
     return (
       <p className="text-sm text-muted">
-        No NPCs yet. Create character cards in the NPCs tab to customize their avatars.
+        Nenhum personagem ainda. Crie fichas na aba NPCs para ver os retratos.
       </p>
     )
   }
 
-  const pickNpc = (id) => setSelectedId(id)
-
-  // Troca de modelo: preset zera a URL custom e herda o body do preset;
-  // "custom" mantém a URL já digitada e o body selecionado.
-  const pickModel = (model) =>
-    setCfg((c) => ({
-      ...c,
-      model,
-      url: model === 'custom' ? c.url : '',
-      body: model === 'custom' ? c.body : AVATARS[model].body,
-    }))
-
-  // Clique manual num mood: persiste na config e segura o auto por 60s.
-  const pickMood = (mood) => {
-    setCfg((c) => ({ ...c, mood }))
-    setAutoMood(null)
-    setManualUntil(Date.now() + MANUAL_OVERRIDE_MS)
-    clearTimeout(overrideTimer.current)
-    overrideTimer.current = setTimeout(() => setManualUntil(0), MANUAL_OVERRIDE_MS)
-  }
-
-  // PATCH do card com o JSON da config (mesmo fluxo de salvamento do NpcsTab).
-  const save = async () => {
-    if (!selected) return
-    setSaving(true)
-    try {
-      await api.updateCard(adventure.id, selected.id, { vrm_id: serializeAvatarConfig(cfg) })
-      toast('Avatar saved.', 'ok')
-      reload()
-    } catch (e) {
-      toast(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const dirty = selected ? !sameAvatarConfig(cfg, parseAvatarConfig(selected.vrm_id)) : false
-  const manualActive = Date.now() < manualUntil
-  const effectiveMood = !manualActive && followStory && autoMood ? autoMood : cfg.mood
-
-  const inputCls =
-    'rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri'
+  const selected = npcs.find((c) => c.id === selectedId) || npcs[0]
+  const visual = visualStateOf(selected)
+  const status = parseSheet(selected).status || ''
 
   return (
     <div>
       <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-secondary">
-        Avatars ({npcs.length})
+        Retratos ({npcs.length})
       </h3>
 
-      {/* seletor de NPC */}
-      <div className="mb-3 flex flex-wrap gap-1">
-        {npcs.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => pickNpc(c.id)}
-            className={`rounded-md px-2 py-1 text-xs font-medium ${
-              selected?.id === c.id
-                ? 'bg-accent-pri text-canvas'
-                : 'border border-subtle text-secondary hover:bg-elevated'
-            }`}
-          >
-            {c.title || 'Sem título'}
-          </button>
-        ))}
-      </div>
-
-      {selected && (
-        <>
-          {/* preview reflete o mood efetivo (auto ou manual) sem sujar a config */}
-          <TalkingAvatar cfg={{ ...cfg, mood: effectiveMood }} className="h-80 w-full" view="mid" />
-
-          {/* modelo: presets locais (public/avatars) ou GLB custom por URL */}
-          <div className="mt-3 flex flex-wrap gap-1">
-            {Object.entries(AVATARS).map(([key, a]) => (
-              <button
-                key={key}
-                onClick={() => pickModel(key)}
-                className={`rounded-md px-2 py-1 text-xs font-medium ${
-                  cfg.model === key
-                    ? 'bg-accent-pri text-canvas'
-                    : 'border border-subtle text-secondary hover:bg-elevated'
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
+      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+        {npcs.map((c) => {
+          const active = selected?.id === c.id
+          return (
             <button
-              onClick={() => pickModel('custom')}
-              className={`rounded-md px-2 py-1 text-xs font-medium ${
-                cfg.model === 'custom'
-                  ? 'bg-accent-pri text-canvas'
-                  : 'border border-subtle text-secondary hover:bg-elevated'
+              key={c.id}
+              type="button"
+              onClick={() => setSelectedId(c.id)}
+              className={`flex w-16 shrink-0 flex-col items-center gap-1 rounded-lg border p-1 ${
+                active
+                  ? 'border-accent-pri bg-accent-pri/10'
+                  : 'border-subtle hover:bg-elevated'
               }`}
             >
-              Custom URL
-            </button>
-          </div>
-
-          {cfg.model === 'custom' && (
-            <div className="mt-2">
-              <input
-                type="text"
-                value={cfg.url}
-                onChange={(e) => setCfg((c) => ({ ...c, url: e.target.value.trim() }))}
-                placeholder="https://…/avatar.glb"
-                className={`${inputCls} w-full`}
+              <PortraitAvatar2D
+                imageId={c.portrait?.id}
+                name={c.title || 'Sem título'}
+                visual={visualStateOf(c)}
+                status={parseSheet(c).status || ''}
+                className="h-16 w-full rounded-md"
               />
-              <p className="mt-1 text-xs text-muted">
-                Ready Player Me GLB com morphTargets=ARKit,Oculus Visemes
-              </p>
-            </div>
-          )}
-
-          {/* corpo (forma usada pelo TalkingHead p/ poses) */}
-          <div className="mt-3 flex items-center gap-2">
-            <span className="text-xs text-secondary">Corpo:</span>
-            {['F', 'M'].map((b) => (
-              <button
-                key={b}
-                onClick={() => setCfg((c) => ({ ...c, body: b }))}
-                className={`rounded-md px-2 py-1 text-xs font-medium ${
-                  cfg.body === b
-                    ? 'bg-accent-pri text-canvas'
-                    : 'border border-subtle text-secondary hover:bg-elevated'
-                }`}
-              >
-                {b}
-              </button>
-            ))}
-          </div>
-
-          {/* moods */}
-          <div className="mt-4 flex flex-wrap gap-1">
-            {MOODS.map((m) => (
-              <button
-                key={m}
-                onClick={() => pickMood(m)}
-                className={`rounded-md px-2 py-1 text-xs font-medium ${
-                  effectiveMood === m
-                    ? 'bg-accent-pri text-canvas'
-                    : 'border border-subtle text-secondary hover:bg-elevated'
-                }`}
-              >
-                {MOOD_LABELS[m]}
-              </button>
-            ))}
-          </div>
-
-          <label className="mt-3 flex items-center gap-2 text-sm text-secondary">
-            <input
-              type="checkbox"
-              checked={followStory}
-              onChange={(e) => setFollowStory(e.target.checked)}
-              className="accent-accent-600"
-            />
-            Follow the story
-            {!storyText && (
-              <span className="text-xs text-muted">(aguardando o feed da história)</span>
-            )}
-          </label>
-          {followStory && autoMood && !manualActive && (
-            <p className="mt-1 text-xs text-accent-pri">
-              Auto-detected: {MOOD_LABELS[autoMood]}
-            </p>
-          )}
-
-          <div className="mt-4 flex justify-end">
-            <button
-              onClick={save}
-              disabled={!dirty || saving}
-              className={`${inputCls} bg-accent-pri font-medium text-canvas hover:bg-accent-hov disabled:opacity-50`}
-            >
-              {saving ? 'Salvando…' : 'Salvar avatar'}
+              <span className="max-w-full truncate text-[10px] font-medium text-secondary">
+                {c.title || 'Sem título'}
+              </span>
             </button>
-          </div>
-        </>
+          )
+        })}
+      </div>
+
+      <PortraitAvatar2D
+        imageId={selected.portrait?.id}
+        name={selected.title || 'Sem título'}
+        visual={visual}
+        status={status}
+        className="h-80 w-full rounded-xl border border-subtle"
+      />
+      {!selected.portrait?.id && (
+        <p className="mt-2 text-xs text-muted">Este personagem ainda não tem retrato.</p>
+      )}
+
+      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div className="rounded-lg border border-subtle bg-surface px-2 py-1.5">
+          <dt className="text-[10px] uppercase tracking-wide text-muted">Emoção</dt>
+          <dd className="truncate text-secondary" title={visual?.emotion || ''}>{fieldText(visual?.emotion)}</dd>
+        </div>
+        <div className="rounded-lg border border-subtle bg-surface px-2 py-1.5">
+          <dt className="text-[10px] uppercase tracking-wide text-muted">Ação</dt>
+          <dd className="truncate text-secondary" title={visual?.action || ''}>{fieldText(visual?.action)}</dd>
+        </div>
+        <div className="rounded-lg border border-subtle bg-surface px-2 py-1.5">
+          <dt className="text-[10px] uppercase tracking-wide text-muted">Pose</dt>
+          <dd className="truncate text-secondary" title={visual?.pose || ''}>{fieldText(visual?.pose)}</dd>
+        </div>
+      </dl>
+      {status && (
+        <p className="mt-2 text-[10px] uppercase tracking-wide text-red-400">{status}</p>
       )}
     </div>
   )

@@ -434,6 +434,14 @@ export const api = {
       body: extra_prompt ? { action_seq, extra_prompt } : { action_seq },
       headers: { Prefer: 'respond-async' },
     }),
+  // Image-to-video: 202 {job_id}. O MP4 chega no SSE clip_ready.
+  requestClip: (advId, { image_id, prompt } = {}, { signal } = {}) =>
+    request(`/adventures/${advId}/clips`, {
+      method: 'POST',
+      body: { image_id, prompt },
+      headers: { Prefer: 'respond-async' },
+      signal,
+    }),
   getAdventureJob: (advId, jobId) => request(`/adventures/${advId}/jobs/${jobId}`),
   cancelJob: (jobId) => request(`/jobs/${jobId}/cancel`, { method: 'POST' }),
   // Sugestões de próxima ação ("choices") — {"choices": [{type, text}]}.

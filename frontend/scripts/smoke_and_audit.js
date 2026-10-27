@@ -19,7 +19,6 @@ const mimeTypes = {
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json',
   '.wasm': 'application/wasm',
-  '.glb': 'model/gltf-binary',
 };
 
 const mockAdventure = {

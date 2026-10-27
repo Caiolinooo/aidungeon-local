@@ -7,10 +7,9 @@ import {
   storeBeat,
 } from '../src/components/adjudicationView.js'
 import {
-  gestureFromVisual,
-  moodFromEmotion,
-  poseFromVisual,
-  resolveAvatarMotion,
+  mergedVisual,
+  portraitCue,
+  visualStateOf,
 } from '../src/components/avatar/avatarMotion.js'
 import { bondGlance, stanceOf } from '../src/components/drawer/npcBondView.js'
 
@@ -71,15 +70,46 @@ test('delta repetido não entra duas vezes e retry/story não aplicam', () => {
   assert.equal(Object.keys(stored).length, 1)
 })
 
-test('emoção vira mood do TalkingHead e pose solta não vira URL', () => {
-  assert.equal(moodFromEmotion('tenderness'), 'love')
-  assert.equal(moodFromEmotion('euforia'), null)
-  assert.equal(poseFromVisual('sitting'), 'sitting')
-  assert.equal(poseFromVisual('de braços cruzados'), null)
-  assert.equal(gestureFromVisual('shrug'), 'shrug')
-  assert.equal(gestureFromVisual('recua'), null)
-  const motion = resolveAvatarMotion({ emotion: 'medo', pose: 'kneel', action: 'wave' }, 'neutral')
-  assert.deepEqual(motion, { mood: 'fear', pose: 'kneel', gesture: 'handup' })
+test('retrato 2D lê visual_state e não transforma texto livre em URL', () => {
+  const card = {
+    id: 'c1',
+    sheet: JSON.stringify({
+      visual_state: { emotion: 'tenderness', pose: 'sitting', action: 'wave', seq: 2 },
+    }),
+  }
+  assert.deepEqual(visualStateOf(card), {
+    action: 'wave',
+    emotion: 'tenderness',
+    pose: 'sitting',
+    seq: 2,
+  })
+  assert.deepEqual(mergedVisual(card, {
+    c1: { emotion: 'medo', action: 'recua', pose: 'kneel' },
+  }), {
+    action: 'recua',
+    emotion: 'medo',
+    pose: 'kneel',
+    seq: 2,
+  })
+  const loose = portraitCue({
+    emotion: 'euforia',
+    pose: 'de braços cruzados',
+    action: 'https://evil.example/pose',
+  })
+  assert.equal(loose.tint, '')
+  assert.equal(loose.actionMotion, '')
+  assert.equal(loose.poseMotion, '')
+  assert.equal(loose.pose, 'de braços cruzados')
+  assert.equal(loose.action, 'https://evil.example/pose')
+  assert.match(`${loose.tint}${loose.actionMotion}${loose.poseMotion}`, /^[a-z]*$/)
+  const known = portraitCue({ emotion: 'medo', pose: 'kneel', action: 'shrug' })
+  assert.equal(known.tint, 'fear')
+  assert.equal(known.poseMotion, 'low')
+  assert.equal(known.actionMotion, 'tilt')
+  const warm = portraitCue({ emotion: 'tenderness', pose: 'sitting', action: 'wave' })
+  assert.equal(warm.tint, 'warm')
+  assert.equal(warm.poseMotion, 'settle')
+  assert.equal(warm.actionMotion, 'sway')
 })
 
 test('ficha mostra desconfiança, estágio, histórico e motivo NPC', () => {

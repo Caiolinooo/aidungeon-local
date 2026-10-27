@@ -89,6 +89,11 @@ ALTER TABLE images ADD COLUMN ref_id TEXT DEFAULT '';
 ALTER TABLE images ADD COLUMN cache_key TEXT DEFAULT '';
 ALTER TABLE images ADD COLUMN reused_from TEXT DEFAULT '';
 
+-- Clipe MP4 (migration 039). Raster antigo continua image/png, sem duração.
+ALTER TABLE images ADD COLUMN media_type TEXT DEFAULT 'image/png';
+ALTER TABLE images ADD COLUMN duration_ms INTEGER;
+ALTER TABLE images ADD COLUMN source_image_id TEXT DEFAULT '';
+
 -- v0.3.0: fila do pipeline assíncrono de assets (worker em app/jobs.py)
 CREATE TABLE jobs(
   id TEXT PRIMARY KEY,

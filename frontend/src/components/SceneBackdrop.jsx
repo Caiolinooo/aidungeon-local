@@ -11,6 +11,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { playerDisplayText } from '../utils.js'
+import { useToast } from './Toast.jsx'
+import ClipActions from './ClipActions.jsx'
+import { useSceneClip } from './useSceneClip.js'
+import { clipVideoDomProps, mediaDownloadName, motionPrompt, prefersReducedMotion } from '../sceneClip.js'
 
 const STANCE_LABEL = {
   resist: 'recua',
@@ -61,6 +65,19 @@ export default function SceneBackdrop({
   const lastSyncRef = useRef(0)
   const [reacting, setReacting] = useState(false)
   const [line, setLine] = useState('')
+  const toast = useToast()
+  const sourceImageId = scene?.backdrop?.image?.id || ''
+  const sceneClip = useSceneClip({
+    adventureId,
+    sourceImageId,
+    prompt: motionPrompt({
+      place: scene?.location && scene.location !== 'the current scene' ? scene.location : '',
+      atmosphere: scene?.atmosphere || '',
+      caption: scene?.backdrop?.image?.prompt || '',
+      story: storyText || '',
+    }),
+    toast,
+  })
 
   useEffect(() => {
     if (!adventureId || generating) return undefined
@@ -200,22 +217,39 @@ export default function SceneBackdrop({
     ? scene.location
     : ''
 
+  const playingClip = sceneClip.showVideo && sceneClip.clip?.url
+  const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion() })
+
   return (
     <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
-      scene.notice ? 'min-h-[clamp(10rem,28vh,20rem)]' : 'h-[clamp(8rem,24vh,18rem)]'
+      playingClip
+        ? 'min-h-[clamp(14rem,36vh,24rem)]'
+        : scene.notice
+          ? 'min-h-[clamp(10rem,28vh,20rem)]'
+          : 'h-[clamp(8rem,24vh,18rem)]'
     }`}>
-      {backdropUrl && (
+      {playingClip ? (
+        <video
+          key={sceneClip.clip.id}
+          src={sceneClip.clip.url}
+          {...videoProps}
+          onError={sceneClip.failPlayback}
+          className="absolute inset-0 h-full w-full bg-black object-contain"
+        />
+      ) : backdropUrl ? (
         <div
           className={`absolute inset-0 bg-cover bg-center transition-all duration-700 ${filters} ${
             reacting ? 'scene-react' : ''
           }`}
           style={{ backgroundImage: `url("${backdropUrl}")` }}
         />
-      )}
-      <div className="absolute inset-0 bg-gradient-to-t from-canvas via-canvas/60 to-canvas/10" />
+      ) : null}
+      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-t ${
+        playingClip ? 'from-canvas/35 via-transparent to-canvas/20' : 'from-canvas via-canvas/60 to-canvas/10'
+      }`} />
 
-      <div className="relative flex h-full flex-col justify-between px-4 py-3">
-        <div className="flex items-start justify-between gap-2">
+      <div className="pointer-events-none relative flex h-full flex-col justify-between px-4 py-3">
+        <div className="pointer-events-auto flex items-start justify-between gap-2">
           {place || scene.notice ? (
             <div className="max-w-[75%]">
               {place ? (
@@ -231,14 +265,31 @@ export default function SceneBackdrop({
               ) : null}
             </div>
           ) : <span />}
-          {scene.backdrop?.status === 'error' && (
-            <button
-              onClick={retry}
-              className="rounded-full border border-warn-800 bg-canvas/90 px-2.5 py-1 text-[10px] text-warn-200 hover:bg-warn-950/60 transition"
-            >
-              Cenário falhou — repetir
-            </button>
-          )}
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            {scene.backdrop?.status === 'error' && (
+              <button
+                type="button"
+                onClick={retry}
+                className="rounded-full border border-warn-800 bg-canvas/90 px-2.5 py-1 text-[10px] text-warn-200 hover:bg-warn-950/60 transition"
+              >
+                Cenário falhou — repetir
+              </button>
+            )}
+            {sourceImageId && (
+              <ClipActions
+                pending={sceneClip.pending}
+                hasClip={Boolean(sceneClip.clip?.url)}
+                showingVideo={sceneClip.showVideo}
+                downloadHref={sceneClip.clip?.url || ''}
+                downloadName={mediaDownloadName(sceneClip.clip?.id, sceneClip.clip?.mediaType || 'video/mp4', { prefix: 'clip' })}
+                onStart={sceneClip.start}
+                onCancel={sceneClip.cancel}
+                onShowImage={sceneClip.showImage}
+                onShowClip={sceneClip.showClip}
+                chipClass="rounded-full border border-subtle bg-canvas/90 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-elevated transition disabled:opacity-40"
+              />
+            )}
+          </div>
         </div>
 
         {scene.cast?.length > 0 && (
@@ -278,7 +329,9 @@ export default function SceneBackdrop({
           </div>
         )}
 
-        <p className={`truncate text-center text-[11px] leading-tight text-secondary ${line ? '' : 'invisible'}`}>
+        <p className={`truncate text-center text-[11px] leading-tight text-secondary ${
+          playingClip ? 'hidden' : line ? '' : 'invisible'
+        }`}>
           {line || '·'}
         </p>
       </div>

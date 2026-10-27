@@ -20,7 +20,7 @@ import {
   Dices,
 } from 'lucide-react'
 
-// TalkingHead (three.js) is loaded on-demand
+// Retratos 2D, carregados sob demanda.
 const AvatarsTab = lazy(() => import('./drawer/AvatarsTab.jsx'))
 
 export const INSPECTOR_TABS = [
@@ -38,7 +38,6 @@ export const INSPECTOR_TABS = [
 export function InspectorPane({
   adventure,
   onAdventureChange,
-  storyText,
   tab,
   setTab,
   onClose,
@@ -103,8 +102,8 @@ export function InspectorPane({
           </div>
         )}
         {tab === 'avatars' && (
-          <Suspense fallback={<p className="py-8 text-center text-xs text-muted">Carregando o visualizador 3D…</p>}>
-            <AvatarsTab adventure={adventure} storyText={storyText} />
+          <Suspense fallback={<p className="py-8 text-center text-xs text-muted">Carregando retratos…</p>}>
+            <AvatarsTab adventure={adventure} />
           </Suspense>
         )}
         {tab === 'consistency' && <ConsistencyTab adventure={adventure} />}
@@ -124,7 +123,6 @@ export default function Drawer({
   onClose,
   adventure,
   onAdventureChange,
-  storyText,
   tab,
   setTab,
   controlsComponent,
@@ -144,7 +142,6 @@ export default function Drawer({
       <InspectorPane
         adventure={adventure}
         onAdventureChange={onAdventureChange}
-        storyText={storyText}
         tab={activeTab}
         setTab={handleTabChange}
         onClose={onClose}

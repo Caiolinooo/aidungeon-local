@@ -28,7 +28,7 @@ from app import access, auth, db, image_client, jobs, likeness, llm_client, npc_
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import ImageSettingsUpdate, SeeRequest
+from app.schemas import ClipRequest, ImageSettingsUpdate, SeeRequest
 
 log = logging.getLogger("aidungeon.images")
 
@@ -743,6 +743,11 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
             scene.queue_missing_portraits(
                 adventure_id, frame[:likeness.CAST_REFERENCE_LIMIT])
         raise
+    if img_cfg.get("provider") != "comfyui":
+        # SDXL/Forge não tem máscaras regionais de várias referências. A cena
+        # conserva a descrição do elenco no prompt; retratos continuam img2img.
+        reference_image_ids = []
+        references = []
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
@@ -827,9 +832,64 @@ def post_see(adventure_id: str, body: SeeRequest,
     return image
 
 
-# ------------------------------------------------------------- arquivo PNG
+# --------------------------------------------------------------- clipe Wan
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _clip_source_bytes(image: dict) -> bytes:
+    """PNG raster desta aventura. Vídeo, outro MIME ou arquivo ilegível não servem."""
+    media = str(image.get("media_type") or "image/png").split(";", 1)[0].strip().lower()
+    if media not in ("image/png", "image/x-png"):
+        raise GameError.not_found(f"image {image.get('id')} not found")
+    try:
+        raw = likeness.read_stored_image_bytes(image)
+    except (OSError, FileNotFoundError) as exc:
+        raise GameError.not_found(f"image {image.get('id')} not found") from exc
+    if not raw.startswith(_PNG_MAGIC):
+        raise GameError.not_found(f"image {image.get('id')} not found")
+    return raw
+
+
+@router.post("/adventures/{adventure_id}/clips", status_code=202)
+def post_clip(adventure_id: str, body: ClipRequest,
+              info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    """Enfileira scene_clip. Não gera aqui e não chama narrador nem voz."""
+    prompt = " ".join(body.prompt.split())
+    if not prompt:
+        raise GameError.bad_request("validation_error", "prompt is required")
+    with db.session() as conn:
+        adventure = db.get_adventure(conn, adventure_id)
+        if not adventure or not access.can_see(info.user, adventure.get("owner")):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        img_cfg = image_client.effective_settings(conn)
+        if not img_cfg["enabled"]:
+            raise GameError(503, "image_disabled",
+                            "image generation is disabled (settings.image.enabled)")
+        source = db.get_image(conn, body.image_id)
+        if not source or source["adventure_id"] != adventure_id:
+            raise GameError.not_found(f"image {body.image_id} not found")
+        raw = _clip_source_bytes(source)
+        job = jobs.enqueue_scene_clip(
+            conn, adventure_id, source["id"], prompt,
+            cache_key=image_client.clip_request_key(img_cfg, prompt, raw),
+        )
+    return {"job_id": job["id"]}
+
+
+def _served_media_type(image: dict) -> str:
+    media = str(image.get("media_type") or "image/png").split(";", 1)[0].strip().lower()
+    if media in ("image/png", "image/x-png", ""):
+        return "image/png"
+    if media == "video/mp4":
+        return "video/mp4"
+    if str(image.get("file_path") or "").lower().endswith(".mp4"):
+        return "video/mp4"
+    return "image/png"
+
+
+# ------------------------------------------------------------- arquivo
 @router.get("/images/{image_id}")
-def get_image(image_id: str) -> FileResponse:
+def get_image(image_id: str, download: bool = Query(default=False)) -> FileResponse:
     with db.session() as conn:
         image = db.get_image(conn, image_id)
     if not image:
@@ -840,4 +900,5 @@ def get_image(image_id: str) -> FileResponse:
         raise GameError.not_found(f"image file for {image_id} not found")
     if not path.is_file():
         raise GameError.not_found(f"image file for {image_id} not found")
-    return FileResponse(path, media_type="image/png")
+    media = _served_media_type(image)
+    return FileResponse(path, media_type=media, filename=path.name if download else None)

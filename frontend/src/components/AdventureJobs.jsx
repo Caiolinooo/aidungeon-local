@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../api.js'
+import { jobTypeLabel } from '../sceneClip.js'
 import { useToast } from './Toast.jsx'
 
 const ACTIVE_STATUSES = new Set(['preparing', 'pending', 'running'])
@@ -36,6 +37,7 @@ const TYPE_LABELS = {
   character_portrait: 'Retrato de personagem',
   scene_backdrop: 'Fundo da cena',
   see_image: 'Imagem da cena',
+  scene_clip: jobTypeLabel('scene_clip'),
   npc_day_tick: 'Simulação do dia',
   card_assets: 'Assets do card',
 }

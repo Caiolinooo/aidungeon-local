@@ -282,6 +282,12 @@ class SeeRequest(BaseModel):
     extra_prompt: str = ""
 
 
+class ClipRequest(BaseModel):
+    """POST /api/adventures/{id}/clips — PNG de origem e o movimento do clipe."""
+    image_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=1, max_length=2000)
+
+
 # ------------------------------------------------------------- v2: settings
 class ImageSettingsUpdate(BaseModel):
     """Todos os campos opcionais; omitidos permanecem (openai_api_key="" remove)."""

@@ -1,90 +1,6 @@
-// Liga sheet.visual_state ao TalkingHead já instalado.
-// O corpo 3D continua sendo o GLB de avatarConfig (brunette/avaturn/custom).
-// Não há malha derivada do retrato.
-
-import { MOODS } from './avatarConfig.js'
-
-export const TALKING_HEAD_POSES = [
-  'side', 'hip', 'turn', 'bend', 'back', 'straight', 'wide', 'oneknee', 'kneel', 'sitting',
-]
-
-export const TALKING_HEAD_GESTURES = [
-  'handup', 'index', 'ok', 'thumbup', 'thumbdown', 'side', 'shrug', 'namaste',
-]
-
-const EMOTION_TO_MOOD = {
-  neutral: 'neutral',
-  happy: 'happy',
-  joy: 'happy',
-  alegria: 'happy',
-  sad: 'sad',
-  sadness: 'sad',
-  triste: 'sad',
-  tristeza: 'sad',
-  angry: 'angry',
-  anger: 'angry',
-  raiva: 'angry',
-  fear: 'fear',
-  medo: 'fear',
-  disgust: 'disgust',
-  nojo: 'disgust',
-  love: 'love',
-  tenderness: 'love',
-  carinho: 'love',
-  sleep: 'sleep',
-  sono: 'sleep',
-}
-
-const POSE_ALIAS = {
-  side: 'side',
-  hip: 'hip',
-  turn: 'turn',
-  bend: 'bend',
-  bow: 'bend',
-  back: 'back',
-  straight: 'straight',
-  stand: 'straight',
-  standing: 'straight',
-  wide: 'wide',
-  oneknee: 'oneknee',
-  kneel: 'kneel',
-  kneeling: 'kneel',
-  sitting: 'sitting',
-  sit: 'sitting',
-  senta: 'sitting',
-  sentar: 'sitting',
-  ajoelha: 'kneel',
-  ajoelhar: 'kneel',
-  curva: 'bend',
-  inclina: 'bend',
-}
-
-const GESTURE_ALIAS = {
-  handup: 'handup',
-  wave: 'handup',
-  index: 'index',
-  point: 'index',
-  ok: 'ok',
-  thumbup: 'thumbup',
-  thumbdown: 'thumbdown',
-  side: 'side',
-  shrug: 'shrug',
-  namaste: 'namaste',
-  acena: 'handup',
-  aponta: 'index',
-  encolhe: 'shrug',
-}
-
-function token(value) {
-  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
-}
-
-function fromAlias(value, alias, allowed) {
-  const key = token(value)
-  if (!key) return null
-  const mapped = alias[key] || (allowed.includes(key) ? key : null)
-  return mapped && allowed.includes(mapped) ? mapped : null
-}
+// visual_state da ficha para o retrato 2D.
+// tint / actionMotion / poseMotion são tokens fechados de CSS no retrato
+// inteiro. Texto livre continua só como rótulo e nunca vira URL, classe ou malha.
 
 export function parseSheet(card) {
   const raw = card?.sheet
@@ -121,29 +37,68 @@ export function visualStateOf(card) {
   }
 }
 
-export function moodFromEmotion(emotion) {
-  const mapped = EMOTION_TO_MOOD[token(emotion)]
-  return mapped && MOODS.includes(mapped) ? mapped : null
+function token(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
 }
 
-export function poseFromVisual(pose) {
-  return fromAlias(pose, POSE_ALIAS, TALKING_HEAD_POSES)
+const TINTS = {
+  neutral: 'neutral',
+  happy: 'joy',
+  joy: 'joy',
+  alegria: 'joy',
+  sad: 'sad',
+  sadness: 'sad',
+  triste: 'sad',
+  tristeza: 'sad',
+  angry: 'anger',
+  anger: 'anger',
+  raiva: 'anger',
+  fear: 'fear',
+  medo: 'fear',
+  disgust: 'sour',
+  nojo: 'sour',
+  love: 'warm',
+  tenderness: 'warm',
+  carinho: 'warm',
+  sleep: 'sleep',
+  sono: 'sleep',
 }
 
-export function gestureFromVisual(action) {
-  return fromAlias(action, GESTURE_ALIAS, TALKING_HEAD_GESTURES)
+const ACTION_MOTION = {
+  wave: 'sway',
+  handup: 'sway',
+  acena: 'sway',
+  shrug: 'tilt',
+  encolhe: 'tilt',
+  point: 'lean',
+  index: 'lean',
+  aponta: 'lean',
+  recua: 'pull',
 }
 
-// mood null = não chamar setMood (TalkingHead lança "Unknown mood").
-// pose/gesture null = não chamar playPose/playGesture.
-// playPose com nome fora do template tenta baixar um FBX; por isso o filtro.
-export function resolveAvatarMotion(visual, fallbackMood) {
-  const mood = moodFromEmotion(visual?.emotion)
-    || (MOODS.includes(fallbackMood) ? fallbackMood : null)
+const POSE_MOTION = {
+  sitting: 'settle',
+  sit: 'settle',
+  senta: 'settle',
+  sentar: 'settle',
+  kneel: 'low',
+  kneeling: 'low',
+  ajoelha: 'low',
+  ajoelhar: 'low',
+  back: 'back',
+}
+
+export function portraitCue(visual) {
+  const emotion = String(visual?.emotion ?? '').trim()
+  const action = String(visual?.action ?? '').trim()
+  const pose = String(visual?.pose ?? '').trim()
   return {
-    mood,
-    pose: poseFromVisual(visual?.pose),
-    gesture: gestureFromVisual(visual?.action),
+    emotion,
+    action,
+    pose,
+    tint: TINTS[token(emotion)] || '',
+    actionMotion: ACTION_MOTION[token(action)] || '',
+    poseMotion: POSE_MOTION[token(pose)] || '',
   }
 }
 

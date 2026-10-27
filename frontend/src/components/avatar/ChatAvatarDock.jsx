@@ -1,14 +1,11 @@
-// Dock de avatares do chat (v0.6.0): mostra, na lateral do
-// feed, os avatares 3D (TalkingHead) dos NPCs mencionados na narrativa mais
-// recente. Carregado via React.lazy (three.js fica fora do bundle inicial,
-// mesmo padrão do AvatarsTab).
+// Dock de retratos 2D na lateral do feed. Cada NPC presente na cena usa o
+// retrato principal do card (card.portrait.id), o nome e o visual_state.
+// Carregado via React.lazy. A narração PCM sai pelo primeiro retrato visível.
 //
-// Diferenças da era VRM: sem tints por cor (avatar é um GLB completo, ver
-// avatarConfig.js) e sem o botão 🎨 de sync do retrato; o mood exibido é o
-// persistido em card.vrm_id. O humor do turno vem de sheet.visual_state.
-// O corpo 3D é o GLB já escolhido; o retrato é só uma miniatura de referência.
+// O humor do turno vem de sheet.visual_state (e dos hints do beat). Não há
+// corpo separado nem miniatura por cima de outra malha.
 //
-// Narração: registra UM speaker no avatarBus — o PRIMEIRO avatar visível
+// Narração: registra UM speaker no avatarBus — o PRIMEIRO retrato visível
 // fala pela cena inteira (NarrateButton → speakNarration → speaker.speak).
 //
 // Props:
@@ -17,75 +14,40 @@
 //   refreshKey   — muda → refetch dos cards (ex.: drawer fechou após edição)
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
-import TalkingAvatar from './TalkingAvatar.jsx'
-import { parseAvatarConfig } from './avatarConfig.js'
+import PortraitAvatar2D from './PortraitAvatar2D.jsx'
 import { registerSpeaker } from './avatarBus.js'
 import { mentionsNpc } from './emotionDetect.js'
-import { mergedVisual, visualStateOf } from './avatarMotion.js'
-
-function PortraitCover({ imageId }) {
-  const [src, setSrc] = useState(null)
-  useEffect(() => {
-    if (!imageId) return undefined
-    let url = null
-    let dead = false
-    api.fetchImageBlob(imageId).then((blob) => {
-      if (dead) return
-      url = URL.createObjectURL(blob)
-      setSrc(url)
-    }).catch(() => {})
-    return () => {
-      dead = true
-      if (url) URL.revokeObjectURL(url)
-    }
-  }, [imageId])
-  if (!src) return null
-  return (
-    <img
-      src={src}
-      alt=""
-      title="Retrato de referência. O corpo 3D é o GLB do avatar, não uma malha gerada desta foto."
-      className="absolute bottom-1 right-1 z-10 h-6 w-6 rounded-full border border-white/40 object-cover"
-    />
-  )
-}
-
-function readSheet(card) {
-  const raw = card?.sheet
-  if (!raw) return null
-  if (typeof raw === 'object') return raw
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : null
-  } catch {
-    return null
-  }
-}
+import { mergedVisual, parseSheet, visualStateOf } from './avatarMotion.js'
 
 function DockAvatar({ card, avatarRef, visual }) {
-  const cfg = parseAvatarConfig(card.vrm_id)
-  const status = readSheet(card)?.status || ''
+  const status = parseSheet(card)?.status || ''
   const marked = status === 'dead' || status === 'missing' || status === 'injured'
-  const moodLabel = visual?.emotion || cfg?.mood
+  const caption = [visual?.emotion, visual?.action].filter(Boolean).join(' · ')
   return (
     <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-24">
       <div className="relative h-20 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-32 sm:w-24">
-        <TalkingAvatar ref={avatarRef} cfg={cfg} view="upper" visual={visual} />
-        <PortraitCover imageId={card.portrait?.id} />
+        <PortraitAvatar2D
+          ref={avatarRef}
+          imageId={card.portrait?.id}
+          name={card.title || 'Sem título'}
+          visual={visual}
+          status={status}
+          className="h-full w-full"
+        />
         {card.voice && (
           <span className="absolute right-1 top-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-bold uppercase text-accent-pri">
             {card.voice}
-          </span>
-        )}
-        {moodLabel && (
-          <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[8px] font-medium capitalize text-zinc-200">
-            {moodLabel}
           </span>
         )}
       </div>
       <span className="max-w-full truncate text-[10px] font-semibold text-primary" title={card.title}>
         {card.title || 'Sem título'}
       </span>
+      {caption && (
+        <span className="max-w-full truncate text-[9px] text-muted" title={caption}>
+          {caption}
+        </span>
+      )}
       {marked && (
         <span className="text-[9px] uppercase tracking-wide text-red-400">{status}</span>
       )}
@@ -108,7 +70,7 @@ export default function ChatAvatarDock({
   const [cards, setCards] = useState([])
   // No celular o retrato cobre o texto; começa fechado.
   const [collapsed, setCollapsed] = useState(dockStartsCollapsed)
-  // Refs dos TalkingAvatar por card.id — o speaker do bus usa o índice 0.
+  // Refs dos retratos por card.id — o speaker do bus usa o índice 0.
   const avatarRefs = useRef(new Map())
 
   const reload = useCallback(async () => {
@@ -150,7 +112,7 @@ export default function ChatAvatarDock({
     return mentionsNpc(storyText, [card.title, ...(card.triggers || [])])
   })
 
-  // Um speaker por dock: fala sempre pelo primeiro avatar visível (índice 0
+  // Um speaker por dock: fala sempre pelo primeiro retrato visível (índice 0
   // da lista `present`). O registro é estável — lê o Map de refs na hora.
   useEffect(() => {
     if (present.length === 0) return undefined
@@ -167,7 +129,7 @@ export default function ChatAvatarDock({
     <div className={`absolute bottom-2 right-2 z-20 flex min-w-0 flex-row items-end gap-1 sm:bottom-2 sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end ${collapsed ? '' : 'left-2'}`}>
       <button
         onClick={() => setCollapsed((c) => !c)}
-        title={collapsed ? 'Mostrar avatares dos NPCs' : 'Esconder avatares dos NPCs'}
+        title={collapsed ? 'Mostrar retratos dos NPCs' : 'Esconder retratos dos NPCs'}
         className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900/80 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
       >
         {collapsed ? `NPCs (${present.length})` : 'Ocultar'}

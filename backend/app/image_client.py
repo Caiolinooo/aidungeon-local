@@ -17,6 +17,12 @@ O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
 ser gravado em images.file_path.
 
+`generate_clip` é image-to-video no mesmo ComfyUI: grafo Wan2.2 TI2V 5B
+(template oficial video_wan2_2_5B_ti2v; GGUF usa UnetLoaderGGUF). Lê
+`comfyui_video` do arquivo e não altera `provider` nem `comfyui_unet`.
+Não chama narrador nem voz. O arquivo gravado é um MP4 (ftyp), nunca um PNG
+renomeado.
+
 Erros: falha de conexão/timeout → ImageUnreachable ("unreachable");
 401/403 → ImageAuthError ("auth_error"); demais → ImageError. A api_key
 NUNCA é escrita em logs/mensagens de erro.
@@ -466,22 +472,11 @@ def _comfy_status_message(status: dict) -> str:
     return "erro sem detalhe"
 
 
-def _comfy_fetch_image(client: httpx.Client, base: str, outputs: dict) -> bytes:
-    images: list[dict] = []
-    for output in outputs.values():
-        if not isinstance(output, dict):
-            continue
-        for item in output.get("images") or []:
-            if isinstance(item, dict) and item.get("filename"):
-                images.append(item)
-    if not images:
-        raise ImageError("histórico do ComfyUI sem imagens de saída")
-    chosen = next((item for item in images if item.get("type") == "output"),
-                  images[0])
-    params = {"filename": str(chosen["filename"]),
-              "type": str(chosen.get("type") or "output")}
-    if chosen.get("subfolder"):
-        params["subfolder"] = str(chosen["subfolder"])
+def _comfy_view(client: httpx.Client, base: str, item: dict) -> bytes:
+    params = {"filename": str(item["filename"]),
+              "type": str(item.get("type") or "output")}
+    if item.get("subfolder"):
+        params["subfolder"] = str(item["subfolder"])
     try:
         resp = client.get(f"{base}/view", params=params)
     except httpx.TransportError as exc:
@@ -494,13 +489,30 @@ def _comfy_fetch_image(client: httpx.Client, base: str, outputs: dict) -> bytes:
     return resp.content
 
 
+def _comfy_fetch_image(client: httpx.Client, base: str, outputs: dict) -> bytes:
+    images: list[dict] = []
+    for output in outputs.values():
+        if not isinstance(output, dict):
+            continue
+        for item in output.get("images") or []:
+            if isinstance(item, dict) and item.get("filename"):
+                images.append(item)
+    if not images:
+        raise ImageError("histórico do ComfyUI sem imagens de saída")
+    chosen = next((item for item in images if item.get("type") == "output"),
+                  images[0])
+    return _comfy_view(client, base, chosen)
+
+
 def comfy_poll_interval_s(cfg: dict) -> float:
     """Espera entre leituras do history. Piso 0,2 s; omissão usa 0,25 s."""
     return max(0.2, float(cfg.get("comfyui_poll_interval_s") or 0.25))
 
 
-def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
-    """Enfileira o grafo, espera a execução e devolve o PNG."""
+def _comfy_run(cfg: dict, client: httpx.Client, graph: dict, *,
+               timeout: float | None = None,
+               fetch=None) -> bytes:
+    """Enfileira o grafo, espera a execução e devolve o arquivo de saída."""
     base = _comfy_base(cfg)
     submitted = _post_json(
         client, f"{base}/prompt",
@@ -513,9 +525,13 @@ def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
         raise ImageError(
             f"workflow recusado pelo ComfyUI: {str(submitted['node_errors'])[:200]}")
 
-    timeout = float(cfg.get("timeout_seconds", 300))
+    if timeout is None:
+        timeout = float(cfg.get("timeout_seconds", 300))
+    else:
+        timeout = float(timeout)
     interval = comfy_poll_interval_s(cfg)
     deadline = time.monotonic() + timeout
+    reader = fetch or _comfy_fetch_image
     while True:
         try:
             resp = client.get(f"{base}/history/{prompt_id}")
@@ -539,7 +555,7 @@ def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
                     f"execução falhou no ComfyUI: {_comfy_status_message(status)}")
             outputs = entry.get("outputs") or {}
             if outputs:
-                return _comfy_fetch_image(client, base, outputs)
+                return reader(client, base, outputs)
         if time.monotonic() >= deadline:
             raise ImageError(f"timeout ({timeout:g}s) aguardando o ComfyUI")
         time.sleep(interval)
@@ -640,6 +656,342 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         payload["variation"] = str(variation_value)
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# --------------------------------------------------------- wan2.2 ti2v
+# Template oficial:
+# https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_wan2_2_5B_ti2v.json
+# GGUF troca só o loader (UnetLoaderGGUF). O UNET de imagem não entra no grafo.
+_WAN_NEGATIVE = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，"
+    "最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，"
+    "画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，"
+    "杂乱的背景，三条腿，背景人很多，倒着走"
+)
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_VIDEO_DEFAULTS = {
+    "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
+    "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "vae": "wan2.2_vae.safetensors",
+    "frames": 121,
+    "fps": 24.0,
+    "steps": 20,
+    "cfg": 5.0,
+    "shift": 8.0,
+    "timeout_seconds": 1800.0,
+    "width": 1280,
+    "height": 704,
+    "vertical_width": 704,
+    "vertical_height": 1280,
+}
+
+
+def video_settings(cfg: dict) -> dict:
+    """Bloco `image.providers.comfyui.video`. Não lê o UNET de imagem."""
+    raw = cfg.get("comfyui_video")
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = dict(_VIDEO_DEFAULTS)
+    for key, default in _VIDEO_DEFAULTS.items():
+        if key not in raw or raw[key] is None:
+            continue
+        if isinstance(default, bool):
+            merged[key] = bool(raw[key])
+        elif isinstance(default, float):
+            merged[key] = float(raw[key])
+        elif isinstance(default, int):
+            merged[key] = int(raw[key])
+        else:
+            merged[key] = str(raw[key])
+    return merged
+
+
+def _png_size(content: bytes) -> tuple[int, int]:
+    if len(content) < 24 or not content.startswith(_PNG_MAGIC) or content[12:16] != b"IHDR":
+        raise ImageError("source image must be a PNG")
+    width = int.from_bytes(content[16:20], "big")
+    height = int.from_bytes(content[20:24], "big")
+    if width <= 0 or height <= 0:
+        raise ImageError("source image must be a PNG")
+    return width, height
+
+
+def _clip_frame(video: dict, source: bytes) -> tuple[int, int]:
+    width, height = _png_size(source)
+    if width >= height:
+        return int(video["width"]), int(video["height"])
+    return int(video["vertical_width"]), int(video["vertical_height"])
+
+
+def _is_local_url(url: str) -> bool:
+    try:
+        host = (httpx.URL(url).host or "").lower().strip("[]")
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_mp4(content: bytes) -> bool:
+    if len(content) < 12:
+        return False
+    if content.startswith((_PNG_MAGIC, b"GIF8", b"\xff\xd8\xff", b"RIFF")):
+        return False
+    return b"ftyp" in content[:32]
+
+
+def _comfy_free(client: httpx.Client, base: str) -> None:
+    """POST /free descarrega modelos do Comfy e devolve a VRAM."""
+    try:
+        resp = client.post(
+            f"{base}/free",
+            json={"unload_models": True, "free_memory": True},
+            headers={"Accept": "application/json"},
+        )
+    except httpx.TransportError as exc:
+        raise ImageUnreachable(
+            f"image provider unreachable: {type(exc).__name__}") from exc
+    if resp.status_code in (401, 403):
+        raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em free")
+    if resp.status_code != 200:
+        raise ImageError(
+            f"HTTP {resp.status_code} em free (ComfyUI): {resp.text[:200]}")
+
+
+def _free_comfy(base: str, transport: httpx.BaseTransport | None) -> None:
+    with _make_client(transport, 10) as client:
+        _comfy_free(client, base)
+
+
+def _free_comfy_quiet(base: str, transport: httpx.BaseTransport | None) -> None:
+    try:
+        _free_comfy(base, transport)
+    except ImageError as exc:
+        log.warning("comfy free: %s", exc.message)
+    except Exception as exc:
+        log.warning("comfy free: %s", type(exc).__name__)
+
+
+def _unload_local_forge(cfg: dict, transport: httpx.BaseTransport | None) -> None:
+    """Forge local solta o SDXL antes do Wan. Conexão recusada: Forge parado.
+    HTTP de erro aborta antes do /prompt. Provider que não é sdwebui, ou URL
+    que não é localhost, não é chamado."""
+    if (cfg.get("provider") or "sdwebui") != "sdwebui":
+        return
+    base_url = str(cfg.get("sdwebui_base_url") or "")
+    if not base_url or not _is_local_url(base_url):
+        return
+    url = f"{base_url.rstrip('/')}/sdapi/v1/unload-checkpoint"
+    with _make_client(transport, 10) as client:
+        try:
+            resp = client.post(url, json={}, headers={"Accept": "application/json"})
+        except httpx.ConnectError:
+            return
+        except httpx.TransportError as exc:
+            if "refused" in str(exc).lower():
+                return
+            raise ImageUnreachable(
+                f"image provider unreachable: {type(exc).__name__}") from exc
+        if resp.status_code in (401, 403):
+            raise ImageAuthError(
+                f"auth_error: HTTP {resp.status_code} em unload-checkpoint")
+        if resp.status_code != 200:
+            raise ImageError(
+                f"HTTP {resp.status_code} em unload-checkpoint: {resp.text[:200]}")
+
+
+def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
+                    width: int, height: int, seed: int) -> dict:
+    """API prompt do Wan2.2 TI2V 5B. O loader segue a extensão do arquivo."""
+    unet_name = str(video.get("unet") or "")
+    if unet_name.lower().endswith(".gguf"):
+        loader = "UnetLoaderGGUF"
+        unet_inputs: dict[str, Any] = {"unet_name": unet_name}
+    else:
+        loader = "UNETLoader"
+        unet_inputs = {"unet_name": unet_name, "weight_dtype": "default"}
+    return {
+        "1": {"class_type": loader, "inputs": unet_inputs},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": str(video.get("clip") or ""),
+            "type": "wan",
+            "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": str(video.get("vae") or "")}},
+        "4": {"class_type": "ModelSamplingSD3", "inputs": {
+            "model": ["1", 0], "shift": float(video["shift"])}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": prompt}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": _WAN_NEGATIVE}},
+        "7": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "8": {"class_type": "Wan22ImageToVideoLatent", "inputs": {
+            "vae": ["3", 0], "start_image": ["7", 0],
+            "width": int(width), "height": int(height),
+            "length": int(video["frames"]), "batch_size": 1}},
+        "9": {"class_type": "KSampler", "inputs": {
+            "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0],
+            "latent_image": ["8", 0], "seed": int(seed),
+            "steps": int(video["steps"]), "cfg": float(video["cfg"]),
+            "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1.0}},
+        "10": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["9", 0], "vae": ["3", 0]}},
+        "11": {"class_type": "CreateVideo", "inputs": {
+            "images": ["10", 0], "fps": float(video["fps"])}},
+        "12": {"class_type": "SaveVideo", "inputs": {
+            "video": ["11", 0], "filename_prefix": "video/aidungeon",
+            "format": "mp4", "codec": "auto"}},
+    }
+
+
+def _history_motion(outputs: dict) -> dict:
+    """Vídeo nativo do SaveVideo; VHS antigo publica o MP4 em `gifs`."""
+    videos: list[dict] = []
+    gifs: list[dict] = []
+    for output in outputs.values():
+        if not isinstance(output, dict):
+            continue
+        for item in output.get("videos") or []:
+            if isinstance(item, dict) and item.get("filename"):
+                videos.append(item)
+        for item in output.get("gifs") or []:
+            if isinstance(item, dict) and item.get("filename"):
+                gifs.append(item)
+    pool = videos or gifs
+    if not pool:
+        raise ImageError("histórico do ComfyUI sem vídeo (videos/gifs)")
+    return next((item for item in pool if item.get("type") == "output"), pool[0])
+
+
+def _comfy_fetch_video(client: httpx.Client, base: str, outputs: dict) -> bytes:
+    return _comfy_view(client, base, _history_motion(outputs))
+
+
+def _save_mp4(cfg: dict, adventure_id: str, image_id: str, content: bytes) -> str:
+    """Grava um MP4 real. PNG, GIF ou arquivo pela metade não ficam no disco."""
+    directory = db.REPO_ROOT / cfg["storage_dir"] / adventure_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{image_id}.mp4"
+    partial = path.with_name(path.name + ".partial")
+    try:
+        partial.write_bytes(content)
+        if not _is_mp4(content):
+            raise ImageError("saída do ComfyUI não é um MP4")
+        partial.replace(path)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        raise
+    try:
+        return path.relative_to(db.REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def clip_request_key(cfg: dict, prompt: str, source: bytes) -> str:
+    """Modelo, parâmetros visuais, prompt e pixels definem o clipe cacheado."""
+    video = cfg.get("comfyui_video") or {}
+    payload = {
+        "v": 1,
+        "kind": "scene_clip",
+        "video": {
+            key: value for key, value in video.items()
+            if key not in ("timeout_seconds", "note")
+        },
+        "prompt": " ".join(str(prompt or "").split()),
+        "source": hashlib.sha256(source).hexdigest() if source else "",
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _clip_seed(cfg: dict) -> int:
+    seed_value = cfg.get("seed")
+    if seed_value is None or int(seed_value) < 0:
+        return random.randint(0, 2**31 - 1)
+    return int(seed_value)
+
+
+def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
+                  source_png: bytes,
+                  transport: httpx.BaseTransport | None = None) -> dict:
+    """Image-to-video Wan2.2 TI2V. Exige o PNG de origem, grava `.mp4` e
+    devolve file_path, width, height, provider, media_type e duration_ms.
+
+    Ordem: /free, unload do Forge local (se o provider de imagem for sdwebui
+    em localhost), upload, /prompt, /history, /view, /free. Não muda `cfg`.
+    """
+    prompt = " ".join(str(prompt or "").split())
+    if not prompt:
+        raise ImageError("clip prompt is required")
+    if not source_png:
+        raise ImageError("source image is required")
+    if not source_png.startswith(_PNG_MAGIC):
+        raise ImageError("source image must be a PNG")
+    video = video_settings(cfg)
+    if not str(video.get("unet") or "").strip():
+        raise ImageError("config_error: image.providers.comfyui.video.unet vazio")
+    base = _comfy_base(cfg)
+    frame_w, frame_h = _clip_frame(video, source_png)
+    frames = int(video["frames"])
+    fps = float(video["fps"])
+    if frames <= 0 or fps <= 0:
+        raise ImageError("config_error: video frames/fps inválidos")
+    timeout = float(video["timeout_seconds"])
+    client_timeout = timeout if timeout >= 1 else 30.0
+    try:
+        _free_comfy(base, transport)
+        _unload_local_forge(cfg, transport)
+        with _make_client(transport, client_timeout) as client:
+            name = _comfy_upload(
+                client, base, source_png,
+                f"aidungeon-clip-{hashlib.sha256(source_png).hexdigest()[:16]}.png",
+            )
+            graph = _wan_ti2v_graph(
+                video, prompt, name, width=frame_w, height=frame_h,
+                seed=_clip_seed(cfg))
+            content = _comfy_run(
+                cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video)
+        file_path = _save_mp4(cfg, adventure_id, image_id, content)
+    finally:
+        _free_comfy_quiet(base, transport)
+    return {
+        "file_path": file_path,
+        "width": frame_w,
+        "height": frame_h,
+        "provider": "comfyui",
+        "media_type": "video/mp4",
+        "duration_ms": int(round(frames * 1000 / fps)),
+    }
+
+
+def interrupt_comfy(cfg: dict, transport: httpx.BaseTransport | None = None) -> None:
+    """Cancela o prompt Wan e solta a VRAM (/interrupt e /free)."""
+    base = _comfy_base(cfg)
+    interrupt_error: ImageError | None = None
+    with _make_client(transport, 10) as client:
+        try:
+            resp = client.post(
+                f"{base}/interrupt", json={},
+                headers={"Accept": "application/json"})
+        except httpx.TransportError as exc:
+            interrupt_error = ImageUnreachable(
+                f"image provider unreachable: {type(exc).__name__}")
+            resp = None
+        if interrupt_error is None and resp is not None:
+            if resp.status_code in (401, 403):
+                interrupt_error = ImageAuthError(
+                    f"auth_error: HTTP {resp.status_code} em interrupt")
+            elif resp.status_code != 200:
+                interrupt_error = ImageError(
+                    f"HTTP {resp.status_code} em interrupt: {resp.text[:200]}")
+        try:
+            _comfy_free(client, base)
+        except ImageError:
+            if interrupt_error is None:
+                raise
+    if interrupt_error is not None:
+        raise interrupt_error
 
 
 # ------------------------------------------------------------------ público

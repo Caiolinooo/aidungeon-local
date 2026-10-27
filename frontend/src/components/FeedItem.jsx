@@ -4,12 +4,21 @@
 //   start / continue / story → prosa corrida (story = narração injetada, itálico sutil)
 //   do                     → rótulo "You" (ou o actor) + blockquote
 //   say                    → "You say" / "{actor} says" + blockquote com aspas
-//   see                    → card de imagem (ação "See", v2): action.image = {id, url, prompt}
+//   see                    → card de mídia (ação "See"): action.image = {id, url, prompt, media_type?}
 // Hover revela o botão Edit (qualquer bloco, inclusive respostas da IA).
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import Modal from './Modal.jsx'
 import { useToast } from './Toast.jsx'
+import ClipActions from './ClipActions.jsx'
+import { useSceneClip } from './useSceneClip.js'
+import {
+  clipVideoDomProps,
+  isVideoMedia,
+  mediaDownloadName,
+  motionPrompt,
+  prefersReducedMotion,
+} from '../sceneClip.js'
 import { playerDisplayText } from '../utils.js'
 import { speakNarration, stopNarration } from './avatar/avatarBus.js'
 import { createPcmPlayer, readPcm16Wav } from '../pcmStream.js'
@@ -86,7 +95,7 @@ export default function FeedItem({ action, onEdit, disabled, isLatest = false, a
 
 
       {isSee ? (
-        <SeeImageCard action={action} />
+        <SeeImageCard action={action} adventureId={adventureId} />
       ) : isPlayer ? (
         <blockquote className="border-l border-accent-pri/35 pl-4">
           <div className="mb-1.5 font-sans text-[10px] font-semibold uppercase tracking-[0.22em] text-accent-pri">
@@ -360,7 +369,7 @@ function HiddenImageNotice({ onShow, tall = false }) {
   )
 }
 
-function SeeImageCard({ action }) {
+function SeeImageCard({ action, adventureId = '' }) {
   const toast = useToast()
   const image = action.image
   const [objUrl, setObjUrl] = useState(null)
@@ -369,6 +378,13 @@ function SeeImageCard({ action }) {
   const [copied, setCopiado] = useState(false)
   const [concealed, setConcealed] = useState(false)
   const holderRef = useRef(null)
+  const sourceVideo = isVideoMedia(image?.media_type)
+  const sceneClip = useSceneClip({
+    adventureId,
+    sourceImageId: !sourceVideo && image?.id ? image.id : '',
+    prompt: motionPrompt({ caption: image?.prompt || action.text || '' }),
+    toast,
+  })
 
   useEffect(() => {
     setConcealed(false)
@@ -378,12 +394,19 @@ function SeeImageCard({ action }) {
     if (!image?.id) return undefined
     let cancelled = false
     let url = null
+    setFailed(false)
+    setObjUrl(null)
 
     const load = async () => {
       try {
         const blob = await api.fetchImageBlob(image.id)
         if (cancelled) return
         url = URL.createObjectURL(blob)
+        if (cancelled) {
+          URL.revokeObjectURL(url)
+          url = null
+          return
+        }
         setObjUrl(url)
       } catch {
         if (!cancelled) setFailed(true)
@@ -427,6 +450,15 @@ function SeeImageCard({ action }) {
     .replace(/\s*,\s*wide shot of that action.*$/i, '')
     .trim() || captionSource
 
+  const playingClip = !sourceVideo && sceneClip.showVideo && Boolean(sceneClip.clip?.url)
+  const frameIsVideo = sourceVideo || playingClip
+  const frameUrl = playingClip ? sceneClip.clip.url : objUrl
+  const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion() })
+  const stillName = mediaDownloadName(image?.id || action.id, image?.media_type)
+  const failedCopy = failed || !image?.id
+    ? (sourceVideo ? 'Não foi possível carregar o vídeo.' : 'Não foi possível carregar a imagem.')
+    : (sourceVideo ? 'Carregando o vídeo…' : 'Carregando a ilustração…')
+
   const copyPrompt = async () => {
     if (!rawPrompt) return
     try {
@@ -444,6 +476,35 @@ function SeeImageCard({ action }) {
       <div className="relative">
         {concealed ? (
           <HiddenImageNotice onShow={() => setConcealed(false)} />
+        ) : frameIsVideo ? (
+          <>
+            <div className="overflow-hidden rounded-lg border border-subtle bg-black">
+              {frameUrl ? (
+                <video
+                  key={playingClip ? sceneClip.clip.id : image?.id}
+                  src={frameUrl}
+                  {...videoProps}
+                  onError={playingClip ? sceneClip.failPlayback : undefined}
+                  className="max-h-96 w-full object-contain"
+                />
+              ) : (
+                <div className="flex h-48 items-center justify-center text-sm text-muted">
+                  {failedCopy}
+                </div>
+              )}
+            </div>
+            {frameUrl && (
+              <button
+                type="button"
+                onClick={() => setConcealed(true)}
+                aria-label="Ocultar vídeo"
+                title="Ocultar vídeo"
+                className="absolute right-2 top-2 rounded-md border border-subtle bg-surface/90 p-1.5 text-secondary hover:text-primary"
+              >
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+          </>
         ) : (
           <>
             <button
@@ -456,7 +517,7 @@ function SeeImageCard({ action }) {
                 <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
               ) : (
                 <div className="flex h-48 items-center justify-center text-sm text-muted">
-                  {failed || !image?.id ? 'Não foi possível carregar a imagem.' : 'Carregando a ilustração…'}
+                  {failedCopy}
                 </div>
               )}
             </button>
@@ -491,19 +552,42 @@ function SeeImageCard({ action }) {
           {objUrl && (
             <a
               href={objUrl}
-              download={`scene-${image?.id || action.id}.png`}
+              download={stillName}
               className="rounded-md border border-subtle bg-elevated px-2 py-1 text-[10px] font-medium text-secondary hover:text-primary transition"
             >
-              Save PNG
+              {sourceVideo ? 'Baixar MP4' : 'Save PNG'}
             </a>
           )}
         </div>
       </div>
+      {image?.id && adventureId && !sourceVideo && (
+        <div className="mt-2 px-1">
+          <ClipActions
+            pending={sceneClip.pending}
+            hasClip={Boolean(sceneClip.clip?.url)}
+            showingVideo={sceneClip.showVideo}
+            downloadHref={sceneClip.clip?.url || ''}
+            downloadName={mediaDownloadName(sceneClip.clip?.id, sceneClip.clip?.mediaType || 'video/mp4', { prefix: 'clip' })}
+            onStart={sceneClip.start}
+            onCancel={sceneClip.cancel}
+            onShowImage={sceneClip.showImage}
+            onShowClip={sceneClip.showClip}
+          />
+        </div>
+      )}
 
-      {fullOpen && objUrl && (
-        <Modal title="Ver — ilustração da cena" onClose={() => setFullOpen(false)} wide>
+      {fullOpen && frameUrl && (
+        <Modal title={frameIsVideo ? 'Ver — clipe da cena' : 'Ver — ilustração da cena'} onClose={() => setFullOpen(false)} wide>
           {concealed ? (
             <HiddenImageNotice onShow={() => setConcealed(false)} tall />
+          ) : frameIsVideo ? (
+            <video
+              key={playingClip ? sceneClip.clip.id : image?.id}
+              src={frameUrl}
+              {...videoProps}
+              onError={playingClip ? sceneClip.failPlayback : undefined}
+              className="max-h-[75vh] w-full rounded-lg bg-black object-contain"
+            />
           ) : (
             <div className="relative">
               <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />

@@ -1,6 +1,6 @@
-// Parser incremental de WAV PCM16 mono e player Web Audio para o fallback
-// sem avatar. O dock usa o stream do TalkingHead; este player não entra
-// junto, senão a narração toca duas vezes.
+// Parser incremental de WAV PCM16 mono e player Web Audio.
+// O retrato do dock e o botão de narração usam este player, um de cada vez:
+// se o dock está registrado, o botão entrega o Response só para ele.
 
 export const PCM_FRAME_SAMPLES = 4096
 
@@ -190,7 +190,7 @@ export async function readPcm16Wav(response, { onFormat, onSamples } = {}) {
   }
 }
 
-// OmniVoice / TalkingAvatar entregam PCM a 24 kHz. O contexto criado no
+// OmniVoice entrega PCM a 24 kHz. O contexto criado no
 // gesto usa essa taxa; se o browser recusar, o worklet reamostra.
 const PREWARM_SAMPLE_RATE = 24000
 

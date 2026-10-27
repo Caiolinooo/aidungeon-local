@@ -1214,6 +1214,11 @@ def image_to_dict(row: sqlite3.Row) -> dict:
         "ref_id": row["ref_id"] or "",
         "cache_key": (row["cache_key"] if "cache_key" in row.keys() else "") or "",
         "reused_from": (row["reused_from"] if "reused_from" in row.keys() else "") or "",
+        "media_type": (row["media_type"] if "media_type" in row.keys() else None) or "image/png",
+        "duration_ms": row["duration_ms"] if "duration_ms" in row.keys() else None,
+        "source_image_id": (
+            (row["source_image_id"] if "source_image_id" in row.keys() else "") or ""
+        ),
         "created_at": row["created_at"],
         "url": f"/api/images/{row['id']}",
     }
@@ -1238,24 +1243,28 @@ def insert_image(conn: sqlite3.Connection, *, adventure_id: str, action_seq: int
                  height: int | None = None, image_id: str | None = None,
                  kind: str = "scene", ref_id: str = "",
                  cache_key: str = "", reused_from: str = "",
-                 created_at: str | None = None, job_id: str | None = None) -> dict:
+                 created_at: str | None = None, job_id: str | None = None,
+                 media_type: str = "image/png",
+                 duration_ms: int | None = None,
+                 source_image_id: str = "") -> dict:
     iid = image_id or new_id()
     values = (iid, adventure_id, action_seq, prompt, negative_prompt, file_path,
               provider, width, height, kind, ref_id, cache_key or "",
-              reused_from or "", created_at or utcnow())
+              reused_from or "", created_at or utcnow(),
+              media_type or "image/png", duration_ms, source_image_id or "")
     columns = ("id, adventure_id, action_seq, prompt, negative_prompt,"
                " file_path, provider, width, height, kind, ref_id, cache_key,"
-               " reused_from, created_at")
+               " reused_from, created_at, media_type, duration_ms, source_image_id")
     if job_id is None:
         conn.execute(
-            f"INSERT INTO images({columns}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO images({columns}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             values,
         )
     else:
         # A publicação e a checagem do status são uma única operação atômica:
         # se o cancelamento comitar primeiro, action/retrato fazem rollback.
         cur = conn.execute(
-            f"INSERT INTO images({columns}) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?"
+            f"INSERT INTO images({columns}) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?"
             " WHERE EXISTS (SELECT 1 FROM jobs WHERE id=? AND status='running')",
             (*values, job_id),
         )
@@ -1712,7 +1721,7 @@ class JobCanceled(Exception):
 
 # -------------------------------------------------------------------- jobs
 JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick",
-             "card_assets", "location_image")
+             "card_assets", "location_image", "scene_clip")
 JOB_ACTIVE = ("preparing", "pending", "running")
 
 

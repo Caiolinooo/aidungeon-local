@@ -3,9 +3,10 @@
 Fluxo: rotas enfileiram (`enqueue`, contrato C5); o worker (único por
 processo) faz claim do de menor prioridade e, nela, do mais antigo, e executa
 num thread (SQLite é síncrono). Prioridades: 0 See, 1 retrato de NPC
-presente, 2 fundo de cena, 3 retratos em lote. Com narrativa em curso só o
-See (0) roda. Job novo com a mesma `supersede_key` cancela os pendentes
-antigos. Cada mudança de estado sai no bus (`job_queued`, `job_progress`).
+presente, 2 fundo de cena, 3 retratos em lote, 4 dia de vida, 5 ficha,
+6 clipe Wan. Com narrativa em curso só o See (0) roda. Job novo com a mesma
+`supersede_key` cancela os pendentes antigos. Cada mudança de estado sai no
+bus (`job_queued`, `job_progress`).
 Tipos:
 - `character_portrait` — se o card não tem portrait_prompt (e não há âncora
   nem foto de referência), o job nasce em `preparing`: o LLM (role
@@ -26,6 +27,11 @@ Tipos:
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
   role image_prompt) roda numa thread e só então o job entra na fila do SD,
   para não prender o worker. Termina em `see_ready` ou `see_failed`.
+- `scene_clip` — MP4 Wan2.2 TI2V a partir de um PNG já gravado. Prioridade 6:
+  espera a narrativa e o resto da fila. Cache por modelo+prompt+fonte.
+  Supersede na mesma imagem de origem. Cancelamento manda /interrupt e /free
+  no Comfy e não publica o arquivo. O evento terminal é `clip_ready`.
+  Não chama narrador nem voz.
 
 Aventura apagada no meio do render: o PNG é descartado e o job termina
 cancelado. O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para
@@ -59,6 +65,7 @@ PRIORITY_BACKDROP = 2
 PRIORITY_BULK_PORTRAIT = 3
 PRIORITY_LIFE_TICK = 4
 PRIORITY_CARD_ASSETS = 5
+PRIORITY_SCENE_CLIP = 6
 
 # A cena aberta pede retrato de novo assim que o job anterior termina em erro.
 # Sem esta espera, um CUDA OOM vira outro txt2img a cada poucos segundos.
@@ -133,6 +140,19 @@ def _terminal_event(job: dict, status: str, result: dict | None,
         return ("backdrop_ready", {**data, "ref_id": job.get("ref_id") or ""})
     if job["type"] == "see_image":
         return ("see_ready", data)
+    if job["type"] == "scene_clip":
+        image = result.get("image") or {}
+        return ("clip_ready", {
+            "adventure_id": job["adventure_id"],
+            "job_id": job["id"],
+            "source_image_id": result.get("source_image_id") or job.get("ref_id") or "",
+            "image": {
+                "id": image.get("id"),
+                "url": image.get("url"),
+                "media_type": "video/mp4",
+                "duration_ms": image.get("duration_ms"),
+            },
+        })
     if job["type"] == "card_assets" and result.get("card_id"):
         return ("card_assets_ready", {
             **data, "card_id": result["card_id"], "filled": result.get("filled") or [],
@@ -459,14 +479,18 @@ def cancel(conn, job_id: str) -> dict | None:
 
 def interrupt_image(job: dict, transport: Any = None) -> bool:
     """Melhor esforço para interromper o render de um job running cancelado."""
-    if job["type"] not in ("character_portrait", "scene_backdrop", "see_image", "location_image"):
+    if job["type"] not in ("character_portrait", "scene_backdrop", "see_image",
+                           "location_image", "scene_clip"):
         return False
     try:
         with db.session() as conn:
             cfg = image_client.effective_settings(conn)
-        if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
-            return False
-        image_client.interrupt_sdwebui(cfg, transport)
+        if job["type"] == "scene_clip":
+            image_client.interrupt_comfy(cfg, transport)
+        else:
+            if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
+                return False
+            image_client.interrupt_sdwebui(cfg, transport)
     except ImageError as exc:
         log.warning("job %s: interrupt do WebUI falhou: %s", job["id"], exc.message)
         return False
@@ -496,7 +520,16 @@ def _raise_if_gone(adventure_id: str, file_path: str) -> None:
 
 def _discard_png(file_path: str) -> None:
     """Remove um render que perdeu a corrida para cancelamento."""
+    if not file_path:
+        return
     (db.REPO_ROOT / file_path).unlink(missing_ok=True)
+
+
+def _discard_render(file_path: str) -> None:
+    """Apaga o MP4 publicado e o arquivo parcial do mesmo id."""
+    _discard_png(file_path)
+    if file_path:
+        _discard_png(f"{file_path}.partial")
 
 
 def _build_portrait_prompt(adv: dict, card: dict, llm_cfg: dict,
@@ -791,7 +824,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         width=init_width, height=init_height,
         init_image=init_bytes,
         denoising_strength=denoise,
-        reference_images=references,
+        reference_images=(references if img_cfg.get("provider") == "comfyui" else None),
         negative_extra=portrait_ban,
     )
     if not anchor_id:
@@ -944,8 +977,9 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     negative = ", ".join(
         part for part in (img_cfg["negative_prompt"], ban) if part
     )
-    references = _reference_blobs(
-        job, people=bool(payload.get("include_people")),
+    references = (
+        _reference_blobs(job, people=bool(payload.get("include_people")))
+        if img_cfg.get("provider") == "comfyui" else []
     )
     cache_key = str(payload.get("cache_key") or "") or backdrop_cache_key(
         img_cfg, prompt,
@@ -1009,6 +1043,18 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
             "provider": meta["provider"], "action": action}
 
 
+def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: str, *,
+                       cache_key: str = "") -> dict:
+    """Clipe da mesma fonte substitui os pendentes. Prioridade abaixo da narrativa."""
+    return enqueue(
+        conn, "scene_clip", adventure_id, source_image_id,
+        {"prompt": prompt, "source_image_id": source_image_id,
+         "cache_key": cache_key},
+        priority=PRIORITY_SCENE_CLIP,
+        supersede_key=f"clip:{adventure_id}:{source_image_id}",
+    )
+
+
 def enqueue_day_tick(conn, adventure_id: str, *, reason: str = "auto") -> dict:
     """Um dia fora de cena. Não roda o LLM aqui: o worker chama tick_day."""
     active = db.find_active_job(conn, "npc_day_tick", adventure_id)
@@ -1037,7 +1083,10 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     negative_extra = str(payload.get("negative_extra") or "")
-    references = _reference_blobs(job, people=False)
+    references = (
+        _reference_blobs(job, people=False)
+        if img_cfg.get("provider") == "comfyui" else []
+    )
     cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
         variation=payload.get("variation"), reference_images=references or None)
@@ -1108,6 +1157,98 @@ def _execute_location_image(job: dict, transport: Any) -> dict:
 
 
 
+def _clip_source_png(job: dict) -> tuple[dict, bytes]:
+    payload = job.get("payload") or {}
+    source_id = str(payload.get("source_image_id") or job.get("ref_id") or "")
+    with db.session() as conn:
+        source = db.get_image(conn, source_id) if source_id else None
+    if (not source or source.get("adventure_id") != job["adventure_id"]
+            or str(source.get("media_type") or "image/png").split(";", 1)[0].lower()
+            not in ("image/png", "image/x-png")):
+        raise GameError(404, "not_found", "source image not found")
+    try:
+        raw = likeness.read_stored_image_bytes(source)
+    except (OSError, FileNotFoundError) as exc:
+        raise GameError(404, "not_found", "source image not found") from exc
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise GameError(404, "not_found", "source image not found")
+    return source, raw
+
+
+def _execute_scene_clip(job: dict, transport: Any) -> dict:
+    """Gera o MP4 Wan e grava kind=clip. Cancelamento não deixa arquivo."""
+    payload = job.get("payload") or {}
+    prompt = " ".join(str(payload.get("prompt") or "").split())
+    if not prompt:
+        raise GameError(500, "generation_failed", "scene clip job has no prompt")
+    with db.session() as conn:
+        img_cfg = image_client.effective_settings(conn)
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_disabled",
+                        "image generation is disabled (settings.image.enabled)")
+    source, raw = _clip_source_png(job)
+    source_id = source["id"]
+    cache_key = image_client.clip_request_key(img_cfg, prompt, raw)
+    with db.session() as conn:
+        cached = db.find_cached_image(
+            conn, job["adventure_id"], kind="clip", ref_id=source_id,
+            cache_key=cache_key,
+        )
+    reused_from = ""
+    meta: dict
+    if cached and cached.get("media_type") == "video/mp4":
+        try:
+            ready = likeness.stored_image_path(cached["file_path"]).is_file()
+        except OSError:
+            ready = False
+        if ready:
+            meta = {
+                "file_path": cached["file_path"], "provider": cached["provider"],
+                "width": cached["width"], "height": cached["height"],
+                "media_type": "video/mp4", "duration_ms": cached["duration_ms"],
+            }
+            reused_from = cached["id"]
+        else:
+            cached = None
+    if not reused_from:
+        image_id = db.new_id()
+        meta = image_client.generate_clip(
+            img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
+            source_png=raw, transport=transport)
+    else:
+        image_id = db.new_id()
+    try:
+        with db.session() as conn:
+            image = db.insert_image(
+                conn, adventure_id=job["adventure_id"], action_seq=-1,
+                file_path=meta["file_path"], prompt=prompt,
+                negative_prompt="", provider=meta.get("provider") or "comfyui",
+                width=meta.get("width"), height=meta.get("height"),
+                image_id=image_id, kind="clip", ref_id=source_id,
+                cache_key=cache_key, reused_from=reused_from, job_id=job["id"],
+                media_type="video/mp4", duration_ms=meta.get("duration_ms"),
+                source_image_id=source_id,
+            )
+    except db.JobCanceled:
+        if not reused_from:
+            _discard_render(meta["file_path"])
+        raise
+    except sqlite3.IntegrityError:
+        if not reused_from:
+            _discard_render(meta["file_path"])
+        _raise_if_gone(job["adventure_id"], meta["file_path"])
+        raise
+    return {
+        "source_image_id": source_id,
+        "image": {
+            "id": image["id"],
+            "url": image["url"],
+            "media_type": "video/mp4",
+            "duration_ms": image["duration_ms"],
+        },
+    }
+
+
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "character_portrait": _execute_portrait,
     "card_assets": _execute_card_assets,
@@ -1115,6 +1256,7 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "see_image": _execute_see,
     "npc_day_tick": _execute_day_tick,
     "location_image": _execute_location_image,
+    "scene_clip": _execute_scene_clip,
 }
 
 

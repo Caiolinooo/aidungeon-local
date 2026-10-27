@@ -493,9 +493,9 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
         paint_text,
     )
-    # Hash do prompt FINAL + config + pixels das âncoras, na ordem do elenco.
-    # Trocar a segunda âncora muda só esta chave. Sem o PNG de alguém, o fundo
-    # não entra: cena parcial não é gerada.
+    # O ComfyUI aceita várias âncoras regionais. O SDXL anterior usa img2img
+    # nos retratos; nas cenas, o elenco entra pelo prompt, sem fingir controle
+    # multirreferência que o provider não possui.
     from app import consequences
     visual_effects = consequences.visual_context(adventure)
     if visual_effects:
@@ -507,7 +507,8 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         "blobs": [],
     }
     waiting = None
-    if img_cfg.get("enabled") and include_people and paint_cast:
+    if (img_cfg.get("provider") == "comfyui" and img_cfg.get("enabled")
+            and include_people and paint_cast):
         try:
             plan = cast_reference_plan(conn, adventure_id, paint_cast)
         except GameError as exc:

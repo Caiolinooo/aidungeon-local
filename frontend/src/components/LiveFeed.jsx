@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, ChevronDown, X } from 'lucide-react'
 import { api } from '../api.js'
+import { jobTypeLabel } from '../sceneClip.js'
 import { useToast } from './Toast.jsx'
 
 const FILTERS = [
@@ -19,6 +20,7 @@ const TYPE_LABELS = {
   job_progress: 'Mídia',
   job_queued: 'Mídia',
   backdrop_ready: 'Cenário',
+  clip_ready: 'Clipe',
   see_ready: 'Imagem',
   portrait_ready: 'Retrato',
   adjudication: 'Reação',
@@ -37,7 +39,7 @@ const TYPE_LABELS = {
 
 function categoryOf(type) {
   if (type?.startsWith('life_') || type === 'sim_changed') return 'life'
-  if (type?.includes('job') || type?.includes('see') || type?.includes('portrait') || type?.includes('backdrop') || type?.includes('card_assets')) return 'jobs'
+  if (type?.includes('job') || type?.includes('see') || type?.includes('portrait') || type?.includes('backdrop') || type?.includes('card_assets') || type?.includes('clip')) return 'jobs'
   return 'narrative'
 }
 
@@ -64,8 +66,15 @@ function eventText(event) {
   if (type === 'ui_changed') return 'O painel do jogo mudou.'
   if (type === 'action') return data.text || 'Nova resposta da IA.'
   if (type === 'player_action') return data.text || 'Nova ação do jogador.'
-  if (type === 'job_progress') return `${data.type || 'Job'}: ${data.status || 'atualizado'}.`
-  if (type === 'job_queued') return `${data.type || 'Job'} entrou na fila.`
+  if (type === 'job_progress') {
+    const name = jobTypeLabel(data.type) || data.type || 'Job'
+    return `${name}: ${data.status || 'atualizado'}.`
+  }
+  if (type === 'job_queued') {
+    const name = jobTypeLabel(data.type) || data.type || 'Job'
+    return `${name} entrou na fila.`
+  }
+  if (type === 'clip_ready') return 'Clipe de 5 s pronto.'
   if (type === 'see_ready') return 'Imagem da cena concluída.'
   if (type === 'backdrop_ready') return 'Fundo da cena atualizado.'
   if (type === 'portrait_ready') return 'Retrato atualizado.'

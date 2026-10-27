@@ -1,21 +1,21 @@
-// Ponte narração -> avatar do dock (TalkingHead).
+// Ponte narração -> retrato 2D do dock.
 //
-// O ChatAvatarDock registra um speaker enquanto há um avatar montado; o
+// O ChatAvatarDock registra um speaker enquanto há um retrato montado; o
 // NarrateButton do FeedItem chama speakNarration() e, se nenhum speaker
 // estiver registrado (dock fechado, sem NPC na cena), cai no player PCM.
-// Com dock, o Response WAV é consumido só pelo avatar — o botão não toca
-// de novo.
+// Com dock, o Response WAV é consumido só pelo retrato — o botão não toca
+// de novo. O retrato mostra que está falando; o texto não anima a boca.
 //
 // Contrato do speaker (objeto):
 //   speak: async ({ response, signal, text, onended, onFirstSample, interrupt }) => undefined
 //     - response: Response audio/wav de POST /api/tts/stream (corpo ainda não lido)
-//     - signal: AbortSignal da narração; abort chama streamStop
-//     - text: texto narrado (visemes via lipsync por palavras)
+//     - signal: AbortSignal da narração; abort para o player
+//     - text: texto narrado (o retrato não usa para mover a boca)
 //     - onFirstSample: primeiro bloco PCM recebido (estado playing)
 //     - onended: callback opcional quando a reprodução termina
 //     - interrupt: true (default) corta a fala anterior; false segue
 //       depois que o pedaço anterior já acabou
-//   stop: () => undefined  (streamStop + fila de fala)
+//   stop: () => undefined  (para o player e a fila)
 
 let speaker = null
 

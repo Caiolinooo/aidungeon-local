@@ -331,11 +331,54 @@ a,
   animation: npc-step 0.8s ease-out;
 }
 
+@keyframes portrait-sway {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1.5deg); }
+}
+@keyframes portrait-tilt {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-3deg); }
+}
+@keyframes portrait-lean {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(3px); }
+}
+@keyframes portrait-pull {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.97); }
+}
+@keyframes portrait-speak-glow {
+  0%, 100% { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.45); }
+  50% { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.9); }
+}
+.portrait-motion-sway { animation: portrait-sway 1.8s ease-in-out infinite; transform-origin: center bottom; }
+.portrait-motion-tilt { animation: portrait-tilt 1.4s ease-in-out infinite; transform-origin: center bottom; }
+.portrait-motion-lean { animation: portrait-lean 1.2s ease-in-out infinite; }
+.portrait-motion-pull { animation: portrait-pull 1.4s ease-in-out infinite; }
+.portrait-pose-settle { transform: translateY(8%) scale(1.06); object-position: center 20%; }
+.portrait-pose-low { transform: translateY(14%) scale(1.12); object-position: center 15%; }
+.portrait-pose-back { transform: translateX(-4%); }
+.portrait-speak { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.75); }
+.portrait-speaking { animation: portrait-speak-glow 1.2s ease-in-out infinite; }
+.portrait-tint-neutral { background: transparent; }
+.portrait-tint-joy { background: rgba(250, 204, 21, 0.28); }
+.portrait-tint-sad { background: rgba(96, 165, 250, 0.28); }
+.portrait-tint-anger { background: rgba(248, 113, 113, 0.32); }
+.portrait-tint-fear { background: rgba(167, 139, 250, 0.3); }
+.portrait-tint-warm { background: rgba(251, 113, 133, 0.28); }
+.portrait-tint-sour { background: rgba(163, 230, 53, 0.22); }
+.portrait-tint-sleep { background: rgba(15, 23, 42, 0.35); }
+
 @media (prefers-reduced-motion: reduce) {
   .scene-react,
   .npc-react,
   .turn-beat,
-  .streaming-cursor::after {
+  .streaming-cursor::after,
+  .portrait-motion-sway,
+  .portrait-motion-tilt,
+  .portrait-motion-lean,
+  .portrait-motion-pull,
+  .portrait-speaking {
     animation: none;
   }
 }

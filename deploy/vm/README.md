@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
-| Imagem | `comfyui.service` na porta 8188, FineView Qwen Image 2.1 Turbo Fixed FP8; Forge Neo permanece instalado para rollback |
+| Imagem | `sd-webui-forge.service` na porta 7861, epiCRealism XL CrystalClear; ComfyUI/FineView permanece instalado como provider opcional |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -168,7 +168,7 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 
 Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
 do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
-Wan 2.1. O FineView roda no ComfyUI; o Forge é o caminho de rollback.
+Wan 2.1. O Forge/epiCRealism voltou a ser o provider ativo em 27 out 2026; o FineView no ComfyUI é opcional.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
@@ -180,7 +180,7 @@ sudo systemctl enable --now sd-webui.service
 
 Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
 
-## Imagem: FineView Qwen Image 2.1 no ComfyUI
+## Provider opcional: FineView Qwen Image 2.1 no ComfyUI
 
 O cliente `image.provider = "comfyui"` em `backend/app/image_client.py` fala a
 API do ComfyUI: `POST /prompt`, polling em `GET /history/{id}` e download por
@@ -235,9 +235,35 @@ for DB in /home/caio/aidungeon/data/aidungeon.db \
 done
 ```
 
-Rollback: devolver `image.provider = "sdwebui"`, parar/desabilitar o ComfyUI e
-subir `sd-webui-forge.service` em `127.0.0.1:7861`. Não reiniciar llama-swap nem
+Para ativar o FineView, trocar `image.provider = "comfyui"`, parar o Forge e
+subir `comfyui.service` em `127.0.0.1:8188`. No rollback, devolver `sdwebui`,
+parar o ComfyUI e subir o Forge. Não reiniciar llama-swap nem
 `abz-voice-staging`. Forge e FineView não devem medir VRAM ao mesmo tempo.
+
+## Vídeo real: Wan 2.2 TI2V 5B Q8
+
+O job `scene_clip` anima uma imagem já salva e devolve MP4 de 121 frames a
+24 fps (aproximadamente 5 s), em 1280×704 ou 704×1280. O Wan é um modelo
+temporal separado: os checkpoints Moody, DesireX e Stable Yogi citados nas
+opções do Civitai são de imagem; MP4 na galeria não muda isso.
+
+Instalação reproduzível, com hashes e revisões fixadas:
+
+```bash
+bash /home/caio/aidungeon/deploy/vm/install_wan_video.sh
+sudo systemctl restart comfyui
+```
+
+O instalador usa `Wan2.2-TI2V-5B-Q8_0.gguf` (5,40 GB), UMT5 FP8 (6,74 GB),
+VAE Wan 2.2 (1,41 GB) e ComfyUI-GGUF. Total: 13,55 GB, contra 18,14 GB do
+workflow fp16. Não instalar os três checkpoints Civitai junto com ele sem
+antes liberar disco: os três somam outros 15,47 GiB e ainda exigem encoders.
+
+Antes do clipe, o worker descarrega o checkpoint do Forge local. O ComfyUI
+recebe `/free` antes e depois do job. Assim narrador e voz continuam ativos,
+mas imagem e vídeo não executam ao mesmo tempo. Não enviar prompts de outro
+cliente ao mesmo ComfyUI durante o clipe: `/interrupt` e `/free` são globais.
+O próximo job SDXL recarrega o Forge sob demanda.
 
 Smoke do executor, sem gerar uma imagem:
 

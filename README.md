@@ -87,9 +87,10 @@ OpenAI-compatível.
   fatos materiais do turno, com limites, histórico e idempotência por `seq`.
   Conversa trivial não altera vínculo; romance só avança com reciprocidade.
 - **Retrato, cena e avatar reativos**: ação, emoção, pose e estágio da relação
-  atualizam variantes FineView e o backdrop sem trocar a âncora de identidade.
-  O avatar usa a malha GLB configurada, com poses/gestos locais e reduced motion;
-  não apresenta uma imagem 2D como modelo 3D nem gera uma malha nova do retrato.
+  atualizam variantes e o backdrop sem trocar a âncora de identidade. Com SDXL,
+  retratos usam img2img da âncora e cenas usam a descrição visual do elenco.
+  O avatar 2D usa o retrato real do personagem, com movimento CSS e reduced
+  motion; não finge lip-sync nem gera uma malha 3D.
 
 ## Funcionalidades (v0.10.0)
 
@@ -245,9 +246,13 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   regenerar individual) antes de criar a aventura.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
   tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o modelo
-  é **FineView Qwen Image 2.1 Turbo Fixed FP8** no ComfyUI: retratos 1024×1024, oito
-  passos e identidade por âncoras canônicas. Provedores: **sdwebui**, **comfyui**
-  ou **openai_compatible**.
+  é **epiCRealism XL CrystalClear** no Forge Neo: DPM++ 2M Karras, CFG 5,
+  25 passos, retratos 800×720 e identidade por img2img da âncora canônica.
+  Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
+- **Animar 5 s**: transforma um retrato, See ou cenário em MP4 real com
+  Wan2.2 TI2V 5B no ComfyUI. O clipe usa a imagem como primeiro quadro, abre com
+  controles e sem autoplay, pode ser cancelado e baixado. Imagem e vídeo usam a
+  mesma fila de GPU; narrador e voz continuam disponíveis.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
@@ -278,7 +283,7 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
 │  (padrão: llama.cpp na VM; alternativas: KoboldCpp,    │
 │   Ollama, LM Studio — basta trocar llm.base_url)       │
 ├────────────────────────────────────────────────────────┤
-│  IMAGENS   sdwebui, comfyui (FineView Qwen 2.1) ou      │
+│  IMAGENS   Forge/SDXL epiCRealism (ativo), ComfyUI ou   │
 │  OpenAI-compatible de imagens — local, LAN ou VM        │
 └────────────────────────────────────────────────────────┘
 ```

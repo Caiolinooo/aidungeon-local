@@ -323,6 +323,9 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "comfyui_sigmas": comfyui_sigmas,
         "comfyui_shift": float(comfyui.get("shift", 1.31)),
         "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 0.25)),
+        # Wan2.2 TI2V: só o arquivo. Não entra no ImageSettings público e não
+        # substitui provider/unet da imagem.
+        "comfyui_video": dict(comfyui.get("video") or {}),
         "prompt_builder": dict(prompt_builder),
     }
 

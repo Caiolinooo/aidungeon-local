@@ -2239,6 +2239,62 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/adventures/{adventureId}/clips:
+    post:
+      tags: [images]
+      summary: Gerar clipe MP4 a partir de um PNG (Wan2.2 TI2V)
+      operationId: postAdventureClip
+      description: |
+        Enfileira o job `scene_clip` (prioridade 6). O corpo é
+        `{image_id, prompt}`. A fonte tem de ser um PNG raster desta
+        aventura; vídeo, arquivo ausente ou raster inválido responde 404,
+        o mesmo de aventura de outra pessoa. 202 `{job_id}`.
+        O worker, se `image.provider` for sdwebui em localhost, pede
+        `POST /sdapi/v1/unload-checkpoint` antes do Wan (conexão recusada
+        segue; HTTP de erro aborta antes do prompt). O grafo é o Wan2.2
+        TI2V 5B no ComfyUI (`UnetLoaderGGUF` quando o unet é GGUF), lido de
+        `image.providers.comfyui.video`. Não altera `image.provider` nem o
+        UNET de imagem e não chama narrador nem voz.
+        Cache por modelo+prompt+bytes da fonte. Um clipe novo da mesma fonte
+        cancela os pendentes (`supersede_key` `clip:<adventure>:<image>`).
+        Durante a narrativa o job permanece pending.
+        O SSE `clip_ready` traz `adventure_id`, `job_id`, `source_image_id`
+        e `image` `{id, url, media_type: video/mp4, duration_ms}`.
+        Cancelar um job running manda `/interrupt` e `/free` e não grava o MP4.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClipRequest'
+      responses:
+        '202':
+          description: Job scene_clip criado (pending).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id]
+                properties:
+                  job_id:
+                    type: string
+        '400':
+          description: Prompt vazio.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Geração de imagem desligada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/adventures/{adventureId}/choices:
     post:
       tags: [generation]
@@ -2371,19 +2427,35 @@ paths:
   /api/images/{imageId}:
     get:
       tags: [images]
-      summary: Servir arquivo de imagem gerado
+      summary: Servir PNG ou MP4 gerado
       operationId: getImage
+      description: |
+        Exige Bearer. História de outra pessoa responde 404.
+        `media_type` da linha define o MIME: raster continua `image/png`;
+        clipe Wan sai `video/mp4`. `?download=1` adiciona
+        `Content-Disposition: attachment`.
       parameters:
         - name: imageId
           in: path
           required: true
           schema:
             type: string
+        - name: download
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: '`1` envia o arquivo como anexo.'
       responses:
         '200':
-          description: Arquivo da imagem.
+          description: PNG ou MP4.
           content:
             image/png:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
               schema:
                 type: string
                 format: binary
@@ -5145,7 +5217,7 @@ components:
           type: string
         type:
           type: string
-          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick, card_assets]
+          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick, card_assets, scene_clip]
         status:
           type: string
           enum: [preparing, pending, running, done, error, canceled]
@@ -5157,14 +5229,14 @@ components:
           type: object
         priority:
           type: integer
-          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM).
+          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM), 6 scene_clip (Wan; não roda durante a narrativa).
         supersede_key:
           type: string
-          description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>").
+          description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>"; clipe usa "clip:<adventure_id>:<source_image_id>").
         result:
           type: object
           nullable: true
-          description: 'done → character_portrait {"image": {id, url, prompt}, "card_id", "prompt"}; scene_backdrop {"image", "ref_id"}; see_image {"image": ImageResult}; card_assets {"card_id", "filled", "remaining"}. error → {"code"}.'
+          description: 'done → character_portrait {"image": {id, url, prompt}, "card_id", "prompt"}; scene_backdrop {"image", "ref_id"}; see_image {"image": ImageResult}; card_assets {"card_id", "filled", "remaining"}; scene_clip {"source_image_id", "image": {id, url, media_type, duration_ms}} e o SSE clip_ready repete adventure_id, job_id, source_image_id e esse image. error → {"code"}.'
         error:
           type: string
           nullable: true
@@ -5962,6 +6034,17 @@ components:
         extra_prompt:
           type: string
           description: Detalhe extra do jogador para a imagem (opcional).
+
+    ClipRequest:
+      type: object
+      required: [image_id, prompt]
+      properties:
+        image_id:
+          type: string
+          description: PNG raster já gravado nesta aventura (images.id).
+        prompt:
+          type: string
+          description: Movimento do clipe, em texto livre.
 
     ImageResult:
       type: object

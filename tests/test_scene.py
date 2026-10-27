@@ -505,6 +505,7 @@ def _encoder_inputs(graph: dict) -> dict:
 
 def test_missing_portrait_does_not_paint_a_partial_scene(client, tmp_path):
     use_tmp_storage(tmp_path)
+    _use_comfy()
     adv = make_adventure()
     with db.session() as conn:
         nia = db.insert_card(
@@ -627,6 +628,7 @@ def test_cast_anchors_keep_order_for_see_and_backdrop(client, tmp_path):
 
 def test_second_anchor_invalidates_only_that_scene(client, tmp_path):
     use_tmp_storage(tmp_path)
+    _use_comfy()
     adv = make_adventure()
     ada_bytes = b"\x89PNG\r\nada-anchor"
     bob_bytes = b"\x89PNG\r\nbob-anchor"
@@ -674,6 +676,7 @@ def test_second_anchor_invalidates_only_that_scene(client, tmp_path):
 
 def test_missing_reference_file_fails_the_backdrop_job(client, tmp_path):
     use_tmp_storage(tmp_path)
+    _use_comfy()
     adv = make_adventure()
     with db.session() as conn:
         ada = db.insert_card(

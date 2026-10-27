@@ -199,6 +199,7 @@ def test_multiple_npcs_use_regional_reference_masks():
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
     use_tmp_storage(tmp_path)
+    _use_comfy()
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
         card = db.insert_card(
@@ -236,6 +237,7 @@ def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypa
 def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
     use_tmp_storage(tmp_path)
+    _use_comfy()
     adv = make_adventure()
     with db.session() as conn:
         card = db.insert_card(
@@ -275,6 +277,52 @@ def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, mon
     scenes = [item for item in seen if item.get("width") == 1344]
     assert scenes and scenes[0].get("init_image") is None
     assert scenes[0]["reference_images"] == [PNG_BYTES]
+
+
+def test_sdxl_variant_uses_img2img_and_scene_uses_text_prompt(
+        client, tmp_path, monkeypatch):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Clara",
+            triggers=["Clara"], entry="A ranger.",
+            portrait_prompt="long brown hair, green eyes",
+            sheet=json.dumps({"visual_state": {"action": "running", "emotion": "afraid"}}),
+        )
+    _face(adv["id"], card["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "continue", "Clara runs through the rain.")
+    seen: list[dict] = []
+
+    def fake_generate(cfg, prompt, **kwargs):
+        seen.append(kwargs)
+        path = tmp_path / f"{kwargs['image_id']}.png"
+        path.write_bytes(PNG_BYTES)
+        return {
+            "file_path": str(path), "provider": "sdwebui",
+            "width": kwargs.get("width") or 1024,
+            "height": kwargs.get("height") or 1024,
+        }
+
+    monkeypatch.setattr(image_client, "generate_image", fake_generate)
+    assert client.post(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/portrait",
+        json={},
+    ).status_code == 202
+    assert client.post(f"/api/adventures/{adv['id']}/scene", json={}).status_code == 200
+    assert jobs.process_pending(pipeline_transport()) == 2
+
+    variant = next(item for item in seen if item.get("init_image") is not None)
+    assert variant["init_image"] == PNG_BYTES
+    assert variant["reference_images"] is None
+    assert 0 < variant["denoising_strength"] < 1
+    backdrop = next(item for item in seen if item.get("width") == 1344)
+    assert backdrop.get("init_image") is None
+    assert backdrop["reference_images"] is None
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+    assert job["payload"]["reference_image_ids"] == []
 
 
 def test_cache_key_changes_when_the_reference_changes():

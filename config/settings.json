@@ -135,7 +135,7 @@
   },
   "image": {
     "enabled": true,
-    "provider": "comfyui",
+    "provider": "sdwebui",
     "storage_dir": "data/images",
     "timeout_seconds": 300,
     "providers": {
@@ -164,8 +164,24 @@
         "cfg": 1.0,
         "sigmas": [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0],
         "shift": 1.31,
-        "poll_interval_s": 0.25,
-        "note": "FineView Qwen Image 2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image (Qwen3-VL 8B INT8) + texture-fix VAE. TextEncodeQwenImage21 recebe as referencias; ModelSamplingAuraFlow shift 1.31, ManualSigmas oficial de 8 passos e SamplerCustom euler. clip_device=cpu reserva VRAM para o narrador."
+      "poll_interval_s": 0.25,
+      "video": {
+        "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
+        "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "vae": "wan2.2_vae.safetensors",
+        "frames": 121,
+        "fps": 24,
+        "steps": 20,
+        "cfg": 5,
+        "shift": 8,
+        "timeout_seconds": 1800,
+        "width": 1280,
+        "height": 704,
+        "vertical_width": 704,
+        "vertical_height": 1280,
+        "note": "Wan2.2 TI2V 5B Q8 GGUF no ComfyUI: UnetLoaderGGUF, CLIP umt5 type=wan, VAE wan2.2, Wan22ImageToVideoLatent, ModelSamplingSD3 shift 8, KSampler uni_pc 20 passos CFG 5, CreateVideo 24 fps, SaveVideo mp4. 121 frames. Horizontal 1280x704, vertical 704x1280. Não troca image.provider nem o UNET de imagem. O narrador e a voz não entram neste grafo."
+      },
+      "note": "FineView Qwen Image 2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image (Qwen3-VL 8B INT8) + texture-fix VAE. TextEncodeQwenImage21 recebe as referencias; ModelSamplingAuraFlow shift 1.31, ManualSigmas oficial de 8 passos e SamplerCustom euler. clip_device=cpu reserva VRAM para o narrador."
       },
       "openai_compatible": {
         "base_url": "",
