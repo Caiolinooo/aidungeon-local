@@ -25,7 +25,7 @@ import re
 from typing import Any
 
 from app import body_state, db, llm_client, npc_assets, npc_bonds, npc_life
-from app.voice_emotion import canonical_emotion
+from app.voice_emotion import EMOTIONS, canonical_emotion
 
 log = logging.getLogger("aidungeon.npc_gate")
 
@@ -69,10 +69,10 @@ RULES:
   are physical facts: do not override them, but you still decide how people react.
 - Never mention rules, JSON, fields, numbers, "allow", "partial" or "refuse" to
   the player.
-- Each reaction may include emotion (joy, anger, fear, sadness, tenderness,
-  surprise, disgust, neutral) and pose (a short visible body position). Omit
-  either when the beat does not show it. Reactions stay valid when initiative
-  is null. Do not invent an emotion for the player.
+- Every reaction must include a canonical emotion (joy, anger, fear, sadness,
+  tenderness, surprise, disgust, neutral) and a short visible pose. Use neutral
+  when feelings are restrained; never omit either field. Reactions stay valid
+  when initiative is null. Do not invent an emotion for the player.
 - relation_updates change how the NPC feels. card_id is a living NPC from
   people. target is "player" or another living NPC card_id. Never use the
   player card id. Never update the player as if they were an NPC.
@@ -295,9 +295,9 @@ def _player_context(card: dict | None, username: str) -> dict:
     }
 
 
-# JSON da adjudicação (decision, outcome, reactions, initiative, cue).
-# 400 cabe no schema; o recorte de outcome/cue continua em 900 caracteres.
-GATE_MAX_TOKENS = 400
+# JSON completo da adjudicação. O schema exige os campos aninhados: sem isso o
+# modelo pode devolver reação sem emoção e omitir relation_updates em fatos materiais.
+GATE_MAX_TOKENS = 650
 
 
 def _neutral_decision(payload: dict) -> dict:
@@ -339,14 +339,49 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
             response_format={"type": "json_schema", "json_schema": {
                 "name": "turn_adjudication", "strict": True,
                 "schema": {
-                    "type": "object",
-                    "required": ["decision", "outcome", "reactions", "initiative", "cue"],
+                    "type": "object", "additionalProperties": False,
+                    "required": ["decision", "outcome", "reactions", "initiative", "relation_updates", "cue"],
                     "properties": {
                         "decision": {"type": "string", "enum": list(DECISIONS)},
                         "outcome": {"type": "string"},
-                        "reactions": {"type": "array", "items": {"type": "object"}},
-                        "initiative": {"type": ["object", "null"]},
-                        "relation_updates": {"type": "array", "items": {"type": "object"}},
+                        "reactions": {"type": "array", "items": {
+                            "type": "object", "additionalProperties": False,
+                            "required": ["npc", "card_id", "reaction", "line", "emotion", "pose"],
+                            "properties": {
+                                "npc": {"type": "string"},
+                                "card_id": {"type": "string"},
+                                "reaction": {"type": "string", "minLength": 1},
+                                "line": {"type": "string"},
+                                "emotion": {"type": "string", "enum": list(EMOTIONS)},
+                                "pose": {"type": "string", "minLength": 1},
+                            },
+                        }},
+                        "initiative": {
+                            "type": ["object", "null"], "additionalProperties": False,
+                            "required": ["npc", "card_id", "line", "emotion", "pose"],
+                            "properties": {
+                                "npc": {"type": "string"},
+                                "card_id": {"type": "string"},
+                                "line": {"type": "string"},
+                                "emotion": {"type": "string", "enum": list(EMOTIONS)},
+                                "pose": {"type": "string"},
+                            },
+                        },
+                        "relation_updates": {"type": "array", "items": {
+                            "type": "object", "additionalProperties": False,
+                            "required": ["card_id", "target", "delta", "reason", "evidence"],
+                            "properties": {
+                                "card_id": {"type": "string"},
+                                "target": {"type": "string"},
+                                "delta": {
+                                    "type": "object", "additionalProperties": False, "minProperties": 1,
+                                    "properties": {key: {"type": "integer", "minimum": -20, "maximum": 20}
+                                                   for key in (*npc_bonds.BOND_KEYS, "affinity")},
+                                },
+                                "reason": {"type": "string", "minLength": 1},
+                                "evidence": {"type": "string", "minLength": 1},
+                            },
+                        }},
                         "cue": {"type": "string"},
                     },
                 },

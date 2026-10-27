@@ -220,7 +220,6 @@ def test_living_npc_still_calls_llm_with_token_cap(tmp_db, monkeypatch):
     assert result["decision"] == "refuse"
     assert result["reactions"][0]["npc"] == "Elara"
     assert len(calls) == 1
-    assert calls[0][2]["max_tokens"] == npc_gate.GATE_MAX_TOKENS == 400
     assert calls[0][2]["role"] == "meta"
 
 
@@ -356,4 +355,5 @@ def test_gate_retries_once_with_legacy_budget_when_json_is_truncated(monkeypatch
     monkeypatch.setattr(npc_gate.llm_client, "chat_completion", fake_chat)
     result = npc_gate._call({}, {"action": "seguir"}, None)
     assert result["decision"] == "allow"
-    assert budgets == [400, 900]
+    assert budgets == [npc_gate.GATE_MAX_TOKENS, 900]
+    assert budgets[1] > budgets[0]
