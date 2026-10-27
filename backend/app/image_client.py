@@ -844,9 +844,10 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
 
 
 def _history_motion(outputs: dict) -> dict:
-    """Vídeo nativo do SaveVideo; VHS antigo publica o MP4 em `gifs`."""
+    """SaveVideo publica em `images`; versões antigas usam `videos`/`gifs`."""
     videos: list[dict] = []
     gifs: list[dict] = []
+    native: list[dict] = []
     for output in outputs.values():
         if not isinstance(output, dict):
             continue
@@ -856,9 +857,13 @@ def _history_motion(outputs: dict) -> dict:
         for item in output.get("gifs") or []:
             if isinstance(item, dict) and item.get("filename"):
                 gifs.append(item)
-    pool = videos or gifs
+        for item in output.get("images") or []:
+            if (isinstance(item, dict)
+                    and str(item.get("filename") or "").lower().endswith(".mp4")):
+                native.append(item)
+    pool = videos or gifs or native
     if not pool:
-        raise ImageError("histórico do ComfyUI sem vídeo (videos/gifs)")
+        raise ImageError("histórico do ComfyUI sem vídeo (videos/gifs/images MP4)")
     return next((item for item in pool if item.get("type") == "output"), pool[0])
 
 

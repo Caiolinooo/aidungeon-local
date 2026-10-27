@@ -228,6 +228,14 @@ def test_gifs_fallback_is_saved_as_mp4_and_images_alone_fail(tmp_path):
                 },
             }}}))
     assert both["view"]["filename"] == "real.mp4"
+    native: dict = {}
+    image_client.generate_clip(
+        cfg, "turns", adventure_id="adv", image_id="native-save-video",
+        source_png=PNG_BYTES,
+        transport=_transport(native, history=_history("native.mp4", key="images")))
+    assert native["view"]["filename"] == "native.mp4"
+    assert (tmp_path / "adv" / "native-save-video.mp4").read_bytes() == MP4
+
 
     images: dict = {}
     try:
