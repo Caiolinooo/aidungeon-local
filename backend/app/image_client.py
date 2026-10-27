@@ -494,6 +494,11 @@ def _comfy_fetch_image(client: httpx.Client, base: str, outputs: dict) -> bytes:
     return resp.content
 
 
+def comfy_poll_interval_s(cfg: dict) -> float:
+    """Espera entre leituras do history. Piso 0,2 s; omissão usa 0,25 s."""
+    return max(0.2, float(cfg.get("comfyui_poll_interval_s") or 0.25))
+
+
 def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
     """Enfileira o grafo, espera a execução e devolve o PNG."""
     base = _comfy_base(cfg)
@@ -509,7 +514,7 @@ def _comfy_run(cfg: dict, client: httpx.Client, graph: dict) -> bytes:
             f"workflow recusado pelo ComfyUI: {str(submitted['node_errors'])[:200]}")
 
     timeout = float(cfg.get("timeout_seconds", 300))
-    interval = max(0.2, float(cfg.get("comfyui_poll_interval_s") or 1.0))
+    interval = comfy_poll_interval_s(cfg)
     deadline = time.monotonic() + timeout
     while True:
         try:

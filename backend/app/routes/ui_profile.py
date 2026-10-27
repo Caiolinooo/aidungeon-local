@@ -36,13 +36,21 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import db, llm_client, settings_store, ui_runtime
+from app import auth, consequences, db, llm_client, settings_store, ui_runtime
 from app.deps import get_http_transport
 from app.errors import GameError
 
 log = logging.getLogger("aidungeon.ui_profile")
 
 router = APIRouter()
+
+
+def _visible_ui_state(adv: dict | None, username: str, state: dict | None) -> dict:
+    """Share não recebe private_facts. O que foi gravado no banco não muda."""
+    payload = state if isinstance(state, dict) else {}
+    if adv and not db.is_adventure_owner(adv, username):
+        return consequences.without_private_facts(payload)
+    return payload
 
 _TAB_IDS = ("do", "say", "story")
 _WIDGET_TYPES = ("dice", "stats", "inventory", "character")
@@ -220,7 +228,8 @@ def initial_state(profile: dict | None) -> dict:
 
 
 @router.get("/{adventure_id}/ui-profile")
-def get_ui_profile(adventure_id: str) -> dict:
+def get_ui_profile(adventure_id: str,
+                   info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
@@ -236,11 +245,12 @@ def get_ui_profile(adventure_id: str) -> dict:
                 "hud": ui_runtime.normalize_hud(stored.get("hud")),
                 "actions": ui_runtime.normalize_actions(stored.get("actions")),
             }
-        return {"profile": profile, "state": adv["ui_state"]}
+        return {"profile": profile, "state": _visible_ui_state(adv, info.user, adv["ui_state"])}
 
 
 @router.put("/{adventure_id}/ui-state")
-def put_ui_state(adventure_id: str, body: UiStateIn) -> dict:
+def put_ui_state(adventure_id: str, body: UiStateIn,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     serialized = json.dumps(body.state, ensure_ascii=False)
     if len(serialized.encode("utf-8")) > _MAX_STATE_BYTES:
         raise GameError(413, "state_too_large",
@@ -249,20 +259,31 @@ def put_ui_state(adventure_id: str, body: UiStateIn) -> dict:
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
             raise GameError.not_found(f"adventure {adventure_id} not found")
-        db.update_adventure_ui_state(conn, adventure_id, body.state)
-        return {"state": body.state}
+        state = dict(body.state)
+        if not db.is_adventure_owner(adv, info.user):
+            stored = adv.get("ui_state") if isinstance(adv.get("ui_state"), dict) else {}
+            if "private_facts" in stored:
+                state["private_facts"] = stored["private_facts"]
+            else:
+                state.pop("private_facts", None)
+        db.update_adventure_ui_state(conn, adventure_id, state)
+        return {"state": _visible_ui_state(adv, info.user, state)}
 
 
 @router.post("/{adventure_id}/ui-profile")
 def post_ui_profile(adventure_id: str,
-                    transport: Any = Depends(get_http_transport)) -> dict:
+                    transport: Any = Depends(get_http_transport),
+                    info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     cfg = _ui_cfg()
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
             raise GameError.not_found(f"adventure {adventure_id} not found")
         if not cfg["enabled"]:
-            return {"profile": None, "state": adv["ui_state"]}
+            return {
+                "profile": None,
+                "state": _visible_ui_state(adv, info.user, adv["ui_state"]),
+            }
         actions = db.list_actions(conn, adventure_id)
         llm_cfg = settings_store.effective_llm_settings(conn)
 
@@ -314,11 +335,14 @@ def post_ui_profile(adventure_id: str,
         if adv and not adv["ui_state"]:
             state = initial_state(profile)
             db.update_adventure_ui_state(conn, adventure_id, state)
-            return {"profile": profile, "state": state}
+            return {
+                "profile": profile,
+                "state": _visible_ui_state(adv, info.user, state),
+            }
         state = dict((adv or {}).get("ui_state") or {})
         seed = ui_runtime.seed(profile)
         added = {key: value for key, value in seed.items() if key not in state}
         if added:
             state.update(added)
             db.update_adventure_ui_state(conn, adventure_id, state)
-        return {"profile": profile, "state": state}
+        return {"profile": profile, "state": _visible_ui_state(adv, info.user, state)}

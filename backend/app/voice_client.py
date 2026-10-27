@@ -18,8 +18,11 @@ NUNCA é escrita em logs/mensagens de erro.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -64,6 +67,96 @@ def _make_async_client(transport: httpx.AsyncBaseTransport | None,
     return httpx.AsyncClient(**kwargs)
 
 
+# Um cliente por base_url/timeout. Transporte injetado (teste) continua
+# privado e é fechado por quem o pediu. O compartilhado não fecha com a resposta.
+_shared_lock = threading.Lock()
+_shared_sync: dict[tuple[str, float], httpx.Client] = {}
+_shared_async: dict[tuple[str, float, int], httpx.AsyncClient] = {}
+_clone_sent: dict[str, str] = {}
+
+
+def _borrow_sync(base_url: str, timeout: float,
+                 transport: httpx.BaseTransport | None) -> tuple[httpx.Client, bool]:
+    """Devolve (client, owns). owns=False é o pool thread-safe."""
+    if transport is not None:
+        return _make_client(transport, timeout), True
+    key = (base_url, float(timeout))
+    with _shared_lock:
+        client = _shared_sync.get(key)
+        if client is None or client.is_closed:
+            client = _make_client(None, timeout)
+            _shared_sync[key] = client
+        return client, False
+
+
+def _borrow_async(base_url: str, timeout: float,
+                  transport: httpx.AsyncBaseTransport | None) -> tuple[httpx.AsyncClient, bool]:
+    """Pool de AsyncClient no event loop corrente. Transporte injetado não entra."""
+    if transport is not None:
+        return _make_async_client(transport, timeout), True
+    loop = asyncio.get_running_loop()
+    key = (base_url, float(timeout), id(loop))
+    with _shared_lock:
+        client = _shared_async.get(key)
+        if client is None or client.is_closed:
+            client = _make_async_client(None, timeout)
+            _shared_async[key] = client
+        return client, False
+
+
+def reset_voice_clients() -> None:
+    """Fecha clientes sync do pool e esquece clones enviados. Só para testes."""
+    with _shared_lock:
+        sync_clients = list(_shared_sync.values())
+        async_clients = list(_shared_async.values())
+        _shared_sync.clear()
+        _shared_async.clear()
+        _clone_sent.clear()
+    for client in sync_clients:
+        try:
+            client.close()
+        except Exception:
+            pass
+    for client in async_clients:
+        closer = getattr(client, "aclose", None)
+        if closer is None:
+            continue
+        try:
+            coro = closer()
+            coro.close()
+        except Exception:
+            pass
+
+
+def clone_rvq_digest(rvq: bytes) -> str:
+    return hashlib.sha256(bytes(rvq)).hexdigest()
+
+
+def clone_rvq_is_cached(voice_id: str, rvq: bytes) -> bool:
+    digest = clone_rvq_digest(rvq)
+    with _shared_lock:
+        return _clone_sent.get(voice_id) == digest
+
+
+def remember_clone_rvq(voice_id: str, rvq: bytes) -> None:
+    digest = clone_rvq_digest(rvq)
+    with _shared_lock:
+        _clone_sent[voice_id] = digest
+
+
+def forget_clone_rvq(voice_id: str) -> None:
+    with _shared_lock:
+        _clone_sent.pop(voice_id, None)
+
+
+def is_missing_clone(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, VoiceError)
+        and not isinstance(exc, (VoiceAuthError, VoiceUnreachable))
+        and exc.code == "clone_missing"
+    )
+
+
 def _headers(cfg: dict) -> dict[str, str]:
     """Authorization Bearer (se api_key efetiva); NUNCA logar o valor."""
     headers: dict[str, str] = {}
@@ -80,12 +173,15 @@ def _base(cfg: dict) -> str:
 
 
 class SpeechStream:
-    """Resposta WAV aberta; fecha response e client inclusive ao cancelar."""
+    """Resposta WAV aberta. Fecha a response; o client compartilhado fica vivo."""
 
-    def __init__(self, client: httpx.Client, response: httpx.Response):
+    def __init__(self, client: httpx.Client, response: httpx.Response, *,
+                 owns_client: bool):
         self._client = client
         self._response = response
+        self._owns_client = owns_client
         self._iterator = response.iter_bytes()
+        self._closed = False
 
     def __enter__(self) -> SpeechStream:
         return self
@@ -97,46 +193,94 @@ class SpeechStream:
         return self._iterator
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._response.close()
         finally:
-            self._client.close()
+            if self._owns_client:
+                self._client.close()
+
+
+_MISSING_CLONE_MARKERS = (
+    "voice_not_found",
+    "unknown_voice",
+    "clone_missing",
+    "voice not found",
+    "unknown voice",
+    "no such voice",
+    "missing voice",
+    "voice missing",
+    "clone ausente",
+    "voz não encontrada",
+    "voz nao encontrada",
+)
+
+
+def _missing_clone_response(resp: httpx.Response) -> bool:
+    """404 no speech, ou rejeição explícita de clone/voz ausente."""
+    if resp.status_code == 404:
+        return True
+    if resp.status_code not in (400, 409, 422):
+        return False
+    blob = (resp.text or "")[:500].lower()
+    return any(marker in blob for marker in _MISSING_CLONE_MARKERS)
+
+
+def _speech_status_error(resp: httpx.Response) -> VoiceError:
+    if resp.status_code in (401, 403):
+        return VoiceAuthError(
+            f"auth_error: HTTP {resp.status_code} em audio/speech")
+    message = f"HTTP {resp.status_code} em audio/speech: {resp.text[:200]}"
+    if _missing_clone_response(resp):
+        return VoiceError(message, code="clone_missing")
+    return VoiceError(message)
+
+
+def _speech_payload(cfg: dict, text: str, voice: str, emotion: str | None,
+                    response_format: str) -> dict:
+    voice = voice or cfg["narrator_voice"]
+    instruction = direction_for(emotion) if emotion else None
+    payload = {
+        "model": cfg["tts_model"],
+        "voice": voice,
+        "input": text,
+        "response_format": response_format,
+    }
+    if instruction:
+        payload["instructions"] = instruction
+    return payload
 
 
 def open_speech_stream(cfg: dict, text: str, voice: str, *,
                        emotion: str | None = None,
                        transport: httpx.BaseTransport | None = None) -> SpeechStream:
     """Abre OmniVoice WAV sem buffering nem fallback para Drama-3."""
-    voice = voice or cfg["narrator_voice"]
-    instruction = direction_for(emotion) if emotion else None
-    payload = {
-        "model": cfg["tts_model"], "voice": voice, "input": text,
-        "response_format": "wav",
-    }
-    if instruction:
-        payload["instructions"] = instruction
+    payload = _speech_payload(cfg, text, voice, emotion, "wav")
     timeout = float(cfg.get("timeout_seconds", 60))
-    client = _make_client(transport, timeout)
+    client, owns = _borrow_sync(_base(cfg), timeout, transport)
+    response: httpx.Response | None = None
+    handed = False
     try:
         response = client.send(client.build_request(
             "POST", f"{_base(cfg)}/audio/speech", json=payload,
             headers=_headers(cfg)), stream=True)
-        if response.status_code in (401, 403):
+        if response.status_code in (401, 403) or response.status_code != 200:
             response.read()
-            raise VoiceAuthError(
-                f"auth_error: HTTP {response.status_code} em audio/speech")
-        if response.status_code != 200:
-            response.read()
-            raise VoiceError(
-                f"HTTP {response.status_code} em audio/speech: {response.text[:200]}")
-        return SpeechStream(client, response)
+            raise _speech_status_error(response)
+        stream = SpeechStream(client, response, owns_client=owns)
+        handed = True
+        return stream
     except httpx.TransportError as exc:
-        client.close()
         raise VoiceUnreachable(
             f"voice provider unreachable: {type(exc).__name__}") from exc
-    except Exception:
-        client.close()
-        raise
+    finally:
+        if not handed:
+            if response is not None:
+                response.close()
+            if owns:
+                client.close()
 
 
 def next_speech_chunk(stream: SpeechStream) -> bytes | None:
@@ -147,40 +291,44 @@ def next_speech_chunk(stream: SpeechStream) -> bytes | None:
         return None
 
 # ------------------------------------------------------------------ público
+def _finish_speech(resp: httpx.Response) -> bytes:
+    if resp.status_code in (401, 403) or resp.status_code != 200:
+        raise _speech_status_error(resp)
+    if not resp.content:
+        raise VoiceError("resposta de audio/speech vazia")
+    return resp.content
+
+
 def _post_speech(cfg: dict, payload: dict, *,
                  transport: httpx.BaseTransport | None) -> bytes:
     timeout = float(cfg.get("timeout_seconds", 60))
-    with _make_client(transport, timeout) as client:
+    client, owns = _borrow_sync(_base(cfg), timeout, transport)
+    try:
         try:
             resp = client.post(f"{_base(cfg)}/audio/speech", json=payload,
                                headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
-    if resp.status_code in (401, 403):
-        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em audio/speech")
-    if resp.status_code != 200:
-        raise VoiceError(f"HTTP {resp.status_code} em audio/speech: {resp.text[:200]}")
-    if not resp.content:
-        raise VoiceError("resposta de audio/speech vazia")
-    return resp.content
+        return _finish_speech(resp)
+    finally:
+        if owns:
+            client.close()
 
 
 async def _post_speech_async(cfg: dict, payload: dict, *,
                              transport: httpx.AsyncBaseTransport | None) -> bytes:
     timeout = float(cfg.get("timeout_seconds", 60))
-    async with _make_async_client(transport, timeout) as client:
+    client, owns = _borrow_async(_base(cfg), timeout, transport)
+    try:
         try:
             resp = await client.post(f"{_base(cfg)}/audio/speech", json=payload,
                                      headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
-    if resp.status_code in (401, 403):
-        raise VoiceAuthError(f"auth_error: HTTP {resp.status_code} em audio/speech")
-    if resp.status_code != 200:
-        raise VoiceError(f"HTTP {resp.status_code} em audio/speech: {resp.text[:200]}")
-    if not resp.content:
-        raise VoiceError("resposta de audio/speech vazia")
-    return resp.content
+        return _finish_speech(resp)
+    finally:
+        if owns:
+            await client.aclose()
 
 
 def synthesize(cfg: dict, text: str, voice: str, *,
@@ -431,6 +579,7 @@ def put_clone_rvq(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
     _raise_provider(resp, f"audio/voices/{voice_id}")
+    remember_clone_rvq(voice_id, rvq)
 
 
 async def put_clone_rvq_async(cfg: dict, voice_id: str, ref_text: str, rvq: bytes, *,
@@ -445,11 +594,13 @@ async def put_clone_rvq_async(cfg: dict, voice_id: str, ref_text: str, rvq: byte
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
     _raise_provider(resp, f"audio/voices/{voice_id}")
+    remember_clone_rvq(voice_id, rvq)
 
 
 def delete_clone_remote(cfg: dict, voice_id: str, *,
                         transport: httpx.BaseTransport | None = None) -> None:
     """Apaga o arquivo na VM. Falha só é logada: a linha local já saiu."""
+    forget_clone_rvq(voice_id)
     timeout = float(cfg.get("timeout_seconds", 60))
     try:
         with _make_client(transport, timeout) as client:

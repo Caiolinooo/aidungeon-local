@@ -8,6 +8,7 @@ CREATE TABLE scenarios(
   image_style TEXT DEFAULT '',
   tags TEXT DEFAULT '[]', third_person INTEGER DEFAULT 0,
   story_cards TEXT DEFAULT '[]',       -- v2: cards do rascunho do assistente (JSON)
+  story_starts TEXT DEFAULT '[]',      -- inícios nomeados [{id,title,text}]; o primeiro é o padrão
   owner TEXT DEFAULT '',
   created_at TEXT, updated_at TEXT);
 
@@ -387,4 +388,120 @@ CREATE TABLE IF NOT EXISTS location_images(
   created_at TEXT,
   UNIQUE(adventure_id, card_id, state_key)
 );
+
+-- Modo DM: intenções dos jogadores ficam fora da tabela actions até a aprovação.
+ALTER TABLE adventures ADD COLUMN dm_mode INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS pending_intents (
+  id TEXT PRIMARY KEY,
+  adventure_id TEXT NOT NULL REFERENCES adventures(id) ON DELETE CASCADE,
+  username TEXT NOT NULL,
+  type TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  action_id INTEGER REFERENCES actions(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_intents_adv
+  ON pending_intents(adventure_id, status, created_at);
+
+-- Catálogo: snapshots imutáveis, likes e linhagem de remix.
+CREATE TABLE IF NOT EXISTS publications(
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('scenario', 'adventure')),
+  source_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  cover_image TEXT DEFAULT '',
+  tags TEXT DEFAULT '[]',
+  latest_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS publication_versions(
+  publication_id TEXT NOT NULL REFERENCES publications(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  snapshot TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  cover_image TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (publication_id, version)
+);
+CREATE TABLE IF NOT EXISTS publication_likes(
+  publication_id TEXT NOT NULL REFERENCES publications(id) ON DELETE CASCADE,
+  username TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (publication_id, username)
+);
+CREATE TABLE IF NOT EXISTS publication_version_delete_guard(
+  id INTEGER PRIMARY KEY CHECK (id = 1)
+);
+INSERT OR IGNORE INTO publication_version_delete_guard(id) VALUES (1);
+CREATE INDEX IF NOT EXISTS idx_publications_updated ON publications(updated_at);
+CREATE INDEX IF NOT EXISTS idx_publications_source ON publications(kind, source_id, owner);
+CREATE INDEX IF NOT EXISTS idx_publication_versions_hash
+  ON publication_versions(publication_id, content_hash);
+ALTER TABLE scenarios ADD COLUMN parent_publication_id TEXT REFERENCES publications(id) ON DELETE SET NULL;
+ALTER TABLE scenarios ADD COLUMN parent_version INTEGER;
+ALTER TABLE adventures ADD COLUMN publication_id TEXT REFERENCES publications(id) ON DELETE SET NULL;
+ALTER TABLE adventures ADD COLUMN publication_version INTEGER;
+CREATE TRIGGER IF NOT EXISTS publication_versions_immutable
+BEFORE UPDATE ON publication_versions
+BEGIN
+  SELECT RAISE(ABORT, 'publication_versions are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS publication_versions_no_delete
+BEFORE DELETE ON publication_versions
+WHEN EXISTS (SELECT 1 FROM publication_version_delete_guard WHERE id = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'publication_versions are immutable');
+END;
+
+-- Mods: conteúdo aditivo com origem; append/scripts só na composição.
+CREATE TABLE IF NOT EXISTS mods(
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public', 'private')),
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS mod_versions(
+  id TEXT PRIMARY KEY,
+  mod_id TEXT NOT NULL REFERENCES mods(id),
+  version INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  package_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(mod_id, version)
+);
+CREATE TABLE IF NOT EXISTS adventure_mods(
+  adventure_id TEXT NOT NULL REFERENCES adventures(id) ON DELETE CASCADE,
+  mod_version_id TEXT NOT NULL REFERENCES mod_versions(id),
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+  applied_at TEXT NOT NULL,
+  PRIMARY KEY(adventure_id, mod_version_id)
+);
+ALTER TABLE story_cards ADD COLUMN origin_mod_version_id TEXT REFERENCES mod_versions(id);
+ALTER TABLE location_links ADD COLUMN origin_mod_version_id TEXT REFERENCES mod_versions(id);
+CREATE INDEX IF NOT EXISTS idx_mods_owner ON mods(owner, updated_at);
+CREATE INDEX IF NOT EXISTS idx_mod_versions_mod ON mod_versions(mod_id, version);
+CREATE INDEX IF NOT EXISTS idx_adventure_mods_adv ON adventure_mods(adventure_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_story_cards_mod_origin ON story_cards(adventure_id, origin_mod_version_id);
+CREATE INDEX IF NOT EXISTS idx_location_links_mod_origin ON location_links(adventure_id, origin_mod_version_id);
+CREATE TRIGGER IF NOT EXISTS mod_versions_no_update
+BEFORE UPDATE ON mod_versions
+BEGIN
+  SELECT RAISE(ABORT, 'mod_versions are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS mod_versions_no_delete
+BEFORE DELETE ON mod_versions
+BEGIN
+  SELECT RAISE(ABORT, 'mod_versions are immutable');
+END;
 

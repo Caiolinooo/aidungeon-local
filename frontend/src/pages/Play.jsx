@@ -8,6 +8,9 @@ import Modal from '../components/Modal.jsx'
 import FeedItem from '../components/FeedItem.jsx'
 import InputBar from '../components/InputBar.jsx'
 import ShareModal from '../components/ShareModal.jsx'
+import PublicationModal from '../components/PublicationModal.jsx'
+import ModsModal from '../components/ModsModal.jsx'
+import DmTray from '../components/DmTray.jsx'
 import CharacterModal from '../components/CharacterModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
@@ -303,11 +306,14 @@ export default function Play() {
   const [inject, setInject] = useState(null)
   const [session, setSession] = useState(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [publishOpen, setPublishOpen] = useState(false)
+  const [modsOpen, setModsOpen] = useState(false)
   const [live, setLive] = useState('')
   const [characterOpen, setCharacterOpen] = useState(false)
   const [characterCard, setCharacterCard] = useState(null)
   const [characterLoading, setCharacterLoading] = useState(false)
   const [needsCharacter, setNeedsCharacter] = useState(false)
+  const [intents, setIntents] = useState([])
   const [actionChecks, setActionChecks] = useState({})
   const [rulesChips, setRulesChips] = useState({})
   const [simVersion, setSimVersion] = useState(0)
@@ -320,6 +326,7 @@ export default function Play() {
   const genRef = useRef(null)
   const openCharacterRef = useRef(() => {})
   const currentUserRef = useRef('')
+  const isDmRef = useRef(false)
   const seeJobRef = useRef(null)
   const feedRef = useRef(null)
   const nearBottomRef = useRef(true)
@@ -347,9 +354,36 @@ export default function Play() {
     () => (actions ?? []).slice(visibleStart),
     [actions, visibleStart],
   )
-  const turnBlocked = !!(
-    adventure?.turn_mode && currentUser !== (adventure?.turn_user || '')
+  const isDm = !!(
+    session?.admin
+    || !adventure?.owner
+    || currentUser === adventure.owner
   )
+  const dmMode = !!adventure?.dm_mode
+  const queuesIntent = !!(dmMode && currentUser && !isDm)
+  isDmRef.current = isDm
+  const turnBlocked = !!(
+    adventure?.turn_mode
+    && !(dmMode && isDm)
+    && currentUser !== (adventure?.turn_user || '')
+  )
+  const actionLocked = queuesIntent ? false : turnBlocked
+
+  useEffect(() => {
+    if (!id || !dmMode) {
+      setIntents([])
+      return undefined
+    }
+    let cancelled = false
+    api.listIntents(id, 'pending')
+      .then((res) => {
+        if (!cancelled) setIntents(Array.isArray(res?.intents) ? res.intents : [])
+      })
+      .catch(() => {
+        if (!cancelled) setIntents([])
+      })
+    return () => { cancelled = true }
+  }, [id, dmMode, currentUser])
 
   // Width only. Hiding the dock is the user's choice and must survive a resize.
   useEffect(() => {
@@ -658,6 +692,21 @@ export default function Play() {
       })
       refreshPlayer()
     }
+    const rememberIntent = (data) => {
+      if (!data?.id) return
+      const mine = isDmRef.current || data.username === currentUserRef.current
+      if (!mine) return
+      setIntents((prev) => (prev.some((item) => item.id === data.id) ? prev : [...prev, data]))
+    }
+    const onIntentPending = (ev) => rememberIntent(parse(ev))
+    const onIntentClosed = (ev) => {
+      const data = parse(ev)
+      if (!data?.id) return
+      setIntents((prev) => prev.filter((item) => item.id !== data.id))
+    }
+    es.addEventListener('intent_pending', onIntentPending)
+    es.addEventListener('intent_approved', onIntentClosed)
+    es.addEventListener('intent_rejected', onIntentClosed)
     es.addEventListener('turn_changed', onTurn)
     es.addEventListener('player_action', onPlayer)
     es.addEventListener('token', onToken)
@@ -723,6 +772,9 @@ export default function Play() {
       es.removeEventListener('reset_required', onResetRequired)
       es.removeEventListener('sim_changed', onSimChanged)
       es.removeEventListener('rules_roll', onRulesRoll)
+      es.removeEventListener('intent_pending', onIntentPending)
+      es.removeEventListener('intent_approved', onIntentClosed)
+      es.removeEventListener('intent_rejected', onIntentClosed)
       es.close()
     }
   }, [id, handleCheckData, refreshAdventure, refreshPlayer])
@@ -772,6 +824,7 @@ export default function Play() {
         ...prev,
         ...(dict.owner != null ? { owner: dict.owner } : {}),
         ...('turn_mode' in dict ? { turn_mode: !!dict.turn_mode } : {}),
+        ...('dm_mode' in dict ? { dm_mode: !!dict.dm_mode } : {}),
         ...(dict.turn_user != null ? { turn_user: dict.turn_user } : {}),
         ...(Array.isArray(dict.shares) ? { shares: dict.shares } : {}),
       }
@@ -895,7 +948,7 @@ export default function Play() {
 
   // SSE Stream runner
   const runStream = useCallback(
-    (kind, path, body, applyDone) => {
+    (kind, path, body, applyDone, openStream) => {
       if (generating || needsCharacter) return
       const ctrl = new AbortController()
       abortRef.current = ctrl
@@ -911,6 +964,10 @@ export default function Play() {
         setGen(null)
         setLive('')
         if (meta?.code === 'llm_cancelled') return
+        if (meta?.code === 'not_your_turn' || meta?.code === 'intent_not_pending') {
+          awaitingCheckRef.current = false
+          setPendingCheck(null)
+        }
         if (isCharacterRequired(msg, meta)) {
           promptCharacter()
           return
@@ -922,8 +979,7 @@ export default function Play() {
         }
         toast(text)
       }
-      streamGeneration(path, {
-        body,
+      const streamOptions = {
         signal: ctrl.signal,
         onToken: (tok) => {
           if (abortRef.current !== ctrl) return
@@ -999,7 +1055,11 @@ export default function Play() {
           refreshAdventure({ replaceActions: false })
         },
         onError: (msg, meta) => fail(msg, meta),
-      }).catch((e) => {
+      }
+      const pending = openStream
+        ? openStream(streamOptions)
+        : streamGeneration(path, { body, ...streamOptions })
+      Promise.resolve(pending).catch((e) => {
         if (e?.name === 'AbortError') return
         fail(e)
       })
@@ -1007,9 +1067,39 @@ export default function Play() {
     [generating, needsCharacter, toast, refreshAdventure, id, promptCharacter, handleCheckData],
   )
 
-  const sendAction = (type, text, opts) => {
+  const applyStreamedAction = (prev, data) => {
+    const out = [...prev]
+    if (data.player_action) out.push(data.player_action)
+    if (data.action) out.push(data.action)
+    return out
+  }
+
+  const sendAction = async (type, text, opts) => {
     if (needsCharacter) {
       openCharacter()
+      return
+    }
+    if (queuesIntent) {
+      try {
+        const res = await api.postAction(id, {
+          type,
+          text,
+          ...(opts?.webSearch ? { web_search: true } : {}),
+        })
+        const intent = res?.intent
+        if (intent?.id) {
+          setIntents((prev) => (
+            prev.some((item) => item.id === intent.id) ? prev : [...prev, intent]
+          ))
+        }
+        toast('Intenção enviada ao mestre')
+      } catch (e) {
+        if (isCharacterRequired(e, e)) {
+          promptCharacter()
+          return
+        }
+        toast(e.message || 'Não foi possível enviar a intenção')
+      }
       return
     }
     if (turnBlocked) return
@@ -1022,12 +1112,27 @@ export default function Play() {
       type,
       text,
       ...(opts?.webSearch ? { web_search: true } : {}),
-    }, (prev, data) => {
-      const out = [...prev]
-      if (data.player_action) out.push(data.player_action)
-      if (data.action) out.push(data.action)
-      return out
-    })
+    }, applyStreamedAction)
+  }
+
+  const approveIntent = (intent) => {
+    if (!intent?.id || generating) return
+    return runStream(
+      'action',
+      `/adventures/${id}/intents/${encodeURIComponent(intent.id)}/approve`,
+      null,
+      applyStreamedAction,
+    )
+  }
+
+  const rejectIntent = async (intent) => {
+    if (!intent?.id) return
+    try {
+      await api.rejectIntent(id, intent.id)
+      setIntents((prev) => prev.filter((item) => item.id !== intent.id))
+    } catch (e) {
+      toast(e.message || 'Não foi possível rejeitar')
+    }
   }
 
   const doContinue = () => {
@@ -1177,7 +1282,7 @@ export default function Play() {
   }
 
   const pickChoice = (choice) => {
-    if (generating || turnBlocked) return
+    if (generating || actionLocked) return
     if (!['do', 'say', 'story'].includes(choice.type) || !choice.text?.trim()) return
     sendAction(choice.type, choice.text.trim())
   }
@@ -1279,7 +1384,7 @@ export default function Play() {
     <GamePanel
       profile={uiProfile}
       state={uiState}
-      disabled={generating || turnBlocked || needsCharacter}
+      disabled={generating || actionLocked || needsCharacter}
       regenerating={regeneratingProfile}
       onStateChange={handleUiStateChange}
       onSend={sendAction}
@@ -1396,6 +1501,13 @@ export default function Play() {
 
                 {shareButton}
 
+                {canShare && (
+                  <>
+                    <button onClick={() => setPublishOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Publicar</button>
+                    <button onClick={() => setModsOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Mods</button>
+                  </>
+                )}
+
                 <button
                   onClick={() => {
                     if (!canSee) {
@@ -1429,6 +1541,8 @@ export default function Play() {
                 >
                   <span className="text-xs font-semibold">Map</span>
                 </button>
+                <Link to={`/adventures/${id}/novel`} title="Abrir Visual Novel e replay"
+                  className="flex h-10 items-center rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Novel</Link>
 
 
                 {/* Global Settings Link */}
@@ -1595,7 +1709,7 @@ export default function Play() {
               <GamePanel
                 profile={uiProfile}
                 state={uiState}
-                disabled={generating || turnBlocked || needsCharacter}
+                disabled={generating || actionLocked || needsCharacter}
                 regenerating={regeneratingProfile}
                 onStateChange={handleUiStateChange}
                 onSend={sendAction}
@@ -1620,8 +1734,8 @@ export default function Play() {
                 <button
                   key={i}
                   onClick={() => pickChoice(c)}
-                  disabled={turnBlocked}
-                  title={turnBlocked ? 'Aguarde a sua vez' : `Send action as "${c.type}"`}
+                  disabled={actionLocked}
+                  title={actionLocked ? 'Aguarde a sua vez' : `Send action as "${c.type}"`}
                   className="min-h-8 shrink-0 flex items-center gap-1.5 rounded-full border border-subtle bg-elevated px-3 py-1 text-xs text-secondary hover:border-accent-pri hover:text-primary transition disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="text-[10px] font-bold uppercase text-accent-pri">{c.type}</span>
@@ -1671,6 +1785,15 @@ export default function Play() {
         )}
 
 
+        <DmTray
+          enabled={dmMode}
+          isDm={isDm}
+          intents={intents}
+          busy={generating}
+          onApprove={approveIntent}
+          onReject={rejectIntent}
+        />
+
         {needsCharacter && (
           <div className="border-t border-warn-600/40 bg-warn-950/50 px-4 py-2 text-center text-sm text-warn-200">
             Crie seu personagem para jogar.
@@ -1687,7 +1810,7 @@ export default function Play() {
         {/* Fixed Bottom Input Bar */}
         <InputBar
           disabled={generating}
-          disabledTurn={turnBlocked || needsCharacter}
+          disabledTurn={actionLocked || needsCharacter}
           onSend={sendAction}
           onTextChange={(t) => setInputDirty(t.trim().length > 0)}
           tabs={uiProfile?.tabs}
@@ -1805,6 +1928,9 @@ export default function Play() {
           onChanged={applySharing}
         />
       )}
+
+      {publishOpen && <PublicationModal adventure={adventure} onClose={() => setPublishOpen(false)} />}
+      {modsOpen && <ModsModal adventureId={id} onClose={() => setModsOpen(false)} />}
 
       {characterOpen && (
         <CharacterModal

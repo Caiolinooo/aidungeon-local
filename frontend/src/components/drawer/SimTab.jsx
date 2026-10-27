@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
+import QuestPanel from './QuestPanel.jsx'
 
 const PACKS = [
   { id: '', label: 'Nenhum' },
@@ -152,6 +153,17 @@ export default function SimTab({ adventure, onAdventureChange, version = 0 }) {
         />
         Modo Vida
       </label>
+
+      {view && (
+        <QuestPanel
+          adventureId={id}
+          quests={view.quests}
+          triggers={view.triggers}
+          busy={busy}
+          packOn={!!view.pack}
+          onRun={run}
+        />
+      )}
 
       {actor && (
         <section className="flex flex-col gap-2 rounded-xl border border-subtle p-3">

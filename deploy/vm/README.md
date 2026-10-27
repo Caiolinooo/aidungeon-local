@@ -42,6 +42,20 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 ```
+## Desempenho
+
+- O app usa contexto de 32768 tokens, escala dinâmica 1.0 e DRY nos últimos 512 tokens. O NPC gate é ignorado quando não existe NPC vivo e, quando necessário, tem teto de 400 tokens de saída.
+- O prompt textual de retratos é preparado antes de entrar na fila do worker de GPU. O polling do ComfyUI usa 0,25 s; o piso de configuração é 0,2 s.
+- O cliente de voz mantém conexões HTTP por endpoint e faz upload do RVQ de uma voz clonada uma vez por processo, validando o hash local antes do PUT.
+- Em `/home/caio/Desktop/abz-voice-local/audio_server.py`, o streaming OmniVoice precisa usar `proc.stdout.read1(65536)`. `read(65536)` segura PCM até encher o buffer ou encerrar o processo. No benchmark M1 com 169 caracteres, `read1` antecipou o primeiro PCM de 10,709 s para 8,814 s e o WAV completo de 10,974 s para 9,059 s, sem mudar modelo, texto ou bytes PCM.
+
+
+Esta versão também aplica as migrations `035_story_starts.sql` (inícios),
+`036_dm_mode.sql` (fila do DM), `037_publications.sql` (catálogo/remix) e
+`038_mods.sql` (mods versionados). O smoke deve terminar em `user_version=38`
+e `integrity=ok`. A cópia jogável de uma publicação não contém actions,
+jogadores ou memórias da origem. Não usar `--with-db` no deploy normal: as
+migrations preservam os saves e o backup automático já é feito antes do boot.
 
 ## Atualizar o código (G9)
 

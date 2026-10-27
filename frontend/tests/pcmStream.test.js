@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readPcm16Wav } from '../src/pcmStream.js'
+import { createPcmPlayer, prewarmPcmPlayback, readPcm16Wav, resetPcmPlaybackForTests } from '../src/pcmStream.js'
 
 function encodeWav(samples, sampleRate, dataSize = null) {
   const dataBytes = samples.length * 2
@@ -106,4 +106,114 @@ test('MP3 é rejeitado', async () => {
 test('EOF sem samples rejeita a reprodução', async () => {
   const wav = encodeWav([], 24000, 0)
   await assert.rejects(() => collect([new Uint8Array(wav)]), /PCM16|missing|Invalid WAV/)
+})
+
+test('duas leituras do mesmo WAV entregam o mesmo PCM', async () => {
+  const wav = encodeWav(SAMPLES, 24000)
+  const first = await collect(splitAt(wav, [5, 24, 46]))
+  const second = await collect([new Uint8Array(wav)])
+  assert.equal(first.sampleRate, second.sampleRate)
+  assert.deepEqual(Array.from(first.samples), Array.from(second.samples))
+  assert.deepEqual(Array.from(first.samples), SAMPLES)
+})
+
+function installAudioMocks() {
+  resetPcmPlaybackForTests()
+  const instances = []
+  let modules = 0
+  let nodes = 0
+  class FakeContext {
+    constructor(opts = {}) {
+      this.sampleRate = opts.sampleRate || 48000
+      this.state = 'suspended'
+      this.destination = {}
+      this.audioWorklet = {
+        addModule: async () => {
+          modules += 1
+        },
+      }
+      this.resumes = 0
+      this.closed = false
+      instances.push(this)
+    }
+
+    resume() {
+      this.resumes += 1
+      this.state = 'running'
+      return Promise.resolve()
+    }
+
+    close() {
+      this.closed = true
+      this.state = 'closed'
+      return Promise.resolve()
+    }
+  }
+  class FakeNode {
+    constructor() {
+      nodes += 1
+      this.port = { onmessage: null, postMessage() {} }
+    }
+
+    connect() {}
+
+    disconnect() {}
+  }
+  globalThis.AudioContext = FakeContext
+  globalThis.AudioWorkletNode = FakeNode
+  const listeners = {}
+  globalThis.window = {
+    addEventListener(type, fn) {
+      listeners[type] = fn
+    },
+    removeEventListener(type, fn) {
+      if (listeners[type] === fn) delete listeners[type]
+    },
+  }
+  return {
+    instances,
+    listeners,
+    modules: () => modules,
+    nodes: () => nodes,
+  }
+}
+
+test('prewarm no primeiro gesto não toca; o player reusa contexto e worklet', async () => {
+  const fake = installAudioMocks()
+  prewarmPcmPlayback()
+  assert.equal(fake.instances.length, 0)
+  assert.equal(typeof fake.listeners.pointerdown, 'function')
+  fake.listeners.pointerdown()
+  assert.equal(fake.instances.length, 1)
+  assert.equal(fake.instances[0].sampleRate, 24000)
+  assert.equal(fake.instances[0].resumes, 1)
+  assert.equal(fake.instances[0].state, 'running')
+  assert.equal(fake.nodes(), 0)
+  const first = createPcmPlayer()
+  const second = createPcmPlayer()
+  await first.start(24000)
+  await second.start(24000)
+  assert.equal(fake.instances.length, 1)
+  assert.equal(fake.modules(), 1)
+  assert.equal(fake.nodes(), 2)
+  first.stop()
+  second.stop()
+  assert.equal(fake.instances[0].closed, false)
+  resetPcmPlaybackForTests()
+})
+
+test('stop não fecha o AudioContext compartilhado', async () => {
+  const fake = installAudioMocks()
+  const player = createPcmPlayer()
+  await player.start(24000)
+  player.stop()
+  assert.equal(fake.instances.length, 1)
+  assert.equal(fake.instances[0].closed, false)
+  const again = createPcmPlayer()
+  await again.start(24000)
+  assert.equal(fake.instances.length, 1)
+  assert.equal(fake.modules(), 1)
+  again.stop()
+  assert.equal(fake.instances[0].closed, false)
+  resetPcmPlaybackForTests()
 })

@@ -39,6 +39,8 @@ def test_patch_scenario_preserves_other_fields(client):
     assert body["plot_essentials"] == "You are a dock thief."
     assert body["authors_note"] == "Rain."
     assert body["opening_text"] == "The tide is out."
+    assert body["story_starts"][0]["title"] == "Opening"
+    assert body["story_starts"][0]["text"] == "The tide is out."
     assert body["image_style"] == "ink sketch"
     assert body["tags"] == ["sea"]
     assert body["story_cards"][0]["title"] == "Harbor"
@@ -50,6 +52,8 @@ def test_patch_scenario_preserves_other_fields(client):
     assert got.json()["title"] == "Renamed Harbor"
     assert got.json()["description"] == "A harbor city."
     assert got.json()["opening_text"] == "The tide is out."
+    assert got.json()["story_starts"][0]["text"] == "The tide is out."
+    assert got.json()["story_starts"][0]["id"] == body["story_starts"][0]["id"]
 
 
 def test_delete_scenario_then_get_404(client):

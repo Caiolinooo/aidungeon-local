@@ -9,24 +9,38 @@ _ABILITY_ORDER = ("str", "dex", "con", "int", "wis", "cha")
 
 
 def empty() -> dict:
-    return {"v": 1, "pack": "", "actors": {}, "foes": {}, "life": None}
+    return {
+        "v": 1,
+        "pack": "",
+        "actors": {},
+        "foes": {},
+        "life": None,
+        "rng": None,
+        "quests": [],
+        "triggers": [],
+    }
 
 
 def load(adventure: dict) -> dict:
-    """`sim_state` da aventura por cima de `empty()`. JSON inválido já virou {} no db."""
+    """`sim_state` da aventura por cima de `empty()`. Chaves desconhecidas permanecem."""
     base = empty()
     raw = (adventure or {}).get("sim_state")
     if not isinstance(raw, dict):
         return base
-    for key in ("v", "pack", "actors", "foes", "life"):
-        if key in raw:
-            base[key] = raw[key]
-    if not isinstance(base["actors"], dict):
+    for key, value in raw.items():
+        base[key] = value
+    if not isinstance(base.get("actors"), dict):
         base["actors"] = {}
-    if not isinstance(base["foes"], dict):
+    if not isinstance(base.get("foes"), dict):
         base["foes"] = {}
-    if not isinstance(base["pack"], str):
+    if not isinstance(base.get("pack"), str):
         base["pack"] = ""
+    if not isinstance(base.get("quests"), list):
+        base["quests"] = []
+    if not isinstance(base.get("triggers"), list):
+        base["triggers"] = []
+    if base.get("rng") is not None and not isinstance(base.get("rng"), dict):
+        base["rng"] = None
     return base
 
 

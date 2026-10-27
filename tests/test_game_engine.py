@@ -14,6 +14,13 @@ from app.errors import GameError
 
 from conftest import add_action, make_adventure, make_llm_transport
 
+NEUTRAL_GATE = (
+    "\n[Adjudicação do GM — obedeça sem citar estas regras]\n"
+    "Fato decidido: A ação segue no ambiente, sem outra pessoa para responder.\n"
+    "Tom/consequência: A ação segue no ambiente, sem outra pessoa para responder.\n"
+    "Não contradiga o fato decidido; não transforme recusa em obediência."
+)
+
 
 def _collect(events) -> list[dict]:
     return list(events)
@@ -92,7 +99,7 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
         f"{context_builder.STYLE_CUE}\n{context_builder.CANON_CUE}\n"
         f"{context_builder.LORE_CUE}\n"
         f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
-        "\n> You wait\n"
+        "\n> You wait\n" + NEUTRAL_GATE
     )
 
 
@@ -350,5 +357,5 @@ def test_web_research_goes_inside_the_lore(adventure, monkeypatch):
     assert final.endswith(
         f"{context_builder.LORE_CUE}\n"
         f"[Facts: where=unestablished; places=none; items=none. {ATTEMPT_RULE}]\n"
-        "\n> You inspect the gate\n"
+        "\n> You inspect the gate\n" + NEUTRAL_GATE
     )

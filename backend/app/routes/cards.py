@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, Response
 
-from app import db, events, llm_client, npc_assets, settings_store
+from app import auth, db, events, llm_client, npc_assets, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import CardBulkAction, CardEnrichRequest, CardRegenerateRequest, StoryCardUpsert
@@ -23,6 +23,16 @@ def _adventure_or_404(adventure_id: str) -> None:
 def _sheet_str(sheet: dict | None) -> str:
     """Ficha do body (dict) → JSON canônico p/ a coluna; None/∅ → ''."""
     return json.dumps(sheet, ensure_ascii=False) if sheet else ""
+
+
+def _show_card(conn, adventure_id: str, adventure: dict, card: dict, viewer: str) -> bool:
+    """Não-dono não vê location fora do mapa revelado. Dono e os outros tipos seguem."""
+    if (card.get("type") or "") != "location":
+        return True
+    if db.is_adventure_owner(adventure, viewer):
+        return True
+    from app import world_map
+    return world_map.location_visible(conn, adventure_id, card["id"], viewer=viewer)
 
 
 def _publish_card(adventure_id: str, card_id: str, action: str) -> None:
@@ -56,13 +66,16 @@ def list_cards(
     q: str | None = None,
     type: str | None = None,
     pinned: bool | None = None,
+    info: auth.AuthInfo = Depends(auth.require_auth),
 ) -> list[dict]:
     _adventure_or_404(adventure_id)
     with db.session() as conn:
-        return [
-            db.attach_portrait(conn, c)
-            for c in db.list_cards(conn, adventure_id, q=q, card_type=type, pinned=pinned)
+        adventure = db.get_adventure(conn, adventure_id) or {}
+        visible = [
+            c for c in db.list_cards(conn, adventure_id, q=q, card_type=type, pinned=pinned)
+            if _show_card(conn, adventure_id, adventure, c, info.user)
         ]
+        return [db.attach_portrait(conn, c) for c in visible]
 
 
 @router.post("/{adventure_id}/cards/bulk")
@@ -84,11 +97,16 @@ def bulk_cards(adventure_id: str, body: CardBulkAction) -> dict:
 
 
 @router.get("/{adventure_id}/cards/{card_id}")
-def get_card(adventure_id: str, card_id: str) -> dict:
+def get_card(adventure_id: str, card_id: str,
+             info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         card = db.get_card(conn, adventure_id, card_id)
         if card:
-            db.attach_portrait(conn, card)
+            adventure = db.get_adventure(conn, adventure_id) or {}
+            if not _show_card(conn, adventure_id, adventure, card, info.user):
+                card = None
+            else:
+                db.attach_portrait(conn, card)
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
     return card

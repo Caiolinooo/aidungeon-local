@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { getWorldMap, revealLocation, travelTo } from '../api/worldMap.js'
 import { useToast } from './Toast.jsx'
 
 function LocationImage({ location, onLoad }) {
@@ -31,7 +32,7 @@ function LocationImage({ location, onLoad }) {
   return <img src={src} alt={location.title} className="h-32 w-full rounded-lg object-cover" />
 }
 
-function LocationCard({ location, current, onTravel, onImage, busy }) {
+function LocationCard({ location, current, onTravel, onReveal, onImage, busy }) {
   return (
     <article className={`rounded-xl border p-3 ${current ? 'border-accent-pri bg-accent-pri/10' : 'border-subtle bg-surface'}`}>
       <LocationImage location={location} />
@@ -52,15 +53,40 @@ function LocationCard({ location, current, onTravel, onImage, busy }) {
       <p className="mt-1 line-clamp-3 text-xs text-secondary">{location.entry}</p>
       <div className="mt-2 flex flex-wrap gap-1">
         {(location.links || []).map((link) => (
-          <button
-            key={link.id || link.to_card_id}
-            type="button"
-            onClick={() => onTravel(link.to_card_id)}
-            disabled={busy}
-            className="rounded-full border border-accent-800 px-2 py-0.5 text-[11px] text-accent-pri hover:bg-accent-950 disabled:opacity-40"
-          >
-            → {link.to_title}
-          </button>
+          link.hidden ? (
+            <span
+              key={link.id || link.to_card_id}
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-subtle px-2 py-0.5 text-[11px] text-muted"
+            >
+              Saída não revelada
+              <button
+                type="button"
+                onClick={() => onTravel(link.to_card_id)}
+                disabled={busy}
+                className="rounded-full border border-accent-800 px-2 py-0.5 text-[11px] text-accent-pri hover:bg-accent-950 disabled:opacity-40"
+              >
+                Viajar
+              </button>
+              <button
+                type="button"
+                onClick={() => onReveal(link.to_card_id)}
+                disabled={busy}
+                className="rounded-full border border-subtle px-2 py-0.5 text-[11px] text-secondary hover:bg-elevated disabled:opacity-40"
+              >
+                Revelar
+              </button>
+            </span>
+          ) : (
+            <button
+              key={link.id || link.to_card_id}
+              type="button"
+              onClick={() => onTravel(link.to_card_id)}
+              disabled={busy}
+              className="rounded-full border border-accent-800 px-2 py-0.5 text-[11px] text-accent-pri hover:bg-accent-950 disabled:opacity-40"
+            >
+              → {link.to_title}
+            </button>
+          )
         ))}
       </div>
     </article>
@@ -111,7 +137,7 @@ export default function WorldMap({ adventure, open = true, onClose }) {
     if (!adventure?.id) return
     setLoading(true)
     try {
-      setData(await api.getMap(adventure.id))
+      setData(await getWorldMap(adventure.id))
     } catch (e) {
       toast(e.message)
     } finally {
@@ -138,9 +164,21 @@ export default function WorldMap({ adventure, open = true, onClose }) {
   const travel = async (cardId) => {
     setBusy(true)
     try {
-      await api.travelTo(adventure.id, cardId)
+      await travelTo(adventure.id, cardId)
       toast('Viagem realizada.', 'ok')
       await load()
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reveal = async (cardId) => {
+    setBusy(true)
+    try {
+      setData(await revealLocation(adventure.id, cardId))
+      toast('Local revelado.', 'ok')
     } catch (e) {
       toast(e.message)
     } finally {
@@ -233,7 +271,7 @@ export default function WorldMap({ adventure, open = true, onClose }) {
           locations.length ? (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {locations.map((location) => (
-                <LocationCard key={location.id} location={location} current={location.current} onTravel={travel} onImage={generateImage} busy={busy} />
+                <LocationCard key={location.id} location={location} current={location.current} onTravel={travel} onReveal={reveal} onImage={generateImage} busy={busy} />
               ))}
             </div>
           ) : (

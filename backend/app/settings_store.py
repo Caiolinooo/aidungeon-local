@@ -322,7 +322,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "comfyui_cfg": float(comfyui.get("cfg", 1.0)),
         "comfyui_sigmas": comfyui_sigmas,
         "comfyui_shift": float(comfyui.get("shift", 1.31)),
-        "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 1.0)),
+        "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 0.25)),
         "prompt_builder": dict(prompt_builder),
     }
 

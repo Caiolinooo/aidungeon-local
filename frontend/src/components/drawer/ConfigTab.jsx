@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
+import { getAdventureScripts, putAdventureScripts } from '../../api/adventureScripts.js'
 import { useToast } from '../Toast.jsx'
 import VoiceCloneModal from '../VoiceCloneModal.jsx'
 import { HealthCheck } from '../settings/Controls.jsx'
@@ -18,7 +19,7 @@ const HEALTH_STYLE = {
 // status ao vivo de GET /api/health/llm (model_discovered etc.).
 // Geração reúne presets, tamanho da resposta e todos os samplers de
 // settings/llm; as seções Images e Voice usam seus endpoints GET/PUT próprios.
-export default function ConfigTab() {
+export default function ConfigTab({ adventure = null }) {
   const toast = useToast()
   const [settings, setSettings] = useState(null)
   const [health, setHealth] = useState(null)
@@ -239,7 +240,203 @@ export default function ConfigTab() {
 
       {/* v0.4.0 — seção Voice: TTS (OmniVoice) + STT (Whisper) da stack da VM */}
       <VoiceSettingsSection inputCls={inputCls} labelCls={labelCls} />
+
+      <AdventureScriptsSection adventure={adventure} inputCls={inputCls} labelCls={labelCls} />
     </div>
+  )
+}
+
+const ADVENTURE_SCRIPT_HOOKS = [
+  {
+    key: 'input_modifier',
+    label: 'Entrada',
+    hint: 'Roda antes do turno. Variáveis: action, text, type. Pode definir modifier(action).',
+  },
+  {
+    key: 'context_modifier',
+    label: 'Contexto',
+    hint: 'Roda na lista enviada ao modelo. Variável: context. Pode definir modifier(context).',
+  },
+  {
+    key: 'output_modifier',
+    label: 'Saída',
+    hint: 'Roda no texto gerado. Variáveis: text, output. Pode definir modifier(text).',
+  },
+]
+
+const EMPTY_SCRIPTS = { input_modifier: '', context_modifier: '', output_modifier: '' }
+
+function scriptSourceLabel(source) {
+  if (source === 'adventure') return 'Vale o script desta aventura.'
+  if (source === 'global') return 'Vazio aqui: o turno usa o script global.'
+  return 'Nenhum script neste hook.'
+}
+
+function AdventureScriptsSection({ adventure, inputCls, labelCls }) {
+  const toast = useToast()
+  const adventureId = adventure?.id || ''
+  const adventureIdRef = useRef(adventureId)
+  adventureIdRef.current = adventureId
+  const saveGen = useRef(0)
+  const [scripts, setScripts] = useState(EMPTY_SCRIPTS)
+  const [meta, setMeta] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const applyPayload = (data) => {
+    setScripts({
+      input_modifier: data?.input_modifier || '',
+      context_modifier: data?.context_modifier || '',
+      output_modifier: data?.output_modifier || '',
+    })
+    setMeta({ sources: data?.sources || {}, global: data?.global || {} })
+  }
+
+  useEffect(() => {
+    if (!adventureId) {
+      setScripts(EMPTY_SCRIPTS)
+      setMeta(null)
+      setError('')
+      setLoading(false)
+      return undefined
+    }
+    let cancelled = false
+    saveGen.current += 1
+    setSaving(false)
+    setLoading(true)
+    setError('')
+    setScripts(EMPTY_SCRIPTS)
+    setMeta(null)
+    getAdventureScripts(adventureId)
+      .then((data) => {
+        if (!cancelled) applyPayload(data)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError(e.message || 'Não foi possível ler os scripts.')
+        toast(e.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [adventureId, toast])
+
+  const persist = async (payload, okMessage) => {
+    if (!adventureId) return
+    const id = adventureId
+    const gen = ++saveGen.current
+    setSaving(true)
+    setError('')
+    try {
+      const data = await putAdventureScripts(id, payload)
+      if (saveGen.current !== gen || adventureIdRef.current !== id) return
+      applyPayload(data)
+      toast(okMessage, 'ok')
+    } catch (e) {
+      if (saveGen.current !== gen || adventureIdRef.current !== id) return
+      setError(e.message || 'Não foi possível salvar os scripts.')
+      toast(e.message)
+    } finally {
+      if (saveGen.current === gen) setSaving(false)
+    }
+  }
+
+  const saveAll = () => persist(
+    {
+      input_modifier: scripts.input_modifier,
+      context_modifier: scripts.context_modifier,
+      output_modifier: scripts.output_modifier,
+    },
+    'Scripts da aventura salvos.',
+  )
+
+  const clearHook = (key) => persist(
+    { [key]: '' },
+    'Hook removido. Se existir script global, o turno volta a usá-lo.',
+  )
+
+  const busy = loading || saving
+
+  return (
+    <section className="flex flex-col gap-3 border-t border-subtle pt-4" aria-labelledby="adventure-scripts-title">
+      <div>
+        <h3 id="adventure-scripts-title" className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Scripts da aventura
+        </h3>
+        <p className="mt-0.5 text-xs text-muted">
+          Cada hook salvo aqui substitui só o da aventura aberta. Campo vazio não grava nada nesta aventura:
+          o turno usa <code>script:global:*</code> daquele hook, se existir. Limpar apaga a chave da aventura
+          e devolve esse fallback. O global não muda nesta tela. O script é validado ao salvar e só roda nos
+          hooks do turno.
+        </p>
+      </div>
+
+      {!adventureId && (
+        <p className="text-sm text-muted">Abra uma aventura para editar os scripts dela.</p>
+      )}
+
+      {adventureId && loading && !meta && (
+        <p className="text-sm text-muted">Carregando scripts…</p>
+      )}
+
+      {adventureId && (meta || error) && (
+        <>
+          {ADVENTURE_SCRIPT_HOOKS.map((hook) => {
+            const source = meta?.sources?.[hook.key] || 'empty'
+            const globalText = meta?.global?.[hook.key] || ''
+            return (
+              <label key={hook.key} className="block">
+                <span className={labelCls}>{hook.label}</span>
+                <span className="mb-1 block text-xs text-muted">{hook.hint}</span>
+                <span className="mb-1 block text-xs text-secondary">{scriptSourceLabel(source)}</span>
+                {source === 'global' && globalText && (
+                  <pre className="mb-1 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg border border-subtle bg-surface/40 px-3 py-2 text-xs text-muted">
+                    {globalText}
+                  </pre>
+                )}
+                <textarea
+                  value={scripts[hook.key]}
+                  onChange={(e) => setScripts((prev) => ({ ...prev, [hook.key]: e.target.value }))}
+                  rows={5}
+                  disabled={busy}
+                  spellCheck={false}
+                  aria-label={`Script de ${hook.label}`}
+                  placeholder="Vazio = usar o script global deste hook"
+                  className={`${inputCls} resize-y font-mono text-xs disabled:opacity-60`}
+                />
+                <div className="mt-1 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => clearHook(hook.key)}
+                    disabled={busy}
+                    className="rounded-lg border border-subtle px-3 py-1.5 text-xs text-primary hover:bg-surface disabled:opacity-50"
+                  >
+                    Limpar
+                  </button>
+                </div>
+              </label>
+            )
+          })}
+
+          {error && <p className="text-xs text-danger-300">{error}</p>}
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={saveAll}
+              disabled={busy}
+              className="rounded-lg bg-accent-pri px-3 py-1.5 text-xs font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50"
+            >
+              {saving ? 'Salvando…' : 'Salvar scripts'}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 

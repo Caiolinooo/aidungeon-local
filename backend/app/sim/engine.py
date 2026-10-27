@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
 
 from app import db, npc_assets
-from app.sim import intent, life, packs, rules, state
+from app.sim import intent, life, packs, rng as sim_rng, rules, state, triggers
 
 log = logging.getLogger("aidungeon.sim.engine")
 
@@ -73,6 +72,7 @@ def run_turn(adventure_id: str, adventure: dict, player_action: dict,
     if not pack_id and not life_on:
         return None
     pack = packs.load_pack(pack_id) if pack_id else None
+    sim_rng.ensure(loaded)
     before = state.snapshot(loaded)
     with db.session() as conn:
         cards = db.list_cards(conn, adventure_id)
@@ -100,16 +100,20 @@ def run_turn(adventure_id: str, adventure: dict, player_action: dict,
     else:
         classified = intent.normalize({})
     penalty = life.penalty(actor, pack) if life_on else 0
-    rng = random.SystemRandom()
+    rng = sim_rng.gameplay_rng(loaded)
     resolution = rules.resolve(loaded, pack, classified, key, cards, penalty, rng)
     if resolution.refusal:
         return {"refusal": resolution.refusal}
+    with db.session() as trig_conn:
+        triggers.refresh(trig_conn, adventure_id, loaded, user=user or "", cards=cards)
     time_info = None
     if life_on:
         time_info = life.advance(
             loaded, int(classified.get("minutes") or 30), classified.get("activity") or "other",
             key, cards, rng, settings["npc_colocation_chance"],
         )
+        with db.session() as trig_conn:
+            triggers.refresh(trig_conn, adventure_id, loaded, user=user or "", cards=cards)
     block = rules.build_block(resolution.steps, resolution.changes, time_info, None)
     payload = {
         "pack": pack_id,

@@ -144,9 +144,50 @@ def _may_use_clone(conn, username: str, cloned: dict, adventure_id: str) -> bool
     return bool(adventure["owner"]) and cloned["owner"] == adventure["owner"]
 
 
+async def _ensure_clone(request: Request, cfg: dict, voice: str, cloned: dict | None,
+                        transport: Any, *, force: bool = False) -> None:
+    """Envia o RVQ uma vez por id+SHA256 neste processo. force reenvia."""
+    if cloned is None:
+        return
+    rvq = cloned["rvq"]
+    if force:
+        voice_client.forget_clone_rvq(voice)
+    elif voice_client.clone_rvq_is_cached(voice, rvq):
+        return
+    try:
+        await _await_until_disconnect(
+            request,
+            voice_client.put_clone_rvq_async(
+                cfg, voice, cloned["ref_text"], rvq, transport=transport),
+        )
+    except voice_client.VoiceError as exc:
+        raise GameError(502, exc.code, exc.message) from exc
+
+
+def _as_game_error(exc: voice_client.VoiceError) -> GameError:
+    """clone_missing é interno: o cliente continua vendo `error`."""
+    code = "error" if exc.code == "clone_missing" else exc.code
+    return GameError(502, code, exc.message)
+
+
+async def _retry_if_clone_missing(request: Request, cfg: dict, voice: str,
+                                  cloned: dict | None, transport: Any,
+                                  exc: voice_client.VoiceError, operation):
+    """Reenvia o clone uma vez e repete a fala só se nenhum áudio foi entregue."""
+    if cloned is None or not voice_client.is_missing_clone(exc):
+        raise _as_game_error(exc) from exc
+    if await request.is_disconnected():
+        raise _as_game_error(exc) from exc
+    await _ensure_clone(request, cfg, voice, cloned, transport, force=True)
+    try:
+        return await operation()
+    except voice_client.VoiceError as again:
+        raise _as_game_error(again) from again
+
+
 # ----------------------------------------------------------------------- /tts
 async def _prepare_tts(request: Request, body: TtsRequest,
-                       info: auth.AuthInfo, transport: Any) -> tuple[dict, str, str, str]:
+                       info: auth.AuthInfo, transport: Any) -> tuple[dict, str, str, str, dict | None]:
     with db.session() as conn:
         cfg = settings_store.effective_voice_settings(conn)
     if not cfg["enabled"]:
@@ -172,15 +213,7 @@ async def _prepare_tts(request: Request, body: TtsRequest,
         cloned = db.get_cloned_voice(conn, voice) if voice.startswith("cv_") else None
         if cloned is not None and not _may_use_clone(conn, info.user, cloned, adventure_id):
             raise GameError(404, "voice_not_found", f"voice {voice} not found")
-    if cloned is not None:
-        try:
-            await _await_until_disconnect(
-                request,
-                voice_client.put_clone_rvq_async(
-                    cfg, voice, cloned["ref_text"], cloned["rvq"], transport=transport),
-            )
-        except voice_client.VoiceError as exc:
-            raise GameError(502, exc.code, exc.message) from exc
+    await _ensure_clone(request, cfg, voice, cloned, transport)
     npc_emotion = None
     if adventure_id:
         with db.session() as conn:
@@ -189,22 +222,27 @@ async def _prepare_tts(request: Request, body: TtsRequest,
                 npc_emotion = npc_bonds.npc_emotion_for_line(cards, text)
     emotion = voice_emotion.choose_emotion(
         text, npc_emotion=npc_emotion, hint=body.emotion)
-    return cfg, text, voice, emotion
+    return cfg, text, voice, emotion, cloned
 
 
 @router.post("/tts")
 async def post_tts(request: Request, body: TtsRequest,
                    info: auth.AuthInfo = Depends(auth.require_auth),
                    transport: Any = Depends(get_http_transport)) -> Response:
-    cfg, text, voice, emotion = await _prepare_tts(request, body, info, transport)
-    try:
-        audio = await _await_until_disconnect(
+    cfg, text, voice, emotion, cloned = await _prepare_tts(request, body, info, transport)
+
+    async def speak() -> bytes:
+        return await _await_until_disconnect(
             request,
             voice_client.synthesize_async(
                 cfg, text, voice, emotion=emotion, transport=transport),
         )
+
+    try:
+        audio = await speak()
     except voice_client.VoiceError as exc:
-        raise GameError(502, exc.code, exc.message) from exc
+        audio = await _retry_if_clone_missing(
+            request, cfg, voice, cloned, transport, exc, speak)
     return Response(content=audio, media_type="audio/mpeg",
                     headers={"X-Voice-Emotion": emotion})
 
@@ -213,15 +251,20 @@ async def post_tts(request: Request, body: TtsRequest,
 async def post_tts_stream(request: Request, body: TtsRequest,
                           info: auth.AuthInfo = Depends(auth.require_auth),
                           transport: Any = Depends(get_http_transport)) -> StreamingResponse:
-    cfg, text, voice, emotion = await _prepare_tts(request, body, info, transport)
-    try:
-        speech = await _await_until_disconnect(
+    cfg, text, voice, emotion, cloned = await _prepare_tts(request, body, info, transport)
+
+    async def open_stream():
+        return await _await_until_disconnect(
             request, asyncio.to_thread(
                 voice_client.open_speech_stream,
                 cfg, text, voice, emotion=emotion, transport=transport),
         )
+
+    try:
+        speech = await open_stream()
     except voice_client.VoiceError as exc:
-        raise GameError(502, exc.code, exc.message) from exc
+        speech = await _retry_if_clone_missing(
+            request, cfg, voice, cloned, transport, exc, open_stream)
 
     async def chunks():
         try:

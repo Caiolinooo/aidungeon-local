@@ -12,7 +12,7 @@ import time
 
 from app import db, events
 from app.errors import GameError
-from app.sim import life, state
+from app.sim import life, state, triggers
 
 log = logging.getLogger("aidungeon.sim.runtime")
 
@@ -166,6 +166,9 @@ def run_tick(adventure_id: str, minutes: int | None = None, *,
             jumped = life.advance(
                 sim, selected_minutes, "other", actor_key, cards,
                 random.Random(int.from_bytes(digest[:8], "big")), 0.25,
+            )
+            triggers.refresh(
+                conn, adventure_id, sim, user=(adventure.get("owner") or ""), cards=cards,
             )
             db.set_sim_state(conn, adventure_id, sim)
             saved_life = sim["life"]

@@ -28,7 +28,7 @@ from app import access, db, jobs, settings_store, users
 from app.sim import runtime as sim_runtime
 from app.auth import require_auth
 from app.errors import GameError
-from app.routes import (actions, adventures, assistant, cards, choices,
+from app.routes import (actions, adventure_scripts, adventures, assistant, cards, choices,
                         consistency as consistency_routes,
                         generation, health, images, import_export, jobs as jobs_routes,
                         memory, scenarios, scene as scene_routes, settings, ui_profile,
@@ -38,6 +38,8 @@ from app.routes import events as events_routes
 from app.routes import likeness as likeness_routes
 from app.routes import rulesets as rulesets_routes
 from app.routes import sim as sim_routes
+from app.routes import publications as publication_routes
+from app.routes import mods as mods_routes
 from app.routes import world_map as world_map_routes
 from app.routes import users as users_routes
 
@@ -128,6 +130,12 @@ app.include_router(users_routes.router, prefix="/api", tags=["users"],
 app.include_router(scenarios.router, prefix="/api/scenarios", tags=["scenarios"],
                    dependencies=_protected)
 app.include_router(adventures.router, prefix="/api/adventures", tags=["adventures"],
+                   dependencies=_protected)
+app.include_router(adventure_scripts.router, prefix="/api/adventures",
+                   tags=["scripts"], dependencies=_protected)
+app.include_router(publication_routes.router, prefix="/api/publications",
+                   tags=["publications"], dependencies=_protected)
+app.include_router(mods_routes.router, prefix="/api", tags=["mods"],
                    dependencies=_protected)
 app.include_router(rulesets_routes.router, prefix="/api", tags=["rulesets"],
                    dependencies=_protected)

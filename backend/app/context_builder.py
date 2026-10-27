@@ -274,6 +274,22 @@ def _fit_budget(text: str, budget_tokens: int) -> str:
     return cut.rstrip()
 
 
+def _join_append(base: str, extra: str) -> str:
+    """Texto da aventura primeiro; append de mods habilitados depois. Não grava."""
+    base = (base or "").strip()
+    extra = (extra or "").strip()
+    if base and extra:
+        return f"{base}\n\n{extra}"
+    return base or extra
+
+
+def _enabled_mod_append(conn: sqlite3.Connection, adventure_id: str) -> dict[str, str]:
+    if not adventure_id:
+        return {}
+    from app import mods as mod_catalog
+    return mod_catalog.enabled_appends(conn, adventure_id)
+
+
 # ------------------------------------------------------- formatação ações
 def _unwrap_you(type_: str, text: str) -> str | None:
     """O jogo grava '> You ...'. Na mesa isso esconde quem agiu."""
@@ -657,19 +673,21 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     system_parts: list[str] = []
     volatile_parts: list[str] = []
 
-    # 1 — narrador + ai_instructions (sem cabeçalho)
+    mod_append = _enabled_mod_append(conn, str(adventure.get("id") or ""))
+
+    # 1 — narrador + ai_instructions (sem cabeçalho) + append dos mods habilitados
     block1 = BASE_SYSTEM_PROMPT
     if adventure.get("third_person"):
         block1 += (
             "\nNarrate in the third person. Refer to the protagonist by name; never as \"you\"."
         )
-    ai = (adventure.get("ai_instructions") or "").strip()
+    ai = _join_append(adventure.get("ai_instructions") or "", mod_append.get("ai_instructions") or "")
     if ai:
         block1 += "\n\n" + _fit_budget(ai, int(budgets.get("ai_instructions", 700)))
     system_parts.append(block1)
 
     # 2 — plot_essentials
-    plot = (adventure.get("plot_essentials") or "").strip()
+    plot = _join_append(adventure.get("plot_essentials") or "", mod_append.get("plot_essentials") or "")
     if plot:
         system_parts.append("[Plot]\n" + _fit_budget(plot, int(budgets.get("plot_essentials", 1600))))
 
@@ -797,7 +815,7 @@ def build_context(adventure: dict, actions: list[dict], cfg: dict,
     meta["window_tokens_est"] = used
 
     # 7+8 — user(final): <lore> com voláteis e âncoras, author's note, lembretes, última ação
-    note = (adventure.get("authors_note") or "").strip()
+    note = _join_append(adventure.get("authors_note") or "", mod_append.get("authors_note") or "")
     if note:
         note = _fit_budget(note, int(budgets.get("authors_note", 300)))
     if actions:

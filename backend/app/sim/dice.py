@@ -41,7 +41,8 @@ def parse(expr: str) -> tuple[int, str, int]:
 
 def roll(expr: str, rng: random.Random | None = None) -> Roll:
     count, faces, modifier = parse(expr)
-    rng = rng or random.SystemRandom()
+    if rng is None:
+        raise ValueError("rng obrigatório")
     if faces == "F":
         rolls = [rng.choice((-1, 0, 1)) for _ in range(count)]
     else:

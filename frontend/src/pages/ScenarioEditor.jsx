@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api.js'
+import {
+  applyOpeningText,
+  newStoryStartId,
+  openingFromStarts,
+  replaceWithOpening,
+  storyStartsAreValid,
+  storyStartsFromScenario,
+  storyStartsPayload,
+} from '../api/storyStarts.js'
 import { useToast } from '../components/Toast.jsx'
 import TagInput from '../components/TagInput.jsx'
 import StoryCardsEditor from '../components/StoryCardsEditor.jsx'
@@ -22,6 +31,7 @@ const EMPTY = {
   plot_essentials: '',
   authors_note: '',
   opening_text: '',
+  story_starts: [],
   image_style: '',
   tags: [],
   story_cards: [],
@@ -30,6 +40,73 @@ const EMPTY = {
 
 const miniBtnCls =
   'shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40'
+
+function StoryStartsEditor({ starts, onChange, inputCls, busy }) {
+  const update = (index, patch) => {
+    onChange(starts.map((item, i) => (i === index ? { ...item, ...patch } : item)))
+  }
+  const move = (index, delta) => {
+    const target = index + delta
+    if (target < 0 || target >= starts.length) return
+    const next = [...starts]
+    const [item] = next.splice(index, 1)
+    next.splice(target, 0, item)
+    onChange(next)
+  }
+  const remove = (index) => onChange(starts.filter((_, i) => i !== index))
+  const add = () => onChange([...starts, { id: newStoryStartId(), title: '', text: '' }])
+
+  return (
+    <div className="flex flex-col gap-2">
+      {starts.length === 0 && (
+        <p className="text-xs text-zinc-500">Nenhum início. A aventura nova começa sem texto de abertura.</p>
+      )}
+      {starts.map((start, index) => (
+        <div key={start.id || index} className="rounded-lg border border-zinc-700 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+              {index === 0 ? 'Padrão' : `Início ${index + 1}`}
+            </span>
+            <span className="flex gap-1">
+              <button type="button" onClick={() => move(index, -1)} disabled={busy || index === 0} className={miniBtnCls}>
+                Subir
+              </button>
+              <button
+                type="button"
+                onClick={() => move(index, 1)}
+                disabled={busy || index === starts.length - 1}
+                className={miniBtnCls}
+              >
+                Descer
+              </button>
+              <button type="button" onClick={() => remove(index)} disabled={busy} className={miniBtnCls}>
+                Remover
+              </button>
+            </span>
+          </div>
+          <input
+            value={start.title}
+            onChange={(e) => update(index, { title: e.target.value })}
+            placeholder="Título do início"
+            aria-label={index === 0 ? 'Título do início padrão' : `Título do início ${index + 1}`}
+            className={`${inputCls} mb-2`}
+          />
+          <textarea
+            value={start.text}
+            onChange={(e) => update(index, { text: e.target.value })}
+            rows={4}
+            placeholder="Texto que vira a ação inicial"
+            aria-label={index === 0 ? 'Texto do início padrão' : `Texto do início ${index + 1}`}
+            className={`${inputCls} resize-y font-prose`}
+          />
+        </div>
+      ))}
+      <button type="button" onClick={add} disabled={busy} className={`${miniBtnCls} self-start`}>
+        + Adicionar início
+      </button>
+    </div>
+  )
+}
 
 export default function ScenarioEditor() {
   const { id } = useParams()
@@ -64,6 +141,7 @@ export default function ScenarioEditor() {
         plot_essentials: s.plot_essentials ?? '',
         authors_note: s.authors_note ?? '',
         opening_text: s.opening_text ?? '',
+        story_starts: storyStartsFromScenario(s),
         image_style: s.image_style ?? '',
         tags: s.tags ?? [],
         story_cards: Array.isArray(s.story_cards) ? s.story_cards : [],
@@ -87,7 +165,21 @@ export default function ScenarioEditor() {
     setRegen(null)
   }, [id])
 
-  const payload = () => ({ ...form, title: form.title.trim() })
+  const payload = () => {
+    const story_starts = storyStartsPayload(form.story_starts)
+    return {
+      ...form,
+      title: form.title.trim(),
+      story_starts,
+      opening_text: openingFromStarts(story_starts),
+    }
+  }
+
+  const rejectBlankStarts = () => {
+    if (storyStartsAreValid(form.story_starts)) return false
+    toast('Cada início precisa de título e texto.')
+    return true
+  }
 
   const regenerateEverything = async () => {
     const brief = (form.description || form.title || '').trim()
@@ -110,13 +202,15 @@ export default function ScenarioEditor() {
         deep_characters: true,
         web_search_mode: webOn ? 'always' : 'off',
       })
+      const story_starts = replaceWithOpening(draft.opening_text ?? '')
       setForm({
         title: draft.title ?? form.title,
         description: draft.description ?? '',
         ai_instructions: draft.ai_instructions ?? '',
         plot_essentials: draft.plot_essentials ?? '',
         authors_note: draft.authors_note ?? '',
-        opening_text: draft.opening_text ?? '',
+        opening_text: openingFromStarts(story_starts),
+        story_starts,
         image_style: draft.image_style ?? '',
         tags: draft.tags ?? [],
         story_cards: Array.isArray(draft.story_cards) ? draft.story_cards : [],
@@ -161,6 +255,10 @@ export default function ScenarioEditor() {
           if (Array.isArray(r.story_cards)) next.story_cards = r.story_cards
         } else if (field === 'tags') {
           next.tags = String(r.value ?? '').split(',').map((t) => t.trim()).filter(Boolean)
+        } else if (field === 'opening_text') {
+          const story_starts = applyOpeningText(f.story_starts, r.value ?? '')
+          next.story_starts = story_starts
+          next.opening_text = story_starts.length ? openingFromStarts(story_starts) : (r.value ?? '')
         } else {
           next[field] = r.value ?? ''
         }
@@ -251,6 +349,7 @@ export default function ScenarioEditor() {
       toast('O título é obrigatório.')
       return
     }
+    if (rejectBlankStarts()) return
     if (opRef.current) return
     opRef.current = true
     setPending('save')
@@ -277,6 +376,7 @@ export default function ScenarioEditor() {
       toast('O título é obrigatório.')
       return
     }
+    if (rejectBlankStarts()) return
     if (opRef.current) return
     opRef.current = true
     setPending('copy')
@@ -454,15 +554,23 @@ export default function ScenarioEditor() {
           />
         </label>
 
-        <label className="block">
-          {fieldHeader('opening_text', 'Texto de abertura', "O primeiro bloco da história (vira a ação inicial das aventuras novas).")}
-          <textarea
-            value={form.opening_text}
-            onChange={(e) => setForm((f) => ({ ...f, opening_text: e.target.value }))}
-            rows={6}
-            className={`${inputCls} resize-y font-prose`}
+        <div className="block">
+          {fieldHeader(
+            'opening_text',
+            'Inícios da história',
+            'O primeiro é o padrão e vira a ação inicial. Na criação da aventura o jogador pode escolher outro.',
+          )}
+          <StoryStartsEditor
+            starts={form.story_starts || []}
+            busy={busy}
+            inputCls={inputCls}
+            onChange={(story_starts) => setForm((f) => ({
+              ...f,
+              story_starts,
+              opening_text: openingFromStarts(story_starts),
+            }))}
           />
-        </label>
+        </div>
 
         <label className="block">
           {fieldHeader('image_style', 'Estilo visual (geração de imagem)')}

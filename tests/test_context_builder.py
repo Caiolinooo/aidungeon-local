@@ -210,7 +210,7 @@ def test_recent_window_dynamic_rule(tmp_db):
     with db.session() as conn:
         actions = db.list_actions(conn, adv["id"])
         built = _build(adv, actions, _cfg(conn))
-    expected = 65536 - (700 + 1600 + 900 + 1600 + 800 + 800 + 300 + 200 + 320 + 300) - 1024 - cb.prompt_overhead_tokens()
+    expected = 32768 - (700 + 1600 + 900 + 1600 + 800 + 800 + 300 + 200 + 320 + 300) - 1024 - cb.prompt_overhead_tokens()
     assert built.meta["budgets"]["recent_window"] == expected
 
 
@@ -232,7 +232,8 @@ def test_long_context_dynamic_scaling_and_continuity_anchor(tmp_db):
         cfg = _cfg(conn, context_size=131072)
         built = cb.build_context(adv, actions, cfg, conn)
 
-    assert built.meta["context_scale_factor"] == 3.0
+    # max_scale_factor=1.0: contexto acima da base não infla cards/memórias.
+    assert built.meta["context_scale_factor"] == 1.0
     assert built.meta.get("continuity_anchor_active") is True
     final_msg = built.messages[-1]["content"]
     # Even though turn 10 only says "ask her what the runes mean", Alusair from turn 7 (within last 3 turns) is anchored!

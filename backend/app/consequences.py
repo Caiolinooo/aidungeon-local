@@ -201,6 +201,19 @@ def apply_evaluation(conn, adventure_id: str, evaluation: dict) -> dict:
     return {"effects": added, "public_facts": public_added}
 
 
+def without_private_facts(value: Any) -> Any:
+    """Cópia da resposta sem `private_facts`. O objeto original e o banco ficam."""
+    if isinstance(value, dict):
+        return {
+            key: without_private_facts(item)
+            for key, item in value.items()
+            if key != "private_facts"
+        }
+    if isinstance(value, list):
+        return [without_private_facts(item) for item in value]
+    return value
+
+
 def private_facts_for(adventure: dict, npc_name: str) -> list[str]:
     wanted = " ".join((npc_name or "").split()).casefold()
     return [

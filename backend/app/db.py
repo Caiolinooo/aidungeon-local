@@ -137,7 +137,11 @@ def init_db() -> None:
     migrations: cada 0XX_*.sql roda uma vez, em ordem, registrada pelo número
     em `schema_migrations` — uma 010 nova entra mesmo num banco que já passou
     da 020. Bancos frescos já recebem tudo pelo schema.sql e só registram os
-    números. user_version fica com o maior número aplicado."""
+    números. user_version fica com o maior número aplicado.
+
+    Os triggers de publications e mods não cabem no runner (ele parte o arquivo
+    em ';'). São instalados aqui, depois das migrations, em banco novo e já
+    existente. Não recriam linhas."""
     with connect() as conn:
         applied = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scenarios'"
@@ -148,15 +152,19 @@ def init_db() -> None:
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             _mark_applied(conn, [number for number, _ in migrations])
             conn.execute(f"PRAGMA user_version = {latest}")
-            return
-        done = _applied_migrations(conn, migrations)
-        for number, path in migrations:
-            if number not in done:
-                _apply_migration(conn, path)
-                _mark_applied(conn, [number])
-        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if latest > version:
-            conn.execute(f"PRAGMA user_version = {latest}")
+        else:
+            done = _applied_migrations(conn, migrations)
+            for number, path in migrations:
+                if number not in done:
+                    _apply_migration(conn, path)
+                    _mark_applied(conn, [number])
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if latest > version:
+                conn.execute(f"PRAGMA user_version = {latest}")
+        _backfill_story_starts(conn)
+        from app import mods, publications
+        publications.ensure_schema(conn)
+        mods.install_version_guards(conn)
 
 
 # ----------------------------------------------------------- serialização
@@ -177,9 +185,125 @@ def _dumps(value: Any, default: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+_MAX_STORY_STARTS = 30
+_MAX_START_TITLE = 200
+_MAX_START_TEXT = 50000
+_MAX_START_ID = 80
+_DEFAULT_START_TITLE = "Opening"
+
+
+def _parse_story_starts(raw: Any) -> list[dict]:
+    data = _loads(raw, [])
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        text = str(item.get("text") or "").strip()
+        sid = str(item.get("id") or "").strip()
+        if not title or not text or not sid or sid in seen:
+            continue
+        if len(title) > _MAX_START_TITLE or len(text) > _MAX_START_TEXT or len(sid) > _MAX_START_ID:
+            continue
+        seen.add(sid)
+        out.append({"id": sid, "title": title, "text": text})
+    return out
+
+
+def _normalize_story_starts(story_starts: list | None, opening_text: str) -> tuple[list[dict], str]:
+    """Lista explícita vence. Lista vazia com opening vira o início padrão.
+    None recria o padrão a partir de opening_text (cenário legado)."""
+    if story_starts is None:
+        text = str(opening_text or "").strip()
+        if not text:
+            return [], str(opening_text or "")
+        return [{"id": new_id(), "title": _DEFAULT_START_TITLE, "text": text}], text
+    if not isinstance(story_starts, list):
+        raise ValueError("story starts must be a list")
+    if len(story_starts) > _MAX_STORY_STARTS:
+        raise ValueError("too many story starts")
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for item in story_starts:
+        if not isinstance(item, dict):
+            raise ValueError("story start must be an object")
+        title = str(item.get("title") or "").strip()
+        text = str(item.get("text") or "").strip()
+        sid = str(item.get("id") or "").strip() or new_id()
+        if not title or not text:
+            raise ValueError("story start title and text are required")
+        if len(title) > _MAX_START_TITLE or len(text) > _MAX_START_TEXT or len(sid) > _MAX_START_ID:
+            raise ValueError("story start is too long")
+        if sid in seen:
+            raise ValueError("duplicate story start id")
+        seen.add(sid)
+        cleaned.append({"id": sid, "title": title, "text": text})
+    if cleaned:
+        return cleaned, cleaned[0]["text"]
+    text = str(opening_text or "").strip()
+    if text:
+        return [{"id": new_id(), "title": _DEFAULT_START_TITLE, "text": text}], text
+    return [], ""
+
+
+def _with_legacy_start(conn: sqlite3.Connection, data: dict) -> dict:
+    """Cenário antigo sem inícios ganha um padrão persistido a partir de opening_text."""
+    if data.get("story_starts"):
+        return data
+    text = str(data.get("opening_text") or "").strip()
+    if not text:
+        return data
+    start = {"id": new_id(), "title": _DEFAULT_START_TITLE, "text": text}
+    conn.execute(
+        "UPDATE scenarios SET story_starts=?, opening_text=? "
+        "WHERE id=? AND (story_starts IS NULL OR story_starts='' OR story_starts='[]')",
+        (_dumps([start], []), text, data["id"]),
+    )
+    row = conn.execute(
+        "SELECT story_starts FROM scenarios WHERE id=?", (data["id"],),
+    ).fetchone()
+    parsed = _parse_story_starts(row["story_starts"]) if row else []
+    data["story_starts"] = parsed or [start]
+    data["opening_text"] = data["story_starts"][0]["text"]
+    return data
+
+
+def _backfill_story_starts(conn: sqlite3.Connection) -> None:
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(scenarios)")]
+    if "story_starts" not in cols:
+        conn.execute("ALTER TABLE scenarios ADD COLUMN story_starts TEXT DEFAULT '[]'")
+    rows = conn.execute(
+        "SELECT id FROM scenarios "
+        "WHERE story_starts IS NULL OR story_starts='' OR story_starts='[]'"
+    ).fetchall()
+    for row in rows:
+        full = conn.execute("SELECT * FROM scenarios WHERE id=?", (row["id"],)).fetchone()
+        if full:
+            _with_legacy_start(conn, scenario_to_dict(full))
+
+
+def resolve_start_text(scenario: dict, start_id: str | None) -> str:
+    """Texto exato do início escolhido. Sem id, usa o padrão (primeiro)."""
+    starts = scenario.get("story_starts") or []
+    if not isinstance(starts, list):
+        starts = []
+    wanted = str(start_id or "").strip()
+    if wanted:
+        for start in starts:
+            if isinstance(start, dict) and start.get("id") == wanted:
+                return str(start.get("text") or "")
+        raise ValueError("story start not found")
+    if starts and isinstance(starts[0], dict):
+        return str(starts[0].get("text") or "")
+    return str(scenario.get("opening_text") or "")
+
+
 def scenario_to_dict(row: sqlite3.Row) -> dict:
     keys = row.keys() if hasattr(row, "keys") else ()
-    return {
+    data = {
         "id": row["id"],
         "title": row["title"],
         "description": row["description"] or "",
@@ -187,6 +311,7 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "plot_essentials": row["plot_essentials"] or "",
         "authors_note": row["authors_note"] or "",
         "opening_text": row["opening_text"] or "",
+        "story_starts": _parse_story_starts(row["story_starts"]) if "story_starts" in keys else [],
         "image_style": (row["image_style"] if "image_style" in keys else "") or "",
         "tags": _loads(row["tags"], []),
         "story_cards": _loads(row["story_cards"], []),
@@ -196,6 +321,12 @@ def scenario_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+    if "parent_publication_id" in keys:
+        data["parent_publication_id"] = row["parent_publication_id"] or None
+    if "parent_version" in keys:
+        version = row["parent_version"]
+        data["parent_version"] = int(version) if version is not None else None
+    return data
 
 
 def adventure_to_dict(row: sqlite3.Row) -> dict:
@@ -219,7 +350,10 @@ def adventure_to_dict(row: sqlite3.Row) -> dict:
         "owner": (row["owner"] if "owner" in row.keys() else "") or "",
         "turn_mode": bool(row["turn_mode"]) if "turn_mode" in row.keys() else False,
         "turn_user": (row["turn_user"] if "turn_user" in row.keys() else "") or "",
+        "dm_mode": bool(row["dm_mode"]) if "dm_mode" in row.keys() else False,
         "character_rules": (row["character_rules"] if "character_rules" in row.keys() else "") or "",
+        "publication_id": (row["publication_id"] if "publication_id" in row.keys() else None) or None,
+        "publication_version": (int(row["publication_version"]) if "publication_version" in row.keys() and row["publication_version"] is not None else None),
         "life_day": int(row["life_day"]) if "life_day" in row.keys() and row["life_day"] is not None else 0,
         "life_tick_seq": int(row["life_tick_seq"]) if "life_tick_seq" in row.keys() and row["life_tick_seq"] is not None else 0,
         "sim_state": _sim_state(row),
@@ -367,18 +501,21 @@ def memory_to_dict(row: sqlite3.Row, include_vector: bool = False, *,
 def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = "",
                     ai_instructions: str = "", plot_essentials: str = "",
                     authors_note: str = "", opening_text: str = "",
+                    story_starts: list | None = None,
                     image_style: str = "",
                     tags: list | None = None, story_cards: list | None = None,
                     third_person: bool = False, owner: str = "",
                     created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     sid = new_id()
+    starts, opening_text = _normalize_story_starts(story_starts, opening_text)
     conn.execute(
         "INSERT INTO scenarios(id, title, description, ai_instructions, plot_essentials,"
-        " authors_note, opening_text, image_style, tags, story_cards, third_person, owner,"
-        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " authors_note, opening_text, image_style, tags, story_cards, story_starts,"
+        " third_person, owner, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (sid, title, description, ai_instructions, plot_essentials, authors_note,
-         opening_text, image_style, _dumps(tags, []), _dumps(story_cards, []), int(third_person),
+         opening_text, image_style, _dumps(tags, []), _dumps(story_cards, []),
+         _dumps(starts, []), int(third_person),
          owner or "", created_at or now, updated_at or now),
     )
     return scenario_to_dict(conn.execute("SELECT * FROM scenarios WHERE id=?", (sid,)).fetchone())
@@ -386,13 +523,15 @@ def insert_scenario(conn: sqlite3.Connection, *, title: str, description: str = 
 
 def get_scenario(conn: sqlite3.Connection, scenario_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM scenarios WHERE id=?", (scenario_id,)).fetchone()
-    return scenario_to_dict(row) if row else None
+    if not row:
+        return None
+    return _with_legacy_start(conn, scenario_to_dict(row))
 
 
 def list_scenarios(conn: sqlite3.Connection, tag: str | None = None,
                    q: str | None = None) -> list[dict]:
     rows = conn.execute("SELECT * FROM scenarios ORDER BY created_at DESC").fetchall()
-    out = [scenario_to_dict(r) for r in rows]
+    out = [_with_legacy_start(conn, scenario_to_dict(r)) for r in rows]
     if tag:
         out = [s for s in out if tag in s["tags"]]
     if q:
@@ -407,13 +546,30 @@ def update_scenario(conn: sqlite3.Connection, scenario_id: str, **fields: Any) -
     current = get_scenario(conn, scenario_id)
     if not current:
         return None
+    if "story_starts" in fields and fields.get("story_starts") is not None:
+        hint = fields["opening_text"] if fields.get("opening_text") is not None else ""
+        starts, opening = _normalize_story_starts(fields["story_starts"], hint or "")
+    elif fields.get("opening_text") is not None:
+        new_opening = str(fields["opening_text"] or "")
+        if current["story_starts"]:
+            if not new_opening.strip():
+                raise ValueError("story start title and text are required")
+            starts = [dict(item) for item in current["story_starts"]]
+            starts[0]["text"] = new_opening.strip()
+            opening = starts[0]["text"]
+        else:
+            starts, opening = _normalize_story_starts(None, new_opening)
+    else:
+        starts = current["story_starts"]
+        opening = current["opening_text"]
     merged = {
         "title": current["title"] if fields.get("title") is None else fields["title"],
         "description": current["description"] if fields.get("description") is None else fields["description"],
         "ai_instructions": current["ai_instructions"] if fields.get("ai_instructions") is None else fields["ai_instructions"],
         "plot_essentials": current["plot_essentials"] if fields.get("plot_essentials") is None else fields["plot_essentials"],
         "authors_note": current["authors_note"] if fields.get("authors_note") is None else fields["authors_note"],
-        "opening_text": current["opening_text"] if fields.get("opening_text") is None else fields["opening_text"],
+        "opening_text": opening,
+        "story_starts": starts,
         "image_style": current["image_style"] if fields.get("image_style") is None else fields["image_style"],
         "tags": current["tags"] if fields.get("tags") is None else fields["tags"],
         "story_cards": current["story_cards"] if fields.get("story_cards") is None else fields["story_cards"],
@@ -421,13 +577,14 @@ def update_scenario(conn: sqlite3.Connection, scenario_id: str, **fields: Any) -
     }
     conn.execute(
         "UPDATE scenarios SET title=?, description=?, ai_instructions=?, plot_essentials=?,"
-        " authors_note=?, opening_text=?, image_style=?, tags=?, story_cards=?, third_person=?,"
-        " updated_at=? WHERE id=?",
+        " authors_note=?, opening_text=?, image_style=?, tags=?, story_cards=?, story_starts=?,"
+        " third_person=?, updated_at=? WHERE id=?",
         (
             merged["title"], merged["description"], merged["ai_instructions"],
             merged["plot_essentials"], merged["authors_note"], merged["opening_text"],
             merged["image_style"], _dumps(merged["tags"], []),
-            _dumps(merged["story_cards"], []), int(merged["third_person"]),
+            _dumps(merged["story_cards"], []), _dumps(merged["story_starts"], []),
+            int(merged["third_person"]),
             utcnow(), scenario_id,
         ),
     )
@@ -517,17 +674,19 @@ def insert_adventure(conn: sqlite3.Connection, *, title: str, scenario_id: str |
                      tags: list | None = None,
                      third_person: bool = False, source: str = "new",
                      owner: str = "", character_rules: str = "",
+                     publication_id: str | None = None, publication_version: int | None = None,
                      created_at: str | None = None, updated_at: str | None = None) -> dict:
     now = utcnow()
     aid = new_id()
     conn.execute(
         "INSERT INTO adventures(id, scenario_id, title, description, ai_instructions,"
         " plot_essentials, authors_note, story_summary, image_style, tags, third_person,"
-        " source, owner, character_rules, created_at, updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " source, owner, character_rules, publication_id, publication_version,"
+        " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (aid, scenario_id, title, description, ai_instructions, plot_essentials,
          authors_note, story_summary, image_style, _dumps(tags, []), int(third_person),
-         source, owner or "", character_rules or "", created_at or now, updated_at or now),
+         source, owner or "", character_rules or "", publication_id or None,
+         publication_version, created_at or now, updated_at or now),
     )
     return adventure_to_dict(conn.execute("SELECT * FROM adventures WHERE id=?", (aid,)).fetchone())
 
@@ -585,8 +744,8 @@ def update_adventure(conn: sqlite3.Connection, adventure_id: str, **fields: Any)
 
 def delete_adventure(conn: sqlite3.Connection, adventure_id: str) -> bool:
     """Remove a aventura e todos os dependentes (schema não tem ON DELETE CASCADE)."""
-    for table in ("jobs", "images", "memories", "npc_memories", "story_cards",
-                  "actions", "adventure_shares", "turn_canon"):
+    for table in ("pending_intents", "jobs", "images", "memories", "npc_memories",
+                  "story_cards", "actions", "adventure_shares", "turn_canon"):
         conn.execute(f"DELETE FROM {table} WHERE adventure_id=?", (adventure_id,))
     cur = conn.execute("DELETE FROM adventures WHERE id=?", (adventure_id,))
     return cur.rowcount > 0
@@ -638,6 +797,17 @@ def unshare_adventure(conn: sqlite3.Connection, adventure_id: str, username: str
     return adventure_participants(conn, adv)
 
 
+def is_adventure_owner(adv: dict | None, username: str) -> bool:
+    """Dono, admin, ou aventura legada sem dono. Share não entra."""
+    if not adv or not username:
+        return False
+    from app.users import is_admin
+    if is_admin(username):
+        return True
+    owner = adv.get("owner") or ""
+    return owner in ("", username)
+
+
 def can_access_adventure(conn: sqlite3.Connection, adv: dict | None, username: str) -> bool:
     """Admin, dono (ou legado sem dono), ou alguém na lista de shares."""
     if not adv or not username:
@@ -649,6 +819,14 @@ def can_access_adventure(conn: sqlite3.Connection, adv: dict | None, username: s
     if owner in ("", username):
         return True
     return username in list_shares(conn, adv["id"])
+
+
+def set_dm_mode(conn: sqlite3.Connection, adventure_id: str, enabled: bool) -> None:
+    """Liga ou desliga a fila do mestre. Não mexe na roda de turnos."""
+    conn.execute(
+        "UPDATE adventures SET dm_mode=? WHERE id=?",
+        (1 if enabled else 0, adventure_id),
+    )
 
 
 def set_turn_mode(conn: sqlite3.Connection, adventure_id: str, enabled: bool,
@@ -832,27 +1010,125 @@ def list_adventure_summaries(conn: sqlite3.Connection) -> list[dict]:
             "tags": adv["tags"], "source": adv["source"], "owner": adv.get("owner") or "",
             "turn_mode": bool(adv.get("turn_mode")),
             "turn_user": adv.get("turn_user") or "",
+            "dm_mode": bool(adv.get("dm_mode")),
             "action_count": count,
             "last_excerpt": excerpt, "updated_at": adv["updated_at"],
         })
     return out
 
 
-def adventure_state(conn: sqlite3.Connection, adventure_id: str) -> dict | None:
+def adventure_state(conn: sqlite3.Connection, adventure_id: str, *,
+                    viewer: str | None = None) -> dict | None:
     adv = get_adventure(conn, adventure_id)
     if not adv:
         return None
     adv["owner"] = adv.get("owner") or ""
     adv["turn_mode"] = bool(adv.get("turn_mode"))
     adv["turn_user"] = adv.get("turn_user") or ""
+    adv["dm_mode"] = bool(adv.get("dm_mode"))
     adv["shares"] = list_shares(conn, adventure_id)
+    restricted = viewer is not None and not is_adventure_owner(adv, viewer)
+    if restricted:
+        from app.consequences import without_private_facts
+        adv["ui_state"] = without_private_facts(adv.get("ui_state") or {})
     adv["actions"] = list_actions(conn, adventure_id)
     adv["story_cards"] = list_cards(conn, adventure_id)
     adv["memories"] = list_memories(conn, adventure_id)
+    if restricted:
+        from app import world_map
+        from app.sim import quests as sim_quests
+        hidden = world_map._hidden_ids(conn, adventure_id)
+        adv["story_cards"] = [
+            card for card in adv["story_cards"] if card.get("id") not in hidden
+        ]
+        adv["sim_state"] = sim_quests.public_sim(adv.get("sim_state") or {})
     return adv
 
 
 # ----------------------------------------------------------------- actions
+def intent_to_dict(row: sqlite3.Row) -> dict:
+    action_id = row["action_id"]
+    return {
+        "id": row["id"],
+        "adventure_id": row["adventure_id"],
+        "username": row["username"],
+        "type": row["type"],
+        "text": row["text"],
+        "status": row["status"],
+        "action_id": int(action_id) if action_id is not None else None,
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"],
+        "resolved_by": row["resolved_by"] or "",
+    }
+
+
+def insert_intent(conn: sqlite3.Connection, adventure_id: str, username: str,
+                  type_: str, text: str) -> dict:
+    """Intenção ainda fora de `actions`. O seq nasce só na aprovação."""
+    if type_ not in PLAYER_TYPES:
+        raise ValueError(f"invalid intent type: {type_}")
+    intent_id = new_id()
+    conn.execute(
+        "INSERT INTO pending_intents("
+        "id, adventure_id, username, type, text, status, created_at, resolved_by)"
+        " VALUES(?,?,?,?,?,'pending',?,?)",
+        (intent_id, adventure_id, username, type_, text, utcnow(), ""),
+    )
+    row = conn.execute(
+        "SELECT * FROM pending_intents WHERE id=?", (intent_id,)).fetchone()
+    return intent_to_dict(row)
+
+
+def get_intent(conn: sqlite3.Connection, intent_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM pending_intents WHERE id=?", (intent_id,)).fetchone()
+    return intent_to_dict(row) if row else None
+
+
+def list_intents(conn: sqlite3.Connection, adventure_id: str, *,
+                 status: str | None = None, username: str | None = None) -> list[dict]:
+    clauses = ["adventure_id=?"]
+    params: list[Any] = [adventure_id]
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    if username is not None:
+        clauses.append("username=?")
+        params.append(username)
+    rows = conn.execute(
+        "SELECT * FROM pending_intents WHERE " + " AND ".join(clauses)
+        + " ORDER BY created_at ASC, id ASC",
+        params,
+    ).fetchall()
+    return [intent_to_dict(row) for row in rows]
+
+
+def resolve_intent(conn: sqlite3.Connection, intent_id: str, *, status: str,
+                   resolved_by: str, action_id: int | None = None) -> dict | None:
+    """Fecha uma intenção pending. Não mexe se outra transação já resolveu."""
+    if status not in ("approved", "rejected"):
+        raise ValueError(f"invalid intent status: {status}")
+    cur = conn.execute(
+        "UPDATE pending_intents SET status=?, resolved_at=?, resolved_by=?, action_id=?"
+        " WHERE id=? AND status='pending'",
+        (status, utcnow(), resolved_by or "", action_id, intent_id),
+    )
+    if cur.rowcount == 0:
+        return None
+    return get_intent(conn, intent_id)
+
+
+def newest_action_id_after(conn: sqlite3.Connection, adventure_id: str, actor: str,
+                           seq_after: int) -> int | None:
+    """Ação do ator criada depois de `seq_after` (-1 se a mesa ainda não tinha ação)."""
+    row = conn.execute(
+        "SELECT id FROM actions WHERE adventure_id=? AND actor=? AND seq>?"
+        " ORDER BY seq DESC LIMIT 1",
+        (adventure_id, actor, seq_after),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def insert_action(conn: sqlite3.Connection, adventure_id: str, seq: int, type: str,
                   text: str, created_at: str | None = None, *,
                   actor: str = "") -> dict:

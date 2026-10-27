@@ -9,7 +9,9 @@ import Play from './pages/Play.jsx'
 import ScenarioEditor from './pages/ScenarioEditor.jsx'
 import Settings from './pages/Settings.jsx'
 import Users from './pages/Users.jsx'
+import Catalog from './pages/Catalog.jsx'
 import Rulesets from './pages/Rulesets.jsx'
+import VisualNovel from './pages/VisualNovel.jsx'
 
 export default function App() {
   return (
@@ -21,6 +23,8 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<AuthGate><Home /></AuthGate>} />
             <Route path="/play/:id" element={<AuthGate><Play /></AuthGate>} />
+            <Route path="/adventures/:id/novel" element={<AuthGate><VisualNovel /></AuthGate>} />
+            <Route path="/catalog" element={<AuthGate><Catalog /></AuthGate>} />
             <Route path="/settings" element={<AuthGate><Settings /></AuthGate>} />
             <Route path="/users" element={<AuthGate><Users /></AuthGate>} />
             <Route path="/rulesets" element={<AuthGate><Rulesets /></AuthGate>} />

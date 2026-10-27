@@ -11,6 +11,25 @@ OpenAI-compatível.
 
 ---
 
+## Funcionalidades (Voyage e desempenho)
+
+- **Estado determinístico**: rolagens usam seed e contador persistidos; quests e
+  triggers mudam por eventos reais de turno, vida, viagem e relações, sem LLM.
+- **Mundo e autoria**: story starts selecionáveis, scripts por aventura com
+  precedência sobre os globais, névoa de guerra persistente e journal que não
+  revela locais desconhecidos.
+- **DM Mode**: ações dos jogadores entram numa fila persistente; o dono aprova
+  pelo motor original ou rejeita sem chamar o LLM. `private_facts` e journal
+  do DM não são expostos aos demais jogadores.
+- **Catálogo e mods**: publicações têm versões imutáveis, busca, tags, likes,
+  remix e linhagem. Jogar cria uma cópia nova sem histórico ou jogadores; mods
+  versionados podem ser aplicados, ativados, desativados e removidos por origem.
+- **Visual Novel**: replay read-only das ações e imagens já gravadas, com
+  navegação, escolhas do caminho real e elenco; não gera mídia nem ramos fake.
+- **Menos latência**: NPC gate é omitido sem NPC presente, prompts de retrato
+  são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
+  AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
+
 ## Funcionalidades (v0.13.0)
 
 - **Livefeed durável**: `world_events` numera fatos e revisões por aventura,
@@ -38,7 +57,7 @@ OpenAI-compatível.
   rollback da ação nova; retry preserva a resposta anterior. TTS/STT cancelam
   ao desconectar e a UI aborta prefetch/transcrição sem inserir texto atrasado.
 - **Jobs e imagens sob controle**: central com estados, retry e cancelamento;
-  SDWebUI recebe interrupt em render ativo. See tem variações; seed, CFG,
+  SDWebUI/ComfyUI recebem interrupt em render ativo. See tem variações; seed, CFG,
   sampler, scheduler, denoise, checkpoint e timeout são persistidos.
 - **Diagnóstico honesto**: `/api/health/llm` rejeita 401 em `/props`; voz e
   imagem ganham sondas não gerativas e botões de verificação na UI.

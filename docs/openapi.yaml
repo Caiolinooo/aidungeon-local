@@ -7,9 +7,12 @@ info:
 
     Convenções gerais:
     - Todos os endpoints respondem JSON (`application/json`), exceto:
-      - os endpoints de geração (`/action`, `/continue`, `/retry`), que respondem
-        `text/event-stream` (SSE) — ver tag `generation`;
-      - `/api/adventures/{id}/export`, que responde `application/zip`.
+      - os endpoints de geração (`/action`, `/continue`, `/retry`), a aprovação
+        de uma intenção pendente e `GET /api/adventures/{id}/events`, que
+        respondem `text/event-stream` (SSE);
+      - `/api/tts` (`audio/mpeg`) e `/api/tts/stream` (`audio/wav`);
+      - `/api/adventures/{id}/export` e `GET /api/adventures/export`, que
+        respondem `application/zip`.
     - Booleans do banco (INTEGER 0/1) são expostos como `true/false`.
     - Campos `tags` e `triggers` são TEXT JSON no banco, expostos como arrays.
     - Timestamps em ISO-8601 UTC.
@@ -48,8 +51,23 @@ tags:
   - name: consistency
     description: Cross-check do projeto — ficha do NPC ↔ prompt de retrato ↔ imagem ↔ memória ↔ embedding, com reparo por IA.
   - name: health
+  - name: scripts
+    description: Scripts de input, context e output por aventura. O PUT valida no sandbox e não executa.
+  - name: publications
+    description: Catálogo com versões imutáveis, likes e remix. Publicar exige dono ou admin da fonte.
+  - name: mods
+    description: Mods e a aplicação por aventura. O pacote é validado; aplicar só insere cards e links que ainda não existem.
+  - name: sim
+    description: Motor de regras e Modo Vida. A maior parte das rotas devolve a vista pública do simulador.
+  - name: events
+    description: Livefeed durável. O stream aceita Bearer ou ?token= porque o EventSource não envia header.
+  - name: users
+    description: Contas. Listar, criar, apagar e redefinir senha alheia é só o admin.
+  - name: world-map
+    description: Mapa, journal e locais. Destino ainda não revelado fica fora do payload.
 
 # Toda rota /api exige Bearer token, exceto as marcadas com `security: []` (login).
+# GET /api/adventures/{id}/events e /events/history também aceitam ?token=.
 # Arquivos estáticos da SPA (fora de /api) são públicos — a página de login precisa carregar.
 security:
   - bearerAuth: []
@@ -100,12 +118,50 @@ paths:
                     type: boolean
                   user:
                     type: string
+                  admin:
+                    type: boolean
+                    description: true só na conta administradora do servidor.
                   expires_at:
                     type: string
                     format: date-time
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /api/auth/password:
+    post:
+      tags: [auth]
+      summary: Trocar a própria senha
+      operationId: changePassword
+      description: |
+        Exige a senha atual. A nova senha tem no mínimo 8 caracteres.
+        Não devolve token novo; o Bearer atual continua válido.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChange'
+      responses:
+        '200':
+          description: Senha atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResult'
+        '400':
+          description: invalid_password — senha nova curta demais.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: auth_not_configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ---------------------------------------------------------------- scenarios
   /api/scenarios:
@@ -307,6 +363,29 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/adventures/export:
+    get:
+      tags: [import-export]
+      summary: Backup de todas as aventuras visíveis
+      operationId: exportAllAdventures
+      description: |
+        Um zip com uma pasta por aventura, no mesmo formato do export
+        individual, restaurável por `POST /api/import/aidungeon`.
+        Admin recebe todas; os demais, só as próprias.
+        O header `X-Adventure-Count` traz quantas entraram.
+      responses:
+        '200':
+          description: Arquivo zip.
+          headers:
+            X-Adventure-Count:
+              schema:
+                type: integer
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+
   /api/adventures/{adventureId}:
     get:
       tags: [adventures]
@@ -323,6 +402,324 @@ paths:
                 $ref: '#/components/schemas/AdventureState'
         '404':
           $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [adventures]
+      summary: Editar metadados da aventura
+      operationId: patchAdventure
+      description: |
+        Campos ausentes não mudam. `turn_mode` e `dm_mode` atualizam a mesa.
+        Exige dono ou admin. Quem não vê a aventura recebe 404; quem vê e não
+        é dono recebe 403.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdventureUpdate'
+      responses:
+        '200':
+          description: Estado completo depois da edição.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureState'
+        '403':
+          description: Jogador com acesso que não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [adventures]
+      summary: Apagar a aventura e os dependentes
+      operationId: deleteAdventure
+      description: Remove ações, cards, memórias e o resto do save. Dono ou admin.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Aventura apagada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, id]
+                properties:
+                  deleted:
+                    type: boolean
+                  id:
+                    type: string
+        '403':
+          description: Jogador com acesso que não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/intents:
+    get:
+      tags: [adventures]
+      summary: Fila de intenções da mesa
+      operationId: listIntents
+      description: |
+        Dono vê a fila inteira. Jogador compartilhado vê só as próprias.
+        `status` default é `pending`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, all]
+            default: pending
+      responses:
+        '200':
+          description: Lista filtrada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intents]
+                properties:
+                  intents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Intent'
+        '400':
+          description: invalid_status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/intents/{intentId}/approve:
+    post:
+      tags: [generation]
+      summary: Aprovar intenção e gerar a ação — SSE
+      operationId: approveIntent
+      description: |
+        Só o dono. Dispara a ação original (`do`/`say`/`story`) em nome de
+        quem pediu e streama como `/action`. Intenção que não está `pending`
+        responde 409 `intent_not_pending`. Com turno ligado, fora da vez do
+        autor responde 409 `not_your_turn`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: intentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stream SSE da geração.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseStream'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: intent_not_pending ou not_your_turn.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/intents/{intentId}/reject:
+    post:
+      tags: [adventures]
+      summary: Rejeitar intenção sem gerar texto
+      operationId: rejectIntent
+      description: Não cria action e não chama o LLM. A vez não anda. Só o dono.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: intentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Intenção rejeitada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intent]
+                properties:
+                  intent:
+                    $ref: '#/components/schemas/Intent'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: intent_not_pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sharing:
+    get:
+      tags: [adventures]
+      summary: Dono, shares e modo de mesa
+      operationId: getSharing
+      description: Quem enxerga a aventura pode ler. Quem não enxerga recebe 404.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Vista de compartilhamento.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [adventures]
+      summary: Compartilhar a aventura com outro usuário
+      operationId: shareAdventure
+      description: |
+        Só o dono. Não compartilha com o próprio dono (400 `cannot_share_owner`).
+        Usuário inexistente é 404 `user_not_found`. Repetido é 409 `already_shared`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdventureShareCreate'
+      responses:
+        '201':
+          description: Vista depois de incluir o jogador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingView'
+        '400':
+          description: cannot_share_owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: already_shared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sharing/{username}:
+    delete:
+      tags: [adventures]
+      summary: Tirar o acesso compartilhado
+      operationId: unshareAdventure
+      description: Só o dono. Se a vez era desse jogador, ela volta para o dono.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vista depois da remoção.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingView'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/scripts:
+    get:
+      tags: [scripts]
+      summary: Scripts da aventura e a fonte efetiva
+      operationId: getAdventureScripts
+      description: |
+        Devolve o texto salvo na aventura, o global e `sources`
+        (`adventure`, `global` ou `empty`). Não executa. String vazia na
+        aventura não copia o global para ela; ausência da chave é que cai no global.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Scripts e fontes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureScripts'
+        '403':
+          description: Quem vê a aventura mas não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [scripts]
+      summary: Gravar scripts da aventura
+      operationId: putAdventureScripts
+      description: |
+        Valida no sandbox atual e grava. Não executa. Campo ausente não muda.
+        String vazia apaga a chave da aventura para o script global voltar a valer.
+        Violação do sandbox ou syntax error respondem 422 `script_rejected`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdventureScriptsUpdate'
+      responses:
+        '200':
+          description: Vista depois de gravar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdventureScripts'
+        '403':
+          description: Quem vê a aventura mas não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: script_rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # --------------------------------------------------------------- generation
   /api/adventures/{adventureId}/action:
@@ -904,6 +1301,65 @@ paths:
               schema:
                 $ref: '#/components/schemas/StoryCard'
 
+  /api/adventures/{adventureId}/cards/{cardId}/reference/primary:
+    post:
+      tags: [assets]
+      summary: Escolher a foto de referência principal
+      operationId: setPrimaryReference
+      description: image_path aponta para uma foto já gravada do card.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrimaryReferenceRequest'
+      responses:
+        '200':
+          description: Card atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/cards/{cardId}/likeness/resolve:
+    post:
+      tags: [assets]
+      summary: Resolver referência externa do personagem
+      operationId: resolveLikeness
+      description: |
+        Busca uma foto de referência, grava em `data/references` e o descritor
+        na ficha. `title` substitui a consulta. `force` refaz mesmo se já houver referência.
+        Menor continua recusado.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+        - name: title
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: force
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Card com a referência aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoryCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Menor (minor) ou referência recusada.
+
   /api/adventures/{adventureId}/cards/{cardId}/memories:
     get:
       tags: [assets]
@@ -1428,6 +1884,87 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/settings/embeddings:
+    get:
+      tags: [settings]
+      summary: Ler configuração de embeddings
+      operationId: getEmbeddingsSettings
+      responses:
+        '200':
+          description: Config efetiva (arquivo + overrides).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingsSettings'
+    put:
+      tags: [settings]
+      summary: Atualizar embeddings
+      operationId: putEmbeddingsSettings
+      description: Só o admin. Campos omitidos permanecem.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingsSettingsUpdate'
+      responses:
+        '200':
+          description: Config aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingsSettings'
+        '403':
+          description: Somente admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/settings/scripting:
+    get:
+      tags: [settings]
+      summary: Ler scripts globais
+      operationId: getScriptingSettings
+      description: |
+        Os três hooks globais. A aventura só usa o global quando a chave dela
+        não existe.
+      responses:
+        '200':
+          description: Textos globais.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptHooks'
+    put:
+      tags: [settings]
+      summary: Gravar scripts globais
+      operationId: putScriptingSettings
+      description: |
+        Só o admin. Campo ausente não muda. String vazia apaga a chave global.
+        Este PUT não executa o script.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptHooks'
+      responses:
+        '200':
+          description: Textos globais depois da gravação.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptHooks'
+        '403':
+          description: Somente admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ------------------------------------------------------------------ assistant
   /api/assistant/generate:
     post:
@@ -1525,6 +2062,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/assistant/card:
+    post:
+      tags: [assistant]
+      summary: Gerar ou enriquecer um story card
+      operationId: assistantCard
+      description: |
+        Um card só. `adventure_id` entra como contexto se o usuário enxerga a
+        aventura; senão o contexto vem de `draft`. `web_search` anexa fontes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantCardRequest'
+      responses:
+        '200':
+          description: Card gerado e fontes, se houve busca.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantCardResponse'
+        '503':
+          description: generation_failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/assistant/sync-plot:
+    post:
+      tags: [assistant]
+      summary: Sugerir Plot Essentials e Author's Note
+      operationId: assistantSyncPlot
+      description: |
+        Lê a aventura recente e devolve sugestão. Não grava sozinho.
+        Aventura invisível responde 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssistantSyncPlotRequest'
+      responses:
+        '200':
+          description: Textos sugeridos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantSyncPlotResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: generation_failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/assistant/web-search:
+    post:
+      tags: [assistant]
+      summary: Pesquisa direta para a UI
+      operationId: assistantWebSearch
+      description: Consulta Wikipedia e a web. Não chama o LLM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebSearchRequest'
+      responses:
+        '200':
+          description: Resultados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebSearchResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   # -------------------------------------------------------------------- images
   /api/adventures/{adventureId}/see:
@@ -1799,6 +2416,93 @@ paths:
               schema:
                 $ref: '#/components/schemas/VoiceList'
 
+  /api/voices/clone:
+    post:
+      tags: [voice]
+      summary: Clonar uma voz a partir de um áudio
+      operationId: cloneVoice
+      description: |
+        Multipart com `file` e `name` (1–40 caracteres). `ref_text` vazio faz
+        o STT preencher o que foi dito. Áudio vazio ou acima de 15 MiB responde
+        400 `invalid_audio`. Nome repetido é 409 `voice_name_taken`.
+        Voz desligada é 400 `voice_disabled`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 40
+                ref_text:
+                  type: string
+                  default: ''
+      responses:
+        '200':
+          description: Voz clonada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClonedVoice'
+        '400':
+          description: invalid_payload, invalid_audio, ref_text_empty ou voice_disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: voice_name_taken.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Provider de voz indisponível ou RVQ inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/voices/{voiceId}:
+    delete:
+      tags: [voice]
+      summary: Apagar uma voz clonada
+      operationId: deleteVoice
+      description: |
+        Só o dono da voz (ou admin). Voz de outro usuário responde 404
+        `voice_not_found`. Cards que apontavam para ela perdem o vínculo.
+        Se era a voz do narrador, o narrador volta para `M1`.
+      parameters:
+        - name: voiceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Voz apagada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+        '404':
+          description: voice_not_found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/tts:
     post:
       tags: [voice]
@@ -2035,6 +2739,456 @@ paths:
                 $ref: '#/components/schemas/ProviderHealth'
 
   # ------------------------------------------------------------------ rulesets
+  /api/adventures/{adventureId}/sim:
+    get:
+      tags: [sim]
+      summary: Vista pública do simulador
+      operationId: getSim
+      description: Quem enxerga a aventura. Não inclui fatos privados do blob cru.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Pack, ator, inimigos vivos, relógio, quests e gatilhos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/sim/pack:
+    put:
+      tags: [sim]
+      summary: Ligar ou trocar o pacote de regras
+      operationId: putSimPack
+      description: |
+        Só o dono. `pack` vazio desliga as regras. Valores aceitos são `""`,
+        `d20` e `d100`. Com pack, o ator de quem grava é criado se ainda não existe.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimPackUpdate'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: invalid_pack.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/life:
+    put:
+      tags: [sim]
+      summary: Ligar ou desligar o Modo Vida
+      operationId: putSimLife
+      description: Só o dono. Desligar também pausa o playback. Sem chamada de LLM.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimLifeUpdate'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/sim/life/advance:
+    post:
+      tags: [sim]
+      summary: Avançar o relógio com uma atividade
+      operationId: advanceLife
+      description: |
+        Quem enxerga a aventura. Não é o catch-up idempotente. Exige Modo Vida
+        ligado (409 `life_disabled`). Meia-noite pode enfileirar o tick do dia.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimAdvance'
+      responses:
+        '200':
+          description: Vista depois do avanço.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: life_disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: invalid_activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/actor:
+    put:
+      tags: [sim]
+      summary: Ajustar a ficha mecânica de quem está logado
+      operationId: putSimActor
+      description: |
+        Campos ausentes não mudam. `resync` recolhe habilidades a partir da ficha
+        do personagem. Números são limitados pelo servidor.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimActorUpdate'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/sim/roll:
+    post:
+      tags: [sim]
+      summary: Rolar dados no servidor
+      operationId: rollSim
+      description: |
+        Não chama o LLM. `d20` com `mode` `adv` ou `dis` rola vantagem ou
+        desvantagem. Outra expressão passa pelo parser de dados.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimRollRequest'
+      responses:
+        '200':
+          description: Resultado da rolagem.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimRollResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: invalid_dice.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/action:
+    post:
+      tags: [sim]
+      summary: Resolver uma ação mecânica sem LLM
+      operationId: postSimAction
+      description: |
+        O jogador clicou; o servidor rola. Exige pack ou Modo Vida
+        (409 `sim_off`). Recusa das regras é 409 `rules_refused`.
+        A resposta é a vista do simulador mais `resolution`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimActionRequest'
+      responses:
+        '200':
+          description: Vista e a resolução.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimActionResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: sim_off ou rules_refused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: invalid_kind.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/quests:
+    get:
+      tags: [sim]
+      summary: Quests e gatilhos visíveis
+      operationId: listQuests
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Listas públicas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [sim]
+      summary: Criar quest
+      operationId: createQuest
+      description: Só o dono. A resposta é a vista inteira do simulador.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestCreate'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/sim/quests/{questId}:
+    patch:
+      tags: [sim]
+      summary: Editar quest
+      operationId: patchQuest
+      description: Só o dono. Campos ausentes não mudam.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: questId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestPatch'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Aventura ou quest_not_found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [sim]
+      summary: Apagar quest
+      operationId: deleteQuest
+      description: Só o dono.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: questId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Aventura ou quest_not_found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/quests/{questId}/transition:
+    post:
+      tags: [sim]
+      summary: Mudar status, etapa ou progresso da quest
+      operationId: transitionQuest
+      description: Só o dono. Transição inválida é 409 `invalid_transition`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: questId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestTransition'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Aventura ou quest_not_found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: invalid_transition.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/sim/triggers:
+    post:
+      tags: [sim]
+      summary: Criar gatilho de quest
+      operationId: createQuestTrigger
+      description: Só o dono. `when` e `apply` são obrigatórios.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestTriggerCreate'
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/adventures/{adventureId}/sim/triggers/{triggerId}:
+    delete:
+      tags: [sim]
+      summary: Apagar gatilho
+      operationId: deleteQuestTrigger
+      description: Só o dono.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: triggerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vista do simulador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimState'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Aventura ou trigger_not_found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/adventures/{adventureId}/sim/life/playback:
     put:
       tags: [sim]
@@ -2132,8 +3286,19 @@ paths:
       tags: [events]
       summary: Histórico durável do livefeed por cursor
       operationId: getEventHistory
+      security:
+        - bearerAuth: []
+        - eventToken: []
+      description: |
+        Bearer no header ou `token` na query. O header ganha. O valor do
+        token não entra no access log. `after` é um event_id exclusivo.
       parameters:
         - $ref: '#/components/parameters/AdventureId'
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
         - name: after
           in: query
           schema:
@@ -2167,6 +3332,56 @@ paths:
                     type: integer
                   reset_required:
                     type: boolean
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/events:
+    get:
+      tags: [events]
+      summary: Livefeed da aventura em SSE
+      operationId: streamAdventureEvents
+      security:
+        - bearerAuth: []
+        - eventToken: []
+      description: |
+        Fora do middleware de Bearer porque o EventSource não envia header.
+        Aceita `Authorization: Bearer` ou `?token=`. História de outra pessoa
+        responde 404. Reconexão com o header `Last-Event-ID` ou `last_event_id`.
+        Comentário `: ping` a cada 15s. `retry: 3000`.
+
+        Primeiro frame útil é `event: ready` com `id` do cursor. Se o cursor
+        expirou, vem antes `event: reset_required` com `snapshot` do estado.
+        Breaker de LLM aberto emite `event: llm_degraded`.
+        Eventos duráveis trazem `id`. Jogador compartilhado não recebe
+        `private_facts` nem intenção de outro jogador.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: last_event_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Stream SSE. O header Last-Event-ID também retoma o cursor.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            X-Accel-Buffering:
+              schema:
+                type: string
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseStream'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -2339,12 +3554,940 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  # ------------------------------------------------------------- publications
+  /api/publications:
+    get:
+      tags: [publications]
+      summary: Listar o catálogo
+      operationId: listPublications
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [new, likes]
+            default: new
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Resumos, sem o snapshot.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PublicationSummary'
+        '400':
+          description: invalid_sort.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [publications]
+      summary: Publicar cenário ou aventura
+      operationId: publishSource
+      description: |
+        `kind` é `scenario` ou `adventure`. Só o dono da fonte (ou admin).
+        Conteúdo igual à última versão já gravada responde 200 com `created` false.
+        Publicação nova ou versão nova responde 201 com `created` true.
+        A versão gravada é imutável.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRequest'
+      responses:
+        '200':
+          description: Versão já existente (mesmo hash).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationDetail'
+        '201':
+          description: Publicação ou versão nova.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationDetail'
+        '400':
+          description: invalid_kind ou invalid_source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Quem não é dono da fonte.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/publications/{publicationId}:
+    get:
+      tags: [publications]
+      summary: Detalhe da versão mais recente
+      operationId: getPublication
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detalhe com snapshot e a lista de versões.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [publications]
+      summary: Apagar publicação
+      operationId: deletePublication
+      description: Só o dono ou admin.
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Publicação apagada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationDeleteResult'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/publications/{publicationId}/versions/{version}:
+    get:
+      tags: [publications]
+      summary: Uma versão imutável
+      operationId: getPublicationVersion
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Detalhe dessa versão.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationDetail'
+        '400':
+          description: invalid_version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/publications/{publicationId}/like:
+    post:
+      tags: [publications]
+      summary: Curtir
+      operationId: likePublication
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Estado do like.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationLike'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [publications]
+      summary: Descurtir
+      operationId: unlikePublication
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Estado do like.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicationLike'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/publications/{publicationId}/remix:
+    post:
+      tags: [publications]
+      summary: Copiar a publicação para um cenário novo
+      operationId: remixPublication
+      description: |
+        Cria um scenario do usuário, sem o histórico da aventura de origem.
+        `version` ausente usa a mais recente. `title` vazio é 400 `invalid_title`.
+        Título ausente herda o da publicação.
+      parameters:
+        - name: publicationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemixRequest'
+      responses:
+        '201':
+          description: Cenário criado e a linhagem.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemixResult'
+        '400':
+          description: invalid_title ou invalid_snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # -------------------------------------------------------------------- mods
+  /api/mods:
+    get:
+      tags: [mods]
+      summary: Listar mods visíveis
+      operationId: listMods
+      description: Públicos, os do usuário e, para o admin, os privados. No máximo 40.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Mods com o resumo das versões, sem o pacote.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mods]
+                properties:
+                  mods:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Mod'
+    post:
+      tags: [mods]
+      summary: Publicar mod e a versão 1
+      operationId: createMod
+      description: |
+        O pacote guarda cards, links, append e scripts. Chaves desconhecidas
+        são descartadas. Script do pacote passa pelo sandbox. Pacote vazio é 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModPublish'
+      responses:
+        '200':
+          description: Mod e a versão criada, esta com o pacote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModPublishResult'
+        '400':
+          description: invalid_package.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: script_rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/mods/{modId}:
+    get:
+      tags: [mods]
+      summary: Ler um mod
+      operationId: getMod
+      description: Privado de outro usuário responde 404.
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Mod e o resumo das versões.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mod'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mods/{modId}/versions:
+    post:
+      tags: [mods]
+      summary: Publicar uma versão nova
+      operationId: createModVersion
+      description: Só o dono do mod. A versão anterior permanece.
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [package]
+              properties:
+                package:
+                  $ref: '#/components/schemas/ModPackage'
+      responses:
+        '200':
+          description: Mod atualizado e a versão nova.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModPublishResult'
+        '403':
+          description: Quem não é o dono do mod.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: script_rejected ou pacote inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/mods/{modId}/versions/{versionId}:
+    get:
+      tags: [mods]
+      summary: Ler uma versão, com o pacote
+      operationId: getModVersion
+      parameters:
+        - name: modId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Versão e o pacote canônico.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModVersionDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/mods:
+    get:
+      tags: [mods]
+      summary: Mods aplicados na aventura
+      operationId: listAdventureMods
+      description: Só o dono.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Aplicações, da mais antiga para a mais nova.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mods]
+                properties:
+                  mods:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AppliedMod'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [mods]
+      summary: Aplicar uma versão do mod
+      operationId: applyMod
+      description: |
+        Só o dono. Insere cards e links que ainda não existem. Não reescreve
+        o que a aventura já tem. Aplicar de novo não duplica.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mod_version_id]
+              properties:
+                mod_version_id:
+                  type: string
+      responses:
+        '200':
+          description: Aplicação, com quantos cards e links entraram agora.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModApplyResult'
+        '400':
+          description: invalid_package.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/mods/{versionId}/enable:
+    post:
+      tags: [mods]
+      summary: Ativar mod já aplicado
+      operationId: enableMod
+      description: Só o dono. Não reinsere cards.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aplicação com enabled true.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppliedMod'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/mods/{versionId}/disable:
+    post:
+      tags: [mods]
+      summary: Desativar mod sem apagar o conteúdo
+      operationId: disableMod
+      description: Só o dono. O script do mod deixa de entrar no turno. Cards ficam.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Aplicação com enabled false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppliedMod'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/mods/{versionId}:
+    delete:
+      tags: [mods]
+      summary: Remover a aplicação e o conteúdo dessa origem
+      operationId: removeAppliedMod
+      description: |
+        Só o dono. Apaga cards e links cuja origem é esta versão.
+        O mod continua no catálogo.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Contagem do que saiu.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModRemoveResult'
+        '403':
+          description: Quem não é o dono.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ------------------------------------------------------------------- users
+  /api/users:
+    get:
+      tags: [users]
+      summary: Listar contas
+      operationId: listUsers
+      description: Só o admin. Não devolve hash de senha.
+      responses:
+        '200':
+          description: Contas e quantas aventuras cada uma possui.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAccount'
+        '403':
+          description: Quem não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [users]
+      summary: Criar conta
+      operationId: createUser
+      description: |
+        Só o admin. Username começa com letra e tem 2–32 caracteres
+        (`A-Z`, `a-z`, dígito, `_`, `-`). Senha com no mínimo 8 caracteres.
+        Nome já usado ou reservado é 409 `user_exists`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Conta criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [username, role]
+                properties:
+                  username:
+                    type: string
+                  role:
+                    type: string
+                    enum: [user]
+        '400':
+          description: invalid_user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Quem não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: user_exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/users/{username}:
+    delete:
+      tags: [users]
+      summary: Apagar conta
+      operationId: deleteUser
+      description: Só o admin. A conta administradora não pode ser apagada (403).
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Conta apagada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, username]
+                properties:
+                  deleted:
+                    type: boolean
+                  username:
+                    type: string
+        '403':
+          description: Quem não é admin, ou tentativa de apagar o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/users/{username}/password:
+    put:
+      tags: [users]
+      summary: Redefinir a senha de outra conta
+      operationId: resetUserPassword
+      description: Só o admin. Não pede a senha atual. Mínimo de 8 caracteres.
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPassword'
+      responses:
+        '200':
+          description: Senha redefinida.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, username]
+                properties:
+                  ok:
+                    type: boolean
+                  username:
+                    type: string
+        '400':
+          description: invalid_password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Quem não é o admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --------------------------------------------------------------- world-map
+  /api/adventures/{adventureId}/map:
+    get:
+      tags: [world-map]
+      summary: Mapa visível, journal e progressão
+      operationId: getWorldMap
+      description: |
+        Locais são cards `type=location`. Destino de link ainda não descoberto
+        não aparece, nem a coordenada nem a imagem.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      responses:
+        '200':
+          description: Mapa filtrado pela névoa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorldMap'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/journal:
+    get:
+      tags: [world-map]
+      summary: Journal visível
+      operationId: getJournal
+      description: |
+        Notas `visibility=dm` ficam só para o dono. Com `dm_mode`, o dono também
+        vê entrada de local ainda escondido. O default de `limit` é 40.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 40
+      responses:
+        '200':
+          description: Entradas, da mais nova para a mais antiga.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/JournalEntry'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/adventures/{adventureId}/map/travel/{cardId}:
+    post:
+      tags: [world-map]
+      summary: Viajar para um local ligado
+      operationId: travelToLocation
+      description: |
+        Revela o destino e registra o journal. Sem local atual, ou sem ligação,
+        responde 409 `travel_not_allowed`. O mesmo local devolve `travelled` false.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Destino e os links públicos a partir dele.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TravelResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: travel_not_allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/map/reveal/{cardId}:
+    post:
+      tags: [world-map]
+      summary: Revelar um local sem viajar
+      operationId: revealLocation
+      description: Não rebaixa descoberta antiga. Local inexistente é 404.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: Mapa depois da revelação.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorldMap'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: reveal_not_allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/map/world-type:
+    post:
+      tags: [world-map]
+      summary: Definir o tipo de mundo
+      operationId: setWorldType
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [world_type]
+              properties:
+                world_type:
+                  type: string
+                  enum: [real, fictional, franchise, alternate_history]
+      responses:
+        '200':
+          description: Tipo gravado.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [world_type]
+                properties:
+                  world_type:
+                    type: string
+                    enum: [real, fictional, franchise, alternate_history]
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: invalid_world_type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/map/locations:
+    post:
+      tags: [world-map]
+      summary: Gerar um local novo
+      operationId: generateLocation
+      description: |
+        Cria um card `location`, liga ao local atual quando existe e registra
+        o journal. Falha da geração é 422 `location_generation_failed`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationGenerateRequest'
+      responses:
+        '200':
+          description: Card criado e as fontes, se houve busca.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card:
+                    $ref: '#/components/schemas/StoryCard'
+                  web_sources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebSearchHit'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: location_generation_failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/adventures/{adventureId}/map/locations/{cardId}/image:
+    post:
+      tags: [world-map]
+      summary: Pedir imagem de um local visível
+      operationId: generateLocationImage
+      description: |
+        Local invisível ou que não é `location` responde 404. Imagem desligada
+        é 503 `image_generation_disabled`. Cache quente devolve `ready`.
+        Caso contrário enfileira um job e devolve `pending`.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reference:
+                  type: string
+                  default: ''
+      responses:
+        '200':
+          description: Imagem pronta ou job pendente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationImageResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: image_generation_disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       description: Token devolvido por POST /api/auth/login (HMAC-SHA256, TTL de settings.auth.token_ttl_hours).
+    eventToken:
+      type: apiKey
+      in: query
+      name: token
+      description: |
+        Mesmo token do login, só em GET /api/adventures/{id}/events e
+        /events/history. O access log redige o valor.
 
   parameters:
     ScenarioId:
@@ -2590,6 +4733,44 @@ components:
           type: string
           enum: [new, import]
           default: new
+        owner:
+          type: string
+          default: ''
+        turn_mode:
+          type: boolean
+          default: false
+          description: Mesa em turnos. A vez fica em turn_user.
+        turn_user:
+          type: string
+          default: ''
+        dm_mode:
+          type: boolean
+          default: false
+          description: Dono vê journal e mapa que a névoa esconde dos outros.
+        publication_id:
+          type: string
+          nullable: true
+        publication_version:
+          type: integer
+          nullable: true
+        life_day:
+          type: integer
+          default: 0
+        life_tick_seq:
+          type: integer
+          default: 0
+        ui_profile:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/UiProfile'
+        ui_state:
+          type: object
+          additionalProperties: true
+          description: Estado dos widgets. Quem não é dono recebe a cópia sem private_facts.
+        sim_state:
+          type: object
+          additionalProperties: true
+          description: Blob persistido do motor. A vista filtrada é GET /api/adventures/{id}/sim.
         created_at:
           type: string
           format: date-time
@@ -2611,6 +4792,31 @@ components:
           type: array
           items:
             type: string
+        publication_id:
+          type: string
+          nullable: true
+          description: Fonte alternativa a scenario_id. Os dois juntos são 400 invalid_source.
+        publication_version:
+          type: integer
+          minimum: 1
+          nullable: true
+        image_style:
+          type: string
+        ai_instructions:
+          type: string
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        third_person:
+          type: boolean
+        character_rules:
+          type: string
+          maxLength: 4000
+        start_id:
+          type: string
+          maxLength: 80
+          description: Story start escolhido na criação.
 
     AdventureSummary:
       type: object
@@ -2630,6 +4836,22 @@ components:
         source:
           type: string
           enum: [new, import]
+        owner:
+          type: string
+          default: ''
+        shared_by:
+          type: string
+          default: ''
+          description: Dono, quando a aventura chegou por share. Vazio na própria.
+        turn_mode:
+          type: boolean
+          default: false
+        turn_user:
+          type: string
+          default: ''
+        dm_mode:
+          type: boolean
+          default: false
         action_count:
           type: integer
         last_excerpt:
@@ -2657,6 +4879,11 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/Memory'
+            shares:
+              type: array
+              description: Usernames com acesso compartilhado, sem contar o dono duas vezes.
+              items:
+                type: string
             consistency:
               nullable: true
               description: |
@@ -4086,3 +6313,1279 @@ components:
           type: string
           enum: [replace, append]
           default: replace
+
+    PasswordChange:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+        new_password:
+          type: string
+          minLength: 8
+
+    OkResult:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
+    UserCreate:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 2
+          maxLength: 32
+          pattern: '^[A-Za-z][A-Za-z0-9_-]{1,31}$'
+        password:
+          type: string
+          minLength: 8
+
+    UserPassword:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 8
+
+    UserAccount:
+      type: object
+      required: [username, role, adventure_count]
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        created_at:
+          type: string
+          format: date-time
+        adventure_count:
+          type: integer
+
+    AdventureUpdate:
+      type: object
+      description: Campos ausentes não mudam.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        ai_instructions:
+          type: string
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        story_summary:
+          type: string
+        image_style:
+          type: string
+        third_person:
+          type: boolean
+        turn_mode:
+          type: boolean
+        dm_mode:
+          type: boolean
+        character_rules:
+          type: string
+          maxLength: 4000
+
+    AdventureShareCreate:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 32
+
+    SharingView:
+      type: object
+      required: [owner, participants, shares, turn_mode, turn_user, dm_mode]
+      properties:
+        owner:
+          type: string
+        participants:
+          type: array
+          description: Dono primeiro, depois os shares.
+          items:
+            type: string
+        shares:
+          type: array
+          items:
+            type: string
+        turn_mode:
+          type: boolean
+        turn_user:
+          type: string
+        dm_mode:
+          type: boolean
+
+    Intent:
+      type: object
+      required: [id, adventure_id, username, type, text, status]
+      properties:
+        id:
+          type: string
+        adventure_id:
+          type: string
+        username:
+          type: string
+        type:
+          type: string
+          enum: [do, say, story]
+        text:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        action_id:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        resolved_by:
+          type: string
+
+    ScriptHooks:
+      type: object
+      properties:
+        input_modifier:
+          type: string
+        context_modifier:
+          type: string
+        output_modifier:
+          type: string
+
+    AdventureScriptsUpdate:
+      type: object
+      description: Campo ausente não muda. String vazia apaga a chave da aventura.
+      properties:
+        input_modifier:
+          type: string
+        context_modifier:
+          type: string
+        output_modifier:
+          type: string
+
+    AdventureScripts:
+      allOf:
+        - $ref: '#/components/schemas/ScriptHooks'
+        - type: object
+          required: [sources, global]
+          properties:
+            sources:
+              type: object
+              description: O que o turno vai usar em cada hook.
+              additionalProperties:
+                type: string
+                enum: [adventure, global, empty]
+            global:
+              $ref: '#/components/schemas/ScriptHooks'
+
+    EmbeddingsSettings:
+      type: object
+      required: [enabled, base_url, model, timeout_seconds]
+      properties:
+        enabled:
+          type: boolean
+        base_url:
+          type: string
+        model:
+          type: string
+        timeout_seconds:
+          type: integer
+
+    EmbeddingsSettingsUpdate:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        base_url:
+          type: string
+        model:
+          type: string
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+
+    PrimaryReferenceRequest:
+      type: object
+      required: [image_path]
+      properties:
+        image_path:
+          type: string
+
+    AssistantCardRequest:
+      type: object
+      required: [concept]
+      properties:
+        concept:
+          type: string
+          minLength: 2
+        card_type:
+          type: string
+          default: character
+        adventure_id:
+          type: string
+          nullable: true
+        draft:
+          type: object
+          additionalProperties: true
+          nullable: true
+        current_card:
+          type: object
+          additionalProperties: true
+          nullable: true
+        instruction:
+          type: string
+          nullable: true
+        web_search:
+          type: boolean
+          default: false
+        language:
+          type: string
+          default: pt
+
+    AssistantCardResponse:
+      type: object
+      required: [card, web_sources]
+      properties:
+        card:
+          type: object
+          additionalProperties: true
+        web_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebSearchHit'
+
+    AssistantSyncPlotRequest:
+      type: object
+      required: [adventure_id]
+      properties:
+        adventure_id:
+          type: string
+        instruction:
+          type: string
+          nullable: true
+        language:
+          type: string
+          default: pt
+
+    AssistantSyncPlotResponse:
+      type: object
+      required: [plot_essentials, authors_note, summary_delta]
+      properties:
+        plot_essentials:
+          type: string
+        authors_note:
+          type: string
+        summary_delta:
+          type: string
+
+    WebSearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 2
+        language:
+          type: string
+          default: pt
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+
+    WebSearchHit:
+      type: object
+      required: [title, url, snippet, source]
+      properties:
+        title:
+          type: string
+        url:
+          type: string
+        snippet:
+          type: string
+        source:
+          type: string
+
+    WebSearchResponse:
+      type: object
+      required: [query, results]
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebSearchHit'
+
+    ClonedVoice:
+      type: object
+      required: [id, name, ref_text, seconds]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        ref_text:
+          type: string
+        seconds:
+          type: number
+
+    SimState:
+      type: object
+      required: [pack, packs, foes, quests, triggers]
+      properties:
+        pack:
+          type: string
+          description: Vazio quando as regras estão desligadas.
+        packs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        actor:
+          type: object
+          nullable: true
+          additionalProperties: true
+        foes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        life:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/SimLifeClock'
+        quests:
+          type: array
+          items:
+            $ref: '#/components/schemas/Quest'
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestTrigger'
+
+    SimLifeClock:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        running:
+          type: boolean
+        speed:
+          type: integer
+        day:
+          type: integer
+        minute:
+          type: integer
+        clock:
+          type: string
+        weekday:
+          type: string
+        season:
+          type: string
+        npcs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        relations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        reactions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    SimPackUpdate:
+      type: object
+      properties:
+        pack:
+          type: string
+          enum: ['', d20, d100]
+          default: ''
+
+    SimLifeUpdate:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        wage_per_hour:
+          type: integer
+          default: 5
+          minimum: 0
+          maximum: 100000
+
+    SimAdvance:
+      type: object
+      required: [minutes, activity]
+      properties:
+        minutes:
+          type: integer
+          minimum: 1
+          maximum: 720
+        activity:
+          type: string
+          enum: [eat, sleep, rest, wash, social, fun, work, bladder, other]
+
+    SimActorUpdate:
+      type: object
+      properties:
+        resync:
+          type: boolean
+          default: false
+        abilities:
+          type: object
+          additionalProperties:
+            type: integer
+        skills:
+          type: object
+          additionalProperties:
+            type: integer
+        proficient:
+          type: array
+          items:
+            type: string
+        inventory:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+              qty:
+                type: integer
+                default: 1
+        hp:
+          type: integer
+        hp_max:
+          type: integer
+        gold:
+          type: integer
+        level:
+          type: integer
+        xp:
+          type: integer
+
+    SimRollRequest:
+      type: object
+      required: [expr]
+      properties:
+        expr:
+          type: string
+        mode:
+          type: string
+          enum: ['', adv, dis]
+          default: ''
+
+    SimRollResult:
+      type: object
+      required: [expr, rolls, modifier, total]
+      properties:
+        expr:
+          type: string
+        rolls:
+          type: array
+          items:
+            type: integer
+        modifier:
+          type: integer
+        total:
+          type: integer
+
+    SimActionRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [attack, skill, save, use_item, buy, take, rest]
+        target:
+          type: string
+          default: ''
+        toughness:
+          type: string
+          default: normal
+        hostile:
+          type: boolean
+          default: false
+        weapon:
+          type: string
+          default: ''
+        item:
+          type: string
+          default: ''
+        skill:
+          type: string
+          default: ''
+        ability:
+          type: string
+          default: ''
+        gold:
+          type: integer
+          default: 0
+        difficulty:
+          type: string
+          default: medium
+        advantage:
+          type: string
+          default: ''
+        minutes:
+          type: integer
+          default: 5
+        heal:
+          type: boolean
+          default: false
+
+    SimActionResponse:
+      allOf:
+        - $ref: '#/components/schemas/SimState'
+        - type: object
+          properties:
+            resolution:
+              type: object
+              properties:
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                changes:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+                time:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+
+    QuestStatus:
+      type: string
+      enum: [hidden, planned, available, accepted, completed, failed]
+
+    QuestStage:
+      type: object
+      required: [title]
+      properties:
+        id:
+          type: string
+          default: ''
+        title:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 500
+          default: ''
+        done:
+          type: boolean
+          default: false
+
+    Quest:
+      type: object
+      required: [id, title, status, stages, progress]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestStage'
+        progress:
+          type: object
+          properties:
+            value:
+              type: integer
+            target:
+              type: integer
+              nullable: true
+
+    QuestCreate:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+          default: ''
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        stages:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/QuestStage'
+        progress_target:
+          type: integer
+          minimum: 1
+          maximum: 999
+          nullable: true
+        triggers:
+          type: array
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/QuestTriggerIn'
+
+    QuestPatch:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestStage'
+        progress_target:
+          type: integer
+          minimum: 1
+          maximum: 999
+
+    QuestTransition:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        stage_id:
+          type: string
+        done:
+          type: boolean
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 999
+
+    QuestTriggerClause:
+      type: object
+      required: [fact]
+      properties:
+        fact:
+          type: string
+          enum: [hp, gold, san, resource, item, location, relation]
+        op:
+          type: string
+          enum: [eq, ne, lt, lte, gt, gte]
+          nullable: true
+        value:
+          type: integer
+          nullable: true
+        name:
+          type: string
+          maxLength: 80
+        qty:
+          type: integer
+          minimum: 0
+          maximum: 999
+        title:
+          type: string
+          maxLength: 120
+        place:
+          type: string
+          maxLength: 80
+        card_id:
+          type: string
+          maxLength: 80
+        location_id:
+          type: string
+          maxLength: 80
+        a:
+          type: string
+          maxLength: 80
+        b:
+          type: string
+          maxLength: 80
+        stat:
+          type: string
+          maxLength: 40
+        other_id:
+          type: string
+          maxLength: 80
+
+    QuestTriggerEffect:
+      type: object
+      properties:
+        quest_id:
+          type: string
+          default: ''
+        status:
+          $ref: '#/components/schemas/QuestStatus'
+        stage_id:
+          type: string
+          default: ''
+        done:
+          type: boolean
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 999
+        progress_delta:
+          type: integer
+          minimum: -999
+          maximum: 999
+
+    QuestTriggerIn:
+      type: object
+      required: [when, apply]
+      properties:
+        id:
+          type: string
+          default: ''
+        when:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/QuestTriggerClause'
+        apply:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/QuestTriggerEffect'
+
+    QuestTriggerCreate:
+      allOf:
+        - $ref: '#/components/schemas/QuestTriggerIn'
+        - type: object
+          properties:
+            quest_id:
+              type: string
+              default: ''
+
+    QuestTrigger:
+      type: object
+      required: [id, when, apply, applied]
+      properties:
+        id:
+          type: string
+        when:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestTriggerClause'
+        apply:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestTriggerEffect'
+        applied:
+          type: boolean
+
+    QuestList:
+      type: object
+      required: [quests, triggers]
+      properties:
+        quests:
+          type: array
+          items:
+            $ref: '#/components/schemas/Quest'
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestTrigger'
+
+    PublishRequest:
+      type: object
+      required: [kind, source_id]
+      properties:
+        kind:
+          type: string
+          enum: [scenario, adventure]
+        source_id:
+          type: string
+          maxLength: 80
+        cover_image:
+          type: string
+          nullable: true
+          maxLength: 2000
+
+    PublicationVersionMeta:
+      type: object
+      required: [version, content_hash, created_at]
+      properties:
+        version:
+          type: integer
+        content_hash:
+          type: string
+        cover_image:
+          type: string
+          default: ''
+        created_at:
+          type: string
+          format: date-time
+
+    PublicationSummary:
+      type: object
+      required: [id, kind, source_id, owner, title, latest_version, selected_version]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [scenario, adventure]
+        source_id:
+          type: string
+        owner:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          default: ''
+        cover_image:
+          type: string
+          default: ''
+        tags:
+          type: array
+          items:
+            type: string
+        latest_version:
+          type: integer
+        selected_version:
+          type: integer
+        like_count:
+          type: integer
+          default: 0
+        liked:
+          type: boolean
+          default: false
+        content_hash:
+          type: string
+          default: ''
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PublicationDetail:
+      allOf:
+        - $ref: '#/components/schemas/PublicationSummary'
+        - type: object
+          properties:
+            created:
+              type: boolean
+              default: false
+            snapshot:
+              type: object
+              additionalProperties: true
+            versions:
+              type: array
+              items:
+                $ref: '#/components/schemas/PublicationVersionMeta'
+
+    PublicationLike:
+      type: object
+      required: [publication_id, liked, likes]
+      properties:
+        publication_id:
+          type: string
+        liked:
+          type: boolean
+        likes:
+          type: integer
+
+    PublicationDeleteResult:
+      type: object
+      required: [deleted, id]
+      properties:
+        deleted:
+          type: boolean
+        id:
+          type: string
+
+    RemixRequest:
+      type: object
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          nullable: true
+        title:
+          type: string
+          maxLength: 200
+          nullable: true
+
+    RemixResult:
+      type: object
+      required: [scenario_id, parent_publication_id, parent_version, title, scenario]
+      properties:
+        scenario_id:
+          type: string
+        parent_publication_id:
+          type: string
+        parent_version:
+          type: integer
+        title:
+          type: string
+        scenario:
+          $ref: '#/components/schemas/Scenario'
+
+    ModPackageCard:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          maxLength: 64
+        title:
+          type: string
+          maxLength: 200
+        type:
+          type: string
+          default: other
+        triggers:
+          type: array
+          items:
+            type: string
+        entry:
+          type: string
+        pinned:
+          type: boolean
+          default: false
+
+    ModPackageLink:
+      type: object
+      required: [from_key, to_key]
+      properties:
+        from_key:
+          type: string
+        to_key:
+          type: string
+        travel_text:
+          type: string
+        travel_cost:
+          type: string
+        bidirectional:
+          type: boolean
+          default: true
+
+    ModPackage:
+      type: object
+      description: |
+        Chaves fora de cards, links, append e scripts são descartadas.
+        Pacote sem conteúdo é recusado.
+      properties:
+        cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModPackageCard'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModPackageLink'
+        append:
+          type: object
+          properties:
+            ai_instructions:
+              type: string
+            plot_essentials:
+              type: string
+            authors_note:
+              type: string
+        scripts:
+          $ref: '#/components/schemas/ScriptHooks'
+
+    ModVersionSummary:
+      type: object
+      required: [id, version, content_hash, created_at]
+      properties:
+        id:
+          type: string
+        version:
+          type: integer
+        content_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ModVersionDetail:
+      allOf:
+        - $ref: '#/components/schemas/ModVersionSummary'
+        - type: object
+          properties:
+            mod_id:
+              type: string
+            package:
+              $ref: '#/components/schemas/ModPackage'
+
+    Mod:
+      type: object
+      required: [id, owner, title, visibility, versions]
+      properties:
+        id:
+          type: string
+        owner:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          default: ''
+        visibility:
+          type: string
+          enum: [public, private]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModVersionSummary'
+
+    ModPublish:
+      type: object
+      required: [title, package]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          default: ''
+        visibility:
+          type: string
+          enum: [public, private]
+          default: public
+        package:
+          $ref: '#/components/schemas/ModPackage'
+
+    ModPublishResult:
+      type: object
+      required: [mod, version]
+      properties:
+        mod:
+          $ref: '#/components/schemas/Mod'
+        version:
+          $ref: '#/components/schemas/ModVersionDetail'
+
+    AppliedMod:
+      type: object
+      required: [adventure_id, mod_id, mod_version_id, enabled]
+      properties:
+        adventure_id:
+          type: string
+        mod_id:
+          type: string
+        mod_version_id:
+          type: string
+        version:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        content_hash:
+          type: string
+        enabled:
+          type: boolean
+        applied_at:
+          type: string
+          format: date-time
+
+    ModApplyResult:
+      allOf:
+        - $ref: '#/components/schemas/AppliedMod'
+        - type: object
+          properties:
+            inserted_cards:
+              type: integer
+            inserted_links:
+              type: integer
+            already_applied:
+              type: boolean
+
+    ModRemoveResult:
+      type: object
+      required: [removed, adventure_id, mod_version_id, deleted_cards, deleted_links]
+      properties:
+        removed:
+          type: boolean
+        adventure_id:
+          type: string
+        mod_version_id:
+          type: string
+        deleted_cards:
+          type: integer
+        deleted_links:
+          type: integer
+
+    WorldMap:
+      type: object
+      properties:
+        current:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/StoryCard'
+        world_type:
+          type: string
+          enum: [real, fictional, franchise, alternate_history]
+        locations:
+          type: array
+          items:
+            $ref: '#/components/schemas/MapLocation'
+        journal:
+          type: array
+          items:
+            $ref: '#/components/schemas/JournalEntry'
+        progression:
+          type: object
+          additionalProperties: true
+        npc_relations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    MapLocation:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        entry:
+          type: string
+        current:
+          type: boolean
+        image:
+          type: object
+          nullable: true
+          additionalProperties: true
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        hierarchy:
+          type: object
+          additionalProperties: true
+
+    JournalEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        adventure_id:
+          type: string
+        action_id:
+          type: integer
+          nullable: true
+        kind:
+          type: string
+        title:
+          type: string
+        text:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        related:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        visibility:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TravelResult:
+      type: object
+      required: [location, travelled]
+      properties:
+        location:
+          $ref: '#/components/schemas/StoryCard'
+        travelled:
+          type: boolean
+        from:
+          $ref: '#/components/schemas/StoryCard'
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    LocationGenerateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 2
+        reference:
+          type: string
+          default: ''
+        web_search:
+          type: boolean
+          default: false
+
+    LocationImageResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, pending]
+        image:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+            url:
+              type: string
+            prompt:
+              type: string
+        job_id:
+          type: string

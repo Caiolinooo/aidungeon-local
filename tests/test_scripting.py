@@ -258,3 +258,77 @@ def test_game_engine_failing_script_does_not_crash_turn(client):
         actions = db.list_actions(conn, adv["id"])
         player_act = [a for a in actions if a["type"] == "do"][0]
         assert "Attack safely" in player_act["text"]
+
+
+# =============================================================================
+# 6. Precedência: aventura > global > vazio
+# =============================================================================
+
+def test_hook_precedence_adventure_then_global_then_empty(tmp_db):
+    """Cada hook cai sozinho: chave da aventura, senão script:global, senão None."""
+    adv = make_adventure(title="Precedence")
+    with db.session() as conn:
+        db.set_setting(conn, "script:global:input_modifier", "action['text'] = 'G-IN'")
+        db.set_setting(conn, "script:global:context_modifier",
+                       "context.append({'role': 'system', 'content': 'G-CTX'})")
+
+    assert scripting.get_adventure_script(adv["id"], "input_modifier") == "action['text'] = 'G-IN'"
+    assert "G-CTX" in scripting.get_adventure_script(adv["id"], "context_modifier")
+    assert scripting.get_adventure_script(adv["id"], "output_modifier") is None
+
+    scripting.set_adventure_script(adv["id"], "input_modifier", "action['text'] = 'A-IN'")
+    scripting.set_adventure_script(adv["id"], "output_modifier", "text = 'A-OUT'")
+
+    assert scripting.get_adventure_script(adv["id"], "input_modifier") == "action['text'] = 'A-IN'"
+    assert "G-CTX" in scripting.get_adventure_script(adv["id"], "context_modifier")
+    assert scripting.get_adventure_script(adv["id"], "output_modifier") == "text = 'A-OUT'"
+
+    got = scripting.run_input_modifier(
+        scripting.get_adventure_script(adv["id"], "input_modifier"),
+        {"type": "do", "text": "ignored"},
+    )
+    assert got["text"] == "A-IN"
+    assert scripting.run_output_modifier(
+        scripting.get_adventure_script(adv["id"], "output_modifier"), "x",
+    ) == "A-OUT"
+
+    scripting.set_adventure_script(adv["id"], "input_modifier", "   \n")
+    assert scripting.get_adventure_script(adv["id"], "input_modifier") == "action['text'] = 'G-IN'"
+    assert scripting.run_input_modifier(
+        scripting.get_adventure_script(adv["id"], "input_modifier"),
+        {"type": "do", "text": "ignored"},
+    )["text"] == "G-IN"
+
+    with db.session() as conn:
+        db.set_setting(conn, f"script:{adv['id']}:context_modifier", "")
+    assert scripting.get_adventure_script(adv["id"], "context_modifier") == ""
+
+
+def test_turn_uses_adventure_hook_and_global_fallback_per_hook(client):
+    """O turno segue get_adventure_script: aventura no input, global no output."""
+    from app import game_engine
+    from conftest import make_llm_transport
+
+    adv = make_adventure(title="Mixed Hooks")
+    with db.session() as conn:
+        db.set_setting(conn, "script:global:input_modifier", "action['text'] = 'FROM GLOBAL'")
+        db.set_setting(conn, "script:global:output_modifier", "text = text + ' [global]'")
+    scripting.set_adventure_script(
+        adv["id"],
+        "input_modifier",
+        "action['text'] = action['text'].replace('sword', 'blade')",
+    )
+
+    transport = make_llm_transport(tokens=("The", " goblin", " flees."))
+    events = list(game_engine.handle_action(
+        adv["id"], "do", "Draw your sword", transport=transport,
+    ))
+    assert any(e.get("event") == "done" for e in events)
+
+    with db.session() as conn:
+        actions = db.list_actions(conn, adv["id"])
+        player_act = [a for a in actions if a["type"] == "do"][0]
+        assert "blade" in player_act["text"]
+        assert "FROM GLOBAL" not in player_act["text"]
+        ai_act = [a for a in actions if a["type"] == "continue"][0]
+        assert "[global]" in ai_act["text"]

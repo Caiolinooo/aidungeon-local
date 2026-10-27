@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
+import sqlite3
 from pathlib import Path
 
 import httpx
 
-from app import db, image_client, jobs
+from app import db, image_client, jobs, llm_client
 from conftest import make_adventure
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
@@ -82,7 +84,7 @@ def test_enqueue_portrait_dedupes_active_job(client):
     second = client.post(f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait")
     assert first.status_code == 202 and second.status_code == 202
     assert first.json()["id"] == second.json()["id"]
-    assert first.json()["status"] == "pending"
+    assert first.json()["status"] == "preparing"
 
     queued = client.get(f"/api/adventures/{adv['id']}/jobs").json()
     assert len(queued) == 1
@@ -120,7 +122,7 @@ def test_adventure_create_auto_enqueues_character_portraits(client):
     queued = client.get(f"/api/adventures/{adv['id']}/jobs").json()
     portraits = [j for j in queued if j["type"] == "character_portrait"]
     assert len(portraits) == 1
-    assert portraits[0]["status"] == "pending"
+    assert portraits[0]["status"] == "preparing"
     # o NPC também entra na fila do preenchimento da ficha viva (card_assets)
     assert any(j["type"] == "card_assets" for j in queued)
 
@@ -309,3 +311,170 @@ def test_regenerate_portrait_img2img_from_anchor(client, tmp_path, monkeypatch):
     updated = client.get(f"/api/adventures/{adv['id']}/cards/{npc['id']}").json()
     assert updated["portrait"]["id"] != anchor
     assert updated["portrait_anchor_id"] == anchor
+
+
+def _stored_job(job_id: str) -> dict | None:
+    with db.session() as conn:
+        return db.get_job(conn, job_id)
+
+
+def _spy_portrait_llm(monkeypatch, calls: list, *, gate=None, entered=None,
+                      text: str = "silver-haired sky captain, bust portrait"):
+    def spy(cfg, messages, **kwargs):
+        if entered is not None:
+            entered.set()
+        if gate is not None:
+            assert gate.wait(5)
+        calls.append((messages, kwargs))
+        return text
+
+    monkeypatch.setattr(llm_client, "chat_completion", spy)
+
+
+def test_portrait_prompt_stays_off_the_gpu_worker(client, tmp_path, monkeypatch):
+    """O claim não chama o LLM. Uma preparação grava o prompt e a pintura segue."""
+    adv = make_adventure(image_style="ink sketch")
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain of the Kestrel.")
+    use_tmp_storage(tmp_path)
+    calls: list = []
+    _spy_portrait_llm(monkeypatch, calls)
+
+    job = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert job["status"] == "preparing"
+    assert jobs.process_pending(make_assets_transport(), prepare=False) == 0
+    assert calls == []
+    assert _stored_job(job["id"])["status"] == "preparing"
+
+    assert jobs.process_pending(make_assets_transport(), prepare=True) == 1
+    assert len(calls) == 1
+    messages, kwargs = calls[0]
+    assert kwargs["role"] == "image_prompt"
+    assert kwargs["temperature"] == 0.5
+    assert kwargs["max_tokens"] == 160
+    assert messages[0]["content"] == jobs._PORTRAIT_SYSTEM
+    assert "Ada Vane" in messages[1]["content"]
+    assert "Sky captain of the Kestrel" in messages[1]["content"]
+
+    done = _stored_job(job["id"])
+    assert done["status"] == "done", done
+    card = client.get(f"/api/adventures/{adv['id']}/cards/{npc['id']}").json()
+    assert card["portrait_prompt"] == "silver-haired sky captain, bust portrait"
+    assert jobs.process_pending(make_assets_transport(), prepare=True) == 0
+    assert len(calls) == 1
+
+
+def test_portrait_with_prompt_never_prepares(client, tmp_path, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.",
+                   portrait_prompt="scarred veteran captain, oil painting")
+    use_tmp_storage(tmp_path)
+    calls: list = []
+    _spy_portrait_llm(monkeypatch, calls)
+    job = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert job["status"] == "pending"
+    assert jobs.process_pending(make_assets_transport(), prepare=False) == 1
+    assert calls == []
+    assert _stored_job(job["id"])["status"] == "done"
+
+
+def test_duplicate_portrait_prepares_once(client, tmp_path, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
+    use_tmp_storage(tmp_path)
+    calls: list = []
+    _spy_portrait_llm(monkeypatch, calls)
+    first = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    second = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert first["id"] == second["id"]
+    assert first["status"] == "preparing"
+    assert jobs.process_pending(make_assets_transport(), prepare=True) == 1
+    assert len(calls) == 1
+    assert _stored_job(first["id"])["status"] == "done"
+
+
+def test_cancel_preparing_portrait_is_not_stuck(client, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
+    calls: list = []
+    _spy_portrait_llm(monkeypatch, calls)
+    job = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    resp = client.delete(f"/api/adventures/{adv['id']}/jobs/{job['id']}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "canceled"
+    assert jobs.process_pending(make_assets_transport(), prepare=True) == 0
+    assert calls == []
+    assert _stored_job(job["id"])["status"] == "canceled"
+
+
+def test_cancel_during_portrait_prompt_stays_canceled(client, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
+    calls: list = []
+    gate = threading.Event()
+    entered = threading.Event()
+    _spy_portrait_llm(monkeypatch, calls, gate=gate, entered=entered)
+    job = client.post(
+        f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
+    assert job["status"] == "preparing"
+    box: list[int] = []
+    worker = threading.Thread(
+        target=lambda: box.append(
+            jobs.process_pending(make_assets_transport(), prepare=True)),
+    )
+    worker.start()
+    try:
+        assert entered.wait(5)
+        resp = client.delete(f"/api/adventures/{adv['id']}/jobs/{job['id']}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "canceled"
+    finally:
+        gate.set()
+        worker.join(5)
+    assert box == [0]
+    assert not worker.is_alive()
+    assert len(calls) == 1
+    assert calls[0][1]["role"] == "image_prompt"
+    assert _stored_job(job["id"])["status"] == "canceled"
+    assert jobs.process_pending(make_assets_transport(), prepare=False) == 0
+
+
+def test_variant_supersede_cancels_preparing_portrait(client, tmp_path, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
+    use_tmp_storage(tmp_path)
+    calls: list = []
+    _spy_portrait_llm(monkeypatch, calls)
+    with db.session() as conn:
+        first = jobs.enqueue_portrait(
+            conn, adv["id"], npc["id"], variant_key="look-a")
+        second = jobs.enqueue_portrait(
+            conn, adv["id"], npc["id"], variant_key="look-b")
+    assert _stored_job(first["id"])["status"] == "canceled"
+    assert _stored_job(second["id"])["status"] == "preparing"
+    assert jobs.process_pending(make_assets_transport(), prepare=False) == 0
+    assert _stored_job(first["id"])["status"] == "canceled"
+    assert _stored_job(second["id"])["status"] == "preparing"
+    assert jobs.process_pending(make_assets_transport(), prepare=True) == 1
+    assert len(calls) == 1
+    assert _stored_job(first["id"])["status"] == "canceled"
+    assert _stored_job(second["id"])["status"] == "done"
+
+
+def test_preparing_thread_failure_marks_job_failed(client, monkeypatch):
+    adv = make_adventure()
+    npc = make_npc(adv["id"], title="Ada Vane", entry="Sky captain.")
+    with db.session() as conn:
+        job = jobs.enqueue(conn, "character_portrait", adv["id"], npc["id"],
+                           {"kind": "portrait", "state_key": "x"})
+        conn.execute("UPDATE jobs SET status='preparing' WHERE id=?", (job["id"],))
+    monkeypatch.setattr(jobs, "_prepare_portrait_job",
+                        lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    jobs._portrait_prepare_thread(job["id"])
+    stored = _stored_job(job["id"])
+    assert stored["status"] == "error"
+    assert "could not prepare" in stored["error"]

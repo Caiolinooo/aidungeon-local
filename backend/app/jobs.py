@@ -7,9 +7,11 @@ presente, 2 fundo de cena, 3 retratos em lote. Com narrativa em curso só o
 See (0) roda. Job novo com a mesma `supersede_key` cancela os pendentes
 antigos. Cada mudança de estado sai no bus (`job_queued`, `job_progress`).
 Tipos:
-- `character_portrait` — LLM expande a descrição do NPC em prompt EN de
-  retrato (se o card não tiver portrait_prompt), gera a imagem no provider
-  efetivo (mesmo do "See") e vincula ao card (images kind='portrait').
+- `character_portrait` — se o card não tem portrait_prompt (e não há âncora
+  nem foto de referência), o job nasce em `preparing`: o LLM (role
+  image_prompt) escreve o prompt fora do worker e só então o job entra na
+  fila. O worker só gera a imagem no provider efetivo (mesmo do "See") e
+  vincula ao card (images kind='portrait'). Quem já tem prompt não chama o LLM.
   A primeira foto vira a âncora (`portrait_anchor_id`). Geração automática
   não substitui um retrato que já existe. Pedido explícito de regenerar
   usa img2img a partir dessa âncora, para o rosto fictício continuar o mesmo.
@@ -38,6 +40,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -63,6 +66,9 @@ CUDA_OOM_BACKOFF_S = 300
 CUDA_OOM_RETRY_CAP = 3
 
 _wakeup = threading.Event()
+_prepare_lock = threading.Lock()
+_prepare_inflight: set[str] = set()
+_PREPARE_VISIBLE_S = 120.0
 
 _PORTRAIT_SYSTEM = """You write image generation prompts for character portraits.
 Given the character description and the story context, output a single concise English
@@ -157,11 +163,11 @@ def _finish(job: dict, status: str, *, result: dict | None = None,
 # ------------------------------------------------------------- enfileirar
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
             payload: dict | None = None, priority: int = PRIORITY_BACKDROP,
-            supersede_key: str | None = None) -> dict:
+            supersede_key: str | None = None, *, status: str = "pending") -> dict:
     """Job novo (C5). Fila e eventos saem no commit de quem chamou."""
     job = db.insert_job(conn, adventure_id=adventure_id, type=type_, ref_id=ref_id or "",
                         payload=payload, priority=priority,
-                        supersede_key=supersede_key or "")
+                        supersede_key=supersede_key or "", status=status)
     superseded = db.supersede_jobs(conn, supersede_key, job["id"]) if supersede_key else []
     events.record(
         conn, adventure_id, "job_queued",
@@ -309,10 +315,15 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
             payload["init_image_id"] = anchor
     if force_reference:
         payload["force_reference"] = True
+    status = "preparing" if _portrait_needs_prompt(card, payload) else "pending"
+    if status == "preparing" and not image_client.effective_settings(conn).get("enabled"):
+        status = "pending"
     job = enqueue(conn, "character_portrait", adventure_id, card_id, payload,
-                  priority=priority)
+                  priority=priority, status=status)
     if job and variant_key:
         _set_portrait_state(conn, adventure_id, card_id, variant_key, job["id"])
+    if status == "preparing":
+        _arm_portrait_prepare(job["id"])
     return job
 
 
@@ -421,11 +432,16 @@ def _prepare_see(job: dict, plan: Callable[[], dict]) -> None:
     wake()
 
 
-def _fail_see(job: dict, code: str, message: str) -> None:
+def _fail_preparing(job: dict, code: str, message: str) -> None:
+    """Erro de preparação. Cancelado no meio permanece cancelado."""
     with db.session() as conn:
         current = db.get_job(conn, job["id"])
     if current is not None and current["status"] == "preparing":
         _failed(job, code, message)
+
+
+def _fail_see(job: dict, code: str, message: str) -> None:
+    _fail_preparing(job, code, message)
 
 
 def cancel(conn, job_id: str) -> dict | None:
@@ -511,6 +527,144 @@ def _build_portrait_prompt(adv: dict, card: dict, llm_cfg: dict,
     return prompt
 
 
+def _portrait_needs_prompt(card: dict | None, payload: dict) -> bool:
+    """O executor antigo só chamava o LLM sem prompt, âncora e referência."""
+    if not card:
+        return False
+    if str(card.get("portrait_prompt") or "").strip():
+        return False
+    if str(payload.get("init_image_id") or ""):
+        return False
+    if likeness.reference_images([card]):
+        return False
+    return True
+
+
+def _claim_prepare(job_id: str) -> bool:
+    with _prepare_lock:
+        if job_id in _prepare_inflight:
+            return False
+        _prepare_inflight.add(job_id)
+        return True
+
+
+def _release_prepare(job_id: str) -> None:
+    with _prepare_lock:
+        _prepare_inflight.discard(job_id)
+
+
+def _prepare_portrait_job(job: dict, transport: Any) -> None:
+    """Uma preparação: prompt (role image_prompt) e preparing → pending.
+
+    Cancelamento ou supersede no meio não promove. Sem card, sem aventura
+    ou com a imagem desligada, promove mesmo assim para o executor reportar
+    o erro sem ocupar a GPU com o LLM.
+    """
+    with db.session() as conn:
+        current = db.get_job(conn, job["id"])
+    if current is None or current["status"] != "preparing":
+        return
+    payload = dict(current.get("payload") or {})
+    try:
+        with db.session() as conn:
+            adv = db.get_adventure(conn, current["adventure_id"])
+            card = db.get_card(conn, current["adventure_id"], current["ref_id"])
+            needs = False
+            llm_cfg = None
+            if adv and card:
+                img_cfg = image_client.effective_settings(conn)
+                if img_cfg.get("enabled") and _portrait_needs_prompt(card, payload):
+                    llm_cfg = settings_store.effective_llm_settings(conn)
+                    needs = True
+        if needs:
+            _build_portrait_prompt(adv, card, llm_cfg, transport)
+    except (GameError, LlmError) as exc:
+        _fail_preparing(current, exc.code, exc.message)
+        return
+    except Exception:
+        log.exception("portrait %s: prompt falhou", current["id"])
+        _fail_preparing(current, "generation_failed",
+                        "could not build the image prompt")
+        return
+    with db.session() as conn:
+        promoted = db.promote_job(conn, current["id"], payload)
+    if promoted is None:
+        return
+    _progress(promoted)
+    wake()
+
+
+def _prepare_outstanding_portraits(transport: Any) -> None:
+    """Completa os retratos em `preparing`. Uma preparação por job."""
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE type='character_portrait' AND status='preparing'"
+            " ORDER BY priority ASC, created_at ASC, rowid ASC",
+        ).fetchall()
+    for row in rows:
+        job_id = row["id"]
+        if not _claim_prepare(job_id):
+            continue
+        try:
+            with db.session() as conn:
+                job = db.get_job(conn, job_id)
+            if job is not None:
+                _prepare_portrait_job(job, transport)
+        finally:
+            _release_prepare(job_id)
+
+
+def _portrait_prepare_thread(job_id: str) -> None:
+    try:
+        deadline = time.monotonic() + _PREPARE_VISIBLE_S
+        job = None
+        while True:
+            try:
+                with db.session() as conn:
+                    job = db.get_job(conn, job_id)
+            except sqlite3.OperationalError:
+                job = None
+            if job is not None:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("portrait preparation job did not become visible")
+            time.sleep(0.02)
+        _prepare_portrait_job(job, None)
+    except Exception:
+        log.exception("portrait %s: preparação não armou", job_id)
+        try:
+            with db.session() as conn:
+                stuck = db.get_job(conn, job_id)
+            if stuck is not None and stuck["status"] == "preparing":
+                _fail_preparing(stuck, "generation_failed",
+                                "could not prepare the portrait job")
+        except Exception:
+            log.exception("portrait %s: fallback de falha também errou", job_id)
+    finally:
+        _release_prepare(job_id)
+
+
+def _arm_portrait_prepare(job_id: str) -> None:
+    """Uma thread por job quando o worker está ligado.
+
+    Nos testes o worker fica desligado e `process_pending` prepara no
+    transport falso, sem rede e sem segunda chamada.
+    """
+    if not worker_enabled():
+        return
+    if not _claim_prepare(job_id):
+        return
+    thread = threading.Thread(
+        target=_portrait_prepare_thread, args=(job_id,),
+        name="portrait-prompt", daemon=True,
+    )
+    try:
+        thread.start()
+    except Exception:
+        _release_prepare(job_id)
+        raise
+
+
 def _portrait_bytes(image: dict) -> bytes:
     """PNG da foto já gravada (caminho relativo ao repo ou absoluto)."""
     try:
@@ -521,10 +675,7 @@ def _portrait_bytes(image: dict) -> bytes:
 
 
 def _execute_portrait(job: dict, transport: Any) -> dict:
-    """Executa um job character_portrait; devolve o result (ou levanta).
-
-    LLM e render rodam fora de transação: o banco não fica travado para a
-    narrativa enquanto a GPU pinta."""
+    """Pinta um character_portrait já preparado. Não chama o LLM."""
     payload = job.get("payload") or {}
     replace = bool(payload.get("replace"))
     force_reference = bool(payload.get("force_reference"))
@@ -548,16 +699,11 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         if not img_cfg["enabled"]:
             raise GameError(503, "image_generation_disabled",
                             "Image generation is disabled in settings")
-        llm_cfg = settings_store.effective_llm_settings(conn)
         if anchor_id:
             anchor = db.get_image(conn, anchor_id)
             if not anchor:
                 raise GameError(503, "generation_failed",
                                 "canonical portrait image is missing")
-    if (not str(card.get("portrait_prompt") or "").strip()
-            and not anchor_id and not likeness.reference_images([card])):
-        card["portrait_prompt"] = _build_portrait_prompt(
-            adv, card, llm_cfg, transport)
     state_key = str(payload.get("state_key") or "")
     prompt = (npc_assets.portrait_variant_prompt(card) if anchor_id
               else str(card.get("portrait_prompt") or "").strip()
@@ -1007,13 +1153,22 @@ def _run_job(job: dict, transport: Any) -> None:
             log.info("job %s (%s) concluído", job["id"], job["type"])
 
 
-def process_pending(transport: Any = None, *, should_pause=None) -> int:
+def process_pending(transport: Any = None, *, should_pause=None,
+                    prepare: bool | None = None) -> int:
     """Drena a fila em ordem de prioridade (worker e, diretamente, testes).
 
     should_pause, quando passado, é consultado antes de cada claim: enquanto
     devolver verdade (narrativa em curso), só o See sai da fila e o resto
-    espera em pending (a GPU fica com o LLM).
+    espera em pending (a GPU fica com o LLM da narrativa).
+
+    Retrato sem prompt fica em `preparing` e não é claim. O worker de
+    produção não monta esse prompt. Com o worker desligado, os testes
+    completam a preparação aqui, no mesmo `transport`, antes do claim.
     """
+    if prepare is None:
+        prepare = not worker_enabled()
+    if prepare:
+        _prepare_outstanding_portraits(transport)
     processed = 0
     while True:
         paused = should_pause is not None and should_pause()
@@ -1037,6 +1192,12 @@ def recover_interrupted() -> tuple[int, int]:
             "WHERE type<>'see_image' AND status='running'"
         )]
         requeued, failed = db.requeue_interrupted_jobs(conn)
+        preparing_portraits = [
+            row["id"] for row in conn.execute(
+                "SELECT id FROM jobs WHERE type='character_portrait'"
+                " AND status='preparing' ORDER BY priority ASC, created_at ASC",
+            )
+        ]
         for row in failed_rows:
             if db.get_adventure(conn, row["adventure_id"]) is None:
                 continue
@@ -1062,6 +1223,8 @@ def recover_interrupted() -> tuple[int, int]:
                 entity_id=row["id"], correlation_id=row["id"],
                 idempotency_key=f"job:{row['id']}:requeued",
             )
+    for job_id in preparing_portraits:
+        _arm_portrait_prepare(job_id)
     if requeued or failed:
         log.info("jobs: %d de volta à fila, %d See interrompidos", requeued, failed)
     return requeued, failed
@@ -1077,6 +1240,7 @@ async def worker_loop(interval: float = 1.5) -> None:
             await asyncio.to_thread(
                 process_pending,
                 should_pause=game_engine.is_any_generation_active,
+                prepare=False,
             )
         except Exception:
             log.exception("jobs worker: erro no ciclo")

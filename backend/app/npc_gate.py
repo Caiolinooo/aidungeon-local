@@ -173,6 +173,11 @@ def _living_cards(cards: list[dict]) -> list[dict]:
     return found
 
 
+def _has_living_npc(conn, adventure_id: str) -> bool:
+    """Roster real: personagem vivo que não é o jogador. Morto e missing ficam de fora."""
+    return bool(_living_cards(db.list_cards(conn, adventure_id)))
+
+
 def ensure_saved(conn, adventure_id: str) -> int:
     """Garante os campos que o adjudicador lê; nunca decide por ninguém."""
     everyone = [
@@ -264,7 +269,32 @@ def _player_context(card: dict | None, username: str) -> dict:
     }
 
 
-def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = 900,
+# JSON da adjudicação (decision, outcome, reactions, initiative, cue).
+# 400 cabe no schema; o recorte de outcome/cue continua em 900 caracteres.
+GATE_MAX_TOKENS = 400
+
+
+def _neutral_decision(payload: dict) -> dict:
+    """Sem NPC vivo o ambiente não precisa de chamada auxiliar.
+
+    `allow` com reações vazias deixa o narrador seguir a ação. Recusa física
+    continua vindo do world_check, não daqui.
+    """
+    action = " ".join(str(payload.get("action") or "").split())
+    if payload.get("mode") == "continue" or not action:
+        outcome = "Ninguém age por conta própria neste instante."
+    else:
+        outcome = "A ação segue no ambiente, sem outra pessoa para responder."
+    return {
+        "decision": "allow",
+        "outcome": outcome,
+        "reactions": [],
+        "initiative": None,
+        "cue": outcome,
+    }
+
+
+def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX_TOKENS,
           cancel=None) -> dict | None:
     try:
         raw = llm_client.chat_completion(
@@ -302,6 +332,9 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = 900,
     try:
         data = npc_assets._extract_json(raw)
     except Exception:
+        if max_tokens == GATE_MAX_TOKENS:
+            return _call(llm_cfg, payload, transport, max_tokens=900,
+                         cancel=cancel)
         log.warning("npc_gate: resposta sem JSON: %r", (raw or "")[:300])
         return None
     return data if isinstance(data, dict) else None
@@ -351,13 +384,24 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
 
 def decide(adventure_id: str, text: str, llm_cfg: dict, transport, user: str = "",
            rng=None, world_check: dict | None = None, cancel=None) -> dict | None:
-    """Adjudicação de uma ação do jogador. Sem LLM, devolve None."""
+    """Adjudicação de uma ação do jogador. Sem LLM, devolve None.
+
+    Sem NPC vivo elegível a decisão é neutra (`allow`) e o LLM não é chamado.
+    Jogador, morto e `missing` não contam como roster.
+    """
     with db.session() as conn:
         ensure_saved(conn, adventure_id)
+        if not _has_living_npc(conn, adventure_id):
+            return _neutral_decision({
+                "action": plain(text),
+                "mode": "player_action" if plain(text) else "continue",
+            })
         packed = _payload(conn, adventure_id, text, user)
         if packed is None:
             return None
-        payload, _ = packed
+        payload, roster = packed
+    if not roster:
+        return _neutral_decision(payload)
     if isinstance(world_check, dict):
         payload["world_check"] = world_check
     data = _call(llm_cfg or {}, payload, transport, cancel=cancel)
@@ -366,13 +410,20 @@ def decide(adventure_id: str, text: str, llm_cfg: dict, transport, user: str = "
 
 def own_beat(adventure_id: str, llm_cfg: dict | None = None, transport=None,
              cancel=None) -> dict | None:
-    """Continue: a IA decide se alguém age por conta própria e como."""
+    """Continue: a IA decide se alguém age por conta própria e como.
+
+    Sem NPC vivo não há beat próprio nem chamada auxiliar.
+    """
     with db.session() as conn:
         ensure_saved(conn, adventure_id)
+        if not _has_living_npc(conn, adventure_id):
+            return None
         packed = _payload(conn, adventure_id, "", "")
         if packed is None:
             return None
-        payload, _ = packed
+        payload, roster = packed
+    if not roster:
+        return None
     payload["mode"] = "continue"
     payload["instruction"] = (
         "No player action this beat. Decide whether a present NPC acts on their own "

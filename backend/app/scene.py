@@ -403,7 +403,8 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
     return {"status": "pending", "image": image, "error": None}
 
 
-def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
+def sync_scene(conn, adventure_id: str, *, retry: bool = False,
+               viewer: str | None = None) -> dict:
     """Estado da cena para a UI. Enfileira fundo e retratos que faltam.
 
     O fundo usa o momento narrado agora, nao a fala do jogador. Pedido do
@@ -503,7 +504,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
         if not card.get("portrait") and img_cfg.get("enabled"):
             jobs.enqueue_portrait(conn, adventure_id, card["id"])
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-        cast.append({
+        member = {
             "id": card["id"],
             "title": card.get("title") or "",
             "portrait": card.get("portrait"),
@@ -512,10 +513,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False) -> dict:
                 npc_bonds.read_bonds(sheet),
                 obedience=world_facts.obedience_of(card),
             ),
-            "private_facts": consequences.private_facts_for(
+        }
+        # Sem viewer (job/LLM) os fatos continuam no payload. Share não recebe.
+        if viewer is None or db.is_adventure_owner(adventure, viewer):
+            member["private_facts"] = consequences.private_facts_for(
                 adventure, card.get("title") or "",
-            ),
-        })
+            )
+        cast.append(member)
 
     return {
         "location": title,

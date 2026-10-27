@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app import db, image_client, jobs, settings_store, world_map
+from app import auth, db, image_client, jobs, settings_store, world_map
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -25,19 +25,22 @@ class LocationImageRequest(BaseModel):
 
 
 @router.get("/adventures/{adventure_id}/map")
-def get_map(adventure_id: str) -> dict:
+def get_map(adventure_id: str,
+            info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found("adventure not found")
-        return world_map.map_payload(conn, adventure_id)
+        return world_map.map_payload(conn, adventure_id, viewer=info.user)
 
 
 @router.get("/adventures/{adventure_id}/journal")
-def get_journal(adventure_id: str, limit: int = 40) -> dict:
+def get_journal(adventure_id: str, limit: int = 40,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     with db.session() as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found("adventure not found")
-        return {"entries": world_map.journal_for(conn, adventure_id, limit=limit)}
+        return {"entries": world_map.visible_journal(
+            conn, adventure_id, limit=limit, viewer=info.user)}
 
 
 @router.post("/adventures/{adventure_id}/map/travel/{card_id}")
@@ -50,6 +53,23 @@ def post_travel(adventure_id: str, card_id: str) -> dict:
         except ValueError as exc:
             raise GameError(409, "travel_not_allowed", str(exc)) from exc
         return result
+
+
+@router.post("/adventures/{adventure_id}/map/reveal/{card_id}")
+def post_reveal(adventure_id: str, card_id: str,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        if not db.get_adventure(conn, adventure_id):
+            raise GameError.not_found("adventure not found")
+        try:
+            world_map.reveal_location(conn, adventure_id, card_id)
+        except ValueError as exc:
+            code = str(exc)
+            if code == "location_not_found":
+                raise GameError.not_found("location not found") from exc
+            raise GameError(409, "reveal_not_allowed", code) from exc
+        return world_map.map_payload(conn, adventure_id, viewer=info.user)
+
 
 class WorldTypeRequest(BaseModel):
     world_type: str
@@ -92,6 +112,8 @@ def post_location_image(adventure_id: str, card_id: str,
         adventure = db.get_adventure(conn, adventure_id)
         card = db.get_card(conn, adventure_id, card_id)
         if not adventure or not card or (card.get("type") or "") != "location":
+            raise GameError.not_found("location not found")
+        if not world_map.location_visible(conn, adventure_id, card_id):
             raise GameError.not_found("location not found")
         prompt = world_map.generate_location_prompt(conn, adventure_id, card, adventure)
         if body.reference.strip():

@@ -23,6 +23,7 @@ export default function ShareModal({ adventureId, owner, onClose, onChanged }) {
   const [username, setUsername] = useState('')
   const [busy, setBusy] = useState(false)
   const [savingTurn, setSavingTurn] = useState(false)
+  const [savingDm, setSavingDm] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -75,6 +76,7 @@ export default function ShareModal({ adventureId, owner, onClose, onChanged }) {
         owner: updated?.owner ?? sharing.owner,
         turn_mode: updated?.turn_mode ?? next,
         turn_user: updated?.turn_user ?? sharing.turn_user,
+        dm_mode: updated?.dm_mode ?? sharing.dm_mode,
         shares: updated?.shares ?? sharing.shares,
       }
       try {
@@ -85,6 +87,31 @@ export default function ShareModal({ adventureId, owner, onClose, onChanged }) {
       toast(e.message)
     } finally {
       setSavingTurn(false)
+    }
+  }
+
+  const toggleDm = async () => {
+    if (!sharing || savingDm) return
+    const next = !sharing.dm_mode
+    setSavingDm(true)
+    try {
+      const updated = await api.updateAdventure(adventureId, { dm_mode: next })
+      let dict = {
+        ...sharing,
+        owner: updated?.owner ?? sharing.owner,
+        turn_mode: updated?.turn_mode ?? sharing.turn_mode,
+        turn_user: updated?.turn_user ?? sharing.turn_user,
+        dm_mode: updated?.dm_mode ?? next,
+        shares: updated?.shares ?? sharing.shares,
+      }
+      try {
+        dict = await api.getSharing(adventureId)
+      } catch { /* o PATCH já trouxe dm_mode */ }
+      apply(dict)
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setSavingDm(false)
     }
   }
 
@@ -193,6 +220,32 @@ export default function ShareModal({ adventureId, owner, onClose, onChanged }) {
               Vez de {sharing.turn_user || '—'}
             </p>
           ) : null}
+        </div>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-zinc-100">Modo DM</div>
+              <p className="mt-0.5 text-xs text-zinc-500">ações dos jogadores esperam a sua aprovação</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!sharing?.dm_mode}
+              aria-label="Modo DM"
+              disabled={!sharing || savingDm}
+              onClick={toggleDm}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                sharing?.dm_mode ? 'bg-accent-pri' : 'bg-zinc-700'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                  sharing?.dm_mode ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
         </div>
       </div>
     </Modal>

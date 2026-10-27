@@ -190,6 +190,91 @@ export async function readPcm16Wav(response, { onFormat, onSamples } = {}) {
   }
 }
 
+// OmniVoice / TalkingAvatar entregam PCM a 24 kHz. O contexto criado no
+// gesto usa essa taxa; se o browser recusar, o worklet reamostra.
+const PREWARM_SAMPLE_RATE = 24000
+
+let sharedCtx = null
+let moduleReady = null
+let moduleContext = null
+let prewarmInstalled = false
+let prewarmHandler = null
+
+function workletHref() {
+  return new URL('./pcmPlayerWorklet.js', import.meta.url).href
+}
+
+function createContext(sampleRate) {
+  const Ctx = globalThis.AudioContext
+  try {
+    return sampleRate > 0 ? new Ctx({ sampleRate }) : new Ctx()
+  } catch {
+    return new Ctx()
+  }
+}
+
+function sharedContextFor(sampleRate) {
+  if (sharedCtx && sharedCtx.state !== 'closed') return sharedCtx
+  moduleReady = null
+  moduleContext = null
+  sharedCtx = createContext(sampleRate)
+  return sharedCtx
+}
+
+function loadWorklet(context) {
+  if (moduleContext !== context) {
+    moduleContext = context
+    moduleReady = null
+  }
+  if (!moduleReady) {
+    const loading = context.audioWorklet.addModule(workletHref())
+    const tracked = loading.catch((err) => {
+      if (moduleReady === tracked) {
+        moduleReady = null
+        moduleContext = null
+      }
+      throw err
+    })
+    moduleReady = tracked
+  }
+  return moduleReady
+}
+
+function detachPrewarm() {
+  if (typeof window === 'undefined' || !prewarmHandler) return
+  window.removeEventListener('pointerdown', prewarmHandler, true)
+  window.removeEventListener('keydown', prewarmHandler, true)
+  prewarmHandler = null
+  prewarmInstalled = false
+}
+
+// Primeiro gesto: cria o AudioContext e carrega o worklet. Não toca áudio.
+export function prewarmPcmPlayback() {
+  if (prewarmInstalled || typeof window === 'undefined') return
+  prewarmInstalled = true
+  prewarmHandler = () => {
+    detachPrewarm()
+    const context = sharedContextFor(PREWARM_SAMPLE_RATE)
+    loadWorklet(context).catch(() => { /* o start seguinte tenta de novo */ })
+    if (context.state === 'suspended') {
+      context.resume().catch(() => { /* gesto já passou */ })
+    }
+  }
+  window.addEventListener('pointerdown', prewarmHandler, true)
+  window.addEventListener('keydown', prewarmHandler, true)
+}
+
+export function resetPcmPlaybackForTests() {
+  detachPrewarm()
+  try { sharedCtx?.close() } catch { /* contexto já fechado */ }
+  sharedCtx = null
+  moduleReady = null
+  moduleContext = null
+  prewarmInstalled = false
+}
+
+if (typeof window !== 'undefined') prewarmPcmPlayback()
+
 export function createPcmPlayer({ onEnded } = {}) {
   let ctx = null
   let node = null
@@ -205,26 +290,34 @@ export function createPcmPlayer({ onEnded } = {}) {
     try { onEnded?.() } catch { /* callback do chamador */ }
   }
 
+  const dropNode = () => {
+    try { node?.disconnect() } catch { /* nó já desligado */ }
+    node = null
+    if (ctx && sharedCtx !== ctx) {
+      try { ctx.close() } catch { /* contexto já fechado */ }
+    }
+    ctx = null
+  }
+
   return {
     async start(sampleRate) {
       if (stopped) return
       if (!(sampleRate > 0)) throw new Error('Invalid sample rate.')
       const id = ++session
-      let context
-      try {
-        context = new AudioContext({ sampleRate })
-      } catch {
-        context = new AudioContext()
-      }
+      const context = sharedContextFor(sampleRate)
       ctx = context
-      const workletUrl = new URL('./pcmPlayerWorklet.js', import.meta.url)
-      await context.audioWorklet.addModule(workletUrl.href)
+      try {
+        await loadWorklet(context)
+      } catch (err) {
+        if (ctx === context) ctx = null
+        throw err
+      }
       if (stopped || id !== session) {
-        try { await context.close() } catch { /* contexto já fechado */ }
         if (ctx === context) ctx = null
         return
       }
-      node = new AudioWorkletNode(context, 'pcm-player', {
+      const WorkletNode = globalThis.AudioWorkletNode
+      node = new WorkletNode(context, 'pcm-player', {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [1],
@@ -235,9 +328,12 @@ export function createPcmPlayer({ onEnded } = {}) {
       }
       node.connect(context.destination)
       if (context.state === 'suspended') {
-        try { await context.resume() } catch { /* autoplay */ }
+        try { await context.resume() } catch { /* autoplay: sem gesto, fica mudo */ }
       }
-      if (stopped || id !== session) return
+      if (stopped || id !== session) {
+        dropNode()
+        return
+      }
       for (const buf of pending) {
         node.port.postMessage({ type: 'audio', data: buf }, [buf])
       }
@@ -271,12 +367,8 @@ export function createPcmPlayer({ onEnded } = {}) {
       pendingFinish = false
       try { node?.port.postMessage({ type: 'stop' }) } catch { /* porta já fechada */ }
       try { node?.disconnect() } catch { /* nó já desligado */ }
-      const closing = ctx
       node = null
       ctx = null
-      if (closing) {
-        try { closing.close() } catch { /* contexto já fechado */ }
-      }
       emitEnded()
     },
   }

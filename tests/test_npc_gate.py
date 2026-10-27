@@ -164,6 +164,66 @@ def test_remember_stores_only_ai_reactions(tmp_db, monkeypatch):
     assert memories[0]["text"] == "Ela não abaixa a lança."
 
 
+def test_no_living_npc_skips_llm_with_neutral_allow(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Vazio")
+        db.insert_card(conn, adv["id"], title="Jogador", type="character",
+                       player_username="caio", entry="O protagonista.")
+        db.insert_card(
+            conn, adv["id"], title="Fantasma", type="character",
+            entry="Já se foi.",
+            sheet=json.dumps({"status": "dead"}),
+        )
+        db.insert_card(conn, adv["id"], title="Taverna", type="location",
+                       entry="Salão vazio.")
+    calls = _capture(monkeypatch, "não deveria ser chamado")
+    result = npc_gate.decide(adv["id"], "Eu abro a porta.", {}, None)
+    assert calls == []
+    assert result["decision"] == "allow"
+    assert result["reactions"] == []
+    assert result["initiative"] is None
+    assert result["outcome"]
+    assert result["cue"] == result["outcome"]
+    assert npc_gate.own_beat(adv["id"], {}, None) is None
+    assert calls == []
+
+
+def test_dead_only_roster_still_skips_llm(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Cemitério")
+        db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            entry="Guarda caída.",
+            sheet=json.dumps({"status": "missing"}),
+        )
+    calls = _capture(monkeypatch, "não deveria ser chamado")
+    result = npc_gate.decide(adv["id"], "Eu procuro Elara.", {}, None)
+    assert calls == []
+    assert result["decision"] == "allow"
+    assert result["reactions"] == []
+
+
+def test_living_npc_still_calls_llm_with_token_cap(tmp_db, monkeypatch):
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Com gente")
+        elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
+                               entry="Guarda na porta.")
+    calls = _capture(monkeypatch, json.dumps({
+        "decision": "refuse",
+        "outcome": "Elara barra a porta.",
+        "reactions": [{"npc": "Elara", "card_id": elara["id"],
+                       "reaction": "Ela cruza a lança.", "line": "Não."}],
+        "initiative": None,
+        "cue": "Mostre a recusa.",
+    }))
+    result = npc_gate.decide(adv["id"], "Eu entro.", {}, None)
+    assert result["decision"] == "refuse"
+    assert result["reactions"][0]["npc"] == "Elara"
+    assert len(calls) == 1
+    assert calls[0][2]["max_tokens"] == npc_gate.GATE_MAX_TOKENS == 400
+    assert calls[0][2]["role"] == "meta"
+
+
 def test_cue_block_never_invents_player_prose():
     cue = npc_gate.cue_block({
         "decision": "refuse",
@@ -175,3 +235,21 @@ def test_cue_block_never_invents_player_prose():
     assert "Elara não deixa passar." in cue
     assert "NÃO tem o efeito" in cue or "NÃO" in cue
     assert "Fale" not in cue or "Fala possível" in cue
+
+
+def test_gate_retries_once_with_legacy_budget_when_json_is_truncated(monkeypatch):
+    responses = iter([
+        '{"decision":"allow","reactions":[',
+        json.dumps({"decision": "allow", "outcome": "Segue.",
+                    "reactions": [], "initiative": None, "cue": "Segue."}),
+    ])
+    budgets = []
+
+    def fake_chat(*args, **kwargs):
+        budgets.append(kwargs["max_tokens"])
+        return next(responses)
+
+    monkeypatch.setattr(npc_gate.llm_client, "chat_completion", fake_chat)
+    result = npc_gate._call({}, {"action": "seguir"}, None)
+    assert result["decision"] == "allow"
+    assert budgets == [400, 900]

@@ -209,8 +209,10 @@ def test_narrative_lets_only_the_see_through(client, stack):
 
 def test_present_portrait_jumps_the_bulk_queue(client):
     adv = make_adventure()
-    make_npc(adv["id"], title="Ada", entry="Captain.")
-    rex = make_npc(adv["id"], title="Rex", entry="Engineer.")
+    make_npc(adv["id"], title="Ada", entry="Captain.",
+             portrait_prompt="ada bust portrait")
+    rex = make_npc(adv["id"], title="Rex", entry="Engineer.",
+                   portrait_prompt="rex bust portrait")
     bulk = client.post(f"/api/adventures/{adv['id']}/portraits").json()["jobs"]
     assert {job["priority"] for job in bulk} == {jobs.PRIORITY_BULK_PORTRAIT}
 

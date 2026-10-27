@@ -19,21 +19,25 @@ router = APIRouter()
 def create_scenario(body: ScenarioCreate,
                     info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
     log.info("scenarios: %s criou o cenário %r", info.user, body.title)
-    with db.session() as conn:
-        return db.insert_scenario(
-            conn,
-            title=body.title,
-            description=body.description,
-            ai_instructions=body.ai_instructions,
-            plot_essentials=body.plot_essentials,
-            authors_note=body.authors_note,
-            opening_text=body.opening_text,
-            image_style=body.image_style,
-            tags=body.tags,
-            story_cards=[c.model_dump(exclude_none=True) for c in body.story_cards],
-            third_person=body.third_person,
-            owner=info.user,
-        )
+    try:
+        with db.session() as conn:
+            return db.insert_scenario(
+                conn,
+                title=body.title,
+                description=body.description,
+                ai_instructions=body.ai_instructions,
+                plot_essentials=body.plot_essentials,
+                authors_note=body.authors_note,
+                opening_text=body.opening_text,
+                story_starts=[s.model_dump() for s in body.story_starts],
+                image_style=body.image_style,
+                tags=body.tags,
+                story_cards=[c.model_dump(exclude_none=True) for c in body.story_cards],
+                third_person=body.third_person,
+                owner=info.user,
+            )
+    except ValueError as exc:
+        raise GameError.bad_request("invalid_story_start", str(exc)) from exc
 
 
 @router.get("")
@@ -61,13 +65,18 @@ def patch_scenario(scenario_id: str, body: ScenarioUpdate,
             c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c
             for c in body.story_cards
         ]
-    with db.session() as conn:
-        scenario = db.get_scenario(conn, scenario_id)
-        if not scenario:
-            raise GameError.not_found(f"scenario {scenario_id} not found")
-        if not access.can_manage(info.user, scenario["owner"]):
-            raise GameError(403, "forbidden", "only the owner or admin can change this scenario")
-        return db.update_scenario(conn, scenario_id, **fields)
+    if "story_starts" in fields and body.story_starts is not None:
+        fields["story_starts"] = [s.model_dump() for s in body.story_starts]
+    try:
+        with db.session() as conn:
+            scenario = db.get_scenario(conn, scenario_id)
+            if not scenario:
+                raise GameError.not_found(f"scenario {scenario_id} not found")
+            if not access.can_manage(info.user, scenario["owner"]):
+                raise GameError(403, "forbidden", "only the owner or admin can change this scenario")
+            return db.update_scenario(conn, scenario_id, **fields)
+    except ValueError as exc:
+        raise GameError.bad_request("invalid_story_start", str(exc)) from exc
 
 
 @router.delete("/{scenario_id}")

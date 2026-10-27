@@ -108,7 +108,7 @@ export function InspectorPane({
           </Suspense>
         )}
         {tab === 'consistency' && <ConsistencyTab adventure={adventure} />}
-        {tab === 'config' && <ConfigTab />}
+        {tab === 'config' && <ConfigTab adventure={adventure} />}
         {tab === 'details' && <DetailsTab adventure={adventure} onAdventureChange={onAdventureChange} />}
         {tab === 'sim' && (
           <SimTab adventure={adventure} onAdventureChange={onAdventureChange} version={simVersion} />

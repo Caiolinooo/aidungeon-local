@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -29,6 +29,49 @@ class UserCreate(BaseModel):
 
 class UserPassword(BaseModel):
     password: str
+
+
+class StoryStart(BaseModel):
+    """Início nomeado. Na lista do scenario, o primeiro é o padrão."""
+
+    id: str | None = Field(default=None, max_length=80)
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=50000)
+
+    @field_validator("id", "title", "text", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        if value is None:
+            return value
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        return value.strip()
+
+    @field_validator("title", "text")
+    @classmethod
+    def _nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
+    @field_validator("id")
+    @classmethod
+    def _blank_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+def _unique_story_starts(starts: list[StoryStart] | None) -> list[StoryStart] | None:
+    if not starts:
+        return starts
+    if len(starts) > 30:
+        raise ValueError("too many story starts")
+    ids = [item.id for item in starts if item.id]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate story start id")
+    return starts
 
 
 class StoryCardUpsert(BaseModel):
@@ -69,11 +112,17 @@ class ScenarioCreate(BaseModel):
     plot_essentials: str = ""
     authors_note: str = ""
     opening_text: str = ""
+    story_starts: list[StoryStart] = Field(default_factory=list)
     image_style: str = ""
     tags: list[str] = Field(default_factory=list)
     # cards iniciais do rascunho do assistente (v2) — herdados pela aventura
     story_cards: list[StoryCardUpsert] = Field(default_factory=list)
     third_person: bool = False
+
+    @field_validator("story_starts")
+    @classmethod
+    def _starts(cls, starts: list[StoryStart]) -> list[StoryStart]:
+        return _unique_story_starts(starts) or []
 
 
 class ScenarioUpdate(BaseModel):
@@ -84,14 +133,22 @@ class ScenarioUpdate(BaseModel):
     plot_essentials: str | None = None
     authors_note: str | None = None
     opening_text: str | None = None
+    story_starts: list[StoryStart] | None = None
     image_style: str | None = None
     tags: list[str] | None = None
     story_cards: list[StoryCardUpsert] | None = None
     third_person: bool | None = None
 
+    @field_validator("story_starts")
+    @classmethod
+    def _starts(cls, starts: list[StoryStart] | None) -> list[StoryStart] | None:
+        return _unique_story_starts(starts)
+
 
 class AdventureCreate(BaseModel):
     scenario_id: str | None = None
+    publication_id: str | None = None
+    publication_version: int | None = Field(default=None, ge=1)
     title: str | None = None
     tags: list[str] | None = None
     image_style: str | None = None
@@ -100,6 +157,7 @@ class AdventureCreate(BaseModel):
     authors_note: str | None = None
     third_person: bool | None = None
     character_rules: str | None = Field(default=None, max_length=4000)
+    start_id: str | None = Field(default=None, max_length=80)
 
 
 class AdventureUpdate(BaseModel):
@@ -114,6 +172,7 @@ class AdventureUpdate(BaseModel):
     image_style: str | None = None
     third_person: bool | None = None
     turn_mode: bool | None = None
+    dm_mode: bool | None = None
     character_rules: str | None = Field(default=None, max_length=4000)
 
 
@@ -145,6 +204,7 @@ class AdventureFromDraft(BaseModel):
     draft: ScenarioCreate
     character: PlayerCharacterUpsert | None = None
     ruleset_id: str | None = None
+    start_id: str | None = Field(default=None, max_length=80)
 
 
 class AdventureShareCreate(BaseModel):
@@ -368,6 +428,18 @@ class ScriptingSettingsUpdate(BaseModel):
     output_modifier: str | None = None
 
 
+class AdventureScriptsUpdate(BaseModel):
+    """PUT /api/adventures/{id}/scripts.
+
+    Campo omitido permanece. String vazia ou só espaços apaga o hook da
+    aventura para o turno voltar a `script:global:*` daquele hook.
+    O texto passa pelo validador do sandbox e não é executado neste endpoint.
+    """
+    input_modifier: str | None = None
+    context_modifier: str | None = None
+    output_modifier: str | None = None
+
+
 class RulesetUpsert(BaseModel):
     """POST exige name e rules (a rota recusa ausência). PUT aceita qualquer subconjunto."""
     name: str | None = Field(default=None, min_length=1, max_length=120)
@@ -379,5 +451,76 @@ class RulesetApply(BaseModel):
     """POST /adventures/{id}/rulesets/apply — copia rules para character_rules."""
     ruleset_id: str = Field(min_length=1)
     mode: Literal["replace", "append"] = "replace"
+
+
+class QuestStageIn(BaseModel):
+    id: str = ""
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    done: bool = False
+
+
+class QuestTriggerClause(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    fact: Literal["hp", "gold", "san", "resource", "item", "location", "relation"]
+    op: Literal["eq", "ne", "lt", "lte", "gt", "gte"] | None = None
+    value: int | None = None
+    name: str | None = Field(default=None, max_length=80)
+    qty: int | None = Field(default=None, ge=0, le=999)
+    title: str | None = Field(default=None, max_length=120)
+    place: str | None = Field(default=None, max_length=80)
+    card_id: str | None = Field(default=None, max_length=80)
+    location_id: str | None = Field(default=None, max_length=80)
+    a: str | None = Field(default=None, max_length=80)
+    b: str | None = Field(default=None, max_length=80)
+    stat: str | None = Field(default=None, max_length=40)
+    other_id: str | None = Field(default=None, max_length=80)
+
+
+class QuestTriggerEffect(BaseModel):
+    quest_id: str = ""
+    status: Literal["hidden", "planned", "available", "accepted", "completed", "failed"] | None = None
+    stage_id: str = ""
+    done: bool | None = None
+    progress: int | None = Field(default=None, ge=0, le=999)
+    progress_delta: int | None = Field(default=None, ge=-999, le=999)
+
+
+class QuestTriggerIn(BaseModel):
+    id: str = ""
+    when: list[QuestTriggerClause] = Field(min_length=1, max_length=12)
+    apply: list[QuestTriggerEffect] = Field(min_length=1, max_length=8)
+
+
+class QuestTriggerCreate(BaseModel):
+    """POST /adventures/{id}/sim/triggers. `quest_id` no efeito aponta a missão."""
+    id: str = ""
+    quest_id: str = ""
+    when: list[QuestTriggerClause] = Field(min_length=1, max_length=12)
+    apply: list[QuestTriggerEffect] = Field(min_length=1, max_length=8)
+
+
+class QuestCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    status: Literal["hidden", "planned", "available", "accepted", "completed", "failed"] = "planned"
+    stages: list[QuestStageIn] = Field(default_factory=list, max_length=20)
+    progress_target: int | None = Field(default=None, ge=1, le=999)
+    triggers: list[QuestTriggerIn] = Field(default_factory=list, max_length=12)
+
+
+class QuestPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    status: Literal["hidden", "planned", "available", "accepted", "completed", "failed"] | None = None
+    stages: list[QuestStageIn] | None = None
+    progress_target: int | None = Field(default=None, ge=1, le=999)
+
+
+class QuestTransition(BaseModel):
+    status: Literal["hidden", "planned", "available", "accepted", "completed", "failed"] | None = None
+    stage_id: str | None = None
+    done: bool | None = None
+    progress: int | None = Field(default=None, ge=0, le=999)
 
 

@@ -13,7 +13,8 @@ import { clearToken, getToken } from './auth.js'
 
 // Prefixo absoluto opcional da API (deploy do frontend fora do backend).
 // '' (default) = mesma origem — comportamento local inalterado.
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+const viteEnv = import.meta.env ?? {}
+export const API_BASE = String(viteEnv.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 export class ApiError extends Error {
   constructor(status, code, message, hint = '') {
@@ -92,7 +93,7 @@ async function parseError(res) {
   return new ApiError(res.status, code, message, hint)
 }
 
-async function request(path, { method = 'GET', body, signal, headers } = {}) {
+export async function request(path, { method = 'GET', body, signal, headers } = {}) {
   const extra = headers || {}
   let res
   try {
@@ -207,6 +208,19 @@ export const api = {
     request(`/adventures/${id}/sharing`, { method: 'POST', body: { username } }),
   unshareAdventure: (id, username) =>
     request(`/adventures/${id}/sharing/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  // DM: jogador manda JSON (202). Aprovar reabre o stream de /action.
+  listIntents: (id, status = 'pending') =>
+    request(`/adventures/${id}/intents${qs({ status })}`),
+  postAction: (id, payload) =>
+    request(`/adventures/${id}/action`, { method: 'POST', body: payload }),
+  rejectIntent: (id, intentId) =>
+    request(`/adventures/${id}/intents/${encodeURIComponent(intentId)}/reject`, { method: 'POST' }),
+  approveIntent: (id, intentId, handlers = {}) => import('./sse.js').then(
+    ({ streamGeneration }) => streamGeneration(
+      `/adventures/${id}/intents/${encodeURIComponent(intentId)}/approve`,
+      handlers,
+    ),
+  ),
   // Ficha do jogador nesta aventura. GET → {card|null}; PUT devolve o card.
   getCharacter: (id) => request(`/adventures/${id}/character`),
   saveCharacter: (id, payload) =>
@@ -328,8 +342,16 @@ export const api = {
   healthLlm: () => request('/health/llm'),
   healthVoice: () => request('/health/voice'),
   healthImage: () => request('/health/image'),
-  getVoiceSettings: () => request('/settings/voice'),
-  putVoiceSettings: (payload) => request('/settings/voice', { method: 'PUT', body: payload }),
+  getVoiceSettings: async () => {
+    const data = await request('/settings/voice')
+    noteNarratorVoice(data)
+    return data
+  },
+  putVoiceSettings: async (payload) => {
+    const data = await request('/settings/voice', { method: 'PUT', body: payload })
+    noteNarratorVoice(data)
+    return data
+  },
   getEmbeddingsSettings: () => request('/settings/embeddings'),
   putEmbeddingsSettings: (payload) => request('/settings/embeddings', { method: 'PUT', body: payload }),
   getScriptingSettings: () => request('/settings/scripting'),
@@ -445,7 +467,13 @@ export const api = {
   // TTS (Supertonic) + STT (Whisper) via stack de voz da VM — contrato v0.4.0.
   voice: {
     // GET /voices → {voices: [...], narrator_voice: "M1"} (config efetiva).
-    list: ({ signal } = {}) => request('/voices', { signal }),
+    // A narração usa narratorVoice() e não repete este GET. Não há evento de
+    // settings: o cache acompanha list/get/put e o delete do narrador.
+    list: async ({ signal } = {}) => {
+      const data = await request('/voices', { signal })
+      noteNarratorVoice(data)
+      return data
+    },
     clone: (file, name, refText, { signal } = {}) => {
       const fd = new FormData()
       fd.append('file', file, file.name || 'voice.webm')
@@ -453,7 +481,25 @@ export const api = {
       fd.append('ref_text', refText || '')
       return request('/voices/clone', { method: 'POST', body: fd, signal })
     },
-    remove: (id, { signal } = {}) => request(`/voices/${id}`, { method: 'DELETE', signal }),
+    remove: async (id, { signal } = {}) => {
+      const data = await request(`/voices/${id}`, { method: 'DELETE', signal })
+      if (narratorVoiceCache === id) narratorVoiceCache = 'M1'
+      return data
+    },
+    // Voz do narrador já vista nesta página. Um GET /voices no máximo até
+    // settings ou delete mudarem o valor.
+    narratorVoice: async () => {
+      if (narratorVoiceCache) return narratorVoiceCache
+      if (!narratorVoiceInflight) {
+        narratorVoiceInflight = request('/voices').then((data) => {
+          noteNarratorVoice(data)
+          return narratorVoiceCache
+        }).finally(() => {
+          narratorVoiceInflight = null
+        })
+      }
+      return narratorVoiceInflight
+    },
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
     // extra: { emotion, adventureId, signal } — a emoção da linha e, se a linha
@@ -498,7 +544,24 @@ export const api = {
       if (/^[a-z]{2}$/.test(lang)) fd.append('language', lang)
       return request('/stt', { method: 'POST', body: fd, signal })
     },
-    getSettings: () => request('/settings/voice'),
-    putSettings: (patch, { signal } = {}) => request('/settings/voice', { method: 'PUT', body: patch, signal }),
+    getSettings: async () => {
+      const data = await request('/settings/voice')
+      noteNarratorVoice(data)
+      return data
+    },
+    putSettings: async (patch, { signal } = {}) => {
+      const data = await request('/settings/voice', { method: 'PUT', body: patch, signal })
+      noteNarratorVoice(data)
+      return data
+    },
   },
+}
+
+let narratorVoiceCache = ''
+let narratorVoiceInflight = null
+
+function noteNarratorVoice(data) {
+  if (data && typeof data.narrator_voice === 'string' && data.narrator_voice) {
+    narratorVoiceCache = data.narrator_voice
+  }
 }

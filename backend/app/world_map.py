@@ -3,6 +3,11 @@
 Locais são cards `type=location`. Conexões, posição, imagens e entradas do
 journal usam essas mesmas entidades, então mapa, narrativa, memória e imagens
 compartilham referências em vez de inventar objetos separados.
+
+Fog usa `location_links.discovered`: o payload mostra o local atual, locais
+sem link (mundos já existentes) e locais com link descoberto. O destino de um
+link novo não descoberto fica de fora, sem journal, imagem ou coordenada.
+Viajar, gerar ou revelar sobe `discovered` e não rebaixa progresso antigo.
 """
 
 from __future__ import annotations
@@ -24,6 +29,75 @@ def _location_cards(conn, adventure_id: str) -> list[dict]:
     ]
 
 
+def _link_rows(conn, adventure_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM location_links WHERE adventure_id=?",
+        (adventure_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _viewer_sees_unlinked(adventure: dict, viewer: str | None) -> bool:
+    """Local sem rota: dono (e admin) vê. Sem plateia, o mapa legado continua.
+    Jogador que não é dono não vê.
+    """
+    if viewer is None:
+        return True
+    return db.is_adventure_owner(adventure, viewer)
+
+
+def _revealed_ids(cards: list[dict], links: list[dict],
+                  current_id: str | None, *,
+                  include_unlinked: bool = True) -> set[str]:
+    """Quem o mapa pode mostrar.
+
+    O destino de um link `discovered=0` fica oculto. A origem desse link, o
+    local atual e quem tem link descoberto continuam visíveis. Local sem
+    nenhum link só entra com `include_unlinked` (dono ou chamada sem plateia).
+    """
+    has_any: set[str] = set()
+    has_discovered: set[str] = set()
+    concealed_targets: set[str] = set()
+    for link in links:
+        origin = link.get("from_card_id")
+        dest = link.get("to_card_id")
+        if origin:
+            has_any.add(origin)
+        if dest:
+            has_any.add(dest)
+        if int(link.get("discovered") or 0):
+            if origin:
+                has_discovered.add(origin)
+            if dest:
+                has_discovered.add(dest)
+        elif dest:
+            concealed_targets.add(dest)
+    revealed: set[str] = set()
+    for card in cards:
+        card_id = card["id"]
+        if current_id and card_id == current_id:
+            revealed.add(card_id)
+        elif card_id in has_discovered:
+            revealed.add(card_id)
+        elif card_id not in has_any:
+            if include_unlinked:
+                revealed.add(card_id)
+        elif card_id not in concealed_targets:
+            revealed.add(card_id)
+    return revealed
+
+
+def _hidden_ids(conn, adventure_id: str, *, include_unlinked: bool = True) -> set[str]:
+    cards = _location_cards(conn, adventure_id)
+    current = current_location(conn, adventure_id)
+    current_id = current["id"] if current else None
+    revealed = _revealed_ids(
+        cards, _link_rows(conn, adventure_id), current_id,
+        include_unlinked=include_unlinked,
+    )
+    return {card["id"] for card in cards if card["id"] not in revealed}
+
+
 def current_location(conn, adventure_id: str) -> dict | None:
     row = conn.execute(
         "SELECT current_card_id FROM map_state WHERE adventure_id=?",
@@ -31,8 +105,29 @@ def current_location(conn, adventure_id: str) -> dict | None:
     ).fetchone()
     if row and row["current_card_id"]:
         return db.get_card(conn, adventure_id, row["current_card_id"])
-    locations = _location_cards(conn, adventure_id)
-    return locations[0] if locations else None
+    cards = _location_cards(conn, adventure_id)
+    if not cards:
+        return None
+    revealed = _revealed_ids(cards, _link_rows(conn, adventure_id), None)
+    for card in cards:
+        if card["id"] in revealed:
+            return card
+    return None
+
+
+def location_visible(conn, adventure_id: str, card_id: str, *,
+                     viewer: str | None = None) -> bool:
+    card = db.get_card(conn, adventure_id, card_id)
+    if not card or (card.get("type") or "") != "location":
+        return False
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    current = current_location(conn, adventure_id)
+    current_id = current["id"] if current else None
+    cards = _location_cards(conn, adventure_id)
+    return card_id in _revealed_ids(
+        cards, _link_rows(conn, adventure_id), current_id,
+        include_unlinked=_viewer_sees_unlinked(adventure, viewer),
+    )
 
 
 def set_current_location(conn, adventure_id: str, card_id: str) -> dict:
@@ -119,18 +214,34 @@ def coherent_location_context(conn, adventure_id: str, card: dict) -> str:
 def ensure_link(conn, adventure_id: str, from_id: str, to_id: str, *,
                 travel_text: str = "", travel_cost: str = "",
                 bidirectional: bool = True, discovered: bool = True) -> dict:
+    """Cria a rota. `discovered=False` só vale na inserção: não rebaixa fog já aberto."""
+    existing = conn.execute(
+        "SELECT * FROM location_links WHERE adventure_id=? AND from_card_id=? AND to_card_id=?",
+        (adventure_id, from_id, to_id),
+    ).fetchone()
+    if existing:
+        if discovered and not int(existing["discovered"] or 0):
+            conn.execute(
+                "UPDATE location_links SET discovered=1 WHERE id=?",
+                (existing["id"],),
+            )
+            existing = conn.execute(
+                "SELECT * FROM location_links WHERE id=?",
+                (existing["id"],),
+            ).fetchone()
+        return dict(existing)
     link_id = db.new_id()
     conn.execute(
-        "INSERT OR IGNORE INTO location_links("
+        "INSERT INTO location_links("
         "id,adventure_id,from_card_id,to_card_id,travel_text,travel_cost,"
         "bidirectional,discovered,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
         (link_id, adventure_id, from_id, to_id, travel_text, travel_cost,
          int(bidirectional), int(discovered), db.utcnow()),
     )
-    return conn.execute(
-        "SELECT * FROM location_links WHERE adventure_id=? AND from_card_id=? AND to_card_id=?",
-        (adventure_id, from_id, to_id),
-    ).fetchone()
+    return dict(conn.execute(
+        "SELECT * FROM location_links WHERE id=?",
+        (link_id,),
+    ).fetchone())
 
 
 def links_for(conn, adventure_id: str, card_id: str, *,
@@ -159,15 +270,86 @@ def links_for(conn, adventure_id: str, card_id: str, *,
     return result
 
 
+def _promote_links(conn, adventure_id: str, card_id: str) -> int:
+    """Abre só as rotas entre este local e locais já visíveis. Vizinhos ocultos ficam."""
+    cards = _location_cards(conn, adventure_id)
+    links = _link_rows(conn, adventure_id)
+    current = current_location(conn, adventure_id)
+    current_id = current["id"] if current else None
+    known = _revealed_ids(cards, links, current_id)
+    updated = 0
+    for link in links:
+        if int(link.get("discovered") or 0):
+            continue
+        origin = link.get("from_card_id")
+        dest = link.get("to_card_id")
+        if card_id not in (origin, dest):
+            continue
+        other = dest if origin == card_id else origin
+        if other not in known:
+            continue
+        conn.execute(
+            "UPDATE location_links SET discovered=1 WHERE id=? AND discovered=0",
+            (link["id"],),
+        )
+        updated += 1
+    return updated
+
+
+def reveal_location(conn, adventure_id: str, card_id: str) -> dict:
+    """Marca o local como descoberto se ele liga a um local já visível."""
+    card = db.get_card(conn, adventure_id, card_id)
+    if not card or (card.get("type") or "") != "location":
+        raise ValueError("location_not_found")
+    _promote_links(conn, adventure_id, card_id)
+    if not location_visible(conn, adventure_id, card_id):
+        raise ValueError("location_not_connected")
+    return card
+
+
+def _public_links(conn, adventure_id: str, card_id: str,
+                  revealed: set[str]) -> list[dict]:
+    """Saída conhecida leva título e destino. Saída na névoa não leva
+    to_card_id, título nem entry."""
+    raw = links_for(conn, adventure_id, card_id, include_undiscovered=True)
+    public: list[dict] = []
+    seen: set[tuple] = set()
+    seen_hidden: set[str] = set()
+    for link in raw:
+        dest = link.get("to_card_id")
+        key = (link.get("id"), dest)
+        if key in seen:
+            continue
+        seen.add(key)
+        if dest not in revealed:
+            if not dest or dest in seen_hidden:
+                continue
+            seen_hidden.add(dest)
+            public.append({
+                "id": link.get("id"),
+                "from_card_id": link.get("from_card_id"),
+                "bidirectional": int(link.get("bidirectional") or 0),
+                "discovered": 0,
+                "hidden": True,
+            })
+            continue
+        item = dict(link)
+        item["hidden"] = False
+        item["discovered"] = int(link.get("discovered") or 0)
+        public.append(item)
+    return public
+
+
 def travel(conn, adventure_id: str, to_card_id: str) -> dict:
     current = current_location(conn, adventure_id)
     if current is None:
         raise ValueError("no_current_location")
     if current["id"] == to_card_id:
         return {"location": current, "travelled": False, "links": []}
-    options = links_for(conn, adventure_id, current["id"])
+    options = links_for(conn, adventure_id, current["id"], include_undiscovered=True)
     if not any(item["to_card_id"] == to_card_id for item in options):
         raise ValueError("location_not_connected")
+    reveal_location(conn, adventure_id, to_card_id)
     destination = set_current_location(conn, adventure_id, to_card_id)
     add_journal(
         conn, adventure_id, kind="travel", title=f"Viagem para {destination['title']}",
@@ -175,28 +357,36 @@ def travel(conn, adventure_id: str, to_card_id: str) -> dict:
         entity_type="location", entity_id=to_card_id,
         related=[{"type": "location", "id": current["id"], "title": current["title"]}],
     )
+    cards = _location_cards(conn, adventure_id)
+    revealed = _revealed_ids(cards, _link_rows(conn, adventure_id), destination["id"])
     return {
         "location": destination,
         "travelled": True,
         "from": current,
-        "links": links_for(conn, adventure_id, to_card_id),
+        "links": _public_links(conn, adventure_id, destination["id"], revealed),
     }
 
 
-def map_payload(conn, adventure_id: str) -> dict:
+def map_payload(conn, adventure_id: str, *, viewer: str | None = None) -> dict:
     adventure = db.get_adventure(conn, adventure_id) or {}
-    locations = _location_cards(conn, adventure_id)
+    cards = _location_cards(conn, adventure_id)
     current = current_location(conn, adventure_id)
+    current_id = current["id"] if current else None
+    revealed = _revealed_ids(
+        cards, _link_rows(conn, adventure_id), current_id,
+        include_unlinked=_viewer_sees_unlinked(adventure, viewer),
+    )
+    revealed_cards = [card for card in cards if card["id"] in revealed]
     nodes = []
-    for card in locations:
+    for card in revealed_cards:
         image = latest_location_image(conn, adventure_id, card["id"])
         nodes.append({
             "id": card["id"],
             "title": card.get("title") or "",
             "entry": card.get("entry") or "",
-            "current": bool(current and current["id"] == card["id"]),
+            "current": bool(current_id and current_id == card["id"]),
             "image": image,
-            "links": links_for(conn, adventure_id, card["id"]),
+            "links": _public_links(conn, adventure_id, card["id"], revealed),
             "hierarchy": location_hierarchy(card),
         })
     player = db.player_character(conn, adventure_id, adventure.get("owner") or "")
@@ -205,11 +395,11 @@ def map_payload(conn, adventure_id: str) -> dict:
         "current": current,
         "world_type": world_type_of(adventure),
         "locations": nodes,
-        "journal": journal_for(conn, adventure_id),
+        "journal": visible_journal(conn, adventure_id, viewer=viewer),
         "progression": progression.progression_of(
             npc_assets.parse_sheet((player or {}).get("sheet") or "")
         ),
-        "npc_relations": progression.relationship_context(locations),
+        "npc_relations": progression.relationship_context(revealed_cards),
     }
 
 
@@ -235,20 +425,67 @@ def add_journal(conn, adventure_id: str, *, kind: str, title: str, text: str,
     return dict(row) if row else {}
 
 
+def _journal_item(row) -> dict:
+    item = dict(row)
+    try:
+        item["related"] = json.loads(item.pop("related_json") or "[]")
+    except ValueError:
+        item["related"] = []
+    return item
+
+
 def journal_for(conn, adventure_id: str, *, limit: int = 40) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM journal_entries WHERE adventure_id=? "
         "ORDER BY created_at DESC, id DESC LIMIT ?",
         (adventure_id, limit),
     ).fetchall()
-    result = []
-    for row in rows:
-        item = dict(row)
-        try:
-            item["related"] = json.loads(item.pop("related_json") or "[]")
-        except ValueError:
-            item["related"] = []
-        result.append(item)
+    return [_journal_item(row) for row in rows]
+
+
+def visible_journal(conn, adventure_id: str, *, limit: int = 40,
+                    viewer: str | None = None) -> list[dict]:
+    """Journal do mapa.
+
+    Névoa e notas `visibility=dm` ficam de fora para quem não é dono.
+    Com dm_mode, o dono também vê a entrada do local ainda escondido.
+    Os nós do mapa (coordenada, imagem) continuam na névoa.
+    """
+    adventure = db.get_adventure(conn, adventure_id) or {}
+    owner = bool(viewer) and db.is_adventure_owner(adventure, viewer)
+    include_hidden = owner and bool(adventure.get("dm_mode"))
+    include_dm = owner
+    hidden: set[str] = set() if include_hidden else _hidden_ids(
+        conn, adventure_id,
+        include_unlinked=_viewer_sees_unlinked(adventure, viewer),
+    )
+    if not hidden:
+        result = journal_for(conn, adventure_id, limit=limit)
+    else:
+        placeholders = ",".join("?" * len(hidden))
+        rows = conn.execute(
+            "SELECT * FROM journal_entries WHERE adventure_id=? "
+            f"AND NOT (entity_type='location' AND entity_id IN ({placeholders})) "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (adventure_id, *sorted(hidden), limit),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = _journal_item(row)
+            item["related"] = [
+                rel for rel in (item.get("related") or [])
+                if not (
+                    isinstance(rel, dict)
+                    and rel.get("type") == "location"
+                    and rel.get("id") in hidden
+                )
+            ]
+            result.append(item)
+    if not include_dm:
+        result = [
+            item for item in result
+            if (item.get("visibility") or "public") != "dm"
+        ]
     return result
 
 
@@ -333,7 +570,7 @@ def generate_location(conn, adventure_id: str, *, name: str,
     )
     if current:
         ensure_link(conn, adventure_id, current["id"], card["id"],
-                    travel_text=f"Travel to {card['title']}")
+                    travel_text=f"Travel to {card['title']}", discovered=True)
     add_journal(
         conn, adventure_id, kind="discovery", title=f"Local descoberto: {card['title']}",
         text=card.get("entry") or "",

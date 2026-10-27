@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
+import { storyStartsFromScenario } from '../api/storyStarts.js'
 import { clearToken } from '../auth.js'
 import { useToast } from '../components/Toast.jsx'
 import Modal from '../components/Modal.jsx'
@@ -107,6 +108,9 @@ export default function Home() {
           <p className="mt-1 text-xs text-muted">Contos interativos no seu servidor — 100% privado, modelo local.</p>
         </div>
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 items-center">
+          <Link to="/catalog" className="flex h-10 shrink-0 items-center rounded-full border border-subtle bg-surface px-4 text-sm font-medium text-secondary hover:bg-elevated hover:text-primary">
+            Catálogo
+          </Link>
           <button
             onClick={() => setShowReaderModal(true)}
             title="Tema e tipografia da leitura"
@@ -313,6 +317,7 @@ function NewAdventureModal({ onClose, onDeleted }) {
   const [pendingDelete, setPendingDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [selected, setSelected] = useState('blank') // 'blank' | scenario.id
+  const [startId, setStartId] = useState('')
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
@@ -338,10 +343,23 @@ function NewAdventureModal({ onClose, onDeleted }) {
     }
   }
 
+  const selectScenario = (id) => {
+    setSelected(id)
+    if (id === 'blank') {
+      setStartId('')
+      return
+    }
+    const scenario = (scenarios || []).find((item) => item.id === id)
+    const starts = storyStartsFromScenario(scenario)
+    setStartId(starts[0]?.id || '')
+  }
+
   const start = async () => {
     setCreating(true)
     try {
-      const payload = selected === 'blank' ? {} : { scenario_id: selected }
+      const payload = selected === 'blank'
+        ? {}
+        : { scenario_id: selected, ...(startId ? { start_id: startId } : {}) }
       const adv = await api.createAdventure(payload)
       navigate(`/play/${adv.id}`)
     } catch (e) {
@@ -366,7 +384,10 @@ function NewAdventureModal({ onClose, onDeleted }) {
     try {
       await api.deleteScenario(s.id)
       setScenarios((list) => list.filter((x) => x.id !== s.id))
-      setSelected((cur) => (cur === s.id ? 'blank' : cur))
+      if (selected === s.id) {
+        setSelected('blank')
+        setStartId('')
+      }
       toast('Scenario deleted.', 'success')
     } catch (err) {
       toast(err.message)
@@ -428,21 +449,23 @@ function NewAdventureModal({ onClose, onDeleted }) {
               selected === 'blank' ? 'border-accent-pri bg-accent-950/30' : 'border-subtle hover:border-subtle'
             }`}
           >
-            <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => setSelected('blank')} className="mt-1 accent-accent-600" />
+            <input type="radio" name="scenario" checked={selected === 'blank'} onChange={() => selectScenario('blank')} className="mt-1 accent-accent-600" />
             <div>
               <div className="font-semibold text-primary">Aventura em branco</div>
               <div className="text-sm text-muted">Começa com a história vazia — você define a cena.</div>
             </div>
           </label>
 
-          {scenarios.map((s) => (
+          {scenarios.map((s) => {
+            const starts = storyStartsFromScenario(s)
+            return (
+            <div key={s.id} className="flex flex-col gap-1">
             <label
-              key={s.id}
               className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
                 selected === s.id ? 'border-accent-pri bg-accent-950/30' : 'border-subtle hover:border-subtle'
               }`}
             >
-              <input type="radio" name="scenario" checked={selected === s.id} onChange={() => setSelected(s.id)} className="mt-1 accent-accent-600" />
+              <input type="radio" name="scenario" checked={selected === s.id} onChange={() => selectScenario(s.id)} className="mt-1 accent-accent-600" />
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-primary">{s.title}</div>
                 {s.description && <div className="line-clamp-2 text-sm text-muted">{s.description}</div>}
@@ -477,7 +500,36 @@ function NewAdventureModal({ onClose, onDeleted }) {
                 </button>
               </div>
             </label>
-          ))}
+            {selected === s.id && starts.length > 0 && (
+              <div className="ml-8 flex flex-col gap-1">
+                {starts.map((startItem) => (
+                  <label
+                    key={startItem.id}
+                    className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 ${
+                      startId === startItem.id ? 'border-accent-pri bg-accent-950/20' : 'border-subtle'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={`story-start-${s.id}`}
+                      checked={startId === startItem.id}
+                      onChange={() => setStartId(startItem.id)}
+                      className="mt-1 accent-accent-600"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-primary">
+                        {startItem.title}
+                        {starts[0]?.id === startItem.id ? ' · padrão' : ''}
+                      </span>
+                      <span className="line-clamp-2 text-xs text-muted">{startItem.text}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            </div>
+            )
+          })}
 
           <div className="mt-3 flex items-center justify-between">
             <Link to="/scenarios/new" className="text-sm text-accent-pri hover:underline" onClick={onClose}>

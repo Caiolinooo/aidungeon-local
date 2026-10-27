@@ -17,11 +17,10 @@ import { emotionForLine, splitNarration } from '../ttsText.js'
 import { loosenProse } from '../prose.js'
 import { Edit2, Volume2, Square, Loader2, Eye, EyeOff } from 'lucide-react'
 
-// Sem cache: a voz do narrador muda quando o clone é gravado, e a página
-// aberta não pode ficar presa em M1–F3.
+// A página e o dock reutilizam a voz já vista. api.voice invalida no PUT e
+// no delete do narrador; não há evento de settings para escutar.
 async function getNarratorVoice() {
-  const { narrator_voice } = await api.voice.list()
-  return narrator_voice
+  return api.voice.narratorVoice()
 }
 
 function playerLabel(type, actor) {
@@ -121,10 +120,11 @@ function abortError() {
 }
 
 // Botão 🔊 das entradas narrativas da IA. O texto vai em pedaços de 4096
-// caracteres (teto da API): cada um é um WAV PCM e toca até o fim antes do
-// próximo — sem prefetch de MP3. Uma narração comum é uma carga só do
-// OmniVoice. Avatar no dock consome o Response; senão o player PCM toca.
-// `playing` começa no primeiro bloco, não no download completo.
+// caracteres (teto da API): cada um é um WAV PCM. No player local, a síntese
+// do pedaço seguinte começa quando o corpo WAV atual acabou e o áudio ainda
+// toca — no máximo uma síntese OmniVoice. O avatar segura o Response até o
+// fim da fala; começar o próximo antes disso abriria duas sínteses, então o
+// dock continua em série. `playing` começa no primeiro bloco.
 // Clique durante loading/play = stop.
 function NarrateButton({ text, actionId, adventureId = '' }) {
   const toast = useToast()
@@ -136,10 +136,23 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
   const tokenRef = useRef(0)
   // Um AbortController por narração: para o fetch, o player e o avatar.
   const requestControllerRef = useRef(null)
+  // Próximo WAV já pedido enquanto o atual ainda toca. stop cancela o corpo.
+  const preloadRef = useRef(null)
+
+  const cancelPreload = () => {
+    const pending = preloadRef.current
+    preloadRef.current = null
+    if (pending && typeof pending.then === 'function') {
+      pending.then((res) => {
+        try { res?.body?.cancel() } catch { /* corpo já fechado */ }
+      }).catch(() => {})
+    }
+  }
 
   const stop = () => {
     tokenRef.current += 1
     requestControllerRef.current?.abort()
+    cancelPreload()
     playerRef.current?.stop()
     playerRef.current = null
     if (viaAvatarRef.current) {
@@ -155,11 +168,14 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
     return () => {
       tokenRef.current += 1
       requestControllerRef.current?.abort()
+      cancelPreload()
       playerRef.current?.stop()
       if (viaAvatarRef.current) stopNarration()
     }
   }, [])
 
+  // Devolve a espera do fim do áudio. O corpo WAV já terminou: o chamador
+  // pode abrir a síntese seguinte sem uma segunda carga OmniVoice.
   const playPcm = async (response, signal, onFirstSample) => {
     let resolveEnded
     const ended = new Promise((resolve) => {
@@ -168,6 +184,17 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
     const player = createPcmPlayer({ onEnded: resolveEnded })
     playerRef.current = player
     let noted = false
+    const release = async () => {
+      try {
+        await ended
+      } finally {
+        if (playerRef.current === player) {
+          player.stop()
+          playerRef.current = null
+        }
+      }
+      if (signal.aborted) throw abortError()
+    }
     try {
       await readPcm16Wav(response, {
         onFormat: (fmt) => player.start(fmt.sampleRate),
@@ -181,16 +208,17 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
       })
       if (signal.aborted) throw abortError()
       player.finish()
-      await ended
-      if (signal.aborted) throw abortError()
-    } finally {
+      return release
+    } catch (err) {
       player.stop()
       if (playerRef.current === player) playerRef.current = null
+      throw err
     }
   }
 
   const play = async () => {
     tokenRef.current += 1
+    cancelPreload()
     requestControllerRef.current?.abort()
     playerRef.current?.stop()
     if (viaAvatarRef.current) {
@@ -211,13 +239,18 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
         return
       }
       let useAvatar = null
+      let prefetched = null
       for (let i = 0; i < parts.length; i++) {
         if (!alive()) return
-        const response = await api.voice.ttsStream(parts[i], voice, {
-          emotion: emotionForLine(parts[i]),
-          adventureId,
-          signal: controller.signal,
-        })
+        const response = prefetched
+          ? await prefetched
+          : await api.voice.ttsStream(parts[i], voice, {
+              emotion: emotionForLine(parts[i]),
+              adventureId,
+              signal: controller.signal,
+            })
+        prefetched = null
+        preloadRef.current = null
         if (!alive()) {
           try { await response.body?.cancel() } catch { /* corpo já fechado */ }
           return
@@ -250,7 +283,17 @@ function NarrateButton({ text, actionId, adventureId = '' }) {
           useAvatar = false
           viaAvatarRef.current = false
         }
-        await playPcm(response, controller.signal, onFirstSample)
+        const release = await playPcm(response, controller.signal, onFirstSample)
+        if (!last && alive() && useAvatar === false) {
+          const next = api.voice.ttsStream(parts[i + 1], voice, {
+            emotion: emotionForLine(parts[i + 1]),
+            adventureId,
+            signal: controller.signal,
+          })
+          prefetched = next
+          preloadRef.current = next
+        }
+        await release()
         if (!alive()) return
       }
       if (alive()) setState('idle')

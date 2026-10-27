@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from app import auth, db, events, npc_assets
 from app.errors import GameError
 from app.routes.adventures import _managed_adventure, _visible_adventure
-from app.sim import dice, intent, life, packs, rules, runtime, state
+from app.schemas import QuestCreate, QuestPatch, QuestTransition, QuestTriggerCreate
+from app.sim import dice, intent, life, packs, quests, rng as sim_rng, rules, runtime, state, triggers
 
 router = APIRouter()
 
@@ -149,6 +150,14 @@ def _clock_view(sim: dict, user: str, playback: dict | None = None) -> dict | No
     }
 
 
+def _quest_lists(adventure: dict, sim: dict, user: str) -> dict:
+    owner = db.is_adventure_owner(adventure, user)
+    return {
+        "quests": quests.public_quests(sim, owner=owner),
+        "triggers": quests.public_triggers(sim, owner=owner),
+    }
+
+
 def _view(adventure: dict, user: str, conn=None) -> dict:
     sim = state.load(adventure)
     key = state.actor_key(user)
@@ -157,6 +166,7 @@ def _view(adventure: dict, user: str, conn=None) -> dict:
         foe for foe in (sim.get("foes") or {}).values()
         if isinstance(foe, dict) and not foe.get("dead")
     ]
+    listed = _quest_lists(adventure, sim, user)
     return {
         "pack": sim.get("pack") or "",
         "packs": packs.list_packs(),
@@ -165,6 +175,8 @@ def _view(adventure: dict, user: str, conn=None) -> dict:
         "life": _clock_view(
             sim, user, runtime.get_playback(conn, adventure["id"]) if conn is not None else None
         ),
+        "quests": listed["quests"],
+        "triggers": listed["triggers"],
     }
 
 
@@ -246,11 +258,12 @@ def post_advance(adventure_id: str, body: AdvanceBody,
         cards = db.list_cards(conn, adventure_id)
         stats_raw, title = _sheet_stats(conn, adventure_id, info.user)
         rules.ensure_actor(sim, packs.load_pack(sim.get("pack") or ""), info.user, title, stats_raw)
-        import random
+        rng = sim_rng.gameplay_rng(sim)
         jumped = life.advance(
             sim, body.minutes, body.activity, state.actor_key(info.user),
-            cards, random.SystemRandom(), 0.25,
+            cards, rng, 0.25,
         )
+        triggers.refresh(conn, adventure_id, sim, user=info.user, cards=cards)
         if jumped.get("crossed_midnight"):
             from app import jobs
             jobs.enqueue_day_tick(conn, adventure_id, reason="clock")
@@ -365,20 +378,33 @@ def post_roll(adventure_id: str, body: RollBody,
     with db.session() as conn:
         _visible_adventure(conn, adventure_id, info.user)
     mode = body.mode if body.mode in ("", "adv", "dis") else ""
+    expr = body.expr or ""
     try:
-        if body.expr.strip().lower() == "d20" and mode in ("adv", "dis"):
-            import random
-            chosen, rolls = dice.roll_d20(random.SystemRandom(), mode)
-            return {"expr": "d20", "rolls": rolls, "modifier": 0, "total": chosen}
-        rolled = dice.roll(body.expr)
+        if not (expr.strip().lower() == "d20" and mode in ("adv", "dis")):
+            dice.parse(expr)
     except ValueError as exc:
         raise GameError(422, "invalid_dice", str(exc)) from exc
-    return {
-        "expr": rolled.expr,
-        "rolls": rolled.rolls,
-        "modifier": rolled.modifier,
-        "total": rolled.total,
-    }
+    from app import game_engine
+    with game_engine.appending(adventure_id) as conn:
+        adventure = _visible_adventure(conn, adventure_id, info.user)
+        sim = state.load(adventure)
+        rng = sim_rng.gameplay_rng(sim)
+        try:
+            if expr.strip().lower() == "d20" and mode in ("adv", "dis"):
+                chosen, rolls = dice.roll_d20(rng, mode)
+                result = {"expr": "d20", "rolls": rolls, "modifier": 0, "total": chosen}
+            else:
+                rolled = dice.roll(expr, rng)
+                result = {
+                    "expr": rolled.expr,
+                    "rolls": rolled.rolls,
+                    "modifier": rolled.modifier,
+                    "total": rolled.total,
+                }
+        except ValueError as exc:
+            raise GameError(422, "invalid_dice", str(exc)) from exc
+        db.set_sim_state(conn, adventure_id, sim)
+    return result
 
 
 class ActionBody(BaseModel):
@@ -420,8 +446,6 @@ def post_action(adventure_id: str, body: ActionBody,
         "difficulty": body.difficulty, "advantage": body.advantage,
         "minutes": minutes, "activity": activity, "shock": "none", "heal": body.heal,
     })
-    import random
-    rng = random.SystemRandom()
     with game_engine.appending(adventure_id) as conn:
         adventure = _visible_adventure(conn, adventure_id, info.user)
         sim = state.load(adventure)
@@ -436,15 +460,18 @@ def post_action(adventure_id: str, body: ActionBody,
         actor = rules.ensure_actor(sim, pack, info.user, title, stats_raw)
         key = state.actor_key(info.user)
         penalty = life.penalty(actor, pack) if life_on else 0
+        rng = sim_rng.gameplay_rng(sim)
         resolution = rules.resolve(sim, pack, raw, key, cards, penalty, rng)
         if resolution.refusal:
             raise GameError(409, "rules_refused", resolution.refusal)
+        triggers.refresh(conn, adventure_id, sim, user=info.user, cards=cards)
         time_info = None
         if life_on:
             time_info = life.advance(
                 sim, int(raw.get("minutes") or 5), raw.get("activity") or "other",
                 key, cards, rng, 0.25,
             )
+            triggers.refresh(conn, adventure_id, sim, user=info.user, cards=cards)
             if time_info.get("crossed_midnight"):
                 from app import jobs
                 jobs.enqueue_day_tick(conn, adventure_id, reason="clock")
@@ -467,3 +494,77 @@ def post_action(adventure_id: str, body: ActionBody,
         }
     _publish(adventure_id)
     return payload
+
+
+def _raise_quest(exc: quests.QuestError) -> None:
+    status = {"quest_not_found": 404, "trigger_not_found": 404, "invalid_transition": 409}.get(exc.code, 422)
+    raise GameError(status, exc.code, exc.message) from exc
+
+
+def _mutate_quests(adventure_id: str, user: str, fn) -> dict:
+    from app import game_engine
+    with game_engine.appending(adventure_id) as conn:
+        adventure = _managed_adventure(conn, adventure_id, user)
+        sim = state.load(adventure)
+        try:
+            fn(sim)
+        except quests.QuestError as exc:
+            _raise_quest(exc)
+        db.set_sim_state(conn, adventure_id, sim)
+        saved = db.get_adventure(conn, adventure_id) or adventure
+        payload = _view(saved, user, conn)
+    _publish(adventure_id)
+    return payload
+
+
+@router.get("/{adventure_id}/sim/quests")
+def get_quests(adventure_id: str, info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    with db.session() as conn:
+        adventure = _visible_adventure(conn, adventure_id, info.user)
+        sim = state.load(adventure)
+        return _quest_lists(adventure, sim, info.user)
+
+
+@router.post("/{adventure_id}/sim/quests")
+def post_quest(adventure_id: str, body: QuestCreate,
+               info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    return _mutate_quests(adventure_id, info.user, lambda sim: quests.create(sim, body.model_dump()))
+
+
+@router.patch("/{adventure_id}/sim/quests/{quest_id}")
+def patch_quest(adventure_id: str, quest_id: str, body: QuestPatch,
+                info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    data = body.model_dump(exclude_unset=True)
+    return _mutate_quests(
+        adventure_id, info.user, lambda sim: quests.update(sim, quest_id, data),
+    )
+
+
+@router.post("/{adventure_id}/sim/quests/{quest_id}/transition")
+def post_quest_transition(adventure_id: str, quest_id: str, body: QuestTransition,
+                          info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    data = body.model_dump(exclude_unset=True)
+    return _mutate_quests(
+        adventure_id, info.user, lambda sim: quests.transition(sim, quest_id, data),
+    )
+
+
+@router.delete("/{adventure_id}/sim/quests/{quest_id}")
+def delete_quest(adventure_id: str, quest_id: str,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    return _mutate_quests(adventure_id, info.user, lambda sim: quests.delete(sim, quest_id))
+
+
+@router.post("/{adventure_id}/sim/triggers")
+def post_trigger(adventure_id: str, body: QuestTriggerCreate,
+                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    return _mutate_quests(adventure_id, info.user, lambda sim: quests.add_trigger(sim, body.model_dump()))
+
+
+@router.delete("/{adventure_id}/sim/triggers/{trigger_id}")
+def delete_trigger(adventure_id: str, trigger_id: str,
+                   info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
+    return _mutate_quests(adventure_id, info.user, lambda sim: quests.delete_trigger(sim, trigger_id))
+
+
+triggers.install_hooks()

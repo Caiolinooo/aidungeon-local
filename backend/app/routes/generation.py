@@ -12,10 +12,10 @@ import queue as queue_mod
 import threading
 import time
 from typing import Any, AsyncIterator, Callable, Iterator
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from app import auth, db, game_engine
+from app import auth, db, events, game_engine
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import ActionRequest
@@ -55,24 +55,36 @@ def _response(adventure_id: str, factory: Callable[[threading.Event], Iterator[d
         media_type="text/event-stream")
 
 
-def _require_turn(adventure_id: str, info: auth.AuthInfo) -> None:
+def _require_character(conn, adv: dict, username: str) -> None:
+    """Mesa com shares: quem age precisa de personagem, dono inclusive."""
+    if len(db.adventure_participants(conn, adv)) > 1:
+        if db.player_character(conn, adv["id"], username) is None:
+            raise GameError(428, "character_required",
+                            "crie seu personagem para jogar")
+
+
+def _require_turn(adventure_id: str, info: auth.AuthInfo, *,
+                  dm_narration: bool = False) -> None:
     """Quem não vê a aventura toma 404. Com turno ligado, só quem tem a vez age.
 
-    Mesa com shares exige personagem de quem age — inclusive o dono. See não
-    passa por aqui.
+    Com dm_mode, o dono ignora a roda para narrar no meio dela. Continue, retry
+    e cancel (`dm_narration`) ficam só com o dono: o share toma 403 mesmo na
+    própria vez e com o turno desligado, antes de gerar ou cancelar. Mesa com
+    shares exige personagem de quem age — inclusive o dono. See não passa por aqui.
     """
     with db.session() as conn:
         adv = db.get_adventure(conn, adventure_id)
         if not adv or not db.can_access_adventure(conn, adv, info.user):
             raise GameError.not_found(f"adventure {adventure_id} not found")
-        if adv.get("turn_mode") and (adv.get("turn_user") or "") != info.user:
+        if (dm_narration and adv.get("dm_mode")
+                and not db.is_adventure_owner(adv, info.user)):
+            raise GameError(403, "forbidden",
+                            "só o mestre pode continuar, regenerar ou cancelar")
+        dm_owner = bool(adv.get("dm_mode")) and db.is_adventure_owner(adv, info.user)
+        if (adv.get("turn_mode") and not dm_owner
+                and (adv.get("turn_user") or "") != info.user):
             raise GameError(403, "not_your_turn", f"vez de {adv.get('turn_user') or ''}")
-        # Mesa com shares: quem age precisa de personagem, dono inclusive.
-        # See não passa por aqui.
-        if len(db.adventure_participants(conn, adv)) > 1:
-            if db.player_character(conn, adventure_id, info.user) is None:
-                raise GameError(428, "character_required",
-                                "crie seu personagem para jogar")
+        _require_character(conn, adv, info.user)
 
 _SENTINEL = object()
 
@@ -114,7 +126,19 @@ async def _sse(events: Iterator[dict], on_complete: Callable[[], None] | None = 
 @router.post("/{adventure_id}/action")
 async def post_action(adventure_id: str, body: ActionRequest,
                       transport: Any = Depends(get_http_transport),
-                      info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
+                      info: auth.AuthInfo = Depends(auth.require_auth),
+                      ) -> Response:
+    """Dono (e dm_mode desligado) streama. Jogador com dm_mode só enfileira."""
+    with db.session() as conn:
+        adv = db.get_adventure(conn, adventure_id)
+        if not adv or not db.can_access_adventure(conn, adv, info.user):
+            raise GameError.not_found(f"adventure {adventure_id} not found")
+        if adv.get("dm_mode") and not db.is_adventure_owner(adv, info.user):
+            _require_character(conn, adv, info.user)
+            intent = db.insert_intent(
+                conn, adventure_id, info.user, body.type, body.text)
+            events.record(conn, adventure_id, "intent_pending", intent, actor=info.user)
+            return JSONResponse(status_code=202, content={"intent": intent})
     _require_turn(adventure_id, info)
     return _response(adventure_id, lambda cancel: game_engine.handle_action(
         adventure_id, body.type, body.text, transport=transport,
@@ -125,7 +149,7 @@ async def post_action(adventure_id: str, body: ActionRequest,
 async def post_continue(adventure_id: str,
                         transport: Any = Depends(get_http_transport),
                         info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
-    _require_turn(adventure_id, info)
+    _require_turn(adventure_id, info, dm_narration=True)
     return _response(adventure_id, lambda cancel: game_engine.handle_continue(
         adventure_id, transport=transport, cancel=cancel))
 
@@ -134,7 +158,7 @@ async def post_continue(adventure_id: str,
 async def post_retry(adventure_id: str,
                      transport: Any = Depends(get_http_transport),
                      info: auth.AuthInfo = Depends(auth.require_auth)) -> StreamingResponse:
-    _require_turn(adventure_id, info)
+    _require_turn(adventure_id, info, dm_narration=True)
     return _response(adventure_id, lambda cancel: game_engine.handle_retry(
         adventure_id, transport=transport, cancel=cancel))
 
@@ -142,7 +166,7 @@ async def post_retry(adventure_id: str,
 @router.post("/{adventure_id}/generation/cancel")
 def post_cancel(adventure_id: str,
                 info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
-    _require_turn(adventure_id, info)
+    _require_turn(adventure_id, info, dm_narration=True)
     with _active_guard:
         cancel = _active.get(adventure_id)
     if cancel is None or not game_engine.is_generation_active(adventure_id):

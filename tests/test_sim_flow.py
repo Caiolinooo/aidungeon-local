@@ -78,7 +78,7 @@ class _Narrator:
 
 
 def _armed(monkeypatch) -> dict:
-    monkeypatch.setattr("app.sim.engine.random.SystemRandom", Bag)
+    monkeypatch.setattr("app.sim.rng.gameplay_rng", lambda _state: Bag())
     adv = make_adventure(title="Gate", owner="hero")
     add_action(adv["id"], 0, "start", "You stand in the yard.")
     sim = state.empty()

@@ -31,7 +31,7 @@ def test_get_settings_defaults(client):
     assert data["base_url"] == "http://vm.groupabz.com:1234/v1"
     assert data["api_key"] is None                       # settings.json tem ""
     assert data["model_alias"] == "auto"
-    assert data["context_size"] == 65536
+    assert data["context_size"] == 32768
     assert data["max_tokens"] == 300
     assert data["streaming"] is True
     assert data["disable_thinking"] is True              # default do contrato
@@ -242,7 +242,7 @@ def test_put_and_get_advanced_sampler_settings(client):
     assert initial["dry_multiplier"] == 0.8
     assert initial["dry_base"] == 1.75
     assert initial["dry_allowed_length"] == 2
-    assert initial["dry_penalty_last_n"] == -1
+    assert initial["dry_penalty_last_n"] == 512
     assert initial["retry_temperature_step"] == 0.05
     assert initial["max_retry_temperature"] == 1.15
 

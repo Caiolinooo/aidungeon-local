@@ -15,7 +15,7 @@ import re
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app import access, auth, db, events, llm_scheduler
+from app import access, auth, consequences, db, events, llm_scheduler
 from app.errors import GameError
 
 router = APIRouter()
@@ -53,6 +53,33 @@ def _user(request: Request, token: str | None) -> str:
     return user
 
 
+_INTENT_TYPES = frozenset({"intent_pending", "intent_approved", "intent_rejected"})
+
+
+def _intent_visible(event_type: str, data: dict, *, user: str, owner: bool) -> bool:
+    """Intenção de outro jogador não sai no stream nem no histórico do share."""
+    if owner or event_type not in _INTENT_TYPES:
+        return True
+    return (data.get("username") or "") == user
+
+
+def _sse_for(event, hide_secrets: bool, *, user: str) -> str | None:
+    """O barramento é único. O share recebe a cópia sem private_facts.
+
+    Intenção alheia some por completo: o dono lista a fila, o jogador só a sua.
+    """
+    data = event.data if isinstance(event.data, dict) else {}
+    if not _intent_visible(event.type, data, user=user, owner=not hide_secrets):
+        return None
+    if not hide_secrets:
+        return event.sse()
+    payload = json.dumps(
+        consequences.without_private_facts(data),
+        ensure_ascii=False, separators=(",", ":"))
+    cursor = f"id: {event.id}\n" if event.durable else ""
+    return f"{cursor}event: {event.type}\ndata: {payload}\n\n"
+
+
 def _last_event_id(request: Request, query_value: int | None) -> int | None:
     raw = request.headers.get("Last-Event-ID")
     if raw is not None:
@@ -71,11 +98,23 @@ def adventure_event_history(adventure_id: str, request: Request,
     """Página ascendente e estável do log; `after` é um event_id exclusivo."""
     user = _user(request, token)
     with db.session() as conn:
-        if db.get_adventure(conn, adventure_id) is None \
-                or not access.adventure_visible(conn, user, adventure_id):
+        adv = db.get_adventure(conn, adventure_id)
+        if adv is None or not access.adventure_visible(conn, user, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
         page, has_more = events.list_history(
             conn, adventure_id, after=after, limit=limit)
+        hide_secrets = not db.is_adventure_owner(adv, user)
+        raw_page = page
+        visible = []
+        for item in raw_page:
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            if not _intent_visible(item.get("type") or "", payload,
+                                   user=user, owner=not hide_secrets):
+                continue
+            if hide_secrets:
+                item = {**item, "payload": consequences.without_private_facts(payload)}
+            visible.append(item)
+        page = visible
         bounds = conn.execute(
             "SELECT MIN(event_id) AS first_id, MAX(event_id) AS last_id"
             " FROM world_events WHERE adventure_id=?", (adventure_id,),
@@ -85,7 +124,7 @@ def adventure_event_history(adventure_id: str, request: Request,
     reset_required = after > latest or (first is not None and after < int(first) - 1)
     return {
         "events": page,
-        "next_cursor": page[-1]["event_id"] if page else after,
+        "next_cursor": raw_page[-1]["event_id"] if raw_page else after,
         "has_more": has_more,
         "latest_event_id": latest,
         "reset_required": reset_required,
@@ -100,9 +139,10 @@ def adventure_events(adventure_id: str, request: Request,
     cursor = _last_event_id(request, last_event_id)
     snapshot = None
     with db.session() as conn:
-        if db.get_adventure(conn, adventure_id) is None \
-                or not access.adventure_visible(conn, user, adventure_id):
+        adv = db.get_adventure(conn, adventure_id)
+        if adv is None or not access.adventure_visible(conn, user, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")
+        hide_secrets = not db.is_adventure_owner(adv, user)
         if cursor is None:
             row = conn.execute(
                 "SELECT MAX(event_id) AS last_id FROM world_events WHERE adventure_id=?",
@@ -115,7 +155,7 @@ def adventure_events(adventure_id: str, request: Request,
             backlog, reset_required, latest = events.replay(
                 conn, adventure_id, cursor)
             if reset_required:
-                snapshot = db.adventure_state(conn, adventure_id)
+                snapshot = db.adventure_state(conn, adventure_id, viewer=user)
     subscription = events.subscribe(
         adventure_id, latest if reset_required else cursor,
         backlog=backlog, since=latest if cursor is None else None,
@@ -142,7 +182,9 @@ def adventure_events(adventure_id: str, request: Request,
             while True:
                 event = await subscription.aget(PING_S)
                 if event is not None:
-                    yield event.sse()
+                    frame = _sse_for(event, hide_secrets, user=user)
+                    if frame:
+                        yield frame
                 elif subscription.closed:
                     return
                 else:

@@ -128,12 +128,11 @@ def test_settings_block_stays_out_of_runtime_config(tmp_db):
     }
 
 
-def test_world_facts_block_calls_only_the_adjudicator(tmp_db):
+def test_world_facts_block_skips_aux_models_without_npcs(tmp_db):
     narrator = _Narrator()
     events = _play(_yard()["id"], narrator, "draw your sword and conjure a bedroom")
-    aux = narrator.aux_calls()
-    assert len(aux) == 1
-    assert "adjudicator" in aux[0]["messages"][0]["content"].casefold()
+    assert narrator.aux_calls() == []
+    assert len(narrator.calls) == 1
     checks = [event for event in events if event["event"] == "action_check"]
     assert len(checks) == 1
     data = checks[0]["data"]
@@ -200,7 +199,7 @@ def test_garbage_llm_json_does_not_break_the_turn(tmp_db):
 
 def test_llm_failure_does_not_break_the_turn(tmp_db):
     narrator = _Narrator(fail_aux=True)
-    events = _play(_yard()["id"], narrator, "wait quietly by the gate")
+    events = _play(_rich()["id"], narrator, "wait quietly by the gate")
     assert events[-1]["event"] == "done"
     assert "action_check" not in events[-1]["data"]
     assert [event["event"] for event in events if event["event"] == "action_check"] == []
@@ -213,7 +212,7 @@ def test_disabled_check_makes_no_call(tmp_db, monkeypatch):
         "timeout_seconds": 20, "min_words": 1,
     })
     narrator = _Narrator()
-    events = _play(_yard()["id"], narrator, "draw your sword and conjure a bedroom")
+    events = _play(_rich()["id"], narrator, "draw your sword and conjure a bedroom")
     assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in events if event["event"] == "action_check"] == []
     assert events[-1]["event"] == "done"
@@ -221,7 +220,7 @@ def test_disabled_check_makes_no_call(tmp_db, monkeypatch):
 
 
 def test_short_story_and_continue_are_not_checked(tmp_db):
-    adv = _yard()
+    adv = _rich()
     narrator = _Narrator()
     short = _play(adv["id"], narrator, "knock")
     assert len(narrator.aux_calls()) == 1
@@ -247,7 +246,7 @@ def test_collect_failure_still_narrates(tmp_db, monkeypatch):
 
     monkeypatch.setattr(action_check, "collect_state", boom)
     narrator = _Narrator()
-    events = _play(_yard()["id"], narrator, "wait quietly by the gate")
+    events = _play(_rich()["id"], narrator, "wait quietly by the gate")
     assert events[-1]["event"] == "done"
     assert len(narrator.aux_calls()) == 1
     assert [event["event"] for event in events if event["event"] == "action_check"] == []

@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from app import image_client, jobs
+from app import db, image_client, jobs
 
 
 def _cfg(tmp_path, **extra):
@@ -68,6 +68,17 @@ def _transport(capture: dict, *, fail: bool = False) -> httpx.MockTransport:
         return httpx.Response(404)
 
     return httpx.MockTransport(handler)
+
+
+def test_comfy_poll_defaults_to_a_quarter_second_and_keeps_the_floor(tmp_db):
+    assert image_client.comfy_poll_interval_s({}) == 0.25
+    assert image_client.comfy_poll_interval_s({"comfyui_poll_interval_s": None}) == 0.25
+    assert image_client.comfy_poll_interval_s({"comfyui_poll_interval_s": 0}) == 0.25
+    assert image_client.comfy_poll_interval_s({"comfyui_poll_interval_s": 0.05}) == 0.2
+    assert image_client.comfy_poll_interval_s({"comfyui_poll_interval_s": 0.25}) == 0.25
+    assert image_client.comfy_poll_interval_s({"comfyui_poll_interval_s": 1.5}) == 1.5
+    with db.session() as conn:
+        assert image_client.effective_settings(conn)["comfyui_poll_interval_s"] == 0.25
 
 
 def _nodes(graph: dict) -> dict[str, dict]:

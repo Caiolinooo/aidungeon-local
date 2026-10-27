@@ -23,19 +23,19 @@
     "dry_multiplier": 0.8,
     "dry_base": 1.75,
     "dry_allowed_length": 2,
-    "dry_penalty_last_n": -1,
+    "dry_penalty_last_n": 512,
     "max_tokens": 300,
     "max_tokens_slider": { "min": 100, "max": 2048 },
     "retry_temperature_step": 0.05,
     "max_retry_temperature": 1.15
   },
   "context": {
-    "context_size": 65536,
+    "context_size": 32768,
     "recent_window_rule": "recent_window = context_size - soma(demais budgets) - response_reserve; budgets fixos sao pisos, a janela recente absorve a diferenca",
     "dynamic_scaling": {
       "enabled": true,
       "base_context_size": 32768,
-      "max_scale_factor": 3.0,
+      "max_scale_factor": 1.0,
       "continuity_anchor_min_window_tokens": 1200,
       "continuity_anchor_min_turns": 8
     },
@@ -46,7 +46,7 @@
       "story_cards": 1600,
       "memory_bank": 800,
       "story_summary": 800,
-      "recent_window": 56992,
+      "recent_window": 24224,
       "authors_note": 300,
       "last_action": 200,
       "player_state": 320,
@@ -66,7 +66,7 @@
       "pick": "first",
       "note": "auto = GET {base_url}/models em runtime usa o modelo que o servidor tem carregado; model_alias explicito sobrescreve"
     },
-    "context_size": 65536,
+    "context_size": 32768,
     "context_size_limits": { "min": 4096, "max": 106496 },
     "disable_thinking": true,
     "disable_thinking_note": "OBRIGATORIO p/ Qwen3.x hibrido: llm_client DEVE enviar chat_template_kwargs={\"enable_thinking\": false} em toda chamada; sem isso content volta vazio (tokens viram reasoning_content). Validado contra a VM em 2026-10-07.",
@@ -164,7 +164,7 @@
         "cfg": 1.0,
         "sigmas": [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0],
         "shift": 1.31,
-        "poll_interval_s": 1.0,
+        "poll_interval_s": 0.25,
         "note": "FineView Qwen Image 2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image (Qwen3-VL 8B INT8) + texture-fix VAE. TextEncodeQwenImage21 recebe as referencias; ModelSamplingAuraFlow shift 1.31, ManualSigmas oficial de 8 passos e SamplerCustom euler. clip_device=cpu reserva VRAM para o narrador."
       },
       "openai_compatible": {
