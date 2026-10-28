@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
-| Imagem | `sd-webui-forge.service` na porta 7861, epiCRealism XL CrystalClear; ComfyUI/FineView permanece instalado como provider opcional |
+| Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; FineView Qwen (`engine=qwen`) e Forge/epiCRealism continuam disponíveis para rollback |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -168,7 +168,7 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 
 Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
 do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
-Wan 2.1. O FineView voltou a ser o provider ativo; Forge/epiCRealism é rollback.
+Wan 2.1. O ComfyUI/FLUX.2 Klein é o provider ativo; FineView e Forge/epiCRealism são rollback.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
@@ -180,13 +180,21 @@ sudo systemctl enable --now sd-webui.service
 
 Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
 
-## Provider ativo: FineView Qwen Image 2.1 no ComfyUI
+## Imagem no ComfyUI: FLUX.2 Klein ativo
 
-O cliente `image.provider = "comfyui"` em `backend/app/image_client.py` fala a
-API do ComfyUI: `POST /prompt`, polling em `GET /history/{id}` e download por
-`GET /view`. O grafo usa `UNETLoader`, CLIP `qwen_image` e
-`TextEncodeQwenImage21` nas identidades, `ModelSamplingAuraFlow` shift 1.31,
-`ManualSigmas` oficial com oito passos e `SamplerCustom` euler. O CLIP fica em CPU.
+O provider entregue é `image.provider="comfyui"` com
+`image.providers.comfyui.engine="flux2_klein"`. O cliente fala `POST /prompt`,
+`GET /history/{id}` e `GET /view`; o grafo oficial usa UNET FP8, CLIP Qwen3 4B,
+VAE Flux2, `Flux2Scheduler` com 4 passos e `ReferenceLatent` para as âncoras.
+Instalação reproduzível, com URLs e SHA256 fixados:
+
+```bash
+bash deploy/vm/install_flux2_klein.sh
+```
+
+### FineView opcional
+
+Com `engine="qwen"`, o grafo FineView usa `UNETLoader`, CLIP `qwen_image` em CPU, `TextEncodeQwenImage21` para identidades, `ModelSamplingAuraFlow` shift 1.31 e `ManualSigmas` oficial com oito passos no `SamplerCustom` euler.
 
 Arquivos e hashes obrigatórios:
 
@@ -232,13 +240,15 @@ for DB in /home/caio/aidungeon/data/aidungeon.db \
           /home/caio/aidungeon-staging/data/aidungeon.db; do
   sqlite3 "$DB" "INSERT INTO settings(key,value) VALUES('image.provider','\"comfyui\"') \
     ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+  sqlite3 "$DB" "INSERT INTO settings(key,value) VALUES('image.providers.comfyui.engine','\"flux2_klein\"') \
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
 done
 ```
 
-Para ativar o FineView, trocar `image.provider = "comfyui"`, parar o Forge e
-subir `comfyui.service` em `127.0.0.1:8188`. No rollback, devolver `sdwebui`,
-parar o ComfyUI e subir o Forge. Não reiniciar llama-swap nem
-`abz-voice-staging`. Forge e FineView não devem medir VRAM ao mesmo tempo.
+Para ativar o FineView, usar `image.provider="comfyui"` e
+`image.providers.comfyui.engine="qwen"`. No rollback para Forge, devolver
+`sdwebui`, parar o ComfyUI e subir o Forge. Não reiniciar llama-swap nem
+`abz-voice-staging`. Forge e ComfyUI não devem medir VRAM ao mesmo tempo.
 
 ## Vídeo real: LTXV 2B distilled
 
@@ -270,8 +280,8 @@ Não enviar prompts de outro cliente ao mesmo ComfyUI durante o clipe:
 Com `video.auto_scene=true` e `video.auto_portraits=true`, a conclusão de um
 backdrop ou retrato do elenco atual enfileira o respectivo clipe sem outra
 chamada de LLM. Retratos de lote/offscene ficam estáticos. O follow-up nunca
-cancela um clipe manual ativo na mesma fonte; cena usa prioridade 6 e retrato
-automático prioridade 7. Uma nova ação, continuação ou retry preempta somente
+cancela um clipe manual ativo na mesma fonte; cena usa prioridade 3 e retrato
+automático prioridade 7, depois de lotes, vida dos NPCs e `card_assets`. Uma nova ação, continuação ou retry preempta somente
 clipes automáticos pendentes/ativos (`preempted for a new action`), preservando
 os manuais. Desligue as duas flags se o LTXV não estiver instalado.
 

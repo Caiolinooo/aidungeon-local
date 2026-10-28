@@ -2245,7 +2245,7 @@ paths:
       summary: Gerar clipe MP4 a partir de um PNG (LTXV ou Wan2.2)
       operationId: postAdventureClip
       description: |
-        Enfileira o job `scene_clip` (prioridade 6). O corpo é
+        Enfileira o job `scene_clip` (prioridade 3). O corpo é
         `{image_id, prompt}`. A fonte tem de ser um PNG raster desta
         aventura; vídeo, arquivo ausente ou raster inválido responde 404,
         o mesmo de aventura de outra pessoa. 202 `{job_id}`.
@@ -5233,7 +5233,7 @@ components:
           type: object
         priority:
           type: integer
-          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM), 6 scene_clip/cena, 7 retrato animado automático (não roda durante a narrativa).
+          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 scene_clip/cena, 4 retratos em lote, 5 dia de vida do NPC, 6 card_assets (ficha viva via LLM), 7 retrato animado automático (não roda durante a narrativa).
         supersede_key:
           type: string
           description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>"; clipe usa "clip:<adventure_id>:<source_image_id>").

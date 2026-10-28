@@ -244,7 +244,7 @@ class ImagePlan:
 
 ```python
 # backend/app/jobs.py
-PRIORITY_SEE, PRIORITY_PRESENT_PORTRAIT, PRIORITY_BACKDROP, PRIORITY_BULK_PORTRAIT = 0, 1, 2, 3
+PRIORITY_SEE, PRIORITY_PRESENT_PORTRAIT, PRIORITY_BACKDROP, PRIORITY_SCENE_CLIP, PRIORITY_BULK_PORTRAIT = 0, 1, 2, 3, 4
 
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
             payload: dict | None = None, priority: int = PRIORITY_BACKDROP,
@@ -259,9 +259,9 @@ def cancel(conn, job_id: str) -> dict | None: ...
   `running`, `done`, `error`, `canceled`. Colunas novas (migration 021):
   `priority` e `supersede_key`.
 - Prioridades (menor roda antes; no empate, o mais antigo): 0 `see_image`;
-  1 retrato de NPC presente (cena, chronicle, botão de regenerar);
-  2 `scene_backdrop`; 3 retratos em lote (aventura nova, "gerar todos").
-  Com narrativa em curso o worker só tira o See da fila.
+  1 retrato de NPC presente; 2 `scene_backdrop`; 3 `scene_clip` da cena;
+  4 retratos em lote; 5 dia de vida do NPC; 6 `card_assets`; 7 retrato
+  animado automático. Com narrativa em curso o worker só tira o See da fila.
 - Retrato já na fila (dedupe por card) passa à frente quando o pedido novo
   é mais urgente; nunca vai para trás.
 - `supersede_key`: um job novo com a mesma chave cancela os que ainda não

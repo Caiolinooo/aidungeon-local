@@ -332,6 +332,17 @@ def test_image_comfyui_settings_roundtrip(client):
     assert cfg["comfyui_sigmas"] == [
         1.0, 0.978453, 0.95418, 0.926626, 0.89508,
         0.845148, 0.704534, 0.414568, 0.0]
+    flux = cfg["comfyui_flux2"]
+    assert flux["unet"] == "flux-2-klein-4b-fp8.safetensors"
+    assert flux["clip"] == "qwen_3_4b.safetensors"
+    assert flux["clip_type"] == "flux2"
+    assert flux["vae"] == "flux2-vae.safetensors"
+    assert flux["steps"] == 4
+    assert flux["cfg"] == 1.0
+    assert flux["sampler"] == "euler"
+    assert cfg["comfyui_video"]["engine"] == "ltxv"
+    assert cfg["comfyui_video"]["checkpoint"] == (
+        "ltxv-2b-0.9.6-distilled-04-25.safetensors")
 
 
 def test_comfyui_steps_must_match_sigmas(client):

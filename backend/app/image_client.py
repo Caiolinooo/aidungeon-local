@@ -8,10 +8,16 @@ Providers (settings.image.provider, config efetiva de settings_store):
   (openai_api_key, pode ser vazia), JSON {model, prompt, size, response_format:
   "b64_json"}; aceita `data[0].b64_json` ou `data[0].url` (neste caso baixa o
   arquivo da URL).
-- `comfyui`: POST {comfyui_base_url}/prompt com UNETLoader, CLIPLoader qwen_image,
-  TextEncodeQwenImage21, ModelSamplingAuraFlow, ManualSigmas e SamplerCustom;
-  depois GET /history/{prompt_id} e GET /view. Referências entram no encoder
-  visual; retratos com âncora usam seu latent zero e cenas usam EmptyLatentImage.
+- `comfyui`: POST {comfyui_base_url}/prompt e depois GET /history/{prompt_id}
+  e GET /view. `engine` omisso ou `qwen` (default) monta UNETLoader,
+  CLIPLoader qwen_image, TextEncodeQwenImage21, ModelSamplingAuraFlow,
+  ManualSigmas e SamplerCustom. Referências entram no encoder visual;
+  retratos com âncora usam seu latent zero e cenas usam EmptyLatentImage.
+  `engine=flux2_klein` é opt-in e lê `comfyui_flux2` (UNET FP8, CLIP
+  qwen_3_4b type=flux2, flux2-vae): EmptyFlux2LatentImage e Flux2Scheduler
+  no mesmo canvas, 4 passos, CFG 1, euler. Referências passam por LoadImage,
+  ImageScaleToTotalPixels, VAEEncode e ReferenceLatent (teto 4). Não altera
+  `comfyui_unet` nem os grafos LTXV/Wan.
 
 O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
@@ -385,6 +391,70 @@ _COMFY_SIGMAS = (
     1.0, 0.978453, 0.95418, 0.926626, 0.89508,
     0.845148, 0.704534, 0.414568, 0.0,
 )
+_FLUX2_MAX_REFERENCES = 4
+_FLUX2_DEFAULTS = {
+    "unet": "flux-2-klein-4b-fp8.safetensors",
+    "clip": "qwen_3_4b.safetensors",
+    "clip_type": "flux2",
+    "clip_device": "default",
+    "vae": "flux2-vae.safetensors",
+    "weight_dtype": "default",
+    "steps": 4,
+    "cfg": 1.0,
+    "sampler": "euler",
+    "megapixels": 0.25,
+    "upscale_method": "nearest-exact",
+    "resolution_steps": 1,
+    "max_references": _FLUX2_MAX_REFERENCES,
+}
+
+
+def _comfy_image_engine(cfg: dict) -> str:
+    """`engine` omisso ou vazio é `qwen`. Outro valor só `flux2_klein` segue."""
+    engine = str(cfg.get("comfyui_engine") or "qwen").strip().lower() or "qwen"
+    if engine not in ("qwen", "flux2_klein"):
+        raise ImageError(f"config_error: image.engine desconhecido: {engine!r}")
+    return engine
+
+
+def flux2_settings(cfg: dict) -> dict:
+    """Bloco `image.providers.comfyui.flux2`. Não lê o UNET do FineView."""
+    raw = cfg.get("comfyui_flux2")
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = dict(_FLUX2_DEFAULTS)
+    for key, default in _FLUX2_DEFAULTS.items():
+        if key not in raw or raw[key] is None:
+            continue
+        if isinstance(default, float):
+            merged[key] = float(raw[key])
+        elif isinstance(default, int):
+            merged[key] = int(raw[key])
+        else:
+            text = str(raw[key]).strip()
+            if not text and key not in ("unet", "clip", "vae"):
+                continue
+            merged[key] = text
+    cap = int(merged["max_references"])
+    merged["max_references"] = (
+        _FLUX2_MAX_REFERENCES if cap < 1 else min(_FLUX2_MAX_REFERENCES, cap))
+    return merged
+
+
+def _flux2_used_references(init_image: bytes | None,
+                           reference_images: list[bytes] | None,
+                           limit: int) -> list[bytes]:
+    """Âncora primeiro, depois as refs. O teto vale para o grafo e para o hash."""
+    sequence = ([init_image] if init_image is not None else []) + [
+        raw for raw in (reference_images or []) if raw]
+    return sequence[:limit]
+
+
+def _validate_flux2_canvas(width: int, height: int) -> None:
+    if width % 16 or height % 16:
+        raise ImageError(
+            f"config_error: flux2 exige width e height múltiplos de 16 "
+            f"(recebido {width}x{height})")
 
 
 def _comfy_qwen_graph(cfg: dict, prompt: str, image_names: list[str],
@@ -433,6 +503,76 @@ def _comfy_qwen_graph(cfg: dict, prompt: str, image_names: list[str],
         graph[node_id] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
         graph["4"]["inputs"].setdefault("images", {})[
             f"image_{index + 1}"] = [node_id, 0]
+    return graph
+
+
+def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
+                             *, width: int, height: int) -> dict:
+    """FLUX.2 Klein 4B distilled. O sampler sempre parte de latent vazio.
+
+    Cada referência é LoadImage → ImageScaleToTotalPixels → VAEEncode →
+    ReferenceLatent, em série, no positivo e no negativo. EmptyFlux2LatentImage
+    e Flux2Scheduler recebem o mesmo width/height.
+    """
+    flux = flux2_settings(cfg)
+    seed_value = cfg.get("seed")
+    noise_seed = (random.randint(0, 2**31 - 1)
+                  if seed_value is None or int(seed_value) < 0 else int(seed_value))
+    positive: list = ["4", 0]
+    negative: list = ["5", 0]
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {
+            "unet_name": flux["unet"],
+            "weight_dtype": flux["weight_dtype"] or "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": flux["clip"],
+            "type": flux["clip_type"] or "flux2",
+            "device": flux["clip_device"] or "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": flux["vae"]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": prompt}},
+        "5": {"class_type": "ConditioningZeroOut", "inputs": {
+            "conditioning": ["4", 0]}},
+        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1}},
+        "7": {"class_type": "Flux2Scheduler", "inputs": {
+            "steps": int(flux["steps"]), "width": width, "height": height}},
+        "8": {"class_type": "KSamplerSelect", "inputs": {
+            "sampler_name": flux["sampler"] or "euler"}},
+        "9": {"class_type": "RandomNoise", "inputs": {
+            "noise_seed": noise_seed}},
+        "10": {"class_type": "CFGGuider", "inputs": {
+            "model": ["1", 0], "positive": positive, "negative": negative,
+            "cfg": float(flux["cfg"])}},
+        "11": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["9", 0], "guider": ["10", 0], "sampler": ["8", 0],
+            "sigmas": ["7", 0], "latent_image": ["6", 0]}},
+        "12": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["11", 0], "vae": ["3", 0]}},
+        "13": {"class_type": "SaveImage", "inputs": {
+            "images": ["12", 0], "filename_prefix": "aidungeon"}},
+    }
+    for index, image_name in enumerate(image_names):
+        base = 20 + index * 5
+        load, scale, encode, ref_pos, ref_neg = (
+            str(base + offset) for offset in range(5))
+        graph[load] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+        graph[scale] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": [load, 0],
+            "upscale_method": flux["upscale_method"] or "nearest-exact",
+            "megapixels": float(flux["megapixels"]),
+            "resolution_steps": int(flux["resolution_steps"])}}
+        graph[encode] = {"class_type": "VAEEncode", "inputs": {
+            "pixels": [scale, 0], "vae": ["3", 0]}}
+        graph[ref_pos] = {"class_type": "ReferenceLatent", "inputs": {
+            "conditioning": positive, "latent": [encode, 0]}}
+        graph[ref_neg] = {"class_type": "ReferenceLatent", "inputs": {
+            "conditioning": negative, "latent": [encode, 0]}}
+        positive = [ref_pos, 0]
+        negative = [ref_neg, 0]
+    graph["10"]["inputs"]["positive"] = positive
+    graph["10"]["inputs"]["negative"] = negative
     return graph
 
 
@@ -570,17 +710,37 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
                       ) -> tuple[bytes, int, int]:
     width = int(width or cfg.get("comfyui_width") or 1024)
     height = int(height or cfg.get("comfyui_height") or 1024)
+    engine = _comfy_image_engine(cfg)
+    if engine == "flux2_klein":
+        _validate_flux2_canvas(width, height)
+        flux = flux2_settings(cfg)
+        for label in ("unet", "clip", "vae"):
+            if not str(flux.get(label) or "").strip():
+                raise ImageError(
+                    f"config_error: image.providers.comfyui.flux2.{label} vazio")
+        references = _flux2_used_references(
+            init_image, reference_images, int(flux["max_references"]))
+    else:
+        references = (
+            ([init_image] if init_image is not None else [])
+            + list(reference_images or [])
+        )[:_MAX_REFERENCES]
     base = _comfy_base(cfg)
-    references = ([init_image] if init_image is not None else []) + list(reference_images or [])
     names = [
         _comfy_upload(
             client, base, raw,
             f"aidungeon-{index}-{hashlib.sha256(raw).hexdigest()[:16]}.png",
         )
-        for index, raw in enumerate(references[:_MAX_REFERENCES])
+        for index, raw in enumerate(references)
     ]
-    content = _comfy_run(cfg, client, _comfy_qwen_graph(
-        cfg, prompt, names, width=width, height=height, edit=init_image is not None))
+    if engine == "flux2_klein":
+        graph = _comfy_flux2_klein_graph(
+            cfg, prompt, names, width=width, height=height)
+    else:
+        graph = _comfy_qwen_graph(
+            cfg, prompt, names, width=width, height=height,
+            edit=init_image is not None)
+    content = _comfy_run(cfg, client, graph)
     return content, width, height
 
 
@@ -593,7 +753,9 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
     """Hash estável do pedido final. Não inclui api_key e nunca vai para prompt.
 
     Seed e variation só entram quando configurados; assim chaves antigas e o
-    comportamento de cache da instalação padrão continuam válidos.
+    comportamento de cache da instalação padrão continuam válidos. `engine`
+    omisso ou `qwen` não entra no hash. `flux2_klein` entra, e as referências
+    desse engine param no teto de 4, âncora inclusa.
     """
     provider = cfg.get("provider") or "sdwebui"
     negative = _merged_negative({
@@ -636,6 +798,23 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         }
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
+        if _comfy_image_engine(cfg) == "flux2_klein":
+            flux = flux2_settings(cfg)
+            extra["engine"] = "flux2_klein"
+            extra["flux2"] = {
+                "unet": flux["unet"],
+                "clip": flux["clip"],
+                "clip_type": flux["clip_type"],
+                "clip_device": flux["clip_device"],
+                "vae": flux["vae"],
+                "weight_dtype": flux["weight_dtype"],
+                "steps": int(flux["steps"]),
+                "cfg": float(flux["cfg"]),
+                "sampler": flux["sampler"],
+                "megapixels": float(flux["megapixels"]),
+                "upscale_method": flux["upscale_method"],
+                "resolution_steps": int(flux["resolution_steps"]),
+            }
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -650,9 +829,18 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         "extra": extra,
         "init": hashlib.sha256(init_image).hexdigest() if init_image is not None else "",
     }
-    refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
-    if refs:
-        payload["refs"] = [hashlib.sha256(raw).hexdigest() for raw in refs]
+    klein = provider == "comfyui" and _comfy_image_engine(cfg) == "flux2_klein"
+    if klein:
+        used = _flux2_used_references(
+            init_image, reference_images,
+            int(flux2_settings(cfg)["max_references"]))
+        payload["init"] = hashlib.sha256(used[0]).hexdigest() if used else ""
+        if len(used) > 1:
+            payload["refs"] = [hashlib.sha256(raw).hexdigest() for raw in used[1:]]
+    else:
+        refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
+        if refs:
+            payload["refs"] = [hashlib.sha256(raw).hexdigest() for raw in refs]
     variation_value = cfg.get("variation", 0) if variation is None else variation
     if variation_value not in (None, "", 0, "0"):
         payload["variation"] = str(variation_value)
@@ -1127,6 +1315,7 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     init_image pede img2img (mesmo rosto). Sem endpoint img2img o pedido falha
     em vez de inventar outro personagem em txt2img.
     reference_images entram no condicionamento visual nativo do Qwen.
+    Com engine flux2_klein viram ReferenceLatent, no máximo 4, âncora inclusa.
     """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
@@ -1192,9 +1381,14 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 if not base:
                     raise ImageError(
                         "config_error: image.providers.comfyui.base_url vazio")
+                engine = _comfy_image_engine(cfg)
                 _get_json(client, f"{base}/system_stats",
                           {"Accept": "application/json"}, "system_stats")
-                result["unet"] = cfg.get("comfyui_unet") or None
+                if engine == "flux2_klein":
+                    result["unet"] = flux2_settings(cfg)["unet"] or None
+                else:
+                    result["unet"] = cfg.get("comfyui_unet") or None
+                result["engine"] = engine
             elif provider == "openai_compatible":
                 base = str(cfg.get("openai_base_url") or "").rstrip("/")
                 if not base:

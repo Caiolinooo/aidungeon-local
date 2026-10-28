@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app import auth as auth_core
-from app import db, deps, events, jobs
+from app import db, deps, events, jobs, settings_store
 from conftest import TEST_AUTH_SECRET, add_action, make_adventure, sse_body
 from test_scene import _face
 from test_v2 import PNG_BYTES
@@ -98,8 +98,12 @@ class _Stack:
 
 
 @pytest.fixture()
-def stack(client, tmp_path):
+def stack(client, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
+    real_image_settings = settings_store.effective_image_settings
+    monkeypatch.setattr(
+        settings_store, "effective_image_settings",
+        lambda conn: {**real_image_settings(conn), "comfyui_engine": "qwen"})
     with db.session() as conn:
         db.set_setting(conn, "image.provider", json.dumps("comfyui"))
     fake = _Stack()
@@ -175,6 +179,8 @@ def _pending_see(adventure_id: str) -> dict:
 def test_claim_takes_lowest_priority_then_oldest(tmp_db):
     adv = make_adventure()
     with db.session() as conn:
+        scene_clip = jobs.enqueue_scene_clip(
+            conn, adv["id"], "source-scene", "the curtain moves", kind="scene")
         bulk = jobs.enqueue(conn, "character_portrait", adv["id"], "c1",
                             priority=jobs.PRIORITY_BULK_PORTRAIT)
         backdrop = jobs.enqueue(conn, "scene_backdrop", adv["id"], "r1", {"prompt": "x"})
@@ -189,7 +195,7 @@ def test_claim_takes_lowest_priority_then_oldest(tmp_db):
         while (job := db.claim_next_job(conn)) is not None:
             order.append(job["id"])
     assert order == [see["id"], present["id"], present_later["id"],
-                     backdrop["id"], bulk["id"]]
+                     backdrop["id"], scene_clip["id"], bulk["id"]]
 
 
 def test_narrative_lets_only_the_see_through(client, stack):

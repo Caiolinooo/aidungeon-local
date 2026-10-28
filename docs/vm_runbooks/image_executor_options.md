@@ -3,6 +3,8 @@
 Leitura feita em 19 out 2026 na VM `caio@vm.groupabz.com`. Nada foi instalado. `llama-server`, `sd-webui` e o app não foram reiniciados.
 
 > **26 out 2026.** O provider `comfyui` usa FineView Qwen Image 2.1 Turbo Fixed FP8, CLIP Qwen3-VL 8B INT8 em CPU e texture-fix VAE. O grafo tem oito passos, shift 1.31 e referências por `TextEncodeQwenImage21`; downloads e hashes estão em `deploy/vm/README.md`.
+>
+> **28 out 2026.** O provider ativo é `comfyui` com `engine=flux2_klein`: `flux-2-klein-4b-fp8.safetensors`, `qwen_3_4b.safetensors` (`CLIPLoader` type `flux2`) e `flux2-vae.safetensors`. Canvas único em `EmptyFlux2LatentImage` e `Flux2Scheduler`, 4 passos, CFG 1, euler. Referências: `LoadImage` → `ImageScaleToTotalPixels` (0,25 MP por âncora) → `VAEEncode` → `ReferenceLatent` no positivo e no negativo, teto 4. `engine=qwen` mantém o FineView; LTXV e Wan não mudam.
 
 O app fala HTTP com o executor em `backend/app/image_client.py`: `POST {base}/sdapi/v1/txt2img` e, no retrato por foto, `POST /sdapi/v1/img2img`. A resposta usada é `images[0]` em base64. O corpo está fixo em `DPM++ 2M`, scheduler `Karras`, `cfg_scale` 5 — o que o epiCRealism XL pede.
 
@@ -40,7 +42,7 @@ Nenhum modelo abaixo foi gerado nesta L4. O número de cada linha é o da fonte,
 | FLUX.1 FP8 | ~12 GB ([Thunder Compute](https://www.thundercompute.com/blog/flux-comfyui-ai-image-generation)) | só com o narrador pausado |
 | FLUX.1 GGUF Q4 / NF4 | 6–8 GB no mesmo guia | não cabe nos 5,4 GB medidos |
 | FLUX.2 dev | 32B, ~90 GB mesmo em lowVRAM ([NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-flux-2-comfyui/)) | não cabe na L4 |
-| FLUX.2 Klein 4B destilado | 8 GB em FP16, 4 passos ([Thunder Compute](https://www.thundercompute.com/blog/flux-comfyui-ai-image-generation)) | só com o narrador pausado |
+| FLUX.2 Klein 4B destilado | FP8 oficial, 4 passos, encoder Qwen3 4B e VAE próprios ([BFL](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)) | **medido na L4 em 1344×768:** 27,99 s frio e 6,32 s aquecido sem referência; com um retrato real, 32,61 s de render a 1 MP e **25,49 s a 0,25 MP** (fila excluída); narrador/voz ativos e Forge descarregado |
 | FLUX.2 Klein 9B | 29 GB no mesmo guia | não cabe na L4 |
 | FLUX 3 Image Klein INT8 | 5,6B; 8 GB; 1 MP em menos de 9 s numa RTX 4070 ([BFL](https://bfl.ai/blog/flux-3-image-klein)) | planejado: UNET 5,8 GB + VAE 0,3 GB na GPU, CLIP 4,9 GB na CPU. Não medido |
 | SD 3.5 Large | acima de 18 GB em BF16; 11 GB em FP8 TensorRT ([NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-gtc-paris-tensorrt-rtx-nim-microservices/)) | só com o narrador pausado, e o FP8 ainda passa dos 5,4 GB |
@@ -71,10 +73,12 @@ Um guia atribui 4–6 GB ao Wan 2.1 1.3B em GGUF 480p ([WillItRunAI](https://wil
 
 ## O que trocar
 
-**Stills.** O alvo implementado é **FineView Qwen Image 2.1 Turbo Fixed FP8** no
-**ComfyUI**, com o CLIP Qwen3-VL 8B INT8 na CPU. Retratos usam a âncora
-canônica e fotos de referência como pixels, não mais InstantID/ControlNet no
-caminho ComfyUI. O SDWebUI continua disponível para rollback.
+**Stills.** O provider principal usa **FLUX.2 Klein 4B distilled** (`engine=flux2_klein`),
+com FP8, encoder `qwen_3_4b`, VAE `flux2-vae`, 4 passos, CFG 1 e até 4 referências.
+O A/B real em 1344×768 mediu 27,99 s frio e 6,32 s aquecido, contra 245,26 s e
+80,03 s do epiCRealism em 20 passos. FineView Qwen Image 2.1 (`engine=qwen`) e
+SDWebUI/epiCRealism continuam instalados para rollback. Retratos usam a âncora
+canônica e fotos como pixels; similaridade de embeddings não define identidade.
 
 O cliente monta o grafo (`POST /prompt`) porque o ComfyUI não devolve
 `images[0]` em `/sdapi/v1/txt2img`; polling e download ficam em `/history` e
@@ -83,7 +87,7 @@ O cliente monta o grafo (`POST /prompt`) porque o ComfyUI não devolve
 O prompt upsampler oficial fica de fora: o LLM do jogo já entrega o prompt
 detalhado e outro modelo de texto ocuparia RAM/VRAM sem necessidade.
 
-**Clipe.** **Wan 2.1 T2V-1.3B** num worker ComfyUI, **só com o narrador pausado**. São 5 s a 480p e 8,19 GB no README — acima dos 5,4 GB, abaixo dos ~20 GB com o llama fora. O app não tem cliente de vídeo; não reaproveita o `txt2img`. O Neo lista Wan 2.2 **14B**, que não cabe. CogVideoX-2B, SVD, Hunyuan e LTX-2.5 ficam de fora pelo tamanho ou pelo hardware da medição.
+**Clipe.** O default é **LTXV 2B distilled**, 121 frames a 24 fps, 768×448 ou 448×768, 8 passos e CFG 1. Um `scene_clip` recente renderizou em 14,34 s, mas ficou 895,42 s na fila atrás de jobs menos urgentes; por isso `scene_clip` agora tem prioridade 3, antes de lotes, `card_assets` e retratos animados. Wan 2.2 TI2V continua opt-in. Narrador e voz não são pausados.
 
 ## Fontes
 
@@ -91,6 +95,8 @@ detalhado e outro modelo de texto ocuparia RAM/VRAM sem necessidade.
 - [The Decoder — resumo do mesmo lançamento](https://the-decoder.com/black-forest-labs-open-weights-image-model-flux-3-image-klein-runs-on-consumer-gpus-with-just-8-gb-of-vram) (15 out 2026)
 - [Thunder Compute — Flux no ComfyUI](https://www.thundercompute.com/blog/flux-comfyui-ai-image-generation) (out 2026)
 - [NVIDIA — FLUX.2](https://blogs.nvidia.com/blog/rtx-ai-garage-flux-2-comfyui/)
+- [ComfyUI — FLUX.2 Klein 4B](https://docs.comfy.org/tutorials/flux/flux-2-klein)
+- [BFL — FLUX.2 Klein 4B oficial](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)
 - [NVIDIA — SD 3.5 e TensorRT](https://blogs.nvidia.com/blog/rtx-ai-garage-gtc-paris-tensorrt-rtx-nim-microservices/) (12 jun 2025)
 - [Hugging Face — SD 3.5 Medium](https://huggingface.co/stabilityai/stable-diffusion-3.5-medium)
 - [Hugging Face — Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)

@@ -27,8 +27,8 @@ Tipos:
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
   role image_prompt) roda numa thread e só então o job entra na fila do SD,
   para não prender o worker. Termina em `see_ready` ou `see_failed`.
-- `scene_clip` — MP4 image-to-video (LTXV; Wan se engine=wan) a partir de um PNG já gravado. Prioridade 6
-  (cena) ou 7 (retrato): espera a narrativa e o resto da fila. Cache por
+- `scene_clip` — MP4 image-to-video (LTXV; Wan se engine=wan) a partir de um PNG já gravado. Prioridade 3
+  (cena) ou 7 (retrato): cenas passam antes de retratos em lote e enriquecimento.
   modelo+prompt+fonte. Supersede na mesma imagem de origem. Cancelamento
   manda /interrupt e /free no Comfy e não publica o arquivo. O evento
   terminal é `clip_ready`. Com `auto_scene` / `auto_portraits` (default
@@ -69,10 +69,10 @@ log = logging.getLogger("aidungeon.jobs")
 PRIORITY_SEE = 0
 PRIORITY_PRESENT_PORTRAIT = 1
 PRIORITY_BACKDROP = 2
-PRIORITY_BULK_PORTRAIT = 3
-PRIORITY_LIFE_TICK = 4
-PRIORITY_CARD_ASSETS = 5
-PRIORITY_SCENE_CLIP = 6
+PRIORITY_SCENE_CLIP = 3
+PRIORITY_BULK_PORTRAIT = 4
+PRIORITY_LIFE_TICK = 5
+PRIORITY_CARD_ASSETS = 6
 PRIORITY_PORTRAIT_CLIP = 7
 
 # A cena aberta pede retrato de novo assim que o job anterior termina em erro.
@@ -1189,8 +1189,8 @@ def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: st
                        automatic: bool = False) -> dict:
     """Mesma fonte+prompt ativo é deduplicado; prompt novo substitui o pendente.
 
-    A rota manual omite `priority`, `kind` e `supersede` e continua na
-    prioridade 6: outro prompt cancela o pendente da mesma fonte.
+    A rota manual omite `priority`, `kind` e `supersede` e usa a prioridade 3:
+    outro prompt cancela o pendente da mesma fonte.
     `supersede=False` (follow-up automático) devolve o job ativo mesmo com
     prompt diferente e não apaga o pedido. `kind="portrait"` sem prioridade
     explícita fica atrás da cena.

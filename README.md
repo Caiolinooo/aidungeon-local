@@ -246,10 +246,12 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   note, abertura em 2ª pessoa, tags e 3–8 story cards. Revise cada campo (com botão de
   regenerar individual) antes de criar a aventura.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
-  tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o modelo
-  ativo é **FineView Qwen Image 2.1 Turbo Fixed** no ComfyUI, com Euler, CFG 1,
-  8 passos e referências de identidade. Provedores: **sdwebui**, **comfyui** ou
-  **openai_compatible**; epiCRealism/Forge continua disponível para rollback.
+  tela cheia, cópia rápida do prompt gerado e download direto em PNG. O provider
+  ativo é **ComfyUI com FLUX.2 Klein 4B distilled** (`engine=flux2_klein`): FP8,
+  `qwen_3_4b`, `flux2-vae`, 4 passos, CFG 1 e até 4 referências de identidade.
+  FineView Qwen Image 2.1 Turbo Fixed (`engine=qwen`) e epiCRealism/Forge
+  (`provider=sdwebui`) continuam disponíveis para comparação e rollback.
+  Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
 - **Cena e retratos animados**: LTXV 2B distilled transforma o PNG vigente em
   MP4 real de aproximadamente 5 s (768×448, 121 frames, 8 passos). Wan 2.2
   continua disponível com `video.engine=wan`. Novo backdrop dispara o vídeo da situação;
@@ -318,11 +320,12 @@ streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime �
   i5-1145G7 + Iris Xe, sem CUDA) e feito para *storytelling*. Modelos de referência em
   `config/models.json` (Qwen2.5-7B Q4_K_M; fallback 3B "modo rápido").
 - **Imagens**: `sdwebui` (A1111/Forge/SD.Next com `--api`, local ou LAN), `comfyui`
-  (grafo API em `/prompt`, com polling em `/history`; edição pelo condicionamento
-  nativo `TextEncodeQwenImage21` para manter o rosto) ou `openai_compatible`
+  (grafo API em `/prompt`, com polling em `/history`; `engine=qwen` edita pelo
+  condicionamento nativo `TextEncodeQwenImage21`; `engine=flux2_klein` usa
+  `ReferenceLatent` com teto de 4) ou `openai_compatible`
   — ex. um servidor de difusão na VM). Endpoint, resolução, steps, negative prompt e
   estilo são configuráveis pela UI; modelo/VAE/sampler do ComfyUI ficam em
-  `config/settings.json`.
+  `config/settings.json`. O provider ativo do arquivo é `comfyui`/`flux2_klein`.
 
 Nota Qwen3.x: modelos híbridos exigem `chat_template_kwargs.enable_thinking=false` em
 toda chamada (sem isso `content` volta vazio) — o `llm_client` já envia sempre que

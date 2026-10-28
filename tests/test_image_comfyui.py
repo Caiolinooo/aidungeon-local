@@ -229,3 +229,190 @@ def test_jobs_interrupt_running_comfyui_render(client, tmp_path, monkeypatch):
 
     assert jobs.interrupt_image({"id": "job-1", "type": "see_image"}) is True
     assert called == ["comfyui"]
+
+
+def _klein(tmp_path, **extra):
+    cfg = _cfg(
+        tmp_path,
+        comfyui_engine="flux2_klein",
+        comfyui_flux2={
+            "unet": "flux-2-klein-4b-fp8.safetensors",
+            "clip": "qwen_3_4b.safetensors",
+            "clip_type": "flux2",
+            "clip_device": "default",
+            "vae": "flux2-vae.safetensors",
+            "weight_dtype": "default",
+            "steps": 4,
+            "cfg": 1.0,
+            "sampler": "euler",
+            "megapixels": 1.0,
+            "upscale_method": "nearest-exact",
+            "resolution_steps": 1,
+            "max_references": 4,
+        },
+    )
+    cfg.update(extra)
+    return cfg
+
+
+def _refuse_transport(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"comfy should not be called for {request.url.path}")
+
+
+def test_qwen_request_key_ignores_flux2_block(tmp_path):
+    base = _cfg(tmp_path)
+    tagged = _cfg(
+        tmp_path,
+        comfyui_engine="qwen",
+        comfyui_flux2={"unet": "flux-2-klein-4b-fp8.safetensors"},
+    )
+    prompt = "a knight"
+    refs = [b"one"]
+    assert image_client.request_key(base, prompt, reference_images=refs) == (
+        image_client.request_key(tagged, prompt, reference_images=refs))
+
+
+def test_flux2_klein_graph_uses_official_canvas_and_scheduler(tmp_path):
+    capture: dict = {}
+    result = image_client.generate_image(
+        _klein(tmp_path), "a knight in the rain", adventure_id="adv-1",
+        image_id="klein-1", width=832, height=1216,
+        transport=_transport(capture))
+
+    assert (result["width"], result["height"]) == (832, 1216)
+    graph = capture["graph"]
+    nodes = _nodes(graph)
+    assert "TextEncodeQwenImage21" not in nodes
+    assert "EmptyLatentImage" not in nodes
+    assert "ManualSigmas" not in nodes
+    assert "ModelSamplingAuraFlow" not in nodes
+    assert "SamplerCustom" not in nodes
+    assert "LTXVImgToVideo" not in nodes
+    assert "Wan22ImageToVideoLatent" not in nodes
+    assert "CheckpointLoaderSimple" not in nodes
+    assert "fineviewQWEN_qw21TurboFixed_3299367.safetensors" not in json.dumps(graph)
+    assert nodes["UNETLoader"]["inputs"] == {
+        "unet_name": "flux-2-klein-4b-fp8.safetensors",
+        "weight_dtype": "default",
+    }
+    assert nodes["CLIPLoader"]["inputs"] == {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "flux2",
+        "device": "default",
+    }
+    assert nodes["VAELoader"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+    assert nodes["CLIPTextEncode"]["inputs"]["text"] == "a knight in the rain"
+    assert nodes["ConditioningZeroOut"]["inputs"]["conditioning"] == ["4", 0]
+    latent = nodes["EmptyFlux2LatentImage"]["inputs"]
+    schedule = nodes["Flux2Scheduler"]["inputs"]
+    assert (latent["width"], latent["height"], latent["batch_size"]) == (832, 1216, 1)
+    assert (schedule["width"], schedule["height"], schedule["steps"]) == (832, 1216, 4)
+    assert nodes["KSamplerSelect"]["inputs"]["sampler_name"] == "euler"
+    assert nodes["CFGGuider"]["inputs"]["cfg"] == 1.0
+    assert nodes["CFGGuider"]["inputs"]["positive"] == ["4", 0]
+    assert nodes["CFGGuider"]["inputs"]["negative"] == ["5", 0]
+    sampler = nodes["SamplerCustomAdvanced"]["inputs"]
+    assert sampler["latent_image"] == ["6", 0]
+    assert sampler["sigmas"] == ["7", 0]
+    assert sampler["guider"] == ["10", 0]
+    assert sampler["noise"] == ["9", 0]
+    assert sampler["sampler"] == ["8", 0]
+
+
+def test_flux2_klein_chains_references_on_both_conditionings(tmp_path):
+    capture: dict = {}
+    image_client.generate_image(
+        _klein(tmp_path, seed=7), "same person", adventure_id="adv-1",
+        image_id="klein-2", width=1024, height=1024,
+        init_image=b"\x89PNG-anchor",
+        reference_images=[b"\x89PNG-one", b"\x89PNG-two"],
+        transport=_transport(capture))
+
+    graph = capture["graph"]
+    assert len(capture["uploads"]) == 3
+    assert len(_of_type(graph, "LoadImage")) == 3
+    assert len(_of_type(graph, "ImageScaleToTotalPixels")) == 3
+    assert len(_of_type(graph, "VAEEncode")) == 3
+    assert len(_of_type(graph, "ReferenceLatent")) == 6
+    assert graph["20"]["inputs"]["image"] == "aidungeon-ref-1.png"
+    assert graph["21"]["inputs"]["image"] == ["20", 0]
+    assert graph["21"]["inputs"]["upscale_method"] == "nearest-exact"
+    assert graph["21"]["inputs"]["megapixels"] == 1.0
+    assert graph["21"]["inputs"]["resolution_steps"] == 1
+    assert graph["22"]["inputs"] == {"pixels": ["21", 0], "vae": ["3", 0]}
+    assert graph["23"]["inputs"] == {
+        "conditioning": ["4", 0], "latent": ["22", 0]}
+    assert graph["24"]["inputs"] == {
+        "conditioning": ["5", 0], "latent": ["22", 0]}
+    assert graph["28"]["inputs"]["conditioning"] == ["23", 0]
+    assert graph["29"]["inputs"]["conditioning"] == ["24", 0]
+    assert graph["33"]["inputs"]["conditioning"] == ["28", 0]
+    assert graph["34"]["inputs"]["conditioning"] == ["29", 0]
+    guider = graph["10"]["inputs"]
+    assert guider["positive"] == ["33", 0]
+    assert guider["negative"] == ["34", 0]
+    assert graph["11"]["inputs"]["latent_image"] == ["6", 0]
+    assert graph["9"]["inputs"]["noise_seed"] == 7
+    assert "TextEncodeQwenImage21" not in _nodes(graph)
+
+
+def test_flux2_reference_cap_is_four_and_matches_the_hash(tmp_path):
+    capture: dict = {}
+    refs = [b"r1", b"r2", b"r3", b"r4", b"r5"]
+    image_client.generate_image(
+        _klein(tmp_path), "group", adventure_id="adv-1", image_id="klein-3",
+        init_image=b"anchor", reference_images=refs,
+        transport=_transport(capture))
+    assert len(capture["uploads"]) == 4
+    assert len(_of_type(capture["graph"], "LoadImage")) == 4
+
+    cfg = _klein(tmp_path)
+    capped = image_client.request_key(
+        cfg, "group", init_image=b"anchor", reference_images=refs)
+    same_tail = image_client.request_key(
+        cfg, "group", init_image=b"anchor",
+        reference_images=[b"r1", b"r2", b"r3", b"other"])
+    shorter = image_client.request_key(
+        cfg, "group", init_image=b"anchor",
+        reference_images=[b"r1", b"r2"])
+    assert capped == same_tail
+    assert capped != shorter
+    qwen = image_client.request_key(
+        _cfg(tmp_path), "group", init_image=b"anchor", reference_images=refs)
+    assert qwen != capped
+
+def test_flux2_request_key_covers_execution_parameters(tmp_path):
+    base = _klein(tmp_path)
+    changed = _klein(tmp_path)
+    changed["comfyui_flux2"]["weight_dtype"] = "fp8_e4m3fn"
+    assert image_client.request_key(base, "same") != image_client.request_key(changed, "same")
+
+
+
+def test_flux2_rejects_canvas_that_is_not_a_multiple_of_16(tmp_path):
+    with pytest.raises(image_client.ImageError, match="múltiplos de 16"):
+        image_client.generate_image(
+            _klein(tmp_path), "a knight", adventure_id="adv-1", image_id="odd",
+            width=1000, height=1024,
+            transport=httpx.MockTransport(_refuse_transport))
+
+
+def test_unknown_image_engine_fails(tmp_path):
+    with pytest.raises(image_client.ImageError, match="image.engine desconhecido"):
+        image_client.generate_image(
+            _cfg(tmp_path, comfyui_engine="foo"), "a knight",
+            adventure_id="adv-1", image_id="odd",
+            transport=httpx.MockTransport(_refuse_transport))
+
+
+def test_flux2_health_reports_the_klein_unet(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/system_stats":
+            return httpx.Response(200, json={"system": {}})
+        return httpx.Response(404)
+
+    health = image_client.health(
+        _klein(tmp_path), httpx.MockTransport(handler))
+    assert health["status"] == "ok"
+    assert health["engine"] == "flux2_klein"
+    assert health["unet"] == "flux-2-klein-4b-fp8.safetensors"

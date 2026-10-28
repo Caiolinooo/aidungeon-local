@@ -496,11 +496,23 @@ def test_a_salamander_is_not_painted_as_a_naked_woman(client, tmp_path, monkeypa
     assert "nipples" in negative
 
 
-def _encoder_inputs(graph: dict) -> dict:
-    return next(
-        node["inputs"] for node in graph.values()
-        if node["class_type"] == "TextEncodeQwenImage21"
-    )
+def _reference_image_nodes(graph: dict) -> list:
+    qwen = next((node["inputs"] for node in graph.values()
+                 if node["class_type"] == "TextEncodeQwenImage21"), None)
+    if qwen is not None:
+        return [qwen["images"][key] for key in sorted(qwen["images"])]
+    positive = next(node["inputs"]["positive"] for node in graph.values()
+                    if node["class_type"] == "CFGGuider")
+    references = []
+    while graph[str(positive[0])]["class_type"] == "ReferenceLatent":
+        reference = graph[str(positive[0])]["inputs"]
+        encode = graph[str(reference["latent"][0])]["inputs"]
+        scale = graph[str(encode["pixels"][0])]["inputs"]
+        load_id = str(scale["image"][0])
+        assert graph[load_id]["class_type"] == "LoadImage"
+        references.append([load_id, 0])
+        positive = reference["conditioning"]
+    return list(reversed(references))
 
 
 def test_missing_portrait_does_not_paint_a_partial_scene(client, tmp_path):
@@ -609,9 +621,9 @@ def test_cast_anchors_keep_order_for_see_and_backdrop(client, tmp_path):
         client.app.dependency_overrides.clear()
     assert seen.status_code == 200, seen.text
     assert [blob in capture["uploads"][index] for index, blob in enumerate(blobs)] == [True, True, True]
-    encoder = _encoder_inputs(capture["graphs"][0])["images"]
-    assert encoder["image_1"][0] != encoder["image_2"][0]
-    assert "image_3" in encoder
+    references = _reference_image_nodes(capture["graphs"][0])
+    assert len(references) == 3
+    assert len({reference[0] for reference in references}) == 3
     scene_resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert scene_resp.status_code == 200, scene_resp.text
     with db.session() as conn:

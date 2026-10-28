@@ -323,6 +323,11 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "comfyui_sigmas": comfyui_sigmas,
         "comfyui_shift": float(comfyui.get("shift", 1.31)),
         "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 0.25)),
+        # Still opt-in. engine omisso é qwen e não entra no request_key.
+        # flux2 não participa da validação len(sigmas) == steps + 1.
+        "comfyui_engine": (
+            str(comfyui.get("engine") or "qwen").strip().lower() or "qwen"),
+        "comfyui_flux2": dict(comfyui.get("flux2") or {}),
         # Clipe: LTXV no arquivo; Wan é video.engine=wan. Não entra no
         # ImageSettings público e não substitui provider/unet da imagem.
         "comfyui_video": dict(comfyui.get("video") or {}),

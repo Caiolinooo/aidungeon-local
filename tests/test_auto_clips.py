@@ -55,14 +55,18 @@ def _drain_origins() -> list[str]:
     while True:
         with db.session() as conn:
             row = conn.execute(
-                "SELECT id, type FROM jobs WHERE status='pending' "
-                "ORDER BY priority ASC, created_at ASC, rowid ASC LIMIT 1"
+                "SELECT id, type FROM jobs WHERE status='pending'"
+                " AND type<>'scene_clip'"
+                " ORDER BY priority ASC, created_at ASC, rowid ASC LIMIT 1"
             ).fetchone()
-        if row is None or row["type"] == "scene_clip":
+        if row is None:
             break
         with db.session() as conn:
-            job = db.claim_next_job(conn)
-        assert job is not None and job["id"] == row["id"]
+            claimed = conn.execute(
+                "UPDATE jobs SET status='running', started_at=? WHERE id=?"
+                " AND status='pending'", (db.utcnow(), row["id"]))
+            assert claimed.rowcount == 1
+            job = db.get_job(conn, row["id"])
         jobs._run_job(job, None)
         ran.append(job["type"])
     return ran
@@ -121,7 +125,7 @@ def test_clip_cache_ignores_scheduling_flags(tmp_path):
     assert image_client.clip_request_key(refined, "walks home", raw) != base
 
 
-def test_manual_clip_stays_priority_six_and_scene_precedes_portrait(tmp_db):
+def test_manual_clip_uses_scene_priority_and_scene_precedes_portrait(tmp_db):
     adv = make_adventure()
     with db.session() as conn:
         manual = jobs.enqueue_scene_clip(conn, adv["id"], "src-manual", "nods")
