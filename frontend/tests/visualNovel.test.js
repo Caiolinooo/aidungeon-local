@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  appendStreamResult,
+  beginReply,
+  canWriteReply,
   commandForKey,
+  imageMediaKind,
   initialCursor,
   isEnd,
+  latestTurnBeats,
   loadVisualNovel,
   mapNovel,
+  novelAfterSubmit,
   positionLabel,
+  presentChoices,
   realImageRef,
   reduceNovel,
+  replyKeyAction,
   selectChoice,
+  submitNovelAction,
 } from '../src/api/visualNovel.js'
 
 function action(partial) {
@@ -228,3 +237,209 @@ function json(data, status = 200) {
     headers: { 'content-type': 'application/json' },
   })
 }
+
+test('escolhas do replay só navegam e a resposta só existe no último beat', () => {
+  const beats = [{ seq: 1, type: 'do' }, { seq: 2, type: 'continue' }]
+  const choices = presentChoices([
+    { type: 'do', text: 'abrir', taken: true, actionSeq: 1 },
+    { type: 'say', text: 'olá', taken: false, actionSeq: null },
+  ])
+  assert.equal(choices.navigationOnly, true)
+  assert.equal(choices.items[0].effect, 'jump')
+  assert.equal(choices.items[1].effect, 'none')
+  assert.equal(choices.items.some((item) => item.effect === 'submit'), false)
+  assert.equal(canWriteReply({ index: 1 }, beats.length), true)
+  assert.equal(canWriteReply({ index: 2 }, beats.length), false)
+  assert.equal(canWriteReply({ index: 0 }, 0), true)
+  assert.equal(beginReply({ busy: true, text: 'abrir', type: 'do' }), null)
+  assert.equal(beginReply({ busy: false, text: '  ', type: 'do' }), null)
+  assert.deepEqual(beginReply({ busy: false, text: ' abrir ', type: 'say' }), { type: 'say', text: 'abrir' })
+  assert.equal(replyKeyAction({ key: 'Enter' }), 'send')
+  assert.equal(replyKeyAction({ key: 'Enter', ctrlKey: true }), 'send')
+  assert.equal(replyKeyAction({ key: 'Enter', metaKey: true }), 'send')
+  assert.equal(replyKeyAction({ key: 'Enter', shiftKey: true }), 'line')
+  assert.equal(replyKeyAction({ key: 'Enter', isComposing: true }), null)
+  assert.equal(imageMediaKind('video/mp4'), 'video')
+  assert.equal(imageMediaKind('image/png'), 'image')
+  assert.equal(imageMediaKind(''), 'image')
+  assert.equal(imageMediaKind('text/html'), 'invalid')
+})
+
+test('stream gravado entra nos beats e token solto não vira narração', () => {
+  const model = mapNovel({
+    adventure: {
+      id: 'adv-1',
+      title: 'Porto',
+      actions: [action({ seq: 0, type: 'start', text: 'A Taverna abre.', created_at: '2026-01-01T00:00:01Z' })],
+    },
+  })
+  const player = action({ seq: 1, type: 'do', text: '\n> You open the door\n', created_at: '2026-01-01T00:00:02Z' })
+  const onlyPlayer = novelAfterSubmit(model, { done: { player_action: player } })
+  assert.equal(onlyPlayer.committed, true)
+  assert.equal(onlyPlayer.model.beats.length, 2)
+  assert.equal(onlyPlayer.model.beats[1].text, 'open the door')
+  assert.equal(onlyPlayer.model.beats.some((beat) => beat.type === 'continue'), false)
+
+  const narration = action({ seq: 2, type: 'continue', text: 'A porta abre.', created_at: '2026-01-01T00:00:03Z' })
+  const turned = novelAfterSubmit(model, { done: { player_action: player, action: narration } })
+  assert.deepEqual(turned.model.beats.map((beat) => beat.seq), [0, 1, 2])
+  assert.equal(turned.model.beats[2].text, 'A porta abre.')
+  assert.equal(turned.model.beats.some((beat) => beat.text.includes('TOKEN')), false)
+  assert.deepEqual(latestTurnBeats(turned.model.beats, 2).map((beat) => beat.seq), [1, 2])
+  assert.equal(presentChoices(turned.model.beats[0].choices).items[0].effect, 'jump')
+  const duplicate = appendStreamResult(turned.model, { player_action: player, action: narration })
+  assert.equal(duplicate, turned.model)
+
+  const queued = novelAfterSubmit(model, { intent: { id: 'intent-1' }, done: null })
+  assert.equal(queued.committed, false)
+  assert.equal(queued.intent.id, 'intent-1')
+  assert.equal(queued.model, model)
+  const missing = novelAfterSubmit(model, { done: { token: 'não gravar' } })
+  assert.equal(missing.missing, true)
+  assert.equal(missing.model, model)
+})
+
+test('POST /action usa o stream real e o erro não fabrica beat', async () => {
+  const calls = []
+  const tokens = []
+  const previousFetch = globalThis.fetch
+  const previousStorage = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: (key) => (key === 'aidl_token' ? 'token-1' : null),
+    setItem() {},
+    removeItem() {},
+  }
+  globalThis.fetch = async (url, opts = {}) => {
+    calls.push({
+      url: String(url),
+      method: opts.method || 'GET',
+      authorization: opts.headers?.Authorization,
+      body: opts.body,
+    })
+    const path = String(url)
+    if (path.endsWith('/api/adventures/adv%2F1/action') && calls.length === 1) {
+      const chunks = [
+        'event: token\ndata: {"token":"Olá"}\n\n',
+        'event: token\ndata: {"token":" mundo"}\n\n',
+        'event: done\ndata: {"player_action":{"id":1,"seq":1,"type":"do","text":"abrir","created_at":"2026-01-01T00:00:02Z"},"action":{"id":2,"seq":2,"type":"continue","text":"A porta abre.","created_at":"2026-01-01T00:00:03Z"}}\n\n',
+      ]
+      return new Response(chunks.join(''), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    if (path.endsWith('/api/adventures/mesa/action')) {
+      return json({ intent: { id: 'intent-9' } }, 202)
+    }
+    if (path.endsWith('/api/adventures/ocupada/action')) {
+      return json({ error: { code: 'generation_in_progress', message: 'já está gerando' } }, 409)
+    }
+    if (path.endsWith('/api/adventures/caiu/action')) {
+      return new Response('event: token\ndata: {"token":"parcial"}\n\nevent: error\ndata: {"message":"caiu","code":"llm_error"}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    return json({ error: { message: 'unexpected' } }, 500)
+  }
+  try {
+    const result = await submitNovelAction('adv/1', {
+      type: 'do',
+      text: '  abrir a porta  ',
+      onToken: (token) => tokens.push(token),
+    })
+    assert.deepEqual(tokens, ['Olá', ' mundo'])
+    assert.equal(result.done.action.text, 'A porta abre.')
+    assert.equal(result.intent, null)
+    assert.equal(calls[0].method, 'POST')
+    assert.equal(calls[0].authorization, 'Bearer token-1')
+    assert.equal(calls[0].body, JSON.stringify({ type: 'do', text: 'abrir a porta' }))
+    assert.equal(calls.some((call) => call.url.includes('/scene') || call.url.includes('/choices')), false)
+
+    const queued = await submitNovelAction('mesa', { type: 'say', text: 'oi' })
+    assert.equal(queued.intent.id, 'intent-9')
+    assert.equal(queued.done, null)
+
+    await assert.rejects(
+      () => submitNovelAction('ocupada', { type: 'do', text: 'de novo' }),
+      (error) => error.message === 'já está gerando' && error.code === 'generation_in_progress',
+    )
+    await assert.rejects(
+      () => submitNovelAction('caiu', { type: 'do', text: 'de novo' }),
+      (error) => error.message === 'caiu' && error.code === 'llm_error',
+    )
+    await assert.rejects(
+      () => submitNovelAction('adv/1', { type: 'do', text: '   ' }),
+      (error) => error.code === 'text_required',
+    )
+    assert.equal(calls.length, 4)
+  } finally {
+    globalThis.fetch = previousFetch
+    globalThis.localStorage = previousStorage
+  }
+})
+
+test('formato real: lista embrulhada, log de ações, fundo posterior e retrato', () => {
+  const novel = mapNovel({
+    adventure: {
+      id: '41c17c7bf1ed43a08754d2a31bd75e61',
+      title: 'Real',
+      actions: {
+        items: [
+          action({ seq: 0, type: 'start', text: 'A noite começa.', created_at: '2026-04-01T00:00:01.000Z' }),
+        ],
+      },
+    },
+    cards: {
+      cards: [
+        { id: 'mira', type: 'character', title: 'Mira', portrait_image_id: 'mira-portrait' },
+        { id: 'loc', type: 'location', title: 'Porto' },
+      ],
+    },
+    jobs: {
+      jobs: [
+        {
+          type: 'scene_backdrop',
+          status: 'done',
+          created_at: '2026-04-01T00:00:09.000Z',
+          finished_at: '2026-04-01T00:00:10.000Z',
+          ref_id: 'adv:scene',
+          payload: { cast_card_ids: ['mira'] },
+          result: { image: { image_id: 'bg-real', url: '/api/images/bg-real' }, ref_id: 'adv:scene' },
+        },
+        {
+          type: 'character_portrait',
+          status: 'done',
+          ref_id: 'mira',
+          result: JSON.stringify({ image: { id: 'mira-portrait', url: '/api/images/mira-portrait' }, card_id: 'mira' }),
+        },
+      ],
+    },
+    events: {
+      events: [
+        { type: 'action', event_id: 2, turn_seq: 1, created_at: '2026-04-01T00:00:02.000Z', payload: {
+          id: 11, seq: 1, type: 'do', text: '\n> You look at Mira\n', created_at: '2026-04-01T00:00:02.000Z',
+        } },
+        { type: 'action', event_id: 3, turn_seq: 2, created_at: '2026-04-01T00:00:03.000Z', payload: {
+          id: 12, seq: 2, type: 'continue', value: 'Mira espera no cais.', createdAt: '2026-04-01T00:00:03.000Z',
+        } },
+        { type: 'choices_ready', event_id: 4, payload: { for_seq: 2, choices: [{ type: 'say', text: 'quem é você' }] } },
+      ],
+    },
+    map: {
+      current: { id: 'loc', title: 'Porto', type: 'location' },
+      locations: [{ id: 'loc', title: 'Porto', current: true, image: { id: 'port-img', url: '/api/images/port-img' } }],
+    },
+  })
+  assert.deepEqual(novel.beats.map((beat) => beat.seq), [0, 1, 2])
+  assert.equal(novel.beats[0].text, 'A noite começa.')
+  assert.equal(novel.beats[0].background.id, 'port-img')
+  assert.equal(novel.beats[0].locationTitle, 'Porto')
+  assert.equal(novel.beats[1].text, 'look at Mira')
+  assert.equal(novel.beats[2].text, 'Mira espera no cais.')
+  assert.equal(novel.beats[2].background.id, 'bg-real')
+  assert.equal(novel.beats[2].cast.some((person) => person.title === 'Mira' && person.portrait.id === 'mira-portrait'), true)
+  assert.equal(novel.beats[2].choices[0].text, 'quem é você')
+  assert.equal(novel.beats[2].choices[0].taken, false)
+  assert.equal(positionLabel(0, novel.beats.length), '1 / 3')
+})
