@@ -1847,12 +1847,14 @@ def finish_job(conn: sqlite3.Connection, job_id: str, status: str,
     return cur.rowcount == 1
 
 
-def cancel_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
-    """Cancela qualquer job ativo; running passa a impedir publicações tardias."""
+def cancel_job(conn: sqlite3.Connection, job_id: str, *,
+                reason: str | None = None) -> dict | None:
+    """Cancela um job ativo; running passa a impedir publicações tardias."""
     cur = conn.execute(
-        "UPDATE jobs SET status='canceled', finished_at=? WHERE id=?"
+        "UPDATE jobs SET status='canceled', finished_at=?,"
+        " error=COALESCE(?, error) WHERE id=?"
         " AND status IN ('preparing','pending','running')",
-        (utcnow(), job_id),
+        (utcnow(), reason, job_id),
     )
     if cur.rowcount == 0:
         return None

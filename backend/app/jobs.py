@@ -27,7 +27,7 @@ Tipos:
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
   role image_prompt) roda numa thread e só então o job entra na fila do SD,
   para não prender o worker. Termina em `see_ready` ou `see_failed`.
-- `scene_clip` — MP4 Wan2.2 TI2V a partir de um PNG já gravado. Prioridade 6
+- `scene_clip` — MP4 image-to-video (LTXV; Wan se engine=wan) a partir de um PNG já gravado. Prioridade 6
   (cena) ou 7 (retrato): espera a narrativa e o resto da fila. Cache por
   modelo+prompt+fonte. Supersede na mesma imagem de origem. Cancelamento
   manda /interrupt e /free no Comfy e não publica o arquivo. O evento
@@ -472,9 +472,9 @@ def _fail_see(job: dict, code: str, message: str) -> None:
     _fail_preparing(job, code, message)
 
 
-def cancel(conn, job_id: str) -> dict | None:
+def cancel(conn, job_id: str, *, reason: str | None = None) -> dict | None:
     """Cancela um job ativo e grava seu evento no mesmo commit."""
-    job = db.cancel_job(conn, job_id)
+    job = db.cancel_job(conn, job_id, reason=reason)
     if job is not None:
         events.record(
             conn, job["adventure_id"], "job_progress",
@@ -507,6 +507,36 @@ def interrupt_image(job: dict, transport: Any = None) -> bool:
                     job["id"], type(exc).__name__)
         return False
     return True
+
+
+def preempt_automatic_clips(adventure_id: str, transport: Any = None) -> int:
+    """Uma ação nova interrompe só clipes automáticos, nunca o pedido manual.
+
+    O worker é serial: sem preempção, um clipe longo impediria o See e o
+    próximo turno. O PNG já pronto continua visível; o próximo evento visual
+    cria outro clipe. O cancelamento do running impede publicação tardia.
+    """
+    running: list[dict] = []
+    canceled_count = 0
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE adventure_id=? AND type='scene_clip'"
+            " AND status IN ('preparing','pending','running')",
+            (adventure_id,),
+        ).fetchall()
+        for row in rows:
+            job = db.get_job(conn, row["id"])
+            if not job or not (job.get("payload") or {}).get("automatic"):
+                continue
+            canceled = cancel(conn, job["id"], reason="preempted for a new action")
+            if canceled is None:
+                continue
+            canceled_count += 1
+            if job.get("status") == "running":
+                running.append(canceled)
+    for job in running:
+        interrupt_image(job, transport)
+    return canceled_count
 
 
 # --------------------------------------------------------------- execução
@@ -1155,7 +1185,8 @@ def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: st
                        cache_key: str = "",
                        priority: int | None = None,
                        kind: str = "",
-                       supersede: bool = True) -> dict:
+                       supersede: bool = True,
+                       automatic: bool = False) -> dict:
     """Mesma fonte+prompt ativo é deduplicado; prompt novo substitui o pendente.
 
     A rota manual omite `priority`, `kind` e `supersede` e continua na
@@ -1178,6 +1209,8 @@ def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: st
         "source_image_id": source_image_id,
         "cache_key": cache_key,
     }
+    if automatic:
+        payload["automatic"] = True
     label = " ".join(str(kind or "").split())
     if label:
         payload["kind"] = label
@@ -1239,6 +1272,7 @@ def _enqueue_clip_followup(job: dict, result: dict) -> None:
             conn, job["adventure_id"], image["id"], prompt,
             cache_key=image_client.clip_request_key(cfg, prompt, raw),
             priority=clip_priority, kind=clip_kind, supersede=False,
+            automatic=True,
         )
 
 

@@ -17,9 +17,11 @@ O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
 ser gravado em images.file_path.
 
-`generate_clip` é image-to-video no mesmo ComfyUI: grafo Wan2.2 TI2V 5B
-(template oficial video_wan2_2_5B_ti2v; GGUF usa UnetLoaderGGUF). Lê
-`comfyui_video` do arquivo e não altera `provider` nem `comfyui_unet`.
+`generate_clip` é image-to-video no mesmo ComfyUI. O default é `ltxv`
+(CheckpointLoaderSimple + CLIPLoader `ltxv` + LTXVImgToVideo + SamplerCustom).
+`engine=wan` é opt-in e usa o TI2V 5B (template video_wan2_2_5B_ti2v; GGUF
+usa UnetLoaderGGUF). Lê `comfyui_video` e não apaga `unet`/`vae` do Wan nem
+altera `provider` ou `comfyui_unet`.
 Não chama narrador nem voz. O arquivo gravado é um MP4 (ftyp), nunca um PNG
 renomeado.
 
@@ -658,31 +660,44 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-# --------------------------------------------------------- wan2.2 ti2v
-# Template oficial:
-# https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_wan2_2_5B_ti2v.json
-# GGUF troca só o loader (UnetLoaderGGUF). O UNET de imagem não entra no grafo.
+# --------------------------------------------------------- i2v (wan / ltxv)
+# Wan: template oficial video_wan2_2_5B_ti2v. GGUF troca só o loader
+# (UnetLoaderGGUF). O UNET de imagem não entra no grafo.
+# LTXV 0.9.x: grafo nativo Comfy (CheckpointLoaderSimple + CLIPLoader ltxv
+# + LTXVImgToVideo + SamplerCustom). Frames 8n+1.
 _WAN_NEGATIVE = (
     "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，"
     "最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，"
     "画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，"
     "杂乱的背景，三条腿，背景人很多，倒着走"
 )
+# Negativo do exemplo oficial LTXV 0.9 (ComfyUI_examples/ltxv). CFG 1 no
+# distilled quase não usa, mas o CLIPTextEncode negativo continua no grafo.
+_LTXV_NEGATIVE = (
+    "low quality, worst quality, deformed, distorted, disfigured, "
+    "motion smear, motion artifacts, fused fingers, bad anatomy, "
+    "weird hand, ugly"
+)
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_CLIP_CACHE_SKIP = ("timeout_seconds", "note", "auto_scene", "auto_portraits")
 _VIDEO_DEFAULTS = {
+    # LTXV 2B 0.9.6 distilled é o default (768x448, 8 passos, CFG 1).
+    # `engine=wan` é opt-in: unet/vae/shift continuam no bloco.
+    "engine": "ltxv",
+    "checkpoint": "ltxv-2b-0.9.6-distilled-04-25.safetensors",
     "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
-    "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "clip": "t5xxl_fp8_e4m3fn_scaled.safetensors",
     "vae": "wan2.2_vae.safetensors",
     "frames": 121,
     "fps": 24.0,
-    "steps": 20,
-    "cfg": 5.0,
+    "steps": 8,
+    "cfg": 1.0,
     "shift": 8.0,
     "timeout_seconds": 1800.0,
-    "width": 1280,
-    "height": 704,
-    "vertical_width": 704,
-    "vertical_height": 1280,
+    "width": 768,
+    "height": 448,
+    "vertical_width": 448,
+    "vertical_height": 768,
     # Só agendam o follow-up. Fora do grafo e da chave de cache.
     "auto_scene": False,
     "auto_portraits": False,
@@ -692,8 +707,9 @@ _VIDEO_DEFAULTS = {
 def video_settings(cfg: dict) -> dict:
     """Bloco `image.providers.comfyui.video`. Não lê o UNET de imagem.
 
-    `auto_scene` e `auto_portraits` só ligam o clipe depois do PNG.
-    Default false. Não entram no grafo Wan.
+    `engine` falta ou vem vazio → `ltxv`. `engine=wan` é opt-in e não apaga
+    `unet`/`vae`. `auto_scene` e `auto_portraits` só ligam o clipe depois
+    do PNG. Default false. Não entram no grafo.
     """
     raw = cfg.get("comfyui_video")
     if not isinstance(raw, dict):
@@ -709,8 +725,17 @@ def video_settings(cfg: dict) -> dict:
         elif isinstance(default, int):
             merged[key] = int(raw[key])
         else:
-            merged[key] = str(raw[key])
+            text = str(raw[key])
+            if key == "engine":
+                text = text.strip().lower() or "ltxv"
+            elif key == "checkpoint":
+                text = text.strip()
+            merged[key] = text
     return merged
+
+
+def _video_engine(video: dict) -> str:
+    return str(video.get("engine") or "ltxv").strip().lower() or "ltxv"
 
 
 def _png_size(content: bytes) -> tuple[int, int]:
@@ -779,7 +804,7 @@ def _free_comfy_quiet(base: str, transport: httpx.BaseTransport | None) -> None:
 
 
 def _unload_local_forge(cfg: dict, transport: httpx.BaseTransport | None) -> None:
-    """Forge local solta o SDXL antes do Wan. Conexão recusada: Forge parado.
+    """Forge local solta o SDXL antes do clipe. Conexão recusada: Forge parado.
     HTTP de erro aborta antes do /prompt. Provider que não é sdwebui, ou URL
     que não é localhost, não é chamado."""
     if (cfg.get("provider") or "sdwebui") != "sdwebui":
@@ -850,6 +875,56 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
     }
 
 
+def _ltxv_i2v_graph(video: dict, prompt: str, image_name: str, *,
+                    width: int, height: int, seed: int) -> dict:
+    """API prompt nativo do LTXV 0.9.x. Checkpoint traz MODEL+VAE; o CLIP
+    é o loader `ltxv`. O UNET/VAE do Wan não entra no grafo."""
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {
+            "ckpt_name": str(video.get("checkpoint") or "")}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": str(video.get("clip") or ""),
+            "type": "ltxv",
+            "device": "default"}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": prompt}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": _LTXV_NEGATIVE}},
+        "5": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "6": {"class_type": "LTXVPreprocess", "inputs": {
+            "image": ["5", 0], "img_compression": 40}},
+        "7": {"class_type": "LTXVImgToVideo", "inputs": {
+            "positive": ["3", 0], "negative": ["4", 0],
+            "vae": ["1", 2], "image": ["6", 0],
+            "width": int(width), "height": int(height),
+            "length": int(video["frames"]), "batch_size": 1,
+            "strength": 1.0}},
+        "8": {"class_type": "LTXVConditioning", "inputs": {
+            "positive": ["7", 0], "negative": ["7", 1],
+            "frame_rate": float(video["fps"])}},
+        "9": {"class_type": "LTXVScheduler", "inputs": {
+            "steps": int(video["steps"]),
+            "max_shift": 2.05, "base_shift": 0.95,
+            "stretch": True, "terminal": 0.1,
+            "latent": ["7", 2]}},
+        "10": {"class_type": "KSamplerSelect", "inputs": {
+            "sampler_name": "euler"}},
+        "11": {"class_type": "SamplerCustom", "inputs": {
+            "model": ["1", 0], "add_noise": True, "noise_seed": int(seed),
+            "cfg": float(video["cfg"]),
+            "positive": ["8", 0], "negative": ["8", 1],
+            "sampler": ["10", 0], "sigmas": ["9", 0],
+            "latent_image": ["7", 2]}},
+        "12": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["11", 0], "vae": ["1", 2]}},
+        "13": {"class_type": "CreateVideo", "inputs": {
+            "images": ["12", 0], "fps": float(video["fps"])}},
+        "14": {"class_type": "SaveVideo", "inputs": {
+            "video": ["13", 0], "filename_prefix": "video/aidungeon",
+            "format": "mp4", "codec": "h264"}},
+    }
+
+
 def _history_motion(outputs: dict) -> dict:
     """SaveVideo publica em `images`; versões antigas usam `videos`/`gifs`."""
     videos: list[dict] = []
@@ -900,14 +975,18 @@ def _save_mp4(cfg: dict, adventure_id: str, image_id: str, content: bytes) -> st
 
 
 def clip_request_key(cfg: dict, prompt: str, source: bytes) -> str:
-    """Modelo, parâmetros visuais, prompt e pixels definem o clipe cacheado."""
-    video = cfg.get("comfyui_video") or {}
+    """Engine, checkpoint e os parâmetros visuais entram na chave.
+
+    Timeout, nota e flags de agendamento ficam de fora. Engine omitido é
+    `ltxv`. `engine=wan` e outro checkpoint não compartilham essa chave.
+    """
+    video = video_settings(cfg)
     payload = {
-        "v": 1,
+        "v": 2,
         "kind": "scene_clip",
         "video": {
             key: value for key, value in video.items()
-            if key not in ("timeout_seconds", "note", "auto_scene", "auto_portraits")
+            if key not in _CLIP_CACHE_SKIP
         },
         "prompt": " ".join(str(prompt or "").split()),
         "source": hashlib.sha256(source).hexdigest() if source else "",
@@ -927,11 +1006,16 @@ def _clip_seed(cfg: dict) -> int:
 def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                   source_png: bytes,
                   transport: httpx.BaseTransport | None = None) -> dict:
-    """Image-to-video Wan2.2 TI2V. Exige o PNG de origem, grava `.mp4` e
+    """Image-to-video no ComfyUI. Exige o PNG de origem, grava `.mp4` e
     devolve file_path, width, height, provider, media_type e duration_ms.
 
-    Ordem: /free, unload do Forge local (se o provider de imagem for sdwebui
-    em localhost), upload, /prompt, /history, /view, /free. Não muda `cfg`.
+    Sem `engine`, ou com `ltxv`, monta o grafo nativo e exige checkpoint.
+    `engine=wan` é opt-in (TI2V); unet/vae do Wan ficam no bloco. Não muda `cfg`.
+
+    Provider de imagem `sdwebui`: /free, unload do Forge local, upload,
+    /prompt, /history, /view, /free — o SDXL precisa da VRAM. Provider
+    `comfyui`: sem /free. O Comfy troca o modelo e o clipe seguinte reusa
+    o que ficou carregado.
     """
     prompt = " ".join(str(prompt or "").split())
     if not prompt:
@@ -941,32 +1025,55 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     if not source_png.startswith(_PNG_MAGIC):
         raise ImageError("source image must be a PNG")
     video = video_settings(cfg)
-    if not str(video.get("unet") or "").strip():
-        raise ImageError("config_error: image.providers.comfyui.video.unet vazio")
-    base = _comfy_base(cfg)
-    frame_w, frame_h = _clip_frame(video, source_png)
     frames = int(video["frames"])
     fps = float(video["fps"])
     if frames <= 0 or fps <= 0:
         raise ImageError("config_error: video frames/fps inválidos")
+    engine = _video_engine(video)
+    if engine == "wan":
+        if not str(video.get("unet") or "").strip():
+            raise ImageError("config_error: image.providers.comfyui.video.unet vazio")
+    elif engine == "ltxv":
+        if not str(video.get("checkpoint") or "").strip():
+            raise ImageError(
+                "config_error: image.providers.comfyui.video.checkpoint vazio")
+        if not str(video.get("clip") or "").strip():
+            raise ImageError("config_error: image.providers.comfyui.video.clip vazio")
+        if frames < 9 or (frames - 1) % 8 != 0:
+            raise ImageError(
+                "config_error: video.frames do LTXV deve ser 8n+1 (mínimo 9)")
+    else:
+        raise ImageError(f"config_error: video.engine desconhecido: {engine!r}")
+    base = _comfy_base(cfg)
+    frame_w, frame_h = _clip_frame(video, source_png)
     timeout = float(video["timeout_seconds"])
     client_timeout = timeout if timeout >= 1 else 30.0
+    # Só o Forge (sdwebui) divide a placa com o Comfy. Imagem no próprio
+    # ComfyUI troca de modelo sem unload forçado entre clipes.
+    release_for_forge = (cfg.get("provider") or "sdwebui") != "comfyui"
     try:
-        _free_comfy(base, transport)
+        if release_for_forge:
+            _free_comfy(base, transport)
         _unload_local_forge(cfg, transport)
         with _make_client(transport, client_timeout) as client:
             name = _comfy_upload(
                 client, base, source_png,
                 f"aidungeon-clip-{hashlib.sha256(source_png).hexdigest()[:16]}.png",
             )
-            graph = _wan_ti2v_graph(
-                video, prompt, name, width=frame_w, height=frame_h,
-                seed=_clip_seed(cfg))
+            if engine == "ltxv":
+                graph = _ltxv_i2v_graph(
+                    video, prompt, name, width=frame_w, height=frame_h,
+                    seed=_clip_seed(cfg))
+            else:
+                graph = _wan_ti2v_graph(
+                    video, prompt, name, width=frame_w, height=frame_h,
+                    seed=_clip_seed(cfg))
             content = _comfy_run(
                 cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video)
         file_path = _save_mp4(cfg, adventure_id, image_id, content)
     finally:
-        _free_comfy_quiet(base, transport)
+        if release_for_forge:
+            _free_comfy_quiet(base, transport)
     return {
         "file_path": file_path,
         "width": frame_w,
@@ -978,7 +1085,7 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
 
 
 def interrupt_comfy(cfg: dict, transport: httpx.BaseTransport | None = None) -> None:
-    """Cancela o prompt Wan e solta a VRAM (/interrupt e /free)."""
+    """Cancela o prompt de vídeo e solta a VRAM (/interrupt e /free)."""
     base = _comfy_base(cfg)
     interrupt_error: ImageError | None = None
     with _make_client(transport, 10) as client:

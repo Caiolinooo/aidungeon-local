@@ -68,6 +68,15 @@ from app.errors import GameError
 
 log = logging.getLogger("aidungeon.game")
 
+
+def _preempt_automatic_clips(adventure_id: str, transport: Any) -> None:
+    """Mídia de fundo nunca pode bloquear a próxima ação do jogador."""
+    try:
+        from app import jobs
+        jobs.preempt_automatic_clips(adventure_id, transport)
+    except Exception:
+        log.exception("não foi possível preemptar clipes automáticos de %s", adventure_id)
+
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
 # Trabalho pós-turno (summarizer + chronicle) não usa o lock de geração:
@@ -1094,6 +1103,7 @@ def handle_action(adventure_id: str, type_: str, text: str,
                                  "a generation is already running for this adventure")
     generation_id = db.new_id()
     try:
+        _preempt_automatic_clips(adventure_id, transport)
         cancel_post_turn(adventure_id)
         # Scripting hook: input modifier (before input processing)
         in_script = scripting.get_adventure_script(adventure_id, "input_modifier")
@@ -1142,6 +1152,7 @@ def handle_continue(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+    _preempt_automatic_clips(adventure_id, transport)
     cancel_post_turn(adventure_id)
     generation_id = db.new_id()
     with appending(adventure_id) as conn:
@@ -1165,6 +1176,7 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
+    _preempt_automatic_clips(adventure_id, transport)
     cancel_post_turn(adventure_id)
 
     with appending(adventure_id) as conn:

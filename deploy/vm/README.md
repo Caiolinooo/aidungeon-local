@@ -168,7 +168,7 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 
 Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
 do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
-Wan 2.1. O Forge/epiCRealism voltou a ser o provider ativo em 27 out 2026; o FineView no ComfyUI é opcional.
+Wan 2.1. O FineView voltou a ser o provider ativo; Forge/epiCRealism é rollback.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
@@ -180,7 +180,7 @@ sudo systemctl enable --now sd-webui.service
 
 Backup desta troca: `/home/caio/aidungeon-backups/forge-20261019T025223Z`.
 
-## Provider opcional: FineView Qwen Image 2.1 no ComfyUI
+## Provider ativo: FineView Qwen Image 2.1 no ComfyUI
 
 O cliente `image.provider = "comfyui"` em `backend/app/image_client.py` fala a
 API do ComfyUI: `POST /prompt`, polling em `GET /history/{id}` e download por
@@ -240,36 +240,40 @@ subir `comfyui.service` em `127.0.0.1:8188`. No rollback, devolver `sdwebui`,
 parar o ComfyUI e subir o Forge. Não reiniciar llama-swap nem
 `abz-voice-staging`. Forge e FineView não devem medir VRAM ao mesmo tempo.
 
-## Vídeo real: Wan 2.2 TI2V 5B Q8
+## Vídeo real: LTXV 2B distilled
 
-O job `scene_clip` anima uma imagem já salva e devolve MP4 de 121 frames a
-24 fps (aproximadamente 5 s), em 1280×704 ou 704×1280. O Wan é um modelo
-temporal separado: os checkpoints Moody, DesireX e Stable Yogi citados nas
-opções do Civitai são de imagem; MP4 na galeria não muda isso.
+O job `scene_clip` anima uma imagem já salva e devolve MP4 H.264 de 121 frames
+a 24 fps (aproximadamente 5 s), em 768×448 ou 448×768, 8 passos, CFG 1. O
+default é `ltxv-2b-0.9.6-distilled-04-25.safetensors` com o T5 FP8. Na L4 da
+VM, o benchmark real gerou 121 frames em 35,25 s; o Wan anterior levava cerca
+de 13 min. Wan 2.2 TI2V fica opt-in (`video.engine=wan`, clip UMT5, 20 passos,
+CFG 5, 1280×704). Moody, DesireX e Stable Yogi são checkpoints de imagem.
 
-Instalação reproduzível, com hashes e revisões fixadas:
+Instalação do default, com hashes pinados:
 
 ```bash
-bash /home/caio/aidungeon/deploy/vm/install_wan_video.sh
+bash /home/caio/aidungeon/deploy/vm/install_ltxv_video.sh
 sudo systemctl restart comfyui
 ```
 
-O instalador usa `Wan2.2-TI2V-5B-Q8_0.gguf` (5,40 GB), UMT5 FP8 (6,74 GB),
-VAE Wan 2.2 (1,41 GB) e ComfyUI-GGUF. Total: 13,55 GB, contra 18,14 GB do
-workflow fp16. Não instalar os três checkpoints Civitai junto com ele sem
-antes liberar disco: os três somam outros 15,47 GiB e ainda exigem encoders.
+O Wan opt-in continua em `install_wan_video.sh`: `Wan2.2-TI2V-5B-Q8_0.gguf`
+(5,40 GB), UMT5 FP8 (6,74 GB), VAE Wan 2.2 (1,41 GB) e ComfyUI-GGUF. Total:
+13,55 GB. Não instalar os três checkpoints Civitai junto sem liberar disco.
 
-Antes do clipe, o worker descarrega o checkpoint do Forge local. O ComfyUI
-recebe `/free` antes e depois do job. Assim narrador e voz continuam ativos,
-mas imagem e vídeo não executam ao mesmo tempo. Não enviar prompts de outro
-cliente ao mesmo ComfyUI durante o clipe: `/interrupt` e `/free` são globais.
-O próximo job SDXL recarrega o Forge sob demanda.
+Antes do clipe, com provider de imagem sdwebui, o worker descarrega o
+checkpoint do Forge local e o ComfyUI recebe `/free` antes e depois do job.
+Provider `comfyui` não chama `/free`: o próprio Comfy troca o modelo e o
+clipe seguinte reusa o que ficou carregado. Narrador e voz continuam ativos.
+Não enviar prompts de outro cliente ao mesmo ComfyUI durante o clipe:
+`/interrupt` e `/free` são globais. O próximo job SDXL recarrega o Forge sob demanda.
 
 Com `video.auto_scene=true` e `video.auto_portraits=true`, a conclusão de um
 backdrop ou retrato do elenco atual enfileira o respectivo clipe sem outra
 chamada de LLM. Retratos de lote/offscene ficam estáticos. O follow-up nunca
 cancela um clipe manual ativo na mesma fonte; cena usa prioridade 6 e retrato
-automático prioridade 7. Desligue as duas flags se o Wan não estiver instalado.
+automático prioridade 7. Uma nova ação, continuação ou retry preempta somente
+clipes automáticos pendentes/ativos (`preempted for a new action`), preservando
+os manuais. Desligue as duas flags se o LTXV não estiver instalado.
 
 Smoke do executor, sem gerar uma imagem:
 

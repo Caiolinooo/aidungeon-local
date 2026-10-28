@@ -1,4 +1,4 @@
-"""Clipe Wan2.2 TI2V: grafo Comfy, fila, cache e o MP4 servido."""
+"""Clipe image-to-video: grafo Wan/LTXV, fila, cache e o MP4 servido."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from test_v3 import PNG_B64, PNG_BYTES, use_tmp_storage
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00mp41isom"
 WAN_UNET = "Wan2.2-TI2V-5B-Q8_0.gguf"
 IMAGE_UNET = "fineviewQWEN_qw21TurboFixed_3299367.safetensors"
+LTX_CKPT = "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+LTX_CLIP = "t5xxl_fp8_e4m3fn_scaled.safetensors"
 
 
 def _png(width: int, height: int) -> bytes:
@@ -43,6 +45,8 @@ def _cfg(tmp_path, **extra) -> dict:
         "seed": 7,
         "storage_dir": str(tmp_path),
         "comfyui_video": {
+            "engine": "wan",
+            "checkpoint": "",
             "unet": WAN_UNET,
             "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
             "vae": "wan2.2_vae.safetensors",
@@ -144,13 +148,15 @@ def test_file_video_block_does_not_replace_the_image_unet(tmp_db):
     assert cfg["provider"] == "sdwebui"
     assert cfg["comfyui_unet"] == IMAGE_UNET
     video = cfg["comfyui_video"]
+    assert video["engine"] == "ltxv"
+    assert video["checkpoint"] == LTX_CKPT
+    assert video["clip"] == LTX_CLIP
     assert video["unet"] == WAN_UNET
-    assert video["clip"] == "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
     assert video["vae"] == "wan2.2_vae.safetensors"
-    assert (video["frames"], video["fps"], video["steps"]) == (121, 24, 20)
-    assert (video["cfg"], video["shift"], video["timeout_seconds"]) == (5, 8, 1800)
-    assert (video["width"], video["height"]) == (1280, 704)
-    assert (video["vertical_width"], video["vertical_height"]) == (704, 1280)
+    assert (video["frames"], video["fps"], video["steps"]) == (121, 24, 8)
+    assert (video["cfg"], video["shift"], video["timeout_seconds"]) == (1, 8, 1800)
+    assert (video["width"], video["height"]) == (768, 448)
+    assert (video["vertical_width"], video["vertical_height"]) == (448, 768)
 
 
 def test_wan_graph_uses_video_unet_and_frees_around_the_prompt(tmp_path):
@@ -280,6 +286,265 @@ def test_clip_cache_tracks_render_settings_but_not_timeout(tmp_path):
     refined["comfyui_video"]["steps"] += 1
     assert image_client.clip_request_key(refined, "walks home", PNG_BYTES) != base
 
+    wan = image_client.video_settings(cfg)
+    assert wan["engine"] == "wan"
+    assert wan["checkpoint"] == ""
+    assert wan["unet"] == WAN_UNET
+    assert wan["vae"] == "wan2.2_vae.safetensors"
+    explicit = _cfg(tmp_path)
+    explicit["comfyui_video"] = {
+        **explicit["comfyui_video"], "engine": "WAN", "checkpoint": "",
+    }
+    assert image_client.clip_request_key(explicit, "walks home", PNG_BYTES) == base
+
+    ltx = _cfg(tmp_path)
+    ltx["comfyui_video"] = {
+        **ltx["comfyui_video"],
+        "engine": "ltxv",
+        "checkpoint": LTX_CKPT,
+    }
+    ltx_key = image_client.clip_request_key(ltx, "walks home", PNG_BYTES)
+    assert ltx_key != base
+    other = _cfg(tmp_path)
+    other["comfyui_video"] = {
+        **other["comfyui_video"],
+        "engine": "ltxv",
+        "checkpoint": "ltxv-2b-0.9.6-dev.safetensors",
+    }
+    assert image_client.clip_request_key(other, "walks home", PNG_BYTES) != ltx_key
+    kept = image_client.video_settings(ltx)
+    assert kept["engine"] == "ltxv"
+    assert kept["checkpoint"] == LTX_CKPT
+    assert kept["unet"] == WAN_UNET
+    assert kept["vae"] == "wan2.2_vae.safetensors"
+    assert ltx["comfyui_video"]["unet"] == WAN_UNET
+
+    blank = image_client.video_settings({})
+    assert blank["engine"] == "ltxv"
+    assert blank["checkpoint"] == LTX_CKPT
+    assert blank["clip"] == LTX_CLIP
+    assert blank["steps"] == 8
+    assert blank["cfg"] == 1
+    assert (blank["width"], blank["height"]) == (768, 448)
+    assert (blank["vertical_width"], blank["vertical_height"]) == (448, 768)
+    assert blank["unet"] == WAN_UNET
+    assert image_client.clip_request_key({}, "walks home", PNG_BYTES) != base
+
+
+def _ltxv_cfg(tmp_path, **extra) -> dict:
+    cfg = _cfg(tmp_path, **extra)
+    cfg["comfyui_video"] = {
+        **cfg["comfyui_video"],
+        "engine": "ltxv",
+        "checkpoint": LTX_CKPT,
+        "clip": LTX_CLIP,
+        "steps": 8,
+        "cfg": 1,
+        "width": 768,
+        "height": 448,
+        "vertical_width": 448,
+        "vertical_height": 768,
+    }
+    return cfg
+
+
+def _node(graph: dict, class_type: str) -> dict:
+    return next(node for node in graph.values() if node["class_type"] == class_type)
+
+
+def test_ltxv_graph_returns_mp4_and_keeps_the_wan_block(tmp_path):
+    cfg = _ltxv_cfg(tmp_path)
+    before = (
+        cfg["provider"], cfg["comfyui_unet"],
+        cfg["comfyui_video"]["unet"], cfg["comfyui_video"]["vae"],
+        cfg["comfyui_video"]["checkpoint"],
+    )
+    capture: dict = {}
+    result = image_client.generate_clip(
+        cfg, "camera pushes in", adventure_id="adv", image_id="ltx-1",
+        source_png=PNG_BYTES, transport=_transport(capture))
+    assert (
+        cfg["provider"], cfg["comfyui_unet"],
+        cfg["comfyui_video"]["unet"], cfg["comfyui_video"]["vae"],
+        cfg["comfyui_video"]["checkpoint"],
+    ) == before
+    assert capture["paths"] == [
+        "/free", "/sdapi/v1/unload-checkpoint", "/upload/image", "/prompt",
+        "/history/pid-1", "/view", "/free",
+    ]
+    graph = capture["graph"]
+    assert WAN_UNET not in json.dumps(graph)
+    assert IMAGE_UNET not in json.dumps(graph)
+    assert "wan2.2_vae.safetensors" not in json.dumps(graph)
+    for banned in ("UnetLoaderGGUF", "UNETLoader", "VAELoader",
+                   "Wan22ImageToVideoLatent", "KSampler", "ModelSamplingSD3"):
+        assert all(node["class_type"] != banned for node in graph.values())
+
+    ckpt = _node(graph, "CheckpointLoaderSimple")
+    assert ckpt["inputs"]["ckpt_name"] == LTX_CKPT
+    clip = _node(graph, "CLIPLoader")
+    assert clip["inputs"]["clip_name"] == LTX_CLIP
+    assert clip["inputs"]["type"] == "ltxv"
+    assert clip["inputs"]["device"] == "default"
+    encodes = [node for node in graph.values()
+               if node["class_type"] == "CLIPTextEncode"]
+    assert [node["inputs"]["clip"] for node in encodes] == [["2", 0], ["2", 0]]
+    assert encodes[0]["inputs"]["text"] == "camera pushes in"
+    assert "low quality" in encodes[1]["inputs"]["text"]
+    assert "色调艳丽" not in encodes[1]["inputs"]["text"]
+
+    preprocess = _node(graph, "LTXVPreprocess")
+    assert preprocess["inputs"]["image"] == ["5", 0]
+    assert preprocess["inputs"]["img_compression"] == 40
+    latent = _node(graph, "LTXVImgToVideo")
+    assert latent["inputs"]["positive"] == ["3", 0]
+    assert latent["inputs"]["negative"] == ["4", 0]
+    assert latent["inputs"]["vae"] == ["1", 2]
+    assert latent["inputs"]["image"] == ["6", 0]
+    assert (latent["inputs"]["width"], latent["inputs"]["height"],
+            latent["inputs"]["length"]) == (768, 448, 121)
+    assert latent["inputs"]["batch_size"] == 1
+    assert latent["inputs"]["strength"] == 1
+    cond = _node(graph, "LTXVConditioning")
+    assert cond["inputs"]["positive"] == ["7", 0]
+    assert cond["inputs"]["negative"] == ["7", 1]
+    assert cond["inputs"]["frame_rate"] == 24
+    schedule = _node(graph, "LTXVScheduler")
+    assert schedule["inputs"]["steps"] == 8
+    assert schedule["inputs"]["max_shift"] == 2.05
+    assert schedule["inputs"]["base_shift"] == 0.95
+    assert schedule["inputs"]["stretch"] is True
+    assert schedule["inputs"]["terminal"] == 0.1
+    assert schedule["inputs"]["latent"] == ["7", 2]
+    select = _node(graph, "KSamplerSelect")
+    assert select["inputs"]["sampler_name"] == "euler"
+    sampler = _node(graph, "SamplerCustom")
+    assert sampler["inputs"]["model"] == ["1", 0]
+    assert sampler["inputs"]["add_noise"] is True
+    assert sampler["inputs"]["noise_seed"] == 7
+    assert sampler["inputs"]["cfg"] == 1
+    assert sampler["inputs"]["positive"] == ["8", 0]
+    assert sampler["inputs"]["negative"] == ["8", 1]
+    assert sampler["inputs"]["sampler"] == ["10", 0]
+    assert sampler["inputs"]["sigmas"] == ["9", 0]
+    assert sampler["inputs"]["latent_image"] == ["7", 2]
+    decode = _node(graph, "VAEDecode")
+    assert decode["inputs"]["samples"] == ["11", 0]
+    assert decode["inputs"]["vae"] == ["1", 2]
+    video = _node(graph, "CreateVideo")
+    assert video["inputs"]["images"] == ["12", 0]
+    assert video["inputs"]["fps"] == 24
+    saved_node = _node(graph, "SaveVideo")
+    assert saved_node["inputs"]["video"] == ["13", 0]
+    assert saved_node["inputs"]["format"] == "mp4"
+    assert saved_node["inputs"]["codec"] == "h264"
+    assert saved_node["inputs"]["filename_prefix"] == "video/aidungeon"
+
+    saved = tmp_path / "adv" / "ltx-1.mp4"
+    assert saved.read_bytes() == MP4
+    assert result["media_type"] == "video/mp4"
+    assert result["provider"] == "comfyui"
+    assert result["duration_ms"] == 5042
+    assert (result["width"], result["height"]) == (768, 448)
+    assert result["file_path"].endswith("ltx-1.mp4")
+
+    tall: dict = {}
+    vertical = image_client.generate_clip(
+        cfg, "looks up", adventure_id="adv", image_id="ltx-v",
+        source_png=_png(8, 16), transport=_transport(tall))
+    latent_v = _node(tall["graph"], "LTXVImgToVideo")
+    assert (latent_v["inputs"]["width"], latent_v["inputs"]["height"]) == (448, 768)
+    assert (vertical["width"], vertical["height"]) == (448, 768)
+    assert vertical["duration_ms"] == 5042
+
+    bad_frames = _ltxv_cfg(tmp_path)
+    bad_frames["comfyui_video"]["frames"] = 120
+    missed: dict = {}
+    try:
+        image_client.generate_clip(
+            bad_frames, "walks", adventure_id="adv", image_id="bad-frames",
+            source_png=PNG_BYTES, transport=_transport(missed))
+    except image_client.ImageError as exc:
+        assert "8n+1" in exc.message
+    else:
+        raise AssertionError("ltxv length must be 8n+1")
+    assert missed["paths"] == []
+
+    missing = _cfg(tmp_path)
+    missing["comfyui_video"] = {
+        **missing["comfyui_video"], "engine": "ltxv", "checkpoint": "  ",
+    }
+    empty: dict = {}
+    try:
+        image_client.generate_clip(
+            missing, "walks", adventure_id="adv", image_id="no-ckpt",
+            source_png=PNG_BYTES, transport=_transport(empty))
+    except image_client.ImageError as exc:
+        assert "checkpoint" in exc.message
+    else:
+        raise AssertionError("ltxv without checkpoint must fail")
+    assert empty["paths"] == []
+    assert missing["comfyui_video"]["unet"] == WAN_UNET
+
+    implied = _ltxv_cfg(tmp_path)
+    implied["comfyui_video"].pop("engine")
+    implied_cap: dict = {}
+    image_client.generate_clip(
+        implied, "camera pushes in", adventure_id="adv", image_id="ltx-default",
+        source_png=PNG_BYTES, transport=_transport(implied_cap))
+    assert _node(implied_cap["graph"], "CheckpointLoaderSimple")["inputs"]["ckpt_name"] == LTX_CKPT
+    assert all(node["class_type"] != "UnetLoaderGGUF" for node in implied_cap["graph"].values())
+
+    unknown = _cfg(tmp_path)
+    unknown["comfyui_video"]["engine"] = "foo"
+    odd: dict = {}
+    try:
+        image_client.generate_clip(
+            unknown, "walks", adventure_id="adv", image_id="odd-engine",
+            source_png=PNG_BYTES, transport=_transport(odd))
+    except image_client.ImageError as exc:
+        assert "desconhecido" in exc.message
+    else:
+        raise AssertionError("unknown engine must fail")
+    assert odd["paths"] == []
+
+
+def test_comfy_reuses_the_model_and_sdwebui_still_frees(tmp_path):
+    comfy = _cfg(tmp_path, provider="comfyui")
+    kept: dict = {}
+    transport = _transport(kept)
+    image_client.generate_clip(
+        comfy, "walks", adventure_id="adv", image_id="keep-1",
+        source_png=PNG_BYTES, transport=transport)
+    image_client.generate_clip(
+        comfy, "turns", adventure_id="adv", image_id="keep-2",
+        source_png=PNG_BYTES, transport=transport)
+    assert "/free" not in kept["paths"]
+    assert "/sdapi/v1/unload-checkpoint" not in kept["paths"]
+    assert kept["paths"].count("/prompt") == 2
+    assert kept["paths"].count("/upload/image") == 2
+    assert (tmp_path / "adv" / "keep-1.mp4").read_bytes() == MP4
+    assert (tmp_path / "adv" / "keep-2.mp4").read_bytes() == MP4
+
+    ltx = _ltxv_cfg(tmp_path, provider="comfyui")
+    native: dict = {}
+    image_client.generate_clip(
+        ltx, "walks", adventure_id="adv", image_id="ltx-keep",
+        source_png=PNG_BYTES, transport=_transport(native))
+    assert "/free" not in native["paths"]
+    assert _node(native["graph"], "CheckpointLoaderSimple")["inputs"]["ckpt_name"] == LTX_CKPT
+
+    forge = _cfg(tmp_path)
+    released: dict = {}
+    image_client.generate_clip(
+        forge, "walks", adventure_id="adv", image_id="forge-1",
+        source_png=PNG_BYTES, transport=_transport(released))
+    assert released["paths"] == [
+        "/free", "/sdapi/v1/unload-checkpoint", "/upload/image", "/prompt",
+        "/history/pid-1", "/view", "/free",
+    ]
+
+
 def test_forge_unload_errors_and_video_timeout(tmp_path):
     cfg = _cfg(tmp_path)
     refused: dict = {}
@@ -315,6 +580,8 @@ def test_forge_unload_errors_and_video_timeout(tmp_path):
         comfy, "walks", adventure_id="adv", image_id="native",
         source_png=PNG_BYTES, transport=_transport(native))
     assert "/sdapi/v1/unload-checkpoint" not in native["paths"]
+    assert "/free" not in native["paths"]
+    assert "/prompt" in native["paths"]
     assert comfy["provider"] == "comfyui"
     assert comfy["comfyui_unet"] == IMAGE_UNET
 

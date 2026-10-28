@@ -2242,24 +2242,26 @@ paths:
   /api/adventures/{adventureId}/clips:
     post:
       tags: [images]
-      summary: Gerar clipe MP4 a partir de um PNG (Wan2.2 TI2V)
+      summary: Gerar clipe MP4 a partir de um PNG (LTXV ou Wan2.2)
       operationId: postAdventureClip
       description: |
         Enfileira o job `scene_clip` (prioridade 6). O corpo é
         `{image_id, prompt}`. A fonte tem de ser um PNG raster desta
         aventura; vídeo, arquivo ausente ou raster inválido responde 404,
         o mesmo de aventura de outra pessoa. 202 `{job_id}`.
-        O worker, se `image.provider` for sdwebui em localhost, pede
-        `POST /sdapi/v1/unload-checkpoint` antes do Wan (conexão recusada
-        segue; HTTP de erro aborta antes do prompt). O grafo é o Wan2.2
-        TI2V 5B no ComfyUI (`UnetLoaderGGUF` quando o unet é GGUF), lido de
-        `image.providers.comfyui.video`. Não altera `image.provider` nem o
-        UNET de imagem e não chama narrador nem voz.
-        Cache por modelo+prompt+bytes da fonte. Repetir fonte+prompt de um job
-        ativo reutiliza esse job; um prompt novo manual substitui os pendentes
-        da mesma fonte. Com `video.auto_scene`/`video.auto_portraits`, a
-        conclusão do backdrop/retrato atual enfileira o follow-up sem LLM;
+        O default é LTXV 2B distilled (`CheckpointLoaderSimple`, T5 FP8,
+        8 passos, CFG 1, 121 frames/24 fps, 768×448). `video.engine=wan`
+        mantém o Wan2.2 TI2V 5B opt-in. A engine e seus parâmetros visuais
+        entram na chave de cache; flags de automação e timeout não entram.
+        Com provider de imagem sdwebui local, o worker descarrega Forge e
+        ComfyUI. Com ComfyUI, não força `/free` entre clipes, permitindo reuso
+        do modelo carregado. Narrador e voz não são chamados nem descarregados.
+        Repetir fonte+prompt de um job ativo reutiliza esse job; prompt novo
+        manual substitui pendentes da mesma fonte. Com `video.auto_scene`/
+        `video.auto_portraits`, o PNG concluído enfileira o follow-up sem LLM;
         lote/offscene não anima e automação não cancela clipe manual ativo.
+        Nova ação, continuação ou retry preempta apenas clipes automáticos
+        pendentes/running; manuais continuam.
         O SSE `clip_ready` traz `adventure_id`, `job_id`, `source_image_id`
         e `image` `{id, url, media_type: video/mp4, duration_ms}`.
         Cancelar um job running manda `/interrupt` e `/free` e não grava o MP4.
@@ -2434,7 +2436,7 @@ paths:
       description: |
         Exige Bearer. História de outra pessoa responde 404.
         `media_type` da linha define o MIME: raster continua `image/png`;
-        clipe Wan sai `video/mp4`. `?download=1` adiciona
+        clipe sai `video/mp4`. `?download=1` adiciona
         `Content-Disposition: attachment`.
       parameters:
         - name: imageId
@@ -5231,7 +5233,7 @@ components:
           type: object
         priority:
           type: integer
-          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM), 6 scene_clip/cena Wan, 7 retrato animado automático (não roda durante a narrativa).
+          description: Menor roda antes — 0 see_image, 1 retrato de NPC presente, 2 scene_backdrop, 3 retratos em lote, 4 dia de vida do NPC, 5 card_assets (ficha viva via LLM), 6 scene_clip/cena, 7 retrato animado automático (não roda durante a narrativa).
         supersede_key:
           type: string
           description: Job novo com a mesma chave cancela os que ainda não rodam (fundo usa "backdrop:<adventure_id>"; clipe usa "clip:<adventure_id>:<source_image_id>").

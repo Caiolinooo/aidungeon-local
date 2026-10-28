@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app import db, image_client, jobs, likeness
-from conftest import make_adventure
+from app import db, game_engine, image_client, jobs, likeness
+from conftest import make_adventure, make_llm_transport
 from test_scene_clip import _cfg, _png
 from test_v3 import use_tmp_storage
 
@@ -436,3 +436,33 @@ def test_second_backdrop_reuses_the_active_clip(tmp_db, tmp_path, monkeypatch):
     assert again[0]["payload"]["cache_key"] == first[0]["payload"]["cache_key"]
     assert len(calls) == 1
     assert _jobs_of("scene_backdrop")[1]["result"].get("reused") is True
+
+
+def test_new_action_preempts_only_automatic_clips(tmp_db, monkeypatch):
+    adv = make_adventure()
+    with db.session() as conn:
+        running = jobs.enqueue_scene_clip(
+            conn, adv["id"], "auto-running", "rain moves", automatic=True)
+        pending = jobs.enqueue_scene_clip(
+            conn, adv["id"], "auto-pending", "portrait breathes", automatic=True,
+            kind="portrait")
+        manual = jobs.enqueue_scene_clip(
+            conn, adv["id"], "manual", "keep my requested clip")
+        claimed = db.claim_next_job(conn)
+        assert claimed["id"] == running["id"]
+    interrupted = []
+    monkeypatch.setattr(jobs, "interrupt_image", lambda job, transport=None: (
+        interrupted.append(job["id"]) or True))
+
+    output = list(game_engine.handle_action(
+        adv["id"], "do", "look around",
+        transport=make_llm_transport(tokens=("The room answers.",))))
+
+    assert output[-1]["event"] == "done"
+    assert interrupted == [running["id"]]
+    with db.session() as conn:
+        for job in (running, pending):
+            stored = db.get_job(conn, job["id"])
+            assert stored["status"] == "canceled"
+            assert stored["error"] == "preempted for a new action"
+        assert db.get_job(conn, manual["id"])["status"] == "pending"

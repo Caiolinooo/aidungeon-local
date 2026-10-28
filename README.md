@@ -247,11 +247,12 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   regenerar individual) antes de criar a aventura.
 - **See (geração de imagens)**: ilustre o que acabou de acontecer, com visualização em
   tela cheia, cópia rápida do prompt gerado e download direto em PNG. Na VM o modelo
-  é **epiCRealism XL CrystalClear** no Forge Neo: DPM++ 2M Karras, CFG 5,
-  25 passos, retratos 800×720 e identidade por img2img da âncora canônica.
-  Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
-- **Cena e retratos animados**: Wan2.2 TI2V 5B transforma o PNG vigente em
-  MP4 real de aproximadamente 5 s. Novo backdrop dispara o vídeo da situação;
+  ativo é **FineView Qwen Image 2.1 Turbo Fixed** no ComfyUI, com Euler, CFG 1,
+  8 passos e referências de identidade. Provedores: **sdwebui**, **comfyui** ou
+  **openai_compatible**; epiCRealism/Forge continua disponível para rollback.
+- **Cena e retratos animados**: LTXV 2B distilled transforma o PNG vigente em
+  MP4 real de aproximadamente 5 s (768×448, 121 frames, 8 passos). Wan 2.2
+  continua disponível com `video.engine=wan`. Novo backdrop dispara o vídeo da situação;
   novo retrato reativo do elenco atual/player dispara sua reação animada. Ação,
   emoção, pose e estágio dos vínculos orientam o movimento; números e retratos
   em lote não consomem GPU. A foto inicial, sem `visual_state` de turno, também
@@ -259,9 +260,11 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   o clipe mudo, respeitando reduced motion; retrato e identidade partem sempre
   da imagem-âncora atual. `Animar 5 s` continua disponível para See/retrato/
   cenário, com cancelamento e download. Imagem e vídeo usam a mesma fila; cena
-  tem prioridade sobre retratos e o narrador/voz continuam disponíveis.
+  tem prioridade sobre retratos e o narrador/voz continuam disponíveis. Uma nova
+  ação/continuação/retry cancela os clipes automáticos pendentes ou em execução
+  para devolver a GPU ao turno; clipes manuais não são interrompidos.
   As flags `video.auto_scene` e `video.auto_portraits` ficam ativas nesta
-  configuração; desative ambas nas instalações sem o Wan.
+  configuração; desative ambas nas instalações sem o LTXV.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
