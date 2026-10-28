@@ -1188,13 +1188,16 @@ def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: st
     )
 
 
-def _portrait_auto_clip(job: dict) -> bool:
-    """Só retratos reativos/presentes; todo lote fica estático."""
+def _portrait_auto_clip(job: dict, card: dict) -> bool:
+    """Retrato presente já reagiu a um turno; inicial e lote ficam estáticos."""
     try:
         priority = int(job.get("priority"))
     except (TypeError, ValueError):
         return False
-    return priority <= PRIORITY_PRESENT_PORTRAIT
+    if priority > PRIORITY_PRESENT_PORTRAIT:
+        return False
+    visual = _card_sheet(card).get("visual_state")
+    return isinstance(visual, dict) and bool(visual.get("seq"))
 
 
 def _enqueue_clip_followup(job: dict, result: dict) -> None:
@@ -1225,7 +1228,7 @@ def _enqueue_clip_followup(job: dict, result: dict) -> None:
             clip_priority = PRIORITY_SCENE_CLIP
         else:
             card = db.get_card(conn, job["adventure_id"], job.get("ref_id") or "")
-            if not card or not _portrait_auto_clip(job):
+            if not card or not _portrait_auto_clip(job, card):
                 return
             prompt = _portrait_clip_prompt(card, db.list_cards(conn, job["adventure_id"]))
             clip_kind = "portrait"

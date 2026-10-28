@@ -252,13 +252,14 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
 - **Cena e retratos animados**: Wan2.2 TI2V 5B transforma o PNG vigente em
   MP4 real de aproximadamente 5 s. Novo backdrop dispara o vídeo da situação;
-  novo retrato do elenco atual/player dispara sua reação animada. Ação, emoção,
-  pose e estágio dos vínculos orientam o movimento; números e retratos em lote
-  não consomem GPU. A cena repete o clipe mudo, respeitando reduced motion;
-  retrato e identidade partem sempre da imagem-âncora atual. `Animar 5 s`
-  continua disponível para See/retrato/cenário, com cancelamento e download.
-  Imagem e vídeo usam a mesma fila; cena tem prioridade sobre retratos e o
-  narrador/voz continuam disponíveis.
+  novo retrato reativo do elenco atual/player dispara sua reação animada. Ação,
+  emoção, pose e estágio dos vínculos orientam o movimento; números e retratos
+  em lote não consomem GPU. A foto inicial, sem `visual_state` de turno, também
+  fica estática até uma reação ou pedido manual em **Animar 5 s**. A cena repete
+  o clipe mudo, respeitando reduced motion; retrato e identidade partem sempre
+  da imagem-âncora atual. `Animar 5 s` continua disponível para See/retrato/
+  cenário, com cancelamento e download. Imagem e vídeo usam a mesma fila; cena
+  tem prioridade sobre retratos e o narrador/voz continuam disponíveis.
   As flags `video.auto_scene` e `video.auto_portraits` ficam ativas nesta
   configuração; desative ambas nas instalações sem o Wan.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis

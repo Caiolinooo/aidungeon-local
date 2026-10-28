@@ -244,7 +244,7 @@ def test_flags_on_schedule_scene_then_portrait_from_the_png(tmp_db, tmp_path, mo
     assert portrait_clip["payload"]["cache_key"] == expected
 
 
-def test_portrait_without_visual_state_does_not_invent_motion(tmp_db, tmp_path, monkeypatch):
+def test_initial_portrait_without_turn_stays_still(tmp_db, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
     _patch_flags(monkeypatch, scene=False, portraits=True)
     monkeypatch.setattr(image_client, "generate_image", _fake_generate([]))
@@ -256,16 +256,8 @@ def test_portrait_without_visual_state_does_not_invent_motion(tmp_db, tmp_path, 
         jobs.enqueue_portrait(conn, adv["id"], card["id"])
     _enqueue_scene(adv["id"])
     _drain_origins()
-    clips = _jobs_of("scene_clip")
-    assert len(clips) == 1
-    assert clips[0]["payload"]["kind"] == "portrait"
-    prompt = clips[0]["payload"]["prompt"]
-    assert "Portrait of Nia." in prompt
-    assert "grey coat" in prompt
-    assert "Do not invent a gesture" in prompt
-    assert "Subtle environmental motion" in prompt
-    assert "raises the lantern" not in prompt
-    assert "Animate only this visible state" not in prompt
+    assert _jobs_of("scene_clip") == []
+    assert _jobs_of("character_portrait")[0]["status"] == "done"
     assert _jobs_of("scene_backdrop")[0]["status"] == "done"
 
 
