@@ -24,8 +24,8 @@ function DockAvatar({ card, avatarRef, visual }) {
   const marked = status === 'dead' || status === 'missing' || status === 'injured'
   const caption = [visual?.emotion, visual?.action].filter(Boolean).join(' · ')
   return (
-    <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-24">
-      <div className="relative h-20 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-32 sm:w-24">
+    <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-full sm:max-w-full">
+      <div className="relative h-24 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-28 sm:w-full">
         <PortraitAvatar2D
           ref={avatarRef}
           imageId={card.portrait?.id}
@@ -126,16 +126,19 @@ export default function ChatAvatarDock({
   if (present.length === 0) return null
 
   return (
-    <div className={`absolute bottom-2 right-2 z-20 flex min-w-0 flex-row items-end gap-1 sm:bottom-2 sm:left-auto sm:right-2 sm:top-2 sm:flex-col sm:items-end ${collapsed ? '' : 'left-2'}`}>
+    <aside
+      aria-label="Retratos da cena"
+      className={`play-portrait-rail z-20 flex min-h-0 min-w-0 shrink-0 flex-row items-end gap-2 overflow-x-auto border-t border-subtle bg-canvas/95 px-2 py-1 max-sm:max-h-40 max-sm:w-full sm:max-w-[22%] sm:flex-col sm:items-center sm:gap-1 sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-y-contain sm:border-l sm:border-t-0 sm:px-1.5 sm:py-2 ${collapsed ? 'sm:w-auto' : 'sm:w-[6.75rem]'}`}
+    >
       <button
         onClick={() => setCollapsed((c) => !c)}
         title={collapsed ? 'Mostrar retratos dos NPCs' : 'Esconder retratos dos NPCs'}
-        className="shrink-0 rounded-md border border-zinc-700 bg-zinc-900/80 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+        className="shrink-0 rounded-md border border-subtle bg-surface px-2 py-1 text-[10px] text-secondary hover:text-primary"
       >
         {collapsed ? `NPCs (${present.length})` : 'Ocultar'}
       </button>
       {!collapsed && (
-        <div className="flex min-w-0 max-w-full flex-row gap-2 overflow-x-auto sm:min-h-0 sm:max-h-full sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:overscroll-y-contain">
+        <div className="flex w-max min-w-0 max-w-full flex-row gap-2 sm:w-full sm:min-h-0 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto">
           {present.map((c) => (
             <DockAvatar
               key={c.id}
@@ -149,6 +152,6 @@ export default function ChatAvatarDock({
           ))}
         </div>
       )}
-    </div>
+    </aside>
   )
 }

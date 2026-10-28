@@ -25,6 +25,7 @@ import CharacterModal from '../components/CharacterModal.jsx'
 import GamePanel from '../components/GamePanel.jsx'
 import Drawer, { InspectorPane } from '../components/Drawer.jsx'
 import SceneBackdrop from '../components/SceneBackdrop.jsx'
+import './Play.css'
 import AdventureJobs from '../components/AdventureJobs.jsx'
 import GenerationPreferences from '../components/GenerationPreferences.jsx'
 import LiveFeed from '../components/LiveFeed.jsx'
@@ -1482,11 +1483,11 @@ export default function Play() {
   ) : null
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-canvas text-primary">
+    <div className="play-shell flex h-full w-full min-w-0 max-w-full overflow-hidden bg-canvas text-primary">
       {/* LEFT COLUMN: Main Story Pane */}
-      <div className="flex flex-1 min-w-0 flex-col h-full overflow-hidden relative">
+      <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-hidden">
         {/* Header + Action Bar */}
-        <header className="relative z-30 flex shrink-0 flex-col gap-2 border-b border-subtle/70 bg-canvas/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        <header className="relative z-30 flex min-w-0 shrink-0 flex-col gap-2 border-b border-subtle/70 bg-canvas/95 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2">
             {/* Mobile Drawer Button */}
             <button
@@ -1524,7 +1525,7 @@ export default function Play() {
           </div>
 
           {/* Action Toolbar */}
-          <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap justify-end">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
             <GenerationPreferences
               adventure={adventure}
               onSaved={(uiState) => setAdventure((current) => ({ ...current, ui_state: uiState }))}
@@ -1686,17 +1687,15 @@ export default function Play() {
           </div>
         )}
 
-        {/* Feed e controles dividem a altura no mobile e a largura no desktop. */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
-          {/* Story Prose Feed */}
-          <div className="relative min-h-0 min-w-0 flex-1 bg-canvas">
+        {/* Prosa no centro; retratos ocupam um trilho, sem cobrir o texto. */}
+        <div className="play-story-pane flex min-h-0 min-w-0 max-w-full flex-1 flex-col bg-canvas sm:flex-row">
           <main
             ref={feedRef}
             onScroll={onFeedScroll}
-            className="h-full overflow-y-auto overscroll-y-contain px-4 py-6"
+            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-6"
           >
             <div
-              className={`mx-auto flex flex-col gap-6 pb-14 sm:pb-4 transition-all duration-150 ${colWidthCls} ${fontFamilyCls}`}
+              className={`mx-auto flex w-full min-w-0 flex-col gap-6 pb-14 sm:pb-4 transition-all duration-150 ${colWidthCls} ${fontFamilyCls}`}
               style={{
                 fontSize: storyFontSize,
                 lineHeight: lineHeightValue,
@@ -1801,10 +1800,17 @@ export default function Play() {
             />
           </Suspense>
         </div>
-          {panelOpen && !isInspectorDocked && (
+        {panelOpen && !isInspectorDocked && (
+          <div
+            className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-stretch sm:justify-end"
+            onPointerDown={(event) => {
+              if (event.target === event.currentTarget) setPanelOpen(false)
+            }}
+          >
             <aside
               aria-label="Controles do jogo"
-              className="flex min-h-0 w-full shrink-0 flex-col lg:h-full lg:w-[clamp(24rem,30vw,30rem)] lg:border-l lg:border-subtle [&>div]:lg:h-full [&>div]:lg:max-h-full [&>div]:lg:border-t-0"
+              className="flex min-h-0 max-h-[min(70dvh,100%)] w-full min-w-0 max-w-full flex-col overflow-hidden border-t border-subtle bg-surface shadow-2xl sm:h-full sm:max-h-full sm:w-[min(24rem,calc(100%-1rem))] sm:border-l sm:border-t-0"
+              onPointerDown={(event) => event.stopPropagation()}
             >
               <GamePanel
                 profile={uiProfile}
@@ -1818,15 +1824,16 @@ export default function Play() {
                 onClose={() => setPanelOpen(false)}
                 adventureId={id}
                 packOn={packOn}
+                embedded
               />
             </aside>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Suggestion Choices Chips */}
         {showChoices && (
-          <div className="border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur z-10">
-            <div className={`mx-auto flex items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
+          <div className="z-10 min-w-0 max-w-full border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur">
+            <div className={`mx-auto flex min-w-0 max-w-full items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
               <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted">
                 Suggested:
               </span>
@@ -1847,8 +1854,8 @@ export default function Play() {
         )}
 
         {webSources.length > 0 && (
-          <div className="border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur z-10">
-            <div className={`mx-auto flex items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
+          <div className="z-10 min-w-0 max-w-full border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur">
+            <div className={`mx-auto flex min-w-0 max-w-full items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
               <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted">
                 🌐 Sources:
               </span>
@@ -1930,7 +1937,7 @@ export default function Play() {
 
       {/* RIGHT COLUMN: Docked Inspector (Desktop >= 1024px) */}
       {isInspectorDocked && isWide && (
-        <div className="hidden lg:flex w-[380px] xl:w-[420px] 2xl:w-[480px] shrink-0 h-full overflow-hidden border-l border-subtle bg-surface">
+        <div className="hidden h-full min-h-0 w-[min(22rem,32%)] max-w-[22rem] shrink-0 overflow-hidden border-l border-subtle bg-surface lg:flex">
           <InspectorPane
             adventure={adventure}
             onAdventureChange={setAdventure}
@@ -2047,8 +2054,15 @@ export default function Play() {
         />
       )}
       {mapOpen && (
-        <div className="fixed inset-0 z-50 flex bg-canvas/95 backdrop-blur sm:left-1/2 sm:w-1/2 sm:border-l sm:border-subtle">
-          <WorldMap adventure={adventure} open={mapOpen} onClose={() => setMapOpen(false)} />
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setMapOpen(false)
+          }}
+        >
+          <div className="h-full min-h-0 w-[min(40rem,calc(100%-0.5rem))] min-w-0 max-w-full overflow-x-hidden border-l border-subtle bg-canvas shadow-2xl">
+            <WorldMap adventure={adventure} open={mapOpen} onClose={() => setMapOpen(false)} />
+          </div>
         </div>
       )}
     </div>

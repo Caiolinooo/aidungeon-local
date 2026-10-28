@@ -1,4 +1,4 @@
-/* Replay visual novel. Só layout: imagens vêm de URLs já persistidas. */
+/* Visual novel. O fundo fica atrás; elenco e caixa rolam juntos, sem cobrir um ao outro. */
 
 .vn-root {
   box-sizing: border-box;
@@ -19,8 +19,9 @@
 
 .vn-bar {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
   padding: max(0.6rem, env(safe-area-inset-top)) 1rem 0.6rem;
@@ -31,7 +32,7 @@
 .vn-title {
   margin: 0;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 8rem;
   font-family: Georgia, Cambria, "Times New Roman", serif;
   font-size: 1rem;
   font-weight: 600;
@@ -64,6 +65,7 @@
 .vn-plate {
   position: absolute;
   inset: 0;
+  z-index: 0;
 }
 
 .vn-bg {
@@ -106,9 +108,23 @@
 .vn-scrim {
   position: absolute;
   inset: auto 0 0;
+  z-index: 0;
   height: 58%;
   background: linear-gradient(180deg, rgb(var(--bg-canvas-rgb) / 0) 0%, rgb(var(--bg-canvas-rgb) / 0.94) 70%);
   pointer-events: none;
+}
+
+.vn-foreground {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .vn-cast {
@@ -191,14 +207,21 @@
   box-shadow: 0 16px 40px rgb(0 0 0 / 0.28);
 }
 
+.vn-turn + .vn-turn {
+  margin-top: 0.8rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgb(var(--border-subtle-rgb));
+}
+
 .vn-text {
   margin: 0.35rem 0 0;
-  max-height: min(34vh, 16rem);
+  max-height: min(28vh, 14rem);
   overflow: auto;
   font-family: Georgia, Cambria, "Times New Roman", serif;
   font-size: 1.05rem;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .vn-empty-line {
@@ -240,10 +263,31 @@
   color: rgb(var(--text-secondary-rgb));
 }
 
+.vn-choice-legend,
+.vn-record {
+  margin: 0;
+}
+
+.vn-choice-legend {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: rgb(var(--text-secondary-rgb));
+}
+
+.vn-record {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.35rem 0.15rem 0;
+}
+
 .vn-choice-text {
   font-family: Georgia, Cambria, "Times New Roman", serif;
   font-size: 0.98rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .vn-note {
@@ -286,6 +330,8 @@
 
 .vn-center {
   flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -315,6 +361,73 @@
 .vn-hint {
   margin: 0.55rem 0 0;
   font-size: 0.72rem;
+}
+
+.vn-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgb(var(--border-subtle-rgb));
+}
+
+.vn-center-start .vn-reply {
+  width: min(36rem, 100%);
+  text-align: left;
+}
+
+.vn-reply-types,
+.vn-reply-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.vn-reply-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(var(--accent-gold-rgb));
+}
+
+.vn-reply-text {
+  width: 100%;
+  min-height: 4.6rem;
+  max-height: 9rem;
+  resize: vertical;
+  border-radius: 0.55rem;
+  border: 1px solid rgb(var(--border-subtle-rgb));
+  background: rgb(var(--bg-canvas-rgb));
+  color: rgb(var(--text-primary-rgb));
+  font: inherit;
+  line-height: 1.45;
+  padding: 0.55rem 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.vn-reply-text:disabled {
+  opacity: 0.6;
+}
+
+.vn-reply-row .vn-hint {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
+.vn-stream {
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.55rem;
+  background: rgb(var(--bg-elevated-rgb));
+}
+
+.vn-error {
+  margin: 0;
+  color: rgb(var(--danger-400));
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
 .vn-actions {

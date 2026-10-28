@@ -1,15 +1,21 @@
-// Replay read-only da visual novel.
-// Lê ações, retratos, cenários e sugestões já persistidos. Não chama
-// POST /scene, /choices, /see nem /portraits — esses endpoints geram mídia ou texto.
+// Visual novel: replay do que já foi salvo e continuação no beat mais recente.
+// O carregamento usa só GET. Continuar envia POST /api/adventures/:id/action,
+// o mesmo contrato do Play (SSE token/done/error, ou 202 JSON de intenção).
+// O texto ao vivo do stream não vira beat. Sem ação gravada, não há narração.
+// Não chama POST /scene, /choices, /see nem /portraits.
 //
 // GET /api/adventures/:id
 // GET /api/adventures/:id/cards
 // GET /api/adventures/:id/jobs?status=done
 // GET /api/adventures/:id/events/history?after&limit
+//   (choices_ready navega; eventos action completam o replay se o array vier curto)
 // GET /api/adventures/:id/map
+// O fundo é o job scene_backdrop já pronto, mesmo pintado depois da última ação.
+// POST /api/adventures/:id/action
 // A página busca GET /api/images/:imageId com Bearer (api.fetchImageBlob).
 
-import { request } from '../api.js'
+import { getToken } from '../auth.js'
+import { API_BASE, notifyUnauthorized, request } from '../api.js'
 import { playerDisplayText } from '../utils.js'
 
 export const VISUAL_NOVEL_ENDPOINTS = Object.freeze([
@@ -20,6 +26,8 @@ export const VISUAL_NOVEL_ENDPOINTS = Object.freeze([
   'GET /api/adventures/:id/map',
   'GET /api/images/:imageId',
 ])
+
+export const VISUAL_NOVEL_ACTION_ENDPOINT = 'POST /api/adventures/:id/action'
 
 const PLAYER_TYPES = new Set(['do', 'say', 'story'])
 const NARRATIVE_TYPES = new Set(['start', 'continue'])
@@ -129,23 +137,230 @@ export async function loadVisualNovel(adventureId, { signal } = {}) {
 
 export function mapNovel({ adventure, cards, jobs, events, map } = {}) {
   const source = adventure && typeof adventure === 'object' ? adventure : {}
-  const people = peopleFrom(Array.isArray(cards) && cards.length ? cards : source.story_cards)
+  const eventList = listFrom(events, ['events', 'items', 'history'])
+  const jobList = listFrom(jobs, ['jobs', 'items', 'results'])
+  const storyCards = withPortraitJobs(
+    preferList(cards, source.story_cards, ['cards', 'items', 'results']),
+    jobList,
+  )
+  const people = peopleFrom(storyCards)
   const locations = locationsFrom(people.allCards, map)
-  const suggestions = suggestionsBySeq(events)
-  const actions = (Array.isArray(source.actions) ? source.actions : [])
-    .slice()
-    .sort((a, b) => seqOf(a) - seqOf(b) || String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
-
+  const suggestions = suggestionsBySeq(eventList)
+  const actions = collectActions(source, eventList)
   const beats = actions.map((action) => makeBeat(action, people))
   attachChoices(beats, suggestions)
   attachOpenSuggestions(beats, suggestions)
-  applyBackgrounds(beats, backdropImages(jobs), locations)
-
+  applyBackgrounds(beats, backdropImages(jobList), locations, storyCards)
   return {
     adventureId: String(source.id || ''),
     title: String(source.title || ''),
     beats: beats.map(publishBeat),
+    play: {
+      dmMode: !!source.dm_mode,
+      owner: String(source.owner || ''),
+      turnMode: !!source.turn_mode,
+      turnUser: String(source.turn_user || ''),
+    },
+    source: {
+      adventure: { ...source, actions },
+      cards: storyCards,
+      jobs: jobList,
+      events: eventList,
+      map: map && typeof map === 'object' ? map : null,
+    },
   }
+}
+
+function listFrom(value, keys) {
+  if (Array.isArray(value)) return value.filter((item) => item != null)
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return []
+    try {
+      return listFrom(JSON.parse(trimmed), keys)
+    } catch {
+      return []
+    }
+  }
+  if (!value || typeof value !== 'object') return []
+  for (const key of keys) {
+    if (value[key] == null) continue
+    const nested = listFrom(value[key], keys)
+    if (nested.length) return nested
+  }
+  return []
+}
+
+function preferList(primary, fallback, keys) {
+  const first = listFrom(primary, keys)
+  if (first.length) return first
+  return listFrom(fallback, keys)
+}
+
+function parseJson(value) {
+  if (typeof value !== 'string') return value && typeof value === 'object' ? value : null
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function collectActions(adventure, events) {
+  const source = adventure && typeof adventure === 'object' ? adventure : {}
+  const raw = [
+    ...actionRecords(source.actions),
+    ...actionRecords(source.history),
+  ]
+  if (!raw.length && source.adventure && typeof source.adventure === 'object') {
+    raw.push(...actionRecords(source.adventure.actions))
+  }
+  for (const event of events || []) raw.push(...actionsFromEvent(event))
+  const normalized = raw.flatMap((item) => flattenAction(item)).map(normalizeAction).filter(Boolean)
+  return dedupeActions(normalized)
+    .sort((a, b) => seqOf(a) - seqOf(b) || String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
+}
+
+function actionRecords(value) {
+  const listed = listFrom(value, ['items', 'actions', 'results', 'data', 'history'])
+  if (listed.length) return listed
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  if (value.type && (value.text != null || value.value != null || value.seq != null || value.id != null)) {
+    return [value]
+  }
+  const values = Object.values(value)
+  if (
+    values.length
+    && values.every((item) => item && typeof item === 'object' && !Array.isArray(item)
+      && (item.type || item.text != null || item.value != null || item.seq != null))
+  ) {
+    return values
+  }
+  return []
+}
+
+function actionsFromEvent(event) {
+  if (!event || typeof event !== 'object') return []
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : null
+  if (!payload) return []
+  if (event.type === 'action') {
+    return [{
+      ...payload,
+      seq: payload.seq ?? event.turn_seq,
+      created_at: payload.created_at || payload.createdAt || event.created_at || '',
+    }]
+  }
+  const nested = []
+  if (payload.player_action && typeof payload.player_action === 'object') nested.push(payload.player_action)
+  if (payload.action && typeof payload.action === 'object' && payload.action.type) nested.push(payload.action)
+  return nested
+}
+
+function flattenAction(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  const nested = []
+  for (const key of ['replies', 'children', 'actions']) {
+    if (Array.isArray(raw[key])) nested.push(...raw[key])
+  }
+  return [raw, ...nested.flatMap((item) => flattenAction(item))]
+}
+
+function normalizeAction(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const type = String(raw.type || raw.action_type || '').trim().toLowerCase()
+  let text = raw.text ?? raw.value ?? raw.content ?? ''
+  if (text && typeof text === 'object') text = text.text ?? text.value ?? ''
+  text = typeof text === 'string' ? text : String(text ?? '')
+  const seq = raw.seq ?? raw.action_seq ?? raw.turn_seq
+  const id = raw.id ?? raw.action_id ?? null
+  if (!type && !text.trim() && seq == null && id == null) return null
+  const created = firstText(raw.created_at, raw.createdAt, raw.finished_at)
+  return {
+    ...raw,
+    id,
+    seq,
+    type: type || 'story',
+    text,
+    created_at: created,
+    actor: String(raw.actor || raw.username || '').trim(),
+    image: raw.image ?? null,
+  }
+}
+
+function dedupeActions(list) {
+  const seenId = new Set()
+  const seenText = new Set()
+  const out = []
+  for (const action of list) {
+    const id = action?.id == null || action.id === '' ? '' : String(action.id)
+    const key = `${seqOf(action)}:${action.type}:${norm(action.text)}`
+    if (id && seenId.has(id)) continue
+    if (seenText.has(key)) continue
+    if (id) seenId.add(id)
+    seenText.add(key)
+    out.push(action)
+  }
+  return out
+}
+
+function withPortraitJobs(cards, jobs) {
+  const list = Array.isArray(cards) ? cards.map((card) => ({ ...card })) : []
+  const byId = new Map(list.map((card) => [String(card.id || ''), card]))
+  for (const job of jobs || []) {
+    const type = String(job?.type || '').toLowerCase()
+    if (type !== 'character_portrait' && type !== 'portrait') continue
+    if (!['done', 'completed', 'success'].includes(String(job?.status || '').toLowerCase())) continue
+    const result = parseJson(job?.result) || {}
+    const image = imageFromJob(job)
+    const cardId = String(job?.ref_id || result.card_id || '')
+    if (!image || !cardId || !byId.has(cardId)) continue
+    const card = byId.get(cardId)
+    if (portraitFromCard(card)) continue
+    card.portrait = image
+  }
+  return list
+}
+
+function imageFromJob(job) {
+  const result = parseJson(job?.result) || {}
+  const payload = parseJson(job?.payload) || {}
+  return realImageRef(result.image)
+    || realImageRef(result.image_id)
+    || realImageRef(payload.image)
+    || realImageRef(result)
+}
+
+function castIdsFrom(job, result) {
+  const payload = parseJson(job?.payload) || {}
+  const ids = payload.cast_card_ids || result?.cast_card_ids || payload.cast_ids || []
+  return Array.isArray(ids) ? ids.map((id) => String(id)) : []
+}
+
+function mergeCastIds(beat, castIds, cards) {
+  if (!beat || !Array.isArray(castIds) || castIds.length === 0) return
+  const cast = Array.isArray(beat.cast) ? beat.cast.slice() : []
+  const seen = new Set(cast.map((person) => norm(person?.title)))
+  for (const id of castIds) {
+    const card = (cards || []).find((item) => String(item?.id || '') === String(id))
+    if (!card) continue
+    const title = String(card.title || '').trim()
+    const key = norm(title)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    cast.push({ title, portrait: portraitFromCard(card), speaking: false })
+    if (cast.length >= CAST_LIMIT) break
+  }
+  beat.cast = cast
 }
 
 function normalizeCursor(state, count) {
@@ -185,7 +400,7 @@ async function loadHistory(pathId, signal) {
       if (isAbort(error)) throw error
       return events
     }
-    const batch = Array.isArray(data?.events) ? data.events : []
+    const batch = listFrom(data, ['events', 'items', 'history'])
     events.push(...batch)
     if (!data?.has_more || batch.length === 0) break
     const next = Number(data?.next_cursor)
@@ -218,13 +433,20 @@ function mentioned(text, title) {
 }
 
 export function realImageRef(image) {
+  if (typeof image === 'string' || typeof image === 'number') {
+    return realImageRef({ id: image, url: '' })
+  }
   if (!image || typeof image !== 'object') return null
-  const id = typeof image.id === 'string' ? image.id.trim() : ''
+  const rawId = image.id ?? image.image_id ?? image.portrait_image_id ?? ''
+  const id = String(rawId ?? '').trim()
   const url = typeof image.url === 'string' ? image.url.trim() : ''
   const prompt = typeof image.prompt === 'string' ? image.prompt : ''
   const safeId = /^[A-Za-z0-9_-]+$/.test(id)
   if (url && isBackendImageUrl(url)) {
     return { id: safeId ? id : idFromUrl(url), url, prompt }
+  }
+  if (!url && id && isBackendImageUrl(id)) {
+    return { id: idFromUrl(id), url: id.startsWith('/') ? id : `/${id.replace(/^\/+/, '')}`, prompt }
   }
   if (safeId) return { id, url: `/api/images/${id}`, prompt }
   return null
@@ -252,7 +474,7 @@ function portraitFromCard(card) {
   if (!card || typeof card !== 'object') return null
   const embedded = realImageRef(card.portrait)
   if (embedded) return embedded
-  const id = typeof card.portrait_image_id === 'string' ? card.portrait_image_id.trim() : ''
+  const id = String(card.portrait_image_id ?? card.portrait_id ?? '').trim()
   if (!id) return null
   return realImageRef({ id, url: '', prompt: card.portrait_prompt || '' })
 }
@@ -275,24 +497,32 @@ function locationsFrom(cards, map) {
     const title = String(entry?.title || '').trim()
     if (title.length < 2) return
     const key = norm(title)
-    const image = realImageRef(entry?.image)
+    const image = realImageRef(entry?.image) || realImageRef(entry?.image_id)
     const previous = byKey.get(key)
-    if (!previous || (!previous.image && image)) {
-      byKey.set(key, { title, image: image || previous?.image || null })
+    const current = !!(entry?.current || previous?.current)
+    if (!previous || (!previous.image && image) || (current && !previous.current)) {
+      byKey.set(key, { title, image: image || previous?.image || null, current: current || !!previous?.current })
     }
   }
   for (const card of cards || []) {
     if (String(card.type || '').toLowerCase() !== 'location') continue
-    put({ title: card.title, image: null })
+    put({ title: card.title, image: card.image || card.image_id || null })
   }
-  const nodes = Array.isArray(map?.locations) ? map.locations : []
-  for (const node of nodes) put(node)
+  const source = map && typeof map === 'object' ? map : {}
+  const nodes = listFrom(source.locations, ['locations', 'items', 'nodes'])
+  const currentId = String(source.current?.id || source.current_id || '')
+  for (const node of nodes) {
+    put({ ...node, current: !!(node?.current || (currentId && node?.id === currentId)) })
+  }
+  if (source.current && typeof source.current === 'object') {
+    put({ ...source.current, current: true, image: source.current.image || null })
+  }
   return [...byKey.values()]
 }
 
 function suggestionsBySeq(events) {
   const map = new Map()
-  const list = Array.isArray(events) ? events : []
+  const list = listFrom(events, ['events', 'items', 'history'])
   for (const event of list) {
     if (event?.type !== 'choices_ready') continue
     const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
@@ -308,7 +538,7 @@ function makeBeat(action, people) {
   const text = displayText(type, action?.text)
   const actor = String(action?.actor || '').trim()
   const speaker = speakerOf(type, actor, people.people)
-  const ownImage = type === 'see' ? realImageRef(action?.image) : null
+  const ownImage = realImageRef(action?.image) || realImageRef(action?.image_id)
   return {
     key: `${seqOf(action)}:${action?.id ?? ''}`,
     seq: seqOf(action),
@@ -453,20 +683,40 @@ function suggestionsFor(beats, playerIndex, suggestions) {
 }
 
 function backdropImages(jobs) {
-  const list = Array.isArray(jobs) ? jobs : []
+  const list = listFrom(jobs, ['jobs', 'items', 'results'])
   return list
-    .filter((job) => job?.type === 'scene_backdrop' && job?.status === 'done')
-    .map((job) => ({
-      at: typeof job.finished_at === 'string' && job.finished_at
-        ? job.finished_at
-        : '',
-      image: realImageRef(job.result?.image),
-    }))
-    .filter((item) => item.image && item.at)
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    .filter((job) => {
+      const type = String(job?.type || '').toLowerCase()
+      const status = String(job?.status || '').toLowerCase()
+      return (type === 'scene_backdrop' || type === 'backdrop')
+        && (status === 'done' || status === 'completed' || status === 'success')
+    })
+    .map((job) => {
+      const result = parseJson(job?.result)
+      const at = firstText(job?.finished_at, job?.created_at, job?.createdAt, job?.started_at)
+      return {
+        at,
+        image: imageFromJob(job),
+        castIds: castIdsFrom(job, result),
+      }
+    })
+    .filter((item) => item.image)
+    .sort((a, b) => {
+      if (a.at && b.at) return a.at < b.at ? -1 : a.at > b.at ? 1 : 0
+      if (a.at) return -1
+      if (b.at) return 1
+      return 0
+    })
 }
 
-function applyBackgrounds(beats, backdrops, locations) {
+function applyBackgrounds(beats, backdrops, locations, cards) {
+  const current = (locations || []).find((entry) => entry.current && (entry.image || entry.title))
+  const timed = []
+  const untimed = []
+  for (const item of backdrops || []) {
+    if (item?.at) timed.push(item)
+    else untimed.push(item)
+  }
   let cursor = 0
   let scene = null
   for (const beat of beats) {
@@ -474,12 +724,35 @@ function applyBackgrounds(beats, backdrops, locations) {
     beat.locationTitle = place?.title || ''
     beat.locationImage = place?.image || null
     const at = beat.createdAt
-    while (cursor < backdrops.length && at && backdrops[cursor].at <= at) {
-      scene = { image: backdrops[cursor].image, at: backdrops[cursor].at }
+    while (cursor < timed.length && at && timed[cursor].at <= at) {
+      scene = timed[cursor]
       cursor += 1
     }
-    if (beat.ownImage) scene = { image: beat.ownImage, at: at || scene?.at || '' }
-    beat.background = scene?.image || (!scene ? beat.locationImage : null)
+    if (beat.ownImage) scene = { image: beat.ownImage, at: at || scene?.at || '', castIds: [] }
+    const painted = beat.ownImage || scene?.image || null
+    beat.background = painted || beat.locationImage || current?.image || null
+    if (!beat.locationTitle && current?.title && beat.background === current.image) {
+      beat.locationTitle = current.title
+    }
+    mergeCastIds(beat, scene?.castIds, cards)
+  }
+  const pending = timed.slice(cursor)
+  const latest = pending.length
+    ? pending[pending.length - 1]
+    : (timed.length ? timed[timed.length - 1] : (untimed[untimed.length - 1] || null))
+  if (latest?.image) {
+    for (const beat of beats) {
+      if (beat.background || beat.ownImage) continue
+      beat.background = latest.image
+      if (!beat.locationTitle && current?.title) beat.locationTitle = current.title
+      mergeCastIds(beat, latest.castIds, cards)
+    }
+  }
+  if (pending.length && beats.length && !beats[beats.length - 1].ownImage) {
+    const last = beats[beats.length - 1]
+    last.background = pending[pending.length - 1].image
+    if (!last.locationTitle && current?.title) last.locationTitle = current.title
+    mergeCastIds(last, pending[pending.length - 1].castIds, cards)
   }
 }
 
@@ -509,4 +782,260 @@ function publishBeat(beat) {
     locationTitle: beat.locationTitle,
     background: beat.background,
   }
+}
+
+export function canWriteReply(cursor, count) {
+  const total = Math.max(0, Number(count) || 0)
+  if (total === 0) return true
+  const index = Number(cursor?.index)
+  if (!Number.isFinite(index)) return false
+  return index === total - 1
+}
+
+export function presentChoices(choices) {
+  const items = (Array.isArray(choices) ? choices : []).map((choice) => {
+    const type = PLAYER_TYPES.has(choice?.type) ? choice.type : 'do'
+    const text = String(choice?.text || '').trim()
+    const taken = !!choice?.taken && choice?.actionSeq != null
+    return {
+      type,
+      text,
+      taken,
+      actionSeq: taken ? choice.actionSeq : null,
+      effect: taken ? 'jump' : 'none',
+    }
+  })
+  return { navigationOnly: true, items }
+}
+
+export function latestTurnBeats(beats, index) {
+  const list = Array.isArray(beats) ? beats : []
+  const at = Number(index)
+  if (!Number.isFinite(at) || at < 0 || at >= list.length) return []
+  const current = list[at]
+  const previous = list[at - 1]
+  if (
+    at === list.length - 1
+    && previous
+    && PLAYER_TYPES.has(previous.type)
+    && NARRATIVE_TYPES.has(current?.type)
+  ) {
+    return [previous, current]
+  }
+  return current ? [current] : []
+}
+
+export function beginReply({ busy = false, text = '', type = '' } = {}) {
+  if (busy) return null
+  if (!PLAYER_TYPES.has(type)) return null
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return null
+  return { type, text: trimmed }
+}
+
+// Enter e Ctrl/Cmd+Enter enviam. Shift+Enter quebra a linha. Composição IME não envia.
+export function replyKeyAction(event) {
+  if (!event || event.key !== 'Enter') return null
+  if (event.isComposing || event.keyCode === 229) return null
+  if (event.shiftKey) return 'line'
+  return 'send'
+}
+
+export function imageMediaKind(type) {
+  const value = String(type || '').toLowerCase().split(';', 1)[0].trim()
+  if (value.startsWith('video/')) return 'video'
+  if (!value || value === 'application/octet-stream' || value.startsWith('image/')) return 'image'
+  return 'invalid'
+}
+
+export function appendStreamResult(model, done) {
+  const adventure = model?.source?.adventure
+  if (!adventure || typeof adventure !== 'object') return model
+  const incoming = []
+  if (done?.player_action && typeof done.player_action === 'object') incoming.push(done.player_action)
+  if (done?.action && typeof done.action === 'object') incoming.push(done.action)
+  if (!incoming.length) return model
+  const existing = Array.isArray(adventure.actions) ? adventure.actions : []
+  const seen = new Set(existing.map((action) => (action?.id == null ? '' : String(action.id))).filter(Boolean))
+  const actions = existing.slice()
+  let changed = false
+  for (const action of incoming) {
+    const id = action?.id == null ? '' : String(action.id)
+    if (id && seen.has(id)) continue
+    if (id) seen.add(id)
+    actions.push(action)
+    changed = true
+  }
+  if (!changed) return model
+  return mapNovel({
+    adventure: { ...adventure, actions },
+    cards: model.source.cards,
+    jobs: model.source.jobs,
+    events: model.source.events,
+    map: model.source.map,
+  })
+}
+
+export function novelAfterSubmit(model, result) {
+  if (result?.intent) {
+    return { model, committed: false, intent: result.intent, missing: false }
+  }
+  const next = appendStreamResult(model, result?.done)
+  const committed = !!next && next !== model && (next.beats?.length || 0) > (model?.beats?.length || 0)
+  if (!committed) return { model, committed: false, intent: null, missing: true }
+  return { model: next, committed: true, intent: null, missing: false }
+}
+
+export async function submitNovelAction(adventureId, {
+  type,
+  text,
+  signal,
+  onToken,
+  onEvent,
+} = {}) {
+  const id = String(adventureId || '').trim()
+  if (!id) {
+    const error = new Error('adventure id is required')
+    error.code = 'adventure_required'
+    throw error
+  }
+  if (!PLAYER_TYPES.has(type)) {
+    const error = new Error('tipo de ação inválido')
+    error.code = 'type_required'
+    throw error
+  }
+  const bodyText = String(text || '').trim()
+  if (!bodyText) {
+    const error = new Error('resposta vazia')
+    error.code = 'text_required'
+    throw error
+  }
+  const path = `/adventures/${encodeURIComponent(id)}/action`
+  let res
+  try {
+    const headers = { 'Content-Type': 'application/json' }
+    const token = getToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+    res = await fetch(`${API_BASE}/api${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type, text: bodyText }),
+      signal,
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    const failure = new Error('Sem conexão com o servidor.')
+    failure.status = 0
+    failure.code = 'network_error'
+    throw failure
+  }
+  if (signal?.aborted) {
+    const error = new Error('aborted')
+    error.name = 'AbortError'
+    throw error
+  }
+  const contentType = res.headers.get('content-type') || ''
+  if (!res.ok || contentType.includes('application/json')) return readActionJson(res)
+  return readActionStream(res, { onToken, onEvent, signal })
+}
+
+async function readActionJson(res) {
+  let data = null
+  try {
+    data = await res.json()
+  } catch {
+    data = null
+  }
+  if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized()
+    const error = new Error(data?.error?.message || `Request failed (${res.status})`)
+    error.status = res.status
+    error.code = typeof data?.error?.code === 'string' ? data.error.code : ''
+    throw error
+  }
+  if (data?.intent) return { intent: data.intent, done: null }
+  const error = new Error('Resposta inesperada do servidor.')
+  error.status = res.status
+  error.code = 'invalid_response'
+  throw error
+}
+
+async function readActionStream(res, { onToken, onEvent, signal }) {
+  if (!res.body) {
+    const error = new Error('A narração não chegou.')
+    error.code = 'stream_incomplete'
+    throw error
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let donePayload = null
+  let streamError = null
+  let terminal = false
+  const dispatch = (raw) => {
+    const ev = parseSse(raw)
+    if (!ev || terminal) return
+    if (ev.event === 'token') onToken?.(ev.data?.token ?? '')
+    else if (ev.event === 'done') {
+      terminal = true
+      donePayload = ev.data && typeof ev.data === 'object' ? ev.data : {}
+    } else if (ev.event === 'error') {
+      terminal = true
+      streamError = new Error(ev.data?.message || 'Generation failed')
+      streamError.status = ev.data?.status
+      streamError.code = typeof ev.data?.code === 'string' ? ev.data.code : ''
+    } else onEvent?.(ev.event, ev.data)
+  }
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        dispatch(raw)
+      }
+    }
+    buffer += decoder.decode().replace(/\r\n/g, '\n')
+    if (buffer.trim()) dispatch(buffer)
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    if (!terminal) {
+      const failure = new Error('Stream interrupted.')
+      failure.code = 'stream_interrupted'
+      throw failure
+    }
+  }
+  if (signal?.aborted) {
+    const error = new Error('aborted')
+    error.name = 'AbortError'
+    throw error
+  }
+  if (streamError) throw streamError
+  if (!terminal || !donePayload) {
+    const error = new Error('A narração não chegou.')
+    error.code = 'stream_incomplete'
+    throw error
+  }
+  return { intent: null, done: donePayload }
+}
+
+function parseSse(block) {
+  let event = 'message'
+  const dataLines = []
+  for (const line of String(block || '').split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+  }
+  if (dataLines.length === 0) return null
+  const text = dataLines.join('\n')
+  let data = null
+  try {
+    data = JSON.parse(text)
+  } catch {
+    data = text
+  }
+  return { event, data }
 }

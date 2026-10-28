@@ -322,7 +322,7 @@ function SceneControls({ state, disabled, onSend }) {
 export default function GamePanel({
   profile, state, disabled, regenerating,
   onStateChange, onSend, onInsert, onRegenerate, onClose,
-  inline = false, adventureId = null, packOn = false,
+  inline = false, embedded = false, adventureId = null, packOn = false,
 }) {
   const widgets = (profile?.widgets ?? []).filter((widget) =>
     !(packOn && (widget.type === 'stats' || widget.type === 'inventory')),
@@ -404,8 +404,10 @@ export default function GamePanel({
   }
 
   return (
-    <div role="region" aria-label="Controles do jogo" className="fixed inset-x-0 bottom-0 z-40 max-h-[70dvh] w-full min-w-0 max-w-full shrink-0 overflow-y-auto overscroll-y-contain border-t border-subtle bg-surface/95 shadow-2xl backdrop-blur lg:static lg:z-auto lg:max-h-full lg:shadow-none">
-      <div className="mx-auto w-full max-w-6xl px-3 py-2">
+    <div role="region" aria-label="Controles do jogo" className={embedded
+      ? 'flex h-full min-h-0 w-full min-w-0 max-h-full max-w-full flex-1 flex-col overflow-y-auto overscroll-y-contain bg-surface'
+      : 'fixed inset-x-0 bottom-0 z-40 max-h-[70dvh] w-full min-w-0 max-w-full shrink-0 overflow-y-auto overscroll-y-contain border-t border-subtle bg-surface/95 shadow-2xl backdrop-blur'}>
+      <div className="mx-auto w-full min-w-0 max-w-full px-3 py-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
             Controles do jogo
@@ -430,13 +432,12 @@ export default function GamePanel({
           )}
         </div>
         <SceneControls state={state} disabled={disabled} onSend={onSend} />
-        {/* mobile: cards em fila rolável; desktop: grade conforme a largura disponível */}
-        <div className="mt-2 flex snap-x gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] sm:overflow-visible">
+        <div className="mt-2 flex min-w-0 max-w-full flex-col gap-3 pb-2">
 
           {widgets.map((widget) => (
             <section
               key={widget.id}
-              className="min-w-[16rem] shrink-0 snap-start rounded-xl border border-subtle bg-elevated/70 p-3 sm:min-w-0 sm:shrink"
+              className="min-w-0 max-w-full rounded-xl border border-subtle bg-elevated/70 p-3"
             >
               <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-secondary">
                 {widget.label}

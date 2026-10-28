@@ -1,0 +1,38 @@
+/* Palco da aventura: a prosa fica no centro; retrato e mídia não cortam o quadro. */
+
+.play-shell {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.play-story-pane,
+.play-portrait-rail,
+.play-scene,
+.play-media-frame {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.play-portrait-rail img {
+  object-fit: contain;
+  object-position: center top;
+  transform: none;
+}
+
+.play-scene-media,
+.play-media {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: min(34vh, 18rem);
+  object-fit: contain;
+  object-position: center center;
+  background: #000;
+}
+
+@media (max-width: 639px) {
+  .play-portrait-rail {
+    max-width: 100%;
+  }
+}

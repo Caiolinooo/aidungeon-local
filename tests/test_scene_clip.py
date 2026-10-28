@@ -461,6 +461,30 @@ def test_narrative_holds_the_clip_behind_see_and_backdrop(client, tmp_path):
     assert data["image"]["url"] == f"/api/images/{data['image']['id']}"
 
 
+def test_identical_active_clip_request_reuses_the_job(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    source = _store_png(adv["id"], tmp_path)
+    with db.session() as conn:
+        first = jobs.enqueue_scene_clip(
+            conn, adv["id"], source["id"], "nods", cache_key="same-request",
+        )
+        duplicate = jobs.enqueue_scene_clip(
+            conn, adv["id"], source["id"], "nods", cache_key="same-request",
+        )
+        changed = jobs.enqueue_scene_clip(
+            conn, adv["id"], source["id"], "looks up", cache_key="other-request",
+        )
+        assert duplicate["id"] == first["id"]
+        assert db.get_job(conn, first["id"])["status"] == "canceled"
+        assert db.get_job(conn, changed["id"])["status"] == "pending"
+        count = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type='scene_clip' AND adventure_id=?",
+            (adv["id"],),
+        ).fetchone()[0]
+    assert count == 2
+
+
 def test_cache_reuses_the_mp4_and_same_source_supersedes(client, tmp_path):
     use_tmp_storage(tmp_path)
     adv = make_adventure()

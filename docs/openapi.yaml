@@ -2255,9 +2255,10 @@ paths:
         TI2V 5B no ComfyUI (`UnetLoaderGGUF` quando o unet é GGUF), lido de
         `image.providers.comfyui.video`. Não altera `image.provider` nem o
         UNET de imagem e não chama narrador nem voz.
-        Cache por modelo+prompt+bytes da fonte. Um clipe novo da mesma fonte
-        cancela os pendentes (`supersede_key` `clip:<adventure>:<image>`).
-        Durante a narrativa o job permanece pending.
+        Cache por modelo+prompt+bytes da fonte. Repetir fonte+prompt de um job
+        ativo reutiliza esse job; um prompt novo cancela os pendentes da mesma
+        fonte (`supersede_key` `clip:<adventure>:<image>`). Durante a narrativa
+        o job permanece pending.
         O SSE `clip_ready` traz `adventure_id`, `job_id`, `source_image_id`
         e `image` `{id, url, media_type: video/mp4, duration_ms}`.
         Cancelar um job running manda `/interrupt` e `/free` e não grava o MP4.

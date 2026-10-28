@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertCircle,
   Check,
@@ -109,6 +110,15 @@ export default function AdventureJobs({
     onJobsChange?.(jobs)
   }, [jobs, onJobsChange])
 
+  useEffect(() => {
+    if (!open) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
+
   // Um único poll atende ao painel aberto e ao See; o bus cobre a atualização em segundo plano.
   useEffect(() => {
     if (!open && !watching) return undefined
@@ -197,10 +207,17 @@ export default function AdventureJobs({
         )}
       </button>
 
-      {open && (
+      {open && createPortal(
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 lg:bg-transparent"
+            aria-label="Fechar central de jobs"
+            onClick={() => setOpen(false)}
+          />
         <section
           aria-label="Jobs da aventura"
-          className="absolute right-0 top-12 z-50 flex max-h-[70vh] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-subtle bg-surface shadow-2xl"
+          className="absolute inset-y-0 right-0 z-10 flex h-full max-h-[100dvh] w-[min(22rem,calc(100%-1rem))] min-w-0 max-w-full flex-col overflow-hidden border-l border-subtle bg-surface shadow-2xl"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-subtle px-3 py-2.5">
             <div>
@@ -244,6 +261,7 @@ export default function AdventureJobs({
                 {visibleJobs.map((job) => {
                   const active = ACTIVE_STATUSES.has(job.status)
                   const busy = busyId === job.id
+                  const superseded = job.status === 'canceled' && job.error === 'superseded'
                   return (
                     <li key={job.id} className="rounded-lg border border-subtle bg-elevated/35 p-2.5">
                       <div className="flex items-start justify-between gap-2">
@@ -254,14 +272,17 @@ export default function AdventureJobs({
                         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_CLASSES[job.status] || 'border-subtle text-secondary'}`}>
                           {active && <LoaderCircle className="mr-1 inline h-2.5 w-2.5 animate-spin" />}
                           {job.status === 'done' && <Check className="mr-1 inline h-2.5 w-2.5" />}
-                          {STATUS_LABELS[job.status] || job.status}
+                          {superseded ? 'Substituído' : (STATUS_LABELS[job.status] || job.status)}
                         </span>
                       </div>
 
-                      {job.error && (
+                      {job.error && !superseded && (
                         <p role="alert" className="mt-2 whitespace-pre-wrap break-words rounded-md bg-danger-800/10 p-2 text-[11px] leading-relaxed text-danger-300">
                           {String(job.error)}
                         </p>
+                      )}
+                      {superseded && (
+                        <p className="mt-2 text-[11px] text-muted">Uma animação mais recente desta imagem assumiu a fila.</p>
                       )}
 
                       <div className="mt-2 flex items-center justify-between gap-2">
@@ -303,7 +324,7 @@ export default function AdventureJobs({
             )}
           </div>
         </section>
-      )}
+        </div>, document.body)}
     </div>
   )
 }

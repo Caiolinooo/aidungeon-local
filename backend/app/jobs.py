@@ -1045,7 +1045,11 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
 
 def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: str, *,
                        cache_key: str = "") -> dict:
-    """Clipe da mesma fonte substitui os pendentes. Prioridade abaixo da narrativa."""
+    """Mesma fonte+prompt ativo é deduplicado; prompt novo substitui o pendente."""
+    active = db.find_active_job(conn, "scene_clip", source_image_id)
+    if active and cache_key and \
+            str((active.get("payload") or {}).get("cache_key") or "") == cache_key:
+        return active
     return enqueue(
         conn, "scene_clip", adventure_id, source_image_id,
         {"prompt": prompt, "source_image_id": source_image_id,

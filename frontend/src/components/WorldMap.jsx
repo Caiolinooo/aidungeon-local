@@ -29,7 +29,7 @@ function LocationImage({ location, onLoad }) {
       </div>
     )
   }
-  return <img src={src} alt={location.title} className="h-32 w-full rounded-lg object-cover" />
+  return <img src={src} alt={location.title} className="h-32 w-full rounded-lg bg-black object-contain" />
 }
 
 function LocationCard({ location, current, onTravel, onReveal, onImage, busy }) {

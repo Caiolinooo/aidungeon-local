@@ -221,34 +221,32 @@ export default function SceneBackdrop({
   const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion() })
 
   return (
-    <section className={`relative shrink-0 overflow-hidden border-b border-subtle bg-elevated ${
-      playingClip
-        ? 'min-h-[clamp(14rem,36vh,24rem)]'
-        : scene.notice
-          ? 'min-h-[clamp(10rem,28vh,20rem)]'
-          : 'h-[clamp(8rem,24vh,18rem)]'
-    }`}>
+    <section className="play-scene relative shrink-0 overflow-hidden border-b border-subtle bg-black">
+      <div className="play-media-frame relative flex w-full items-center justify-center bg-black">
       {playingClip ? (
         <video
           key={sceneClip.clip.id}
           src={sceneClip.clip.url}
           {...videoProps}
           onError={sceneClip.failPlayback}
-          className="absolute inset-0 h-full w-full bg-black object-contain"
+          className="play-scene-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain object-center"
         />
       ) : backdropUrl ? (
-        <div
-          className={`absolute inset-0 bg-cover bg-center transition-all duration-700 ${filters} ${
+        <img
+          src={backdropUrl}
+          alt={place || 'Cenário da cena'}
+          className={`play-scene-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain object-center transition-all duration-700 ${filters} ${
             reacting ? 'scene-react' : ''
           }`}
-          style={{ backgroundImage: `url("${backdropUrl}")` }}
         />
-      ) : null}
+      ) : (
+        <div className={`w-full bg-elevated ${scene.notice ? 'h-28' : 'h-24'}`} />
+      )}
       <div className={`pointer-events-none absolute inset-0 bg-gradient-to-t ${
-        playingClip ? 'from-canvas/35 via-transparent to-canvas/20' : 'from-canvas via-canvas/60 to-canvas/10'
+        playingClip ? 'from-canvas/35 via-transparent to-canvas/20' : 'from-canvas via-canvas/55 to-transparent'
       }`} />
 
-      <div className="pointer-events-none relative flex h-full flex-col justify-between px-4 py-3">
+      <div className="pointer-events-none absolute inset-0 flex min-h-0 flex-col px-4 py-3">
         <div className="pointer-events-auto flex items-start justify-between gap-2">
           {place || scene.notice ? (
             <div className="max-w-[75%]">
@@ -292,8 +290,9 @@ export default function SceneBackdrop({
           </div>
         </div>
 
+        <div className={`mt-auto flex min-h-0 min-w-0 flex-col gap-1 ${playingClip ? 'pb-7' : ''}`}>
         {scene.cast?.length > 0 && (
-          <div className="flex items-end justify-start gap-3">
+          <div className="flex min-w-0 max-w-full flex-wrap items-end justify-start gap-2">
             {scene.cast.map((npc) => {
               const src = urls[npc.portrait?.id]
               const stepped = reacting && namedIn(playerText, npc.title)
@@ -306,7 +305,7 @@ export default function SceneBackdrop({
                     <img
                       src={src}
                       alt=""
-                      className={`h-12 w-12 rounded-full border-2 object-cover shadow-lg shadow-canvas/60 sm:h-14 sm:w-14 ${
+                      className={`h-12 w-12 rounded-full border-2 bg-canvas object-contain object-top shadow-lg shadow-canvas/60 sm:h-14 sm:w-14 ${
                         MOOD_RING[npc.mood] || 'border-primary/70'
                       }`}
                     />
@@ -334,6 +333,8 @@ export default function SceneBackdrop({
         }`}>
           {line || '·'}
         </p>
+        </div>
+      </div>
       </div>
     </section>
   )

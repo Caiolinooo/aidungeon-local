@@ -24,8 +24,9 @@ OpenAI-compatível.
 - **Catálogo e mods**: publicações têm versões imutáveis, busca, tags, likes,
   remix e linhagem. Jogar cria uma cópia nova sem histórico ou jogadores; mods
   versionados podem ser aplicados, ativados, desativados e removidos por origem.
-- **Visual Novel**: replay read-only das ações e imagens já gravadas, com
-  navegação, escolhas do caminho real e elenco; não gera mídia nem ramos fake.
+- **Visual Novel**: replay das ações e imagens já gravadas. No último beat
+  dá para escrever e enviar pela mesma API de ação do jogo. As escolhas do
+  replay só navegam; não gera mídia nem ramos fake.
 - **Menos latência**: NPC gate é omitido sem NPC presente, prompts de retrato
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
@@ -251,8 +252,9 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
 - **Animar 5 s**: transforma um retrato, See ou cenário em MP4 real com
   Wan2.2 TI2V 5B no ComfyUI. O clipe usa a imagem como primeiro quadro, abre com
-  controles e sem autoplay, pode ser cancelado e baixado. Imagem e vídeo usam a
-  mesma fila de GPU; narrador e voz continuam disponíveis.
+  controles e sem autoplay, pode ser cancelado e baixado. Cliques idênticos
+  reutilizam o job ativo; um prompt novo substitui o pendente. Imagem e vídeo
+  usam a mesma fila de GPU; narrador e voz continuam disponíveis.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story

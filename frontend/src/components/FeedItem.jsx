@@ -478,14 +478,14 @@ function SeeImageCard({ action, adventureId = '' }) {
           <HiddenImageNotice onShow={() => setConcealed(false)} />
         ) : frameIsVideo ? (
           <>
-            <div className="overflow-hidden rounded-lg border border-subtle bg-black">
+            <div className="play-media-frame overflow-hidden rounded-lg border border-subtle bg-black">
               {frameUrl ? (
                 <video
                   key={playingClip ? sceneClip.clip.id : image?.id}
                   src={frameUrl}
                   {...videoProps}
                   onError={playingClip ? sceneClip.failPlayback : undefined}
-                  className="max-h-96 w-full object-contain"
+                  className="play-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain"
                 />
               ) : (
                 <div className="flex h-48 items-center justify-center text-sm text-muted">
@@ -514,7 +514,7 @@ function SeeImageCard({ action, adventureId = '' }) {
               className="block w-full cursor-pointer overflow-hidden rounded-lg border border-subtle bg-elevated/60"
             >
               {objUrl ? (
-                <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-96 w-full object-contain transition duration-300 hover:scale-[1.01]" />
+                <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="play-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain" />
               ) : (
                 <div className="flex h-48 items-center justify-center text-sm text-muted">
                   {failedCopy}
@@ -586,11 +586,11 @@ function SeeImageCard({ action, adventureId = '' }) {
               src={frameUrl}
               {...videoProps}
               onError={playingClip ? sceneClip.failPlayback : undefined}
-              className="max-h-[75vh] w-full rounded-lg bg-black object-contain"
+              className="h-auto max-h-[75vh] w-full rounded-lg bg-black object-contain"
             />
           ) : (
             <div className="relative">
-              <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="max-h-[75vh] w-full rounded-lg object-contain bg-black/40" />
+              <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="h-auto max-h-[75vh] w-full rounded-lg bg-black object-contain" />
               <button
                 type="button"
                 onClick={() => setConcealed(true)}

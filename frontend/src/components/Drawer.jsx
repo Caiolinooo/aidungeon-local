@@ -47,8 +47,10 @@ export function InspectorPane({
 }) {
   return (
     <aside
-      className={`flex h-full flex-col bg-surface border-subtle ${
-        isDocked ? 'w-full border-l' : 'w-full max-w-md border-l shadow-2xl pb-safe'
+      className={`flex h-full min-w-0 max-w-full flex-col bg-surface border-subtle ${
+        isDocked
+          ? 'w-full border-l'
+          : 'h-full w-[min(24rem,calc(100%-1rem))] border-l shadow-2xl pb-safe'
       }`}
     >
       {/* Inspector Header with Tab Navigation */}
