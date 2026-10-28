@@ -4,7 +4,7 @@ import {
   clipEventMatches,
   clipImageFromJob,
   clipJobTerminal,
-  motionPrompt,
+  restoreSceneClip,
 } from '../sceneClip.js'
 
 function isAbort(error) {
@@ -104,6 +104,25 @@ export function useSceneClip({ adventureId, sourceImageId, prompt, toast }) {
       notify(error?.message || 'Não foi possível carregar o clipe.')
     }
   }
+  useEffect(() => {
+    if (!adventureId || !sourceImageId) return
+    const generation = genRef.current
+    api.listJobs(adventureId).then((jobs) => {
+      if (!mountedRef.current || generation !== genRef.current) return
+      if (pendingRef.current || clipRef.current) return
+      const restored = restoreSceneClip(jobs, sourceImageId)
+      if (!restored) return
+      if (restored.pending) {
+        pendingRef.current = true
+        jobRef.current = restored.jobId
+        setPending(true)
+        setJobId(restored.jobId)
+        return
+      }
+      applyBlob(restored.image, generation)
+    }).catch(() => {})
+  }, [adventureId, sourceImageId])
+
 
   useEffect(() => {
     if (!adventureId || !sourceImageId) return undefined

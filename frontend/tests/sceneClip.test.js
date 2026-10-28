@@ -12,6 +12,7 @@ import {
   mediaDownloadName,
   mediaFileExtension,
   motionPrompt,
+  restoreSceneClip,
   prefersReducedMotion,
 } from '../src/sceneClip.js'
 
@@ -103,6 +104,24 @@ test('resultado do job só vale se a origem bater', () => {
   assert.equal(clipImageFromJob(job, 'img-2')?.id, 'vid-3')
   assert.equal(clipImageFromJob(job, 'img-8'), null)
   assert.equal(clipImageFromJob({ result: { image: { id: 'img-2' } } }, 'img-2'), null)
+})
+
+test('reload restaura o clipe ou o render ativo mais recente da origem', () => {
+  const done = {
+    id: 'job-old', type: 'scene_clip', status: 'done', ref_id: 'img-2',
+    payload: { source_image_id: 'img-2' },
+    result: { source_image_id: 'img-2', image: { id: 'vid-old', media_type: 'video/mp4' } },
+  }
+  const running = {
+    id: 'job-new', type: 'scene_clip', status: 'running', ref_id: 'img-2',
+    payload: { source_image_id: 'img-2' }, result: null,
+  }
+  assert.deepEqual(restoreSceneClip([done, running], 'img-2'), {
+    pending: true, jobId: 'job-new', image: null,
+  })
+  assert.equal(restoreSceneClip([done], 'img-2')?.image.id, 'vid-old')
+  assert.equal(restoreSceneClip([done, { ...running, status: 'error' }], 'img-2')?.image.id, 'vid-old')
+  assert.equal(restoreSceneClip([done, running], 'other'), null)
 })
 
 test('vídeo não força autoplay, com ou sem reduced motion', () => {

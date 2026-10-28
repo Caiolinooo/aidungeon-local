@@ -147,3 +147,23 @@ export function clipImageFromJob(job, sourceImageId) {
   if (String(source) !== String(sourceImageId)) return null
   return image
 }
+
+export function restoreSceneClip(jobs, sourceImageId) {
+  if (!Array.isArray(jobs) || sourceImageId == null || sourceImageId === '') return null
+  const matches = jobs.filter((job) => {
+    if (!job || job.type !== 'scene_clip') return false
+    const source = job.payload?.source_image_id ?? job.payload?.image_id ?? job.ref_id
+    return source != null && String(source) === String(sourceImageId)
+  })
+  const latest = matches[matches.length - 1]
+  if (!latest) return null
+  if (['preparing', 'pending', 'running'].includes(latest.status)) {
+    return { pending: true, jobId: String(latest.id || ''), image: null }
+  }
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const job = matches[index]
+    const image = job.status === 'done' ? clipImageFromJob(job, sourceImageId) : null
+    if (image) return { pending: false, jobId: '', image }
+  }
+  return null
+}
