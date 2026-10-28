@@ -13,6 +13,8 @@ import {
   mediaFileExtension,
   motionPrompt,
   restoreSceneClip,
+  portraitClipVideoProps,
+  portraitShowsClip,
   prefersReducedMotion,
 } from '../src/sceneClip.js'
 
@@ -124,6 +126,39 @@ test('reload restaura o clipe ou o render ativo mais recente da origem', () => {
   assert.equal(restoreSceneClip([done, running], 'other'), null)
 })
 
+test('retrato só monta mp4 em loop mudo e reduced motion fica na foto', () => {
+  const clip = {
+    url: 'blob:vid',
+    id: 'vid-3',
+    mediaType: 'video/mp4',
+    sourceImageId: 'img-2',
+    adventureId: 'adv-1',
+  }
+  assert.equal(portraitShowsClip(clip, { reducedMotion: false, imageId: 'img-2', adventureId: 'adv-1' }), true)
+  assert.equal(portraitShowsClip(clip, { reducedMotion: true, imageId: 'img-2', adventureId: 'adv-1' }), false)
+  assert.equal(portraitShowsClip(null, { reducedMotion: false, imageId: 'img-2' }), false)
+  assert.equal(portraitShowsClip({}, { reducedMotion: false }), false)
+  assert.equal(portraitShowsClip({ url: '', mediaType: 'video/mp4' }, { reducedMotion: false }), false)
+  assert.equal(portraitShowsClip(
+    { url: 'blob:x', mediaType: 'image/png', sourceImageId: 'img-2', adventureId: 'adv-1' },
+    { reducedMotion: false, imageId: 'img-2', adventureId: 'adv-1' },
+  ), false)
+  assert.equal(portraitShowsClip(clip, { reducedMotion: false, imageId: 'img-9', adventureId: 'adv-1' }), false)
+  assert.equal(portraitShowsClip(clip, { reducedMotion: false, imageId: 'img-2', adventureId: 'adv-9' }), false)
+  assert.equal(portraitShowsClip(clip, { reducedMotion: false, imageId: '', adventureId: 'adv-1' }), false)
+  assert.equal(portraitShowsClip(clip, { reducedMotion: false, imageId: 'img-2', adventureId: '' }), false)
+  assert.equal(portraitShowsClip(
+    { url: 'blob:vid', mediaType: 'video/mp4' },
+    { reducedMotion: false, imageId: 'img-2', adventureId: 'adv-1' },
+  ), true)
+  const props = portraitClipVideoProps()
+  assert.equal(props.muted, true)
+  assert.equal(props.loop, true)
+  assert.equal(props.playsInline, true)
+  assert.equal(props.autoPlay, true)
+  assert.equal(props.controls, false)
+})
+
 test('vídeo não força autoplay, com ou sem reduced motion', () => {
   const still = clipVideoProps({ reducedMotion: false })
   const reduced = clipVideoProps({ reducedMotion: prefersReducedMotion(() => ({ matches: true })) })
@@ -135,4 +170,14 @@ test('vídeo não força autoplay, com ou sem reduced motion', () => {
   assert.equal(reduced.reducedMotion, true)
   assert.equal(prefersReducedMotion(() => ({ matches: false })), false)
   assert.equal(prefersReducedMotion(undefined), true)
+})
+
+test('cena pode repetir o clipe mudo, mas reduced motion bloqueia autoplay', () => {
+  const moving = clipVideoProps({ autoPlay: true, reducedMotion: false })
+  const reduced = clipVideoProps({ autoPlay: true, reducedMotion: true })
+  assert.equal(moving.autoPlay, true)
+  assert.equal(moving.loop, true)
+  assert.equal(moving.muted, true)
+  assert.equal(reduced.autoPlay, false)
+  assert.equal(reduced.loop, false)
 })

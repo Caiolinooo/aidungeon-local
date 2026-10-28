@@ -11,7 +11,7 @@ const ATMOSPHERE_PT = {
   blood: 'tensão',
 }
 
-const MOTION = 'movimento contínuo de câmera, gesto sutil e ambiente vivo por 5 segundos, sem personagens novos'
+const MOTION = 'câmera estável, gestos sutis e ambiente vivo por 5 segundos, preservando rostos, roupas e identidade, sem personagens novos'
 
 export function jobTypeLabel(type) {
   if (type === 'scene_clip') return SCENE_CLIP_LABEL
@@ -31,7 +31,7 @@ export function mediaDownloadName(id, mediaType, { prefix = 'scene' } = {}) {
   return `${prefix}-${safe}.${mediaFileExtension(mediaType)}`
 }
 
-// Sem autoplay. Reduced motion também fica sem autoplay — o usuário dá play.
+// Autoplay é opt-in por superfície; reduced motion sempre mantém o quadro parado.
 export function prefersReducedMotion(matchMedia) {
   const query = matchMedia || (typeof window !== 'undefined' ? window.matchMedia : null)
   if (typeof query !== 'function') return true
@@ -42,12 +42,14 @@ export function prefersReducedMotion(matchMedia) {
   }
 }
 
-export function clipVideoProps({ reducedMotion = false } = {}) {
+export function clipVideoProps({ reducedMotion = false, autoPlay = false } = {}) {
+  const play = Boolean(autoPlay) && !reducedMotion
   return {
     controls: true,
     playsInline: true,
-    autoPlay: false,
-    loop: false,
+    muted: true,
+    autoPlay: play,
+    loop: play,
     reducedMotion: Boolean(reducedMotion),
   }
 }
@@ -59,6 +61,36 @@ export function clipVideoDomProps(options) {
     playsInline: props.playsInline,
     autoPlay: props.autoPlay,
     loop: props.loop,
+    muted: props.muted,
+  }
+}
+
+// Retrato: mp4 mudo em loop, sem controles. Reduced motion não monta <video>.
+// Não é lipsync — a fala PCM continua por cima da foto ou do clipe.
+export function portraitShowsClip(clip, { reducedMotion = false, imageId, adventureId } = {}) {
+  if (reducedMotion) return false
+  if (!clip || typeof clip !== 'object') return false
+  if (typeof clip.url !== 'string' || clip.url === '') return false
+  const type = clip.mediaType || clip.media_type || ''
+  if (!isVideoMedia(type)) return false
+  const source = clip.sourceImageId ?? clip.source_image_id
+  if (source != null && source !== '') {
+    if (imageId == null || imageId === '' || String(source) !== String(imageId)) return false
+  }
+  const clipAdventure = clip.adventureId ?? clip.adventure_id
+  if (clipAdventure != null && clipAdventure !== '') {
+    if (adventureId == null || adventureId === '' || String(clipAdventure) !== String(adventureId)) return false
+  }
+  return true
+}
+
+export function portraitClipVideoProps() {
+  return {
+    muted: true,
+    loop: true,
+    playsInline: true,
+    autoPlay: true,
+    controls: false,
   }
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
+import { useSceneClip } from '../useSceneClip.js'
 import PortraitAvatar2D from '../avatar/PortraitAvatar2D.jsx'
 import { parseSheet, visualStateOf } from '../avatar/avatarMotion.js'
 
@@ -12,6 +13,8 @@ function fieldText(value) {
 // Galeria 2D dos retratos reais. Selecionar um personagem mostra o portrait,
 // a ação, a emoção e a pose que já estão na ficha. Nada aqui escolhe malha,
 // corpo ou humor manual.
+// Só o retrato grande escuta o scene_clip do portrait.id. Miniaturas ficam
+// estáticas. O backend agenda o clipe; esta aba não dispara animação.
 export default function AvatarsTab({ adventure }) {
   const toast = useToast()
   const [cards, setCards] = useState(null)
@@ -48,9 +51,15 @@ export default function AvatarsTab({ adventure }) {
     }
   }, [adventure.id, reload])
 
+  const npcs = Array.isArray(cards) ? cards.filter((c) => c.type === 'character') : []
+  const selected = npcs.find((c) => c.id === selectedId) || npcs[0] || null
+  const { clip } = useSceneClip({
+    adventureId: adventure.id,
+    sourceImageId: selected?.portrait?.id || '',
+  })
+
   if (cards === null) return <p className="text-sm text-muted">Carregando…</p>
 
-  const npcs = cards.filter((c) => c.type === 'character')
   if (npcs.length === 0) {
     return (
       <p className="text-sm text-muted">
@@ -59,7 +68,6 @@ export default function AvatarsTab({ adventure }) {
     )
   }
 
-  const selected = npcs.find((c) => c.id === selectedId) || npcs[0]
   const visual = visualStateOf(selected)
   const status = parseSheet(selected).status || ''
 
@@ -100,6 +108,8 @@ export default function AvatarsTab({ adventure }) {
 
       <PortraitAvatar2D
         imageId={selected.portrait?.id}
+        adventureId={adventure.id}
+        clip={clip}
         name={selected.title || 'Sem título'}
         visual={visual}
         status={status}

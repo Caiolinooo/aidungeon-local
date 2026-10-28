@@ -683,11 +683,18 @@ _VIDEO_DEFAULTS = {
     "height": 704,
     "vertical_width": 704,
     "vertical_height": 1280,
+    # Só agendam o follow-up. Fora do grafo e da chave de cache.
+    "auto_scene": False,
+    "auto_portraits": False,
 }
 
 
 def video_settings(cfg: dict) -> dict:
-    """Bloco `image.providers.comfyui.video`. Não lê o UNET de imagem."""
+    """Bloco `image.providers.comfyui.video`. Não lê o UNET de imagem.
+
+    `auto_scene` e `auto_portraits` só ligam o clipe depois do PNG.
+    Default false. Não entram no grafo Wan.
+    """
     raw = cfg.get("comfyui_video")
     if not isinstance(raw, dict):
         raw = {}
@@ -900,7 +907,7 @@ def clip_request_key(cfg: dict, prompt: str, source: bytes) -> str:
         "kind": "scene_clip",
         "video": {
             key: value for key, value in video.items()
-            if key not in ("timeout_seconds", "note")
+            if key not in ("timeout_seconds", "note", "auto_scene", "auto_portraits")
         },
         "prompt": " ".join(str(prompt or "").split()),
         "source": hashlib.sha256(source).hexdigest() if source else "",

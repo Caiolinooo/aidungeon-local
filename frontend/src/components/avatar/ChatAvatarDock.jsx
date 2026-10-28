@@ -7,6 +7,8 @@
 //
 // Narração: registra UM speaker no avatarBus — o PRIMEIRO retrato visível
 // fala pela cena inteira (NarrateButton → speakNarration → speaker.speak).
+// O PCM não é lipsync. Cada retrato visível só restaura/ouve o scene_clip
+// cujo source_image_id é card.portrait.id. O backend agenda; aqui não há play manual.
 //
 // Props:
 //   adventureId  — aventura atual (busca os cards na API)
@@ -14,21 +16,26 @@
 //   refreshKey   — muda → refetch dos cards (ex.: drawer fechou após edição)
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
+import { useSceneClip } from '../useSceneClip.js'
 import PortraitAvatar2D from './PortraitAvatar2D.jsx'
 import { registerSpeaker } from './avatarBus.js'
 import { mentionsNpc } from './emotionDetect.js'
 import { mergedVisual, parseSheet, visualStateOf } from './avatarMotion.js'
 
-function DockAvatar({ card, avatarRef, visual }) {
+function DockAvatar({ adventureId, card, avatarRef, visual }) {
   const status = parseSheet(card)?.status || ''
   const marked = status === 'dead' || status === 'missing' || status === 'injured'
   const caption = [visual?.emotion, visual?.action].filter(Boolean).join(' · ')
+  const portraitId = card.portrait?.id || ''
+  const { clip } = useSceneClip({ adventureId, sourceImageId: portraitId })
   return (
     <div className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-full sm:max-w-full">
       <div className="relative h-24 w-16 overflow-hidden rounded-xl border border-subtle bg-surface/90 shadow-md sm:h-28 sm:w-full">
         <PortraitAvatar2D
           ref={avatarRef}
-          imageId={card.portrait?.id}
+          imageId={portraitId}
+          adventureId={adventureId}
+          clip={clip}
           name={card.title || 'Sem título'}
           visual={visual}
           status={status}
@@ -142,6 +149,7 @@ export default function ChatAvatarDock({
           {present.map((c) => (
             <DockAvatar
               key={c.id}
+              adventureId={adventureId}
               card={c}
               visual={mergedVisual(c, visualHints)}
               avatarRef={(el) => {

@@ -218,7 +218,7 @@ export default function SceneBackdrop({
     : ''
 
   const playingClip = sceneClip.showVideo && sceneClip.clip?.url
-  const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion() })
+  const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion(), autoPlay: true })
 
   return (
     <section className="play-scene relative shrink-0 overflow-hidden border-b border-subtle bg-black">

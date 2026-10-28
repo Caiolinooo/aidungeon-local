@@ -1,10 +1,13 @@
 // Retrato 2D do card. A imagem é o portrait real; emoção, ação e pose
 // só mudam cor e o enquadramento da foto. Fala acende o estado "falando"
-// e toca o PCM. Não há boca, visema nem malha.
+// e toca o PCM. Não há boca, visema nem lipsync.
+// `clip` opcional é um mp4 de scene_clip em loop mudo. Autoplay só sem
+// reduced motion; com reduced motion a foto estática permanece.
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { createPcmPlayer, readPcm16Wav } from '../../pcmStream.js'
 import { portraitCue, prefersReducedMotion } from './avatarMotion.js'
+import { portraitClipVideoProps, portraitShowsClip } from '../../sceneClip.js'
 
 const ACTION_CLASS = {
   sway: 'portrait-motion-sway',
@@ -41,14 +44,16 @@ async function discard(response) {
 }
 
 const PortraitAvatar2D = forwardRef(function PortraitAvatar2D(
-  { imageId, name, visual = null, className = '', status = '' },
+  { imageId, adventureId = '', name, visual = null, className = '', status = '', clip = null },
   ref,
 ) {
   const [src, setSrc] = useState('')
   const [speaking, setSpeaking] = useState(false)
   const [reduced, setReduced] = useState(prefersReducedMotion)
+  const [failedClipUrl, setFailedClipUrl] = useState('')
   const mountedRef = useRef(true)
   const playerRef = useRef(null)
+  const videoRef = useRef(null)
   const speakGenRef = useRef(0)
   const cancelledRef = useRef(0)
   const tailRef = useRef(Promise.resolve())
@@ -93,6 +98,26 @@ const PortraitAvatar2D = forwardRef(function PortraitAvatar2D(
       }
     }
   }, [imageId])
+
+  const clipUrl = clip && typeof clip.url === 'string' ? clip.url : ''
+  const showClip = portraitShowsClip(clip, {
+    reducedMotion: reduced,
+    imageId,
+    adventureId,
+  }) && failedClipUrl !== clipUrl
+
+  useEffect(() => {
+    const node = videoRef.current
+    if (!showClip || !node) return undefined
+    node.muted = true
+    try {
+      const pendingPlay = node.play()
+      if (pendingPlay && typeof pendingPlay.catch === 'function') pendingPlay.catch(() => {})
+    } catch {
+      /* autoplay recusado não derruba o retrato */
+    }
+    return undefined
+  }, [showClip, clipUrl])
 
   stopRef.current = () => {
     cancelledRef.current += 1
@@ -244,10 +269,22 @@ const PortraitAvatar2D = forwardRef(function PortraitAvatar2D(
           alt={label}
           className={`h-full w-full object-cover ${poseClass} ${actionClass} ${statusClass}`.trim()}
         />
-      ) : (
+      ) : showClip ? null : (
         <div className={`flex h-full w-full items-center justify-center bg-elevated text-xs font-semibold text-muted ${statusClass}`.trim()}>
           {(name || '?').slice(0, 1).toUpperCase()}
         </div>
+      )}
+      {showClip && (
+        <video
+          ref={videoRef}
+          key={clip.id || clipUrl}
+          src={clipUrl}
+          {...portraitClipVideoProps()}
+          aria-hidden={src ? 'true' : undefined}
+          aria-label={src ? undefined : label}
+          onError={() => setFailedClipUrl(clipUrl)}
+          className={`pointer-events-none absolute inset-0 h-full w-full object-cover ${poseClass} ${statusClass}`.trim()}
+        />
       )}
       {tintClass && <div className={`pointer-events-none absolute inset-0 ${tintClass}`} aria-hidden="true" />}
       {speaking && (

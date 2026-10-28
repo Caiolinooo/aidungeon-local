@@ -85,6 +85,8 @@ export function useSceneClip({ adventureId, sourceImageId, prompt, toast }) {
         id: image.id,
         mediaType: image.media_type || blob.type || 'video/mp4',
         durationMs: image.duration_ms,
+        sourceImageId,
+        adventureId,
       }
       clipRef.current = next
       setClip(next)

@@ -265,6 +265,12 @@ mas imagem e vídeo não executam ao mesmo tempo. Não enviar prompts de outro
 cliente ao mesmo ComfyUI durante o clipe: `/interrupt` e `/free` são globais.
 O próximo job SDXL recarrega o Forge sob demanda.
 
+Com `video.auto_scene=true` e `video.auto_portraits=true`, a conclusão de um
+backdrop ou retrato do elenco atual enfileira o respectivo clipe sem outra
+chamada de LLM. Retratos de lote/offscene ficam estáticos. O follow-up nunca
+cancela um clipe manual ativo na mesma fonte; cena usa prioridade 6 e retrato
+automático prioridade 7. Desligue as duas flags se o Wan não estiver instalado.
+
 Smoke do executor, sem gerar uma imagem:
 
 ```bash

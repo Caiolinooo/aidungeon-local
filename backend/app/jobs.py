@@ -4,9 +4,9 @@ Fluxo: rotas enfileiram (`enqueue`, contrato C5); o worker (único por
 processo) faz claim do de menor prioridade e, nela, do mais antigo, e executa
 num thread (SQLite é síncrono). Prioridades: 0 See, 1 retrato de NPC
 presente, 2 fundo de cena, 3 retratos em lote, 4 dia de vida, 5 ficha,
-6 clipe Wan. Com narrativa em curso só o See (0) roda. Job novo com a mesma
-`supersede_key` cancela os pendentes antigos. Cada mudança de estado sai no
-bus (`job_queued`, `job_progress`).
+6 clipe Wan da cena, 7 clipe de retrato. Com narrativa em curso só o See (0)
+roda. Job novo com a mesma `supersede_key` cancela os pendentes antigos.
+Cada mudança de estado sai no bus (`job_queued`, `job_progress`).
 Tipos:
 - `character_portrait` — se o card não tem portrait_prompt (e não há âncora
   nem foto de referência), o job nasce em `preparing`: o LLM (role
@@ -27,11 +27,18 @@ Tipos:
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
   role image_prompt) roda numa thread e só então o job entra na fila do SD,
   para não prender o worker. Termina em `see_ready` ou `see_failed`.
-- `scene_clip` — MP4 Wan2.2 TI2V a partir de um PNG já gravado. Prioridade 6:
-  espera a narrativa e o resto da fila. Cache por modelo+prompt+fonte.
-  Supersede na mesma imagem de origem. Cancelamento manda /interrupt e /free
-  no Comfy e não publica o arquivo. O evento terminal é `clip_ready`.
-  Não chama narrador nem voz.
+- `scene_clip` — MP4 Wan2.2 TI2V a partir de um PNG já gravado. Prioridade 6
+  (cena) ou 7 (retrato): espera a narrativa e o resto da fila. Cache por
+  modelo+prompt+fonte. Supersede na mesma imagem de origem. Cancelamento
+  manda /interrupt e /free no Comfy e não publica o arquivo. O evento
+  terminal é `clip_ready`. Com `auto_scene` / `auto_portraits` (default
+  false), o PNG de `scene_backdrop` ou `character_portrait` que acabou de
+  concluir enfileira o clipe. Retrato automático só para quem está em cena
+  (prioridade `<= PRIORITY_PRESENT_PORTRAIT`). Lote inicial e offscene
+  (`PRIORITY_BULK_PORTRAIT`), inclusive do jogador, ficam estáticos. O
+  follow-up não cancela um clipe manual ativo na mesma fonte; o pedido
+  explícito continua substituindo o pendente. Falha nesse follow-up não muda
+  o job de origem. Não chama narrador, voz nem LLM extra.
 
 Aventura apagada no meio do render: o PNG é descartado e o job termina
 cancelado. O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para
@@ -66,6 +73,7 @@ PRIORITY_BULK_PORTRAIT = 3
 PRIORITY_LIFE_TICK = 4
 PRIORITY_CARD_ASSETS = 5
 PRIORITY_SCENE_CLIP = 6
+PRIORITY_PORTRAIT_CLIP = 7
 
 # A cena aberta pede retrato de novo assim que o job anterior termina em erro.
 # Sem esta espera, um CUDA OOM vira outro txt2img a cada poucos segundos.
@@ -1043,20 +1051,203 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
             "provider": meta["provider"], "action": action}
 
 
+_SCENE_CLIP_MOTION = (
+    "Coherent continuous motion, stable camera, no jump cut. "
+    "Keep the same place, lighting and the identity of anyone already visible."
+)
+_PORTRAIT_CLIP_HOLD = "Preserve the same face, clothes and framing. Stable camera."
+_PORTRAIT_CLIP_STILL = (
+    "No stated action, emotion or pose. Do not invent a gesture. "
+    "Subtle environmental motion only."
+)
+_CLIP_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_RELATION_STAGE_KEYS = ("trust", "fear", "affinity", "stage", "alignment")
+
+
+def _card_sheet(card: dict) -> dict:
+    raw = card.get("sheet") if isinstance(card, dict) else None
+    if isinstance(raw, dict):
+        return raw
+    return npc_assets.parse_sheet(raw or "")
+
+
+def _scene_clip_prompt(job: dict) -> str:
+    """Prompt do fundo mais movimento coerente. Sem segundo LLM."""
+    base = " ".join(str((job.get("payload") or {}).get("prompt") or "").split())
+    if not base:
+        return _SCENE_CLIP_MOTION
+    return f"{base}. {_SCENE_CLIP_MOTION}"
+
+
+def _relation_stage_bits(sheet: dict, roster: list[dict]) -> list[str]:
+    """Estágio de cada relação já gravada. Sem peso, histórico ou seq."""
+    from app import npc_bonds, progression
+
+    relations = sheet.get("relations") if isinstance(sheet.get("relations"), dict) else {}
+    by_id = {item.get("id"): item for item in roster}
+    bits: list[str] = []
+    for other_id, raw in relations.items():
+        if not isinstance(raw, dict):
+            continue
+        if not any(key in raw for key in _RELATION_STAGE_KEYS):
+            continue
+        label = raw.get("stage") if isinstance(raw.get("stage"), str) else ""
+        if not label and isinstance(raw.get("alignment"), str):
+            label = str(raw.get("alignment") or "")
+        label = " ".join(label.split())
+        if label and any(ch.isdigit() for ch in label):
+            label = ""
+        if not label:
+            details = progression.relation_with(sheet, str(other_id))
+            label = npc_bonds.alignment_from_bonds({
+                "trust": details["trust"],
+                "relationship": details["affinity"],
+                "distrust": 0,
+                "fear": details["fear"],
+            })
+        other = by_id.get(other_id)
+        name = " ".join(str((other or {}).get("title") or "").split())
+        if name:
+            bits.append(f"toward {name}: {label}")
+        elif label:
+            bits.append(f"relationship stage: {label}")
+    return bits
+
+
+def _portrait_clip_prompt(card: dict, roster: list[dict] | None = None) -> str:
+    """Movimento do retrato a partir do card e do estado visível. Sem LLM."""
+    from app import npc_bonds
+
+    sheet = _card_sheet(card)
+    name = " ".join(str(card.get("title") or "").split())
+    identity = " ".join(bit for bit in npc_assets.visual_bits(card) if bit)
+    reaction = npc_assets.visual_reaction(sheet)
+    stage = npc_assets.alignment_stage(sheet)
+    if not stage and isinstance(sheet.get("bonds"), dict):
+        stage = npc_bonds.alignment_from_bonds(npc_bonds.read_bonds(sheet))
+    parts: list[str] = []
+    if name:
+        parts.append(f"Portrait of {name}.")
+    if identity:
+        parts.append(identity + ".")
+    if stage:
+        parts.append(f"alignment stage: {stage}.")
+    relations = _relation_stage_bits(sheet, roster or [])
+    if relations:
+        parts.append("Relationship stages: " + "; ".join(relations) + ".")
+    motion = [
+        f"{key}: {reaction[key]}"
+        for key in ("action", "emotion", "pose")
+        if reaction.get(key)
+    ]
+    if motion:
+        parts.append(
+            "Animate only this visible state, coherent motion: "
+            + "; ".join(motion) + "."
+        )
+    else:
+        parts.append(_PORTRAIT_CLIP_STILL)
+    parts.append(_PORTRAIT_CLIP_HOLD)
+    return " ".join(" ".join(parts).split())
+
+
 def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: str, *,
-                       cache_key: str = "") -> dict:
-    """Mesma fonte+prompt ativo é deduplicado; prompt novo substitui o pendente."""
+                       cache_key: str = "",
+                       priority: int | None = None,
+                       kind: str = "",
+                       supersede: bool = True) -> dict:
+    """Mesma fonte+prompt ativo é deduplicado; prompt novo substitui o pendente.
+
+    A rota manual omite `priority`, `kind` e `supersede` e continua na
+    prioridade 6: outro prompt cancela o pendente da mesma fonte.
+    `supersede=False` (follow-up automático) devolve o job ativo mesmo com
+    prompt diferente e não apaga o pedido. `kind="portrait"` sem prioridade
+    explícita fica atrás da cena.
+    """
     active = db.find_active_job(conn, "scene_clip", source_image_id)
+    if active and not supersede:
+        return active
     if active and cache_key and \
             str((active.get("payload") or {}).get("cache_key") or "") == cache_key:
         return active
+    if priority is None:
+        priority = (PRIORITY_PORTRAIT_CLIP if kind == "portrait"
+                    else PRIORITY_SCENE_CLIP)
+    payload = {
+        "prompt": prompt,
+        "source_image_id": source_image_id,
+        "cache_key": cache_key,
+    }
+    label = " ".join(str(kind or "").split())
+    if label:
+        payload["kind"] = label
     return enqueue(
-        conn, "scene_clip", adventure_id, source_image_id,
-        {"prompt": prompt, "source_image_id": source_image_id,
-         "cache_key": cache_key},
-        priority=PRIORITY_SCENE_CLIP,
+        conn, "scene_clip", adventure_id, source_image_id, payload,
+        priority=int(priority),
         supersede_key=f"clip:{adventure_id}:{source_image_id}",
     )
+
+
+def _portrait_auto_clip(job: dict) -> bool:
+    """Só retratos reativos/presentes; todo lote fica estático."""
+    try:
+        priority = int(job.get("priority"))
+    except (TypeError, ValueError):
+        return False
+    return priority <= PRIORITY_PRESENT_PORTRAIT
+
+
+def _enqueue_clip_followup(job: dict, result: dict) -> None:
+    """Fonte é o image.id do result. Não chama LLM."""
+    job_type = job.get("type")
+    if job_type not in ("character_portrait", "scene_backdrop"):
+        return
+    image_id = str(((result or {}).get("image") or {}).get("id") or "")
+    if not image_id:
+        return
+    with db.session() as conn:
+        cfg = image_client.effective_settings(conn)
+        video = image_client.video_settings(cfg)
+        if job_type == "scene_backdrop" and not video.get("auto_scene"):
+            return
+        if job_type == "character_portrait" and not video.get("auto_portraits"):
+            return
+        image = db.get_image(conn, image_id)
+        if image is None or str(image.get("adventure_id") or "") != str(
+                job.get("adventure_id") or ""):
+            return
+        raw = likeness.read_stored_image_bytes(image)
+        if not raw.startswith(_CLIP_PNG_MAGIC):
+            return
+        if job_type == "scene_backdrop":
+            prompt = _scene_clip_prompt(job)
+            clip_kind = "scene"
+            clip_priority = PRIORITY_SCENE_CLIP
+        else:
+            card = db.get_card(conn, job["adventure_id"], job.get("ref_id") or "")
+            if not card or not _portrait_auto_clip(job):
+                return
+            prompt = _portrait_clip_prompt(card, db.list_cards(conn, job["adventure_id"]))
+            clip_kind = "portrait"
+            clip_priority = PRIORITY_PORTRAIT_CLIP
+        if not str(prompt or "").strip():
+            return
+        enqueue_scene_clip(
+            conn, job["adventure_id"], image["id"], prompt,
+            cache_key=image_client.clip_request_key(cfg, prompt, raw),
+            priority=clip_priority, kind=clip_kind, supersede=False,
+        )
+
+
+def _schedule_clip_followup(job: dict, result: dict | None) -> None:
+    """Depois do done. Exceção aqui não reabre o job de origem."""
+    try:
+        _enqueue_clip_followup(job, result or {})
+    except Exception:
+        log.exception(
+            "job %s (%s): clipe automático não entrou na fila",
+            job.get("id"), job.get("type"),
+        )
 
 
 def enqueue_day_tick(conn, adventure_id: str, *, reason: str = "auto") -> dict:
@@ -1297,6 +1488,8 @@ def _run_job(job: dict, transport: Any) -> None:
         if _finish(job, "done", result=result,
                    terminal=_terminal_event(job, "done", result, None)):
             log.info("job %s (%s) concluído", job["id"], job["type"])
+            if job["type"] in ("character_portrait", "scene_backdrop"):
+                _schedule_clip_followup(job, result)
 
 
 def process_pending(transport: Any = None, *, should_pause=None,

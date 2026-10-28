@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
-from app import choices_service, db, events, llm_client, llm_scheduler  # noqa: E402
+from app import choices_service, db, events, image_client, llm_client, llm_scheduler  # noqa: E402
 
 # Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
 # `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
@@ -82,6 +82,17 @@ def _jobs_worker_off(monkeypatch):
     via jobs.process_pending(transport) para determinismo."""
     monkeypatch.setenv("AIDUNGEON_JOBS_WORKER", "0")
 
+
+
+@pytest.fixture(autouse=True)
+def _auto_clips_off(monkeypatch):
+    """Testes legados drenam só os jobs que criaram; auto clipes têm opt-in explícito."""
+    real = image_client.video_settings
+
+    def isolated(cfg):
+        return {**real(cfg), "auto_scene": False, "auto_portraits": False}
+
+    monkeypatch.setattr(image_client, "video_settings", isolated)
 
 @pytest.fixture()
 def auth_token() -> str:

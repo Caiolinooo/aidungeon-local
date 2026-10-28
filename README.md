@@ -90,8 +90,8 @@ OpenAI-compatível.
 - **Retrato, cena e avatar reativos**: ação, emoção, pose e estágio da relação
   atualizam variantes e o backdrop sem trocar a âncora de identidade. Com SDXL,
   retratos usam img2img da âncora e cenas usam a descrição visual do elenco.
-  O avatar 2D usa o retrato real do personagem, com movimento CSS e reduced
-  motion; não finge lip-sync nem gera uma malha 3D.
+  O avatar usa MP4 do próprio retrato quando a animação está pronta e imagem
+  estática como fallback/reduced motion; o PCM continua sem fingir lip-sync.
 
 ## Funcionalidades (v0.10.0)
 
@@ -250,11 +250,17 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   é **epiCRealism XL CrystalClear** no Forge Neo: DPM++ 2M Karras, CFG 5,
   25 passos, retratos 800×720 e identidade por img2img da âncora canônica.
   Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
-- **Animar 5 s**: transforma um retrato, See ou cenário em MP4 real com
-  Wan2.2 TI2V 5B no ComfyUI. O clipe usa a imagem como primeiro quadro, abre com
-  controles e sem autoplay, pode ser cancelado e baixado. Cliques idênticos
-  reutilizam o job ativo; um prompt novo substitui o pendente. Imagem e vídeo
-  usam a mesma fila de GPU; narrador e voz continuam disponíveis.
+- **Cena e retratos animados**: Wan2.2 TI2V 5B transforma o PNG vigente em
+  MP4 real de aproximadamente 5 s. Novo backdrop dispara o vídeo da situação;
+  novo retrato do elenco atual/player dispara sua reação animada. Ação, emoção,
+  pose e estágio dos vínculos orientam o movimento; números e retratos em lote
+  não consomem GPU. A cena repete o clipe mudo, respeitando reduced motion;
+  retrato e identidade partem sempre da imagem-âncora atual. `Animar 5 s`
+  continua disponível para See/retrato/cenário, com cancelamento e download.
+  Imagem e vídeo usam a mesma fila; cena tem prioridade sobre retratos e o
+  narrador/voz continuam disponíveis.
+  As flags `video.auto_scene` e `video.auto_portraits` ficam ativas nesta
+  configuração; desative ambas nas instalações sem o Wan.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story
