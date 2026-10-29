@@ -170,3 +170,11 @@ abaixo dos gates de 12.288 MiB do prompt cache e 6.144 MiB do modelo auxiliar.
 Permanecem `-cram 0`, `scheduler.aux_cache_prompt=false`, `llama-aux` inativo e
 `scheduler.role_overrides` vazio. Narrador, pesos e parâmetros de qualidade não
 foram alterados.
+
+## 10. Fechamento com soak reduzido
+
+- A pedido explícito do usuário, o soak de 200 turnos foi interrompido após **53 turnos concluídos, todos HTTP 200**. O processo remoto foi terminado; log parcial: `/home/caio/aidungeon-bench/soak-200.log`.
+- `repro_slot_hang.py --mode app --external --rounds 20`: **120 requisições, zero travamentos**, pior requisição 53,5 s; log `/home/caio/aidungeon-bench/final-repro-slot-hang.log`.
+- Clipe durante um turno isolado: `done` em 80,856 s, sem erro de job; turno HTTP 200 e replay com metas funcionais ok. VRAM livre mínima **36 MiB**, RAM disponível mínima 1.997 MiB, swap delta 0; JSON `/home/caio/aidungeon-bench/final-clip-single-narrative.json`.
+- Retrato legado após o soak: `done` em 30,55 s, sem `config_error`; VRAM livre mínima **196 MiB**, RAM disponível mínima 2.039 MiB, swap delta 0; JSON `/home/caio/aidungeon-bench/final-portrait-after-soak.json`.
+- O piso de 900 MiB continua reprovado nos picos de FLUX/LTXV. Nenhum experimento P2 foi ativado: `-ub 1024`, `-cram 0`, cache desativado, `llama-aux` inativo e overrides vazios permanecem.
