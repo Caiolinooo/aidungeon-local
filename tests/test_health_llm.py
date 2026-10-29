@@ -217,7 +217,8 @@ def test_narrative_ttft_and_speed_of_recent_turns(probe):
         _narrative(ttft, tok_s=17.5 + ttft)
     _narrative(30.0, tok_s=0.0, outcome="timeout", prompt_n=None, cache_n=None)
 
-    stats = probe()["narrative"]
+    data = probe()
+    stats = data["narrative"]
 
     assert stats["samples"] == 5
     assert stats["ttft_p50_s"] == 3.0
@@ -225,6 +226,9 @@ def test_narrative_ttft_and_speed_of_recent_turns(probe):
     assert stats["tok_s_p50"] == 20.5
     assert stats["last"]["outcome"] == "timeout"
     assert stats["last"]["at"].endswith("Z")
+    assert len(data["recent_calls"]) == 6
+    assert {"role", "slot", "outcome", "waited_s", "ttft_s", "prompt_n", "cache_n",
+            "prompt_per_second", "predicted_per_second"} <= set(data["recent_calls"][-1])
 
 
 def test_narrative_stats_empty():

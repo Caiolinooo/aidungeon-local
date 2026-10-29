@@ -63,6 +63,41 @@ def test_action_streams_and_persists(adventure):
     assert [a["type"] for a in actions] == ["start", "do", "continue"]
 
 
+def test_action_emits_bounded_phase_telemetry(adventure):
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "wait and observe the room",
+        transport=make_llm_transport(tokens=("Time passes.",))))
+    phases = [event["data"] for event in events if event["event"] == "turn_phase"]
+    names = {item["phase"] for item in phases}
+    assert names == {"intent", "action_check", "npc_gate", "narrative_wait",
+                     "narrative_ttft", "correction"}
+    for name in names:
+        assert [item["state"] for item in phases if item["phase"] == name] == ["start", "end"]
+        end = next(item for item in phases if item["phase"] == name and item["state"] == "end")
+        assert isinstance(end["elapsed_ms"], int) and end["elapsed_ms"] >= 0
+    wait_end_index = next(index for index, event in enumerate(events)
+                          if event["event"] == "turn_phase"
+                          and event["data"]["phase"] == "narrative_wait"
+                          and event["data"]["state"] == "end")
+    token_index = next(index for index, event in enumerate(events)
+                       if event["event"] == "token")
+    assert wait_end_index < token_index
+    assert all(set(item) <= {"phase", "state", "elapsed_ms"} for item in phases)
+
+
+def test_phase_end_is_emitted_when_work_fails(adventure, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("sim failed")
+
+    monkeypatch.setattr("app.sim.engine.run_turn", fail)
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "wait", transport=make_llm_transport()))
+    intent = [event["data"] for event in events
+              if event["event"] == "turn_phase" and event["data"]["phase"] == "intent"]
+    assert [item["state"] for item in intent] == ["start", "end"]
+    assert events[-1]["event"] == "error"
+
+
 def test_action_say_formatting(adventure):
     transport = make_llm_transport(tokens=("The guard nods.",))
     events = _collect(game_engine.handle_action(adventure["id"], "say",

@@ -69,17 +69,20 @@ def test_commit_publishes_once_and_replay_has_no_duplicates(tmp_db):
         assert sub.get(0.05) is None
 
 
-def test_tokens_do_not_replace_durable_history(tmp_db):
+def test_ephemeral_events_do_not_replace_durable_history(tmp_db):
     adv = make_adventure()
     with db.session() as conn:
         created = events.record(conn, adv["id"], "turn_done", {"seq": 1})
     for n in range(events.BUFFER_SIZE + 20):
         events.publish(adv["id"], "token", {"token": str(n)})
+        events.publish(adv["id"], "turn_phase", {"phase": "intent", "state": "end",
+                                                 "elapsed_ms": n})
     with db.session() as conn:
         backlog, expired, _ = events.replay(conn, adv["id"], 0)
+        history, _ = events.list_history(conn, adv["id"], after=0, limit=None)
     assert not expired
     assert [item["event_id"] for item in backlog] == [created["event_id"]]
-    assert all(item["type"] != "token" for item in backlog)
+    assert [item["type"] for item in history] == ["turn_done"]
 
 
 def test_new_subscriber_receives_durable_event_after_ephemeral_tokens(tmp_db):

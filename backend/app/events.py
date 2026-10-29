@@ -200,14 +200,15 @@ def publish(adventure_id: str | dict, type: str | None = None,
             data: dict | None = None, **metadata) -> int:
     """Publica um registro (`publish(record)`) ou grava e publica um fato.
 
-    A forma antiga continua útil para chamadas fora de uma transação. Tokens e
-    eventos globais do breaker são efêmeros e não avançam o cursor SSE.
+    A forma antiga continua útil para chamadas fora de uma transação. Tokens,
+    fases do turno e eventos globais do breaker são efêmeros e não avançam o
+    cursor SSE.
     """
     if isinstance(adventure_id, dict):
         return publish_record(adventure_id)
     if type is None:
         raise TypeError("type is required")
-    if type == "token":
+    if type in ("token", "turn_phase"):
         with _lock:
             return _publish_locked(_channel_locked(adventure_id), adventure_id, type,
                                    dict(data or {}), durable=False)

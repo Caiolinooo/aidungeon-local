@@ -43,6 +43,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -181,6 +182,25 @@ def _publish_live(adventure_id: str, type_: str, data: dict) -> None:
         events_bus.publish(adventure_id, type_, data)
     except Exception:
         log.warning("live event %s not published", type_, exc_info=True)
+
+
+def _turn_phase_event(adventure_id: str, phase: str, state: str,
+                      started: float | None = None) -> dict:
+    data = {"phase": phase, "state": state}
+    if started is not None:
+        data["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+    _publish_live(adventure_id, "turn_phase", data)
+    return {"event": "turn_phase", "data": data}
+
+
+def _run_turn_phase(adventure_id: str, phase: str, call) -> Iterator[dict]:
+    """Executa uma chamada e sempre fecha a fase, inclusive em exceções."""
+    started = time.monotonic()
+    yield _turn_phase_event(adventure_id, phase, "start")
+    try:
+        return call()
+    finally:
+        yield _turn_phase_event(adventure_id, phase, "end", started)
 
 
 def _format_player_text(type_: str, text: str) -> str:
@@ -773,10 +793,12 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
 
             from app.sim import engine as sim_engine
             if player_action is not None and retry_of is None:
-                outcome = sim_engine.run_turn(
-                    adventure_id, adventure, player_action, actions, user,
-                    llm_cfg, cfg, transport, cancel=cancel,
-                )
+                outcome = yield from _run_turn_phase(
+                    adventure_id, "intent",
+                    lambda: sim_engine.run_turn(
+                        adventure_id, adventure, player_action, actions, user,
+                        llm_cfg, cfg, transport, cancel=cancel,
+                    ))
                 if outcome and outcome.get("refusal"):
                     refusal = outcome["refusal"]
                     with appending(adventure_id) as conn:
@@ -844,9 +866,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
 
             if check_text:
                 check_state = _action_check_state(adventure_id, user, resolution)
-            verdict = _apply_action_check(
-                built, check_text, check_type, check_state, llm_cfg, transport, check_cfg,
-                cancel=cancel)
+                verdict = yield from _run_turn_phase(
+                    adventure_id, "action_check",
+                    lambda: _apply_action_check(
+                        built, check_text, check_type, check_state, llm_cfg, transport,
+                        check_cfg, cancel=cancel))
             if verdict is not None:
                 payload = verdict.to_dict()
                 yield {"event": "action_check", "data": payload}
@@ -865,11 +889,11 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 from app import npc_gate
                 roster = _living_roster(adventure_id)
                 try:
-                    if player_action is None:
-                        adjudication = npc_gate.own_beat(
-                            adventure_id, llm_cfg, transport, cancel=cancel)
-                    else:
-                        adjudication = npc_gate.decide(
+                    def adjudicate():
+                        if player_action is None:
+                            return npc_gate.own_beat(
+                                adventure_id, llm_cfg, transport, cancel=cancel)
+                        return npc_gate.decide(
                             adventure_id,
                             (player_action.get("text") or raw_query_text or ""),
                             llm_cfg,
@@ -878,6 +902,9 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                             world_check=verdict.to_dict() if verdict else None,
                             cancel=cancel,
                         )
+
+                    adjudication = yield from _run_turn_phase(
+                        adventure_id, "npc_gate", adjudicate)
                 except llm_client.LlmCancelled:
                     raise
                 except Exception:
@@ -896,13 +923,30 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     _publish_live(adventure_id, "adjudication", visible)
 
             stream_state = llm_client.StreamState()
-            for token in llm_client.stream_chat_completion(
-                    llm_cfg, built.messages, sampler=sampler,
-                    stop=built.stop_sequences, transport=transport,
-                    state=stream_state, cancel=cancel):
-                full.append(token)
-                _publish_live(adventure_id, "token", {"token": token})
-                yield {"event": "token", "data": {"token": token}}
+            narrative_started = time.monotonic()
+            narrative_open = True
+            yield _turn_phase_event(adventure_id, "narrative_wait", "start")
+            yield _turn_phase_event(adventure_id, "narrative_ttft", "start")
+            try:
+                for token in llm_client.stream_chat_completion(
+                        llm_cfg, built.messages, sampler=sampler,
+                        stop=built.stop_sequences, transport=transport,
+                        state=stream_state, cancel=cancel):
+                    if narrative_open:
+                        yield _turn_phase_event(
+                            adventure_id, "narrative_wait", "end", narrative_started)
+                        yield _turn_phase_event(
+                            adventure_id, "narrative_ttft", "end", narrative_started)
+                        narrative_open = False
+                    full.append(token)
+                    _publish_live(adventure_id, "token", {"token": token})
+                    yield {"event": "token", "data": {"token": token}}
+            finally:
+                if narrative_open:
+                    yield _turn_phase_event(
+                        adventure_id, "narrative_wait", "end", narrative_started)
+                    yield _turn_phase_event(
+                        adventure_id, "narrative_ttft", "end", narrative_started)
 
             text = output_sanitizer.clean_narration("".join(full), stream_state.truncated)
             text = npc_bonds.strip_leaked(text)
@@ -912,15 +956,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 text = scripting.run_output_modifier(out_script, text)
             player_text = (player_action or {}).get("text") or raw_query_text or ""
             compliance = _compliance_flag(text, adjudication)
-            text, quality = _correct_narration(
-                text, player_text=player_text, retry_of=retry_of, built=built,
-                llm_cfg=llm_cfg, sampler=sampler, transport=transport,
-                out_script=out_script,
-                extra_flags=compliance,
-                adjudication=adjudication,
-                adventure_id=adventure_id,
-                cancel=cancel,
-            )
+            text, quality = yield from _run_turn_phase(
+                adventure_id, "correction",
+                lambda: _correct_narration(
+                    text, player_text=player_text, retry_of=retry_of, built=built,
+                    llm_cfg=llm_cfg, sampler=sampler, transport=transport,
+                    out_script=out_script,
+                    extra_flags=compliance,
+                    adjudication=adjudication,
+                    adventure_id=adventure_id,
+                    cancel=cancel,
+                ))
             beat = (adjudication or {}).get("initiative") or {}
             if beat.get("line") and beat.get("npc") and beat["npc"].casefold() not in text.casefold():
                 text = (text.rstrip() + "\n\n" + beat["line"]).strip()
