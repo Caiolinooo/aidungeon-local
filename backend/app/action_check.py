@@ -120,7 +120,7 @@ def check_action(action_text: str, action_type: str, state: dict, *,
             role="turn_check",
             temperature=0.15,
             max_tokens=_max_tokens(cfg),
-            timeout_s=_timeout(cfg),
+            timeout_s=llm_client.role_timeout(llm_cfg, "turn_check"),
             transport=transport,
             cancel=cancel,
             response_format={"type": "json_schema", "json_schema": {
@@ -550,10 +550,3 @@ def _max_tokens(cfg: dict) -> int:
         return max(1, int((cfg or {}).get("max_tokens", 300)))
     except (TypeError, ValueError):
         return 300
-
-
-def _timeout(cfg: dict) -> float:
-    try:
-        return float((cfg or {}).get("timeout_seconds", 20))
-    except (TypeError, ValueError):
-        return 20.0

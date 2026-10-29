@@ -207,9 +207,11 @@ def test_role_timeouts_come_from_settings(tmp_db):
 
 def test_intent_and_check_use_their_roles(monkeypatch):
     seen = []
+    timeouts = {}
 
     def fake(cfg, messages, **kwargs):
         seen.append(kwargs["role"])
+        timeouts[kwargs["role"]] = kwargs.get("timeout_s")
         if kwargs["role"] == "sim_intent":
             return '{"kind":"none"}'
         return json.dumps({
@@ -228,6 +230,7 @@ def test_intent_and_check_use_their_roles(monkeypatch):
     assert classified["kind"] == "none"
     assert verdict.possible is True
     assert seen == ["sim_intent", "turn_check"]
+    assert timeouts == {"sim_intent": 20.0, "turn_check": 12.0}
 
 
 def test_long_assistant_output_gets_a_longer_deadline():
