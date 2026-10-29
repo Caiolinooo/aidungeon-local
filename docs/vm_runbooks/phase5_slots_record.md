@@ -135,3 +135,38 @@ Resultado: _em andamento_.
 - O choices no slot 1 é a vítima de sempre: é a primeira auxiliar depois do
   turno e a única que o jogador espera. A G3 (C7) gera o choices no backend
   logo após o `done`, com prioridade.
+
+## 9. Correção de geração, latência e VRAM (2026-10-29)
+
+Commit validado no staging: `15bf754`. O replay de 20 turnos terminou com
+20/20 ações HTTP 200, sem 409 ou `job_timeout`. `say` não produziu chamadas
+`turn_check`; `sim_intent`, `turn_gate` e `turn_check` usaram os slots 3, 3 e
+4. O browser mostrou `Preparando narrativa` antes do token, os rótulos de fase
+e `Narrando` somente depois do primeiro token.
+
+| Métrica (p50/p95) | Baseline | Correção P0/P1 |
+|---|---:|---:|
+| TTFT | 52,7/83,9 s | 24,7/36,9 s |
+| Turno completo | 72,1/98,0 s | 43,0/54,6 s |
+| `action_check` | 20,0 s (p50) | 12,0/12,1 s |
+| `npc_gate` | 43,9 s (p50) | 12,2/14,6 s |
+| `narrative_ttft` | — | 6,4/8,2 s |
+
+As metas TTFT p50 <=2 s e p95 <=5 s não foram atingidas. Choices teve 19
+respostas 503 por timeout e uma resposta 200 em 8,5 s; não houve amostras
+suficientes para validar a meta de choices. Seis metas de backdrop do replay
+terminaram como `superseded` durante as ações seguintes, sem timeout de job.
+
+O retrato legado `b261430a5ccd4acea2f2975af3749874` terminou `done` em
+848×816, sem `config_error`. FLUX durante replay terminou `done` em 27,465 s;
+o clipe isolado terminou `done` em 18,841 s. O clipe manual durante o replay
+contínuo ficou pendente por 600 s enquanto imagens de maior prioridade eram
+processadas; a medição durante uma narrativa isolada permanece no soak final.
+
+O piso de 900 MiB livres falhou: mínimos de 100 MiB no retrato, 70 MiB no
+FLUX durante replay e 38 MiB no clipe isolado. Portanto `-ub 2048` não foi
+ativado e a unidade permanece em `-ub 1024`. `MemAvailable` foi 3.177 MiB,
+abaixo dos gates de 12.288 MiB do prompt cache e 6.144 MiB do modelo auxiliar.
+Permanecem `-cram 0`, `scheduler.aux_cache_prompt=false`, `llama-aux` inativo e
+`scheduler.role_overrides` vazio. Narrador, pesos e parâmetros de qualidade não
+foram alterados.
