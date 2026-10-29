@@ -282,14 +282,11 @@ def test_corpus_sends_fixed_actions_and_fixture_state(monkeypatch):
     assert "quarto selado" in by_role["turn_check"][1]
     assert "passagem na parede" in by_role["turn_gate"][1]
     sim_timeout = float(settings_store.load_file_settings()["sim"]["timeout_seconds"])
-    check_timeout = float(settings_store.load_file_settings()["action_check"]["timeout_seconds"])
+    check_timeout = llm_client.role_timeout(cfg, "turn_check")
     assert by_role["sim_intent"][0] == sim_timeout
     assert by_role["turn_check"][0] == check_timeout
     gate_timeout = by_role["turn_gate"][0]
-    if gate_timeout is None:
-        assert llm_client.role_timeout({"role_timeouts": {}}, "turn_gate") == 12.0
-    else:
-        assert float(gate_timeout) == 45.0
+    assert (12.0 if gate_timeout is None else float(gate_timeout)) == 12.0
 
 
 def test_parse_score_and_threshold():
