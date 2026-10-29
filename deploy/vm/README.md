@@ -17,7 +17,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | HTTPS | nginx `aidungeon-https.conf`: `https://vm.groupabz.com:8443` → `127.0.0.1:2122` (Let's Encrypt); access log sem query string, porque o EventSource do SSE leva o token em `?token=` |
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
-| Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0`, ~700 MiB de VRAM do CUDA) na porta 8091 |
+| Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0 --device none`, `CUDA_VISIBLE_DEVICES=`; 0 MiB de VRAM) na porta 8091 |
 | Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; FineView Qwen (`engine=qwen`) e Forge/epiCRealism continuam disponíveis para rollback |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
@@ -229,6 +229,9 @@ A unit é `deploy/vm/comfyui.service`, instalada como
 `127.0.0.1:8188`. Antes do primeiro retrato, `GET /system_stats` deve responder
 e os três arquivos precisam ter os hashes acima. `clip_device = "cpu"` mantém o
 Qwen3-VL 8B INT8 fora da VRAM; UNET FP8 e VAE dividem a L4 com narrador e voz.
+`--vram-headroom 2` mantém 2 GB de folga para o VAE do LTXV. Em 29/10/2026,
+FLUX terminou em 24,802 s com 2.264 MiB livres e LTXV em 35,528 s com 1.248
+MiB livres; ambos acima do piso de 900 MiB e sem crescimento de swap.
 
 Antes de `systemctl start comfyui`, verifique `ss -ltnp 'sport = :8188'`. Se um
 ComfyUI manual já estiver escutando, encerre esse processo primeiro; a unit não
@@ -365,13 +368,12 @@ Environment=CUDA_VISIBLE_DEVICES=
 ExecStart=... --n-gpu-layers 0 --device none ...
 ```
 
-Essa variante ficou no ar de 16:16 a 16:54 de 18/10, durante benchmarks e o
-primeiro soak, e gastou 15,6 min de CPU em 38 min; a original tinha gastado
-6,6 min em 2 dias de uso leve do jogador. A carga não foi a mesma, mas é CPU
-que os experts do llama-server (`-ncmoe 24`) também usam. A unit voltou para
-a original (igual a `llama-embeddings.service.g7.bak`); a variante está em
-`llama-embeddings.service.devnone` e a G7 compara as duas com a mesma carga,
-junto com o `-t` do llama-server.
+A unidade versionada `deploy/vm/llama-embeddings.service` aplica as duas linhas.
+Em 29/10/2026 ela foi reativada permanentemente: `/health` respondeu 200, o
+processo de embeddings saiu de 698 MiB para 0 MiB de VRAM e caiu de 9,4 GB
+para 1,7 GB de RSS depois do restart. O Forge legado foi parado por não ser o
+provider ativo, liberando mais 6,9 GB de RAM e 402 MiB de VRAM. `MemAvailable`
+subiu de 3,1 GB para 15 GB antes do restart do ComfyUI.
 
 ## Watchdog de slots
 

@@ -28,7 +28,7 @@ The services co-located on the GPU VM are:
 | Service | Port | Endpoint / Mode | VRAM Footprint (Nominal) | Notes |
 |---|---|---|---|---|
 | **Narrator LLM** (`llama-server`) | 1234 | `http://vm.groupabz.com:1234/v1` | ~10.6 GB | `Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf`, MoE 35B (3B active), `enable_thinking=false` required; 5 slots, `-cram 0`, watchdog (Phase 5) |
-| **Image Generation** (Forge Neo) | 7861 | `http://127.0.0.1:7861` (local only) | ~4.5 GB beside the narrator | SDXL `epiCRealism XL CrystalClear` + `sdxl-vae-fp16-fix`. A1111 remains installed at `/home/caio/sd-webui` on port 7860 as rollback. Z-Image-Turbo, FLUX and Wan were not installed |
+| **Image Generation** (ComfyUI / FLUX.2 Klein) | 8188 | `http://127.0.0.1:8188` (local only) | DynamicVRAM com 2 GB de headroom | FLUX.2 Klein ativo; LTXV no mesmo serviço. Forge Neo/epiCRealism permanece instalado apenas como rollback e fica parado. |
 | **Voice Stack** (Supertonic + Whisper) | 8000 / 8443 | `https://vm.groupabz.com/voice/v1` | ~1.4 GB | TTS (`supertonic-3`), STT (`whisper-1`) behind Nginx reverse proxy |
 | **CPU Embeddings** (`llama-server`) | 8091 | `http://127.0.0.1:8091` (Phase 4) | 0.0 GB (0 MB VRAM) | `Qwen3-Embedding-0.6B-Q8_0.gguf` with `--embeddings --n-gpu-layers 0 --device none` and `CUDA_VISIBLE_DEVICES=` (without them CUDA still reserved 646 MiB) |
 

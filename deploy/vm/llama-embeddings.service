@@ -1,0 +1,15 @@
+[Unit]
+Description=Llama.cpp CPU Embedding Server (Qwen3-Embedding-0.6B, 0 GPU layers)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+WorkingDirectory=/home/caio
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server -m /home/caio/Qwen3-Embedding-0.6B-Q8_0.gguf --host 127.0.0.1 --port 8091 --embeddings --pooling last --n-gpu-layers 0 --device none -c 8192 -b 512 -ub 512 -t 4
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
