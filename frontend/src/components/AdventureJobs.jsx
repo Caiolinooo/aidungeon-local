@@ -75,11 +75,14 @@ function timeMs(value) {
 }
 
 function jobResultCode(job) {
+  // Jobs antigos podem ter result.code="error" e o código real só em `error`.
+  if (typeof job?.error === 'string' && job.error.startsWith('config_error:')) {
+    return 'config_error'
+  }
   const result = job?.result
   if (result && typeof result === 'object' && typeof result.code === 'string') {
     return result.code
   }
-  // Jobs antigos gravaram o código apenas como prefixo de `error`.
   return typeof job?.error === 'string' ? job.error.split(':', 1)[0] : ''
 }
 
