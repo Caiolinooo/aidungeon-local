@@ -76,8 +76,11 @@ function timeMs(value) {
 
 function jobResultCode(job) {
   const result = job?.result
-  if (!result || typeof result !== 'object') return ''
-  return typeof result.code === 'string' ? result.code : ''
+  if (result && typeof result === 'object' && typeof result.code === 'string') {
+    return result.code
+  }
+  // Jobs antigos gravaram o código apenas como prefixo de `error`.
+  return typeof job?.error === 'string' ? job.error.split(':', 1)[0] : ''
 }
 
 function jobHeartbeat(job) {
