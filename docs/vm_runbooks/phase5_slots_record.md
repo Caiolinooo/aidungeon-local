@@ -178,3 +178,38 @@ foram alterados.
 - Clipe durante um turno isolado: `done` em 80,856 s, sem erro de job; turno HTTP 200 e replay com metas funcionais ok. VRAM livre mínima **36 MiB**, RAM disponível mínima 1.997 MiB, swap delta 0; JSON `/home/caio/aidungeon-bench/final-clip-single-narrative.json`.
 - Retrato legado após o soak: `done` em 30,55 s, sem `config_error`; VRAM livre mínima **196 MiB**, RAM disponível mínima 2.039 MiB, swap delta 0; JSON `/home/caio/aidungeon-bench/final-portrait-after-soak.json`.
 - O piso de 900 MiB continua reprovado nos picos de FLUX/LTXV. Nenhum experimento P2 foi ativado: `-ub 1024`, `-cram 0`, cache desativado, `llama-aux` inativo e overrides vazios permanecem.
+
+## 11. Liberação de RAM/VRAM e nova rodada P2
+
+O Forge legado foi parado por não ser o provider configurado e o embeddings foi
+fixado em CPU com `CUDA_VISIBLE_DEVICES=` e `--device none`. O embeddings saiu
+de 698 MiB de VRAM e 9,4 GB de RSS para 0 MiB e cerca de 1,7 GB. Com o Forge
+foram liberados mais 402 MiB de VRAM e 6,9 GB de RSS. `MemAvailable` passou de
+cerca de 3,1 GB para 15–16,5 GB, chegando a 30 GB depois da liberação de caches
+e do encerramento do auxiliar.
+
+O ComfyUI passou a reservar 2 GiB com `--vram-headroom 2`, sem trocar pesos,
+resolução ou passos. FLUX terminou `done` em 24,802 s com 2.264 MiB livres;
+LTXV terminou `done` em 35,528 s com 1.248 MiB livres. JSONs:
+`/home/caio/aidungeon-bench/headroom2-flux.json` e
+`/home/caio/aidungeon-bench/headroom2-clip.json`. Uma sonda com 3 GiB também
+passou (3.136 MiB no FLUX e 1.438 no LTXV), mas o LTXV subiu para 43,938 s;
+a reserva de 2 GiB foi restaurada.
+
+O auxiliar Qwen2.5-3B foi carregado somente em CPU, com zero VRAM atribuída e
+RAM/swap dentro dos limites. A avaliação cega de 24 ações reprovou a
+ativação: candidato com **0/24 JSONs válidos** dentro dos prazos dos papéis
+(17 timeouts e 7 respostas degradadas), contra 16/24 do 35B. Relatório sem
+prompts nem respostas: `/home/caio/aidungeon-bench/aux-24-eval.json`.
+`llama-aux.service` foi desativado e os `role_overrides` permaneceram vazios.
+
+`-ub 2048` não foi ativado: sua estimativa adicional de 592 MiB derrubaria o
+mínimo LTXV medido com headroom 2 de 1.248 para cerca de 656 MiB, abaixo do
+piso de 900. O narrador continua inalterado em `-ub 1024`.
+
+Com `MemAvailable` acima de 12.288 MiB, o cache foi ativado em `-cram 8192` e
+`scheduler.aux_cache_prompt=true`. O repro externo concluiu 120 requisições,
+zero travamentos e pior requisição de 30,8 s; log:
+`/home/caio/aidungeon-bench/cache-repro-slot-hang.log`. A permanência do cache
+ainda depende do soak de 200 turnos, dos limites de RAM/swap/VRAM e da redução
+mínima de 15% no TTFT p50 contra 24,7 s.
