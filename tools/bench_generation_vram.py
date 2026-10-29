@@ -190,6 +190,7 @@ def run_flux(timeout_s: float) -> dict:
     import httpx
     from app import db, image_client
 
+    db.init_db()
     with db.session() as conn:
         cfg = image_client.effective_settings(conn)
     client_timeout = float(cfg.get("timeout_seconds") or timeout_s)

@@ -191,6 +191,16 @@ def test_portrait_and_clip_contracts(monkeypatch):
     assert clip["status"] == "done"
 
 
+def test_flux_initializes_real_database_before_reading_settings(tmp_db, monkeypatch):
+    from app import image_client
+
+    monkeypatch.setattr(image_client, "_generate_comfyui",
+                        lambda *_args: (b"png", 1024, 1024))
+    result = bench.run_flux(5)
+    assert result == {"status": "done", "error": None, "width": 1024,
+                      "height": 1024, "bytes": 3}
+
+
 def test_failed_job_exits_one_even_without_memory_samples():
     report = {"status": "error", "error": "job_timeout", "vram_free_min_mib": None}
     assert bench.classify(report, "no memory samples") == 1
