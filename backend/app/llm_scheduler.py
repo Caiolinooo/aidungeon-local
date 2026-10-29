@@ -4,8 +4,9 @@ Toda chamada passa por `llm_client.chat_completion` ou
 `stream_chat_completion`, que pedem a vez aqui antes de abrir a conexão.
 
 - Prioridade por role, menor primeiro e FIFO dentro da mesma: narrative 0
-  (nunca espera), choices 1, image_prompt e meta 2, assistant 3, chronicle 4,
-  summary 5.
+  (nunca espera), choices e os papéis do turno (sim_intent, turn_check,
+  turn_gate) 1, image_prompt e meta 2, assistant 3, chronicle 4, summary 5,
+  assets 6.
 - Uma auxiliar por slot fixado: a segunda ficaria na fila do llama-server com
   o prazo correndo. Sem slot (servidor com 1 slot ou `/props` ilegível) vale
   só o teto global.
@@ -40,7 +41,8 @@ from typing import Any, Callable, Iterator
 
 log = logging.getLogger("aidungeon.llm.scheduler")
 
-PRIORITIES = {"narrative": 0, "choices": 1, "image_prompt": 2, "meta": 2,
+PRIORITIES = {"narrative": 0, "choices": 1, "sim_intent": 1, "turn_check": 1,
+              "turn_gate": 1, "image_prompt": 2, "meta": 2,
               "assistant": 3, "chronicle": 4, "summary": 5, "assets": 6}
 
 # Outcomes do llm_client que contam como falha do servidor.

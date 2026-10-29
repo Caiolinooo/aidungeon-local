@@ -17,6 +17,15 @@ if str(TOOLS_DIR) not in sys.path:
 import bench_slots  # noqa: E402
 
 
+_TURN_SLOTS = {
+    1: {"sim_intent": 0, "turn_gate": 0, "turn_check": 0},
+    2: {"sim_intent": 1, "turn_gate": 1, "turn_check": 1},
+    3: {"sim_intent": 2, "turn_gate": 2, "turn_check": 1},
+    4: {"sim_intent": 3, "turn_gate": 3, "turn_check": 2},
+    5: {"sim_intent": 3, "turn_gate": 3, "turn_check": 4},
+}
+
+
 @pytest.mark.parametrize("total", [1, 2, 3, 4, 5])
 def test_slot_map_matches_the_app(total):
     llm_client.invalidate_slot_cache()
@@ -26,6 +35,13 @@ def test_slot_map_matches_the_app(total):
         lambda request: httpx.Response(200, json={"total_slots": total}))
     for role, slot in bench_slots.slot_map(total).items():
         assert llm_client.slot_for(cfg, role, transport) == slot, (total, role)
+    for role, slot in _TURN_SLOTS[total].items():
+        assert llm_client.slot_for(cfg, role, transport) == slot, (total, role)
+    if total == 5:
+        unchanged = {"narrative": 0, "choices": 1, "chronicle": 2, "summary": 2,
+                     "image_prompt": 3, "assistant": 3, "meta": 3, "assets": 2}
+        for role, slot in unchanged.items():
+            assert llm_client.slot_for(cfg, role, transport) == slot, role
 
 
 def test_targets_report_what_missed():

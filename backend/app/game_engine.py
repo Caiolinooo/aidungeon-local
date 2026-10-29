@@ -44,6 +44,7 @@ import os
 import sqlite3
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -137,12 +138,19 @@ def acquire_generation_lock(adventure_id: str) -> bool:
 
 
 def release_generation_lock(adventure_id: str) -> None:
-    lock = _lock_for(adventure_id)
-    if lock.locked():
+    try:
+        lock = _lock_for(adventure_id)
+        if lock.locked():
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+    finally:
         try:
-            lock.release()
-        except RuntimeError:
-            pass
+            from app import jobs
+            jobs.resume_portrait_prepare()
+        except Exception:
+            log.warning("não foi possível retomar preparação de retratos", exc_info=True)
 
 
 def is_any_generation_active() -> bool:
@@ -504,14 +512,16 @@ def _action_check_state(adventure_id: str, user: str,
 
 
 def _apply_action_check(built, text: str, type_: str, state: dict | None,
-                        llm_cfg: dict, transport: Any, cfg: dict, cancel=None):
+                        llm_cfg: dict, transport: Any, cfg: dict, cancel=None,
+                        *, allow_llm: bool = True,
+                        blockers: list[str] | None = None):
     """Injeta o bloco no contexto. None se não houve veredito; nunca propaga."""
     if state is None:
         return None
     try:
         verdict = action_check.check_action(
             text, type_, state, llm_cfg=llm_cfg, transport=transport, cfg=cfg,
-            cancel=cancel,
+            cancel=cancel, allow_llm=allow_llm, blockers=blockers,
         )
     except llm_client.LlmCancelled:
         raise
@@ -526,6 +536,28 @@ def _apply_action_check(built, text: str, type_: str, state: dict | None,
             built.messages[-1]["content"], action_check.verdict_block(verdict)),
     }
     return verdict
+
+
+def _npc_gate_world_check(adventure_id: str, player_action: dict | None,
+                          raw_query_text: str, llm_cfg: dict, transport: Any,
+                          user: str, *, action_blockers: list[str] | None = None,
+                          cancel=None) -> dict | None:
+    from app import npc_gate
+
+    if player_action is None:
+        return npc_gate.own_beat(adventure_id, llm_cfg, transport, cancel=cancel)
+    world_check = None
+    if action_blockers is not None:
+        world_check = {"action_blockers": action_blockers[:8]}
+    return npc_gate.decide(
+        adventure_id,
+        player_action.get("text") or raw_query_text or "",
+        llm_cfg,
+        transport,
+        user,
+        world_check=world_check,
+        cancel=cancel,
+    )
 
 
 def _compliance_flag(text: str, adjudication: dict | None) -> list[str]:
@@ -864,13 +896,71 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 yield {"event": "rules_roll", "data": rolled}
                 _publish_live(adventure_id, "rules_roll", rolled)
 
+            social_turn = retry_of is None and (
+                player_action is None or player_action.get("type") in ("do", "say")
+            )
+            blockers = None
             if check_text:
                 check_state = _action_check_state(adventure_id, user, resolution)
-                verdict = yield from _run_turn_phase(
-                    adventure_id, "action_check",
-                    lambda: _apply_action_check(
-                        built, check_text, check_type, check_state, llm_cfg, transport,
-                        check_cfg, cancel=cancel))
+                if check_state is not None:
+                    blockers = action_check.hard_blockers(check_state)
+
+            def run_check():
+                return _apply_action_check(
+                    built, check_text, check_type, check_state, llm_cfg, transport,
+                    check_cfg, cancel=cancel, allow_llm=check_type != "say",
+                    blockers=blockers)
+
+            def adjudicate():
+                return _npc_gate_world_check(
+                    adventure_id, player_action, raw_query_text, llm_cfg,
+                    transport, user, action_blockers=blockers, cancel=cancel)
+
+            if check_text and social_turn:
+                check_started = time.monotonic()
+                gate_started = time.monotonic()
+                yield _turn_phase_event(adventure_id, "action_check", "start")
+                yield _turn_phase_event(adventure_id, "npc_gate", "start")
+                executor = ThreadPoolExecutor(max_workers=2)
+                check_future = executor.submit(run_check)
+                gate_future = executor.submit(adjudicate)
+                pending = {
+                    check_future: ("action_check", check_started),
+                    gate_future: ("npc_gate", gate_started),
+                }
+                try:
+                    while pending:
+                        finished, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                        for future in finished:
+                            phase, started = pending.pop(future)
+                            yield _turn_phase_event(
+                                adventure_id, phase, "end", started)
+                    verdict = check_future.result()
+                    try:
+                        adjudication = gate_future.result()
+                    except llm_client.LlmCancelled:
+                        raise
+                    except Exception:
+                        log.warning("npc_gate: adjudicador indisponível", exc_info=True)
+                        adjudication = None
+                finally:
+                    executor.shutdown(wait=True)
+                    for phase, started in pending.values():
+                        yield _turn_phase_event(adventure_id, phase, "end", started)
+            else:
+                if check_text:
+                    verdict = yield from _run_turn_phase(
+                        adventure_id, "action_check", run_check)
+                if social_turn:
+                    try:
+                        adjudication = yield from _run_turn_phase(
+                            adventure_id, "npc_gate", adjudicate)
+                    except llm_client.LlmCancelled:
+                        raise
+                    except Exception:
+                        log.warning("npc_gate: adjudicador indisponível", exc_info=True)
+                        adjudication = None
+
             if verdict is not None:
                 payload = verdict.to_dict()
                 yield {"event": "action_check", "data": payload}
@@ -882,34 +972,9 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     live["seq"] = player_action.get("seq")
                 _publish_live(adventure_id, "action_check", live)
 
-            social_turn = retry_of is None and (
-                player_action is None or player_action.get("type") in ("do", "say")
-            )
             if social_turn:
                 from app import npc_gate
                 roster = _living_roster(adventure_id)
-                try:
-                    def adjudicate():
-                        if player_action is None:
-                            return npc_gate.own_beat(
-                                adventure_id, llm_cfg, transport, cancel=cancel)
-                        return npc_gate.decide(
-                            adventure_id,
-                            (player_action.get("text") or raw_query_text or ""),
-                            llm_cfg,
-                            transport,
-                            user,
-                            world_check=verdict.to_dict() if verdict else None,
-                            cancel=cancel,
-                        )
-
-                    adjudication = yield from _run_turn_phase(
-                        adventure_id, "npc_gate", adjudicate)
-                except llm_client.LlmCancelled:
-                    raise
-                except Exception:
-                    log.warning("npc_gate: adjudicador indisponível", exc_info=True)
-                    adjudication = None
                 cue = npc_gate.cue_block(adjudication, roster)
                 if cue and built.messages:
                     last = built.messages[-1]

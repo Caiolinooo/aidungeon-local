@@ -389,12 +389,194 @@ def test_flux2_request_key_covers_execution_parameters(tmp_path):
 
 
 
-def test_flux2_rejects_canvas_that_is_not_a_multiple_of_16(tmp_path):
+def test_flux2_canvas_invariant_still_rejects_unaligned_size():
     with pytest.raises(image_client.ImageError, match="múltiplos de 16"):
+        image_client._validate_flux2_canvas(860, 820)
+
+
+@pytest.mark.parametrize(("width", "height"), [
+    (1024, 1024),
+    (832, 1216),
+    (1344, 768),
+    (800, 720),
+])
+def test_flux2_keeps_canvases_already_aligned(tmp_path, width, height):
+    capture: dict = {}
+    cfg = _klein(tmp_path)
+    result = image_client.generate_image(
+        cfg, "a knight", adventure_id="adv-1", image_id=f"aligned-{width}",
+        width=width, height=height, transport=_transport(capture))
+
+    assert (result["width"], result["height"]) == (width, height)
+    nodes = _nodes(capture["graph"])
+    latent = nodes["EmptyFlux2LatentImage"]["inputs"]
+    schedule = nodes["Flux2Scheduler"]["inputs"]
+    assert (latent["width"], latent["height"]) == (width, height)
+    assert (schedule["width"], schedule["height"]) == (width, height)
+    assert image_client.request_key(cfg, "a knight", width=width, height=height) != (
+        image_client.request_key(cfg, "a knight", width=860, height=820))
+
+
+def test_flux2_snaps_legacy_portrait_anchor_to_848x816(tmp_path):
+    capture: dict = {}
+    anchor = b"\x89PNG-anchor"
+    cfg = _klein(tmp_path)
+    result = image_client.generate_image(
+        cfg, "the same thief", adventure_id="adv-1", image_id="legacy-portrait",
+        width=860, height=820, init_image=anchor, transport=_transport(capture))
+
+    assert (result["width"], result["height"]) == (848, 816)
+    assert len(capture["uploads"]) == 1
+    nodes = _nodes(capture["graph"])
+    latent = nodes["EmptyFlux2LatentImage"]["inputs"]
+    schedule = nodes["Flux2Scheduler"]["inputs"]
+    assert (latent["width"], latent["height"], latent["batch_size"]) == (848, 816, 1)
+    assert (schedule["width"], schedule["height"], schedule["steps"]) == (848, 816, 4)
+    assert nodes["SamplerCustomAdvanced"]["inputs"]["latent_image"] == ["6", 0]
+    assert "EmptyLatentImage" not in nodes
+
+    assert image_client.request_key(
+        cfg, "the same thief", width=860, height=820, init_image=anchor) == (
+        image_client.request_key(
+            cfg, "the same thief", width=848, height=816, init_image=anchor))
+    assert image_client.request_key(
+        cfg, "the same thief", width=860, height=820) != (
+        image_client.request_key(
+            cfg, "the same thief", width=832, height=816))
+
+
+def test_flux2_resolves_missing_canvas_then_snaps_and_qwen_does_not(tmp_path):
+    capture: dict = {}
+    flux = _klein(tmp_path, comfyui_width=860, comfyui_height=820)
+    result = image_client.generate_image(
+        flux, "defaults", adventure_id="adv-1", image_id="flux-defaults",
+        width=None, height=0, transport=_transport(capture))
+    assert (result["width"], result["height"]) == (848, 816)
+    assert (
+        _nodes(capture["graph"])["EmptyFlux2LatentImage"]["inputs"]["width"],
+        _nodes(capture["graph"])["EmptyFlux2LatentImage"]["inputs"]["height"],
+    ) == (848, 816)
+    assert image_client.request_key(flux, "defaults", width=0, height=None) == (
+        image_client.request_key(flux, "defaults", width=848, height=816))
+
+    omitted = _klein(tmp_path, comfyui_width=0, comfyui_height=None)
+    omitted_capture: dict = {}
+    omitted_result = image_client.generate_image(
+        omitted, "defaults", adventure_id="adv-1", image_id="flux-1024",
+        transport=_transport(omitted_capture))
+    assert (omitted_result["width"], omitted_result["height"]) == (1024, 1024)
+    assert image_client.request_key(omitted, "defaults") == (
+        image_client.request_key(omitted, "defaults", width=1024, height=1024))
+
+    qwen_capture: dict = {}
+    qwen = _cfg(tmp_path, comfyui_width=860, comfyui_height=820)
+    qwen_result = image_client.generate_image(
+        qwen, "defaults", adventure_id="adv-1", image_id="qwen-legacy",
+        width=860, height=820, transport=_transport(qwen_capture))
+    assert (qwen_result["width"], qwen_result["height"]) == (860, 820)
+    qwen_nodes = _nodes(qwen_capture["graph"])
+    empty = qwen_nodes["EmptyLatentImage"]["inputs"]
+    assert (empty["width"], empty["height"]) == (860, 820)
+    assert "EmptyFlux2LatentImage" not in qwen_nodes
+    assert image_client.request_key(qwen, "defaults", width=860, height=820) != (
+        image_client.request_key(qwen, "defaults", width=848, height=816))
+    assert image_client.request_key(qwen, "defaults") == (
+        image_client.request_key(qwen, "defaults", width=860, height=820))
+
+
+_MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2"
+
+
+def _png(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+    )
+
+
+def _polling_transport(capture: dict, *, ready_after: int,
+                       motion: bool = False) -> httpx.MockTransport:
+    capture.setdefault("polls", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/prompt":
+            capture["graph"] = json.loads(request.content)["prompt"]
+            return httpx.Response(200, json={"prompt_id": "pid-1", "number": 1})
+        if path == "/history/pid-1":
+            capture["polls"] += 1
+            if capture["polls"] < ready_after:
+                return httpx.Response(200, json={})
+            if motion:
+                outputs = {"14": {"videos": [{
+                    "filename": "aidungeon_0001.mp4",
+                    "subfolder": "", "type": "output"}]}}
+            else:
+                outputs = {"16": {"images": [{
+                    "filename": "aidungeon_0001.png",
+                    "subfolder": "", "type": "output"}]}}
+            return httpx.Response(200, json={"pid-1": {
+                "status": {"status_str": "success", "completed": True},
+                "outputs": outputs}})
+        if path == "/view":
+            body = _MP4 if motion else b"\x89PNG-comfy"
+            return httpx.Response(200, content=body)
+        if path == "/upload/image":
+            return httpx.Response(200, json={
+                "name": "aidungeon-ref-1.png", "subfolder": "", "type": "input"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def test_comfy_progress_runs_after_submit_and_each_poll(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_client.time, "sleep", lambda _seconds: None)
+    capture: dict = {}
+    stamps: list[int] = []
+
+    def progress() -> None:
+        stamps.append(capture["polls"])
+
+    image_client.generate_image(
+        _cfg(tmp_path), "a knight", adventure_id="adv-1", image_id="progress",
+        transport=_polling_transport(capture, ready_after=3),
+        progress=progress)
+
+    assert stamps == [0, 1, 2, 3]
+    assert capture["polls"] == 3
+
+    clip_capture: dict = {}
+    clip_stamps: list[int] = []
+
+    def clip_progress() -> None:
+        clip_stamps.append(clip_capture["polls"])
+
+    clip = image_client.generate_clip(
+        _cfg(tmp_path, comfyui_video={"width": 860, "height": 820}),
+        "camera pushes in", adventure_id="adv-1", image_id="clip-progress",
+        source_png=_png(64, 32),
+        transport=_polling_transport(clip_capture, ready_after=2, motion=True),
+        progress=clip_progress)
+
+    assert clip_stamps == [0, 1, 2]
+    assert (clip["width"], clip["height"]) == (860, 820)
+    latent = _nodes(clip_capture["graph"])["LTXVImgToVideo"]["inputs"]
+    assert (latent["width"], latent["height"]) == (860, 820)
+
+
+def test_comfy_progress_error_aborts_before_the_next_poll(tmp_path):
+    capture: dict = {}
+
+    def progress() -> None:
+        raise RuntimeError("stop")
+
+    with pytest.raises(RuntimeError, match="stop"):
         image_client.generate_image(
-            _klein(tmp_path), "a knight", adventure_id="adv-1", image_id="odd",
-            width=1000, height=1024,
-            transport=httpx.MockTransport(_refuse_transport))
+            _cfg(tmp_path), "a knight", adventure_id="adv-1", image_id="abort",
+            transport=_polling_transport(capture, ready_after=1),
+            progress=progress)
+    assert capture["polls"] == 0
 
 
 def test_unknown_image_engine_fails(tmp_path):

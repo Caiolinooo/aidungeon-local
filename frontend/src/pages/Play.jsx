@@ -256,6 +256,43 @@ function ActionCheckNote({ check }) {
 
 const FEED_PAGE_SIZE = 100
 
+const TURN_PHASE_LABELS = {
+  intent: 'Interpretando ação',
+  action_check: 'Checando regras',
+  npc_gate: 'Consultando o mundo',
+  narrative_wait: 'Preparando narrativa',
+  narrative_ttft: 'Preparando narrativa',
+  correction: 'Revisando narração',
+}
+
+function knownTurnPhase(phase) {
+  return Object.prototype.hasOwnProperty.call(TURN_PHASE_LABELS, phase)
+}
+
+function reduceTurnPhases(phases, data) {
+  const phase = typeof data?.phase === 'string' ? data.phase : ''
+  if (!knownTurnPhase(phase)) return phases
+  if (data.state === 'start') {
+    if (phases.includes(phase)) return phases
+    return [...phases, phase]
+  }
+  if (data.state === 'end') {
+    // O fim do TTFT chega antes do token; o rótulo fica até ele.
+    if (phase === 'narrative_ttft') return phases
+    if (!phases.includes(phase)) return phases
+    return phases.filter((item) => item !== phase)
+  }
+  return phases
+}
+
+function turnPhaseLabel(phases) {
+  for (let i = phases.length - 1; i >= 0; i -= 1) {
+    const label = TURN_PHASE_LABELS[phases[i]]
+    if (label) return label
+  }
+  return ''
+}
+
 const StoryFeedItem = memo(function StoryFeedItem({
   action, check, rules, beat, onEdit, disabled, isLatest, adventureId,
 }) {
@@ -358,6 +395,8 @@ export default function Play() {
   const awaitingBaselineRef = useRef(null)
   const livePlayerIdsRef = useRef(new Set())
   const sentTextRef = useRef('')
+  const turnPhasesRef = useRef([])
+  const narratingRef = useRef(false)
   const generating = gen !== null
   const currentUser = session?.user || ''
   genRef.current = gen
@@ -998,6 +1037,8 @@ export default function Play() {
       if (generating || needsCharacter) return
       const ctrl = new AbortController()
       abortRef.current = ctrl
+      turnPhasesRef.current = []
+      narratingRef.current = false
       const nextGen = { kind, text: '' }
       genRef.current = nextGen
       setGen(nextGen)
@@ -1010,6 +1051,8 @@ export default function Play() {
       }
       const fail = (msg, meta) => {
         if (abortRef.current !== ctrl) return
+        turnPhasesRef.current = []
+        narratingRef.current = false
         genRef.current = null
         setGen(null)
         setLive('')
@@ -1033,7 +1076,17 @@ export default function Play() {
         signal: ctrl.signal,
         onToken: (tok) => {
           if (abortRef.current !== ctrl) return
-          setGen((g) => (g ? { ...g, text: g.text + tok } : g))
+          const firstToken = !narratingRef.current
+          if (firstToken) {
+            narratingRef.current = true
+            turnPhasesRef.current = []
+          }
+          setGen((g) => {
+            if (!g) return g
+            const text = g.text + tok
+            if (!firstToken || !g.phaseLabel) return { ...g, text }
+            return { ...g, text, phaseLabel: null }
+          })
         },
         onEvent: (name, data) => {
           if (abortRef.current !== ctrl) return
@@ -1055,7 +1108,21 @@ export default function Play() {
               detail: { type: 'adjudication', adventureId: id, data: view },
             }))
           }
+          if (name === 'turn_phase') {
+            const prev = turnPhasesRef.current
+            const next = reduceTurnPhases(prev, data)
+            if (next !== prev) {
+              turnPhasesRef.current = next
+              const prevLabel = turnPhaseLabel(prev)
+              const nextLabel = turnPhaseLabel(next)
+              if (prevLabel !== nextLabel) {
+                setGen((g) => (g ? { ...g, phaseLabel: nextLabel || null } : g))
+              }
+            }
+          }
           if (name === 'refused') {
+            turnPhasesRef.current = []
+            narratingRef.current = false
             const actionId = data?.action_id
             if (actionId != null) {
               setActions((prev) => (prev ?? []).filter((a) => a.id !== actionId))
@@ -1104,6 +1171,8 @@ export default function Play() {
           }
           liveBeatRef.current = null
           setLiveBeat(null)
+          turnPhasesRef.current = []
+          narratingRef.current = false
           genRef.current = null
           setGen(null)
           setLive('')
@@ -1245,6 +1314,8 @@ export default function Play() {
       if (e?.code !== 'no_generation_in_progress') toast(e.message)
     } finally {
       abortRef.current?.abort()
+      turnPhasesRef.current = []
+      narratingRef.current = false
       genRef.current = null
       setGen(null)
       setLive('')
@@ -1745,7 +1816,7 @@ export default function Play() {
                 <div className="animate-fade-in border-l-2 border-accent-pri/70 pl-4">
                   <div className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-pri">
                     <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-pri" />
-                    Narrando
+                    {gen.phaseLabel || 'Narrando'}
                   </div>
                   <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(gen.text)}

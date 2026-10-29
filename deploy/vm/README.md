@@ -196,6 +196,10 @@ bash deploy/vm/install_flux2_klein.sh
 
 Com `engine="qwen"`, o grafo FineView usa `UNETLoader`, CLIP `qwen_image` em CPU, `TextEncodeQwenImage21` para identidades, `ModelSamplingAuraFlow` shift 1.31 e `ManualSigmas` oficial com oito passos no `SamplerCustom` euler.
 
+No Klein, largura e altura são alinhadas para baixo em múltiplos de 16 antes de
+montar o grafo e calcular a chave de cache: por exemplo, uma âncora legada de
+860×820 gera 848×816. O engine Qwen não passa por esse ajuste.
+
 Arquivos e hashes obrigatórios:
 
 | Arquivo em `/home/caio/ComfyUI/models/` | Bytes | SHA256 |
@@ -337,6 +341,18 @@ unit: `llama-server.service.v090.bak` (original) e `.g2-np2.bak` (`-np 2`).
 Rollback: copiar o backup por cima, `sudo systemctl daemon-reload` e
 `sudo systemctl restart llama-server` (~30 s para carregar o modelo). Reinicie
 só com os slots ociosos (`GET /slots`), fora do horário de jogo.
+
+`sim_intent`, `turn_check` e `turn_gate` têm slots e prioridades próprios;
+check e gate do mesmo turno rodam em paralelo antes do narrador. A checagem de
+`say` usa somente bloqueadores determinísticos. O heartbeat de jobs e o reaper
+independente impedem que geração abandonada retenha a fila; imagens preemptam
+clipes automáticos, nunca clipes manuais.
+
+O auxiliar CPU opcional é instalado por `deploy/vm/install_qwen_aux.sh` e
+`deploy/vm/llama-aux.service` (127.0.0.1:1240, sem VRAM). Sem
+`llm.scheduler.role_overrides`, todos os papéis continuam no 35B. Só preencher
+os overrides depois de `tools/eval_turn_aux.py` passar na equivalência e nos
+limites de RAM/swap; desligar a unit e esvaziar os overrides no rollback.
 
 ## Embeddings e VRAM
 

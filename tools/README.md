@@ -8,6 +8,8 @@ Todos rodam com Python padrão (sem dependências externas).
 | `check_llm.py` | Diagnóstico: alcance, auth e modelos do servidor (GETs públicos) |
 | `bench_llm.py` | Benchmark de geração: TTFT, tok/s, tokens (stream, exige API key) |
 | `replay_turn.py` | Replay de turnos pela API do backend (staging) com as metas de fluidez |
+| `bench_generation_vram.py` | Gera FLUX/retrato/clipe real e amostra VRAM, RAM e swap; falha abaixo de 900 MiB livres |
+| `eval_turn_aux.py` | Compara 24 intenções/checks/gates fixos entre o narrador 35B e o auxiliar 3B, sem gravar aventuras |
 | `bench_slots.py` | Benchmark do llama-server nos papéis do app (C1) contra as metas da seção 2 do plano |
 | `repro_slot_hang.py` | Tenta reproduzir o slot preso do llama.cpp #28280 contra o llama-server |
 | `slot_watchdog.py` | Oneshot do `slot-watchdog.timer`: reinicia o llama-server com slot preso |
@@ -84,7 +86,9 @@ python3 tools/replay_turn.py --env-file /home/caio/aidungeon/.env \
 
 Soak: `--repeat N` repete a lista de `--turn`, `--see-every K` dispara o See a
 cada K turnos e turno acima de `--slow-turn` (120 s) conta como falha. No fim
-saem p50/p95 de TTFT, turno e choices, mais quantos choices deram 503.
+saem p50/p95 de TTFT, turno e choices, mais quantos choices deram 503. Eventos
+`turn_phase` concluídos entram como `phase:<nome>`, também com p50/p95/máximo;
+token e fase são efêmeros e não ocupam o histórico SQLite.
 Staging e app principal dividem o llama-server e o A1111: com `--yield-to`, o
 replay só manda o próximo turno depois de nenhuma aventura do app principal
 mudar por `--idle-s` (300 s).

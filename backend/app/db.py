@@ -1726,13 +1726,24 @@ JOB_ACTIVE = ("preparing", "pending", "running")
 
 
 def job_to_dict(row: sqlite3.Row) -> dict:
-    return {
+    payload = _loads(row["payload"], {})
+    if not isinstance(payload, dict):
+        payload = {}
+    status = row["status"]
+    heartbeat = payload.get("heartbeat_at")
+    if status not in JOB_ACTIVE or not isinstance(heartbeat, str) or not heartbeat:
+        heartbeat = None
+        if "heartbeat_at" in payload:
+            payload = {
+                key: value for key, value in payload.items() if key != "heartbeat_at"
+            }
+    data = {
         "id": row["id"],
         "adventure_id": row["adventure_id"],
         "type": row["type"],
-        "status": row["status"],
+        "status": status,
         "ref_id": row["ref_id"] or "",
-        "payload": _loads(row["payload"], {}),
+        "payload": payload,
         "result": _loads(row["result"], None),
         "error": row["error"],
         "priority": row["priority"],
@@ -1741,6 +1752,9 @@ def job_to_dict(row: sqlite3.Row) -> dict:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
     }
+    if heartbeat is not None:
+        data["heartbeat_at"] = heartbeat
+    return data
 
 
 def insert_job(conn: sqlite3.Connection, *, adventure_id: str, type: str,
@@ -1816,15 +1830,34 @@ def find_active_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | 
 
 def claim_next_job(conn: sqlite3.Connection, *,
                    max_priority: int | None = None) -> dict | None:
-    """pending → running do job de menor prioridade e, nela, do mais antigo (o
-    worker é único por processo). `max_priority` deixa de fora os menos urgentes."""
-    sql = "SELECT id FROM jobs WHERE status='pending'"
+    """pending → running do job de menor prioridade e, nela, do mais antigo.
+
+    O worker é único por processo. `max_priority` deixa de fora os menos
+    urgentes. Clipe com `payload.automatic` espera enquanto existir outro job
+    pending ou preparing que não seja clipe automático. Se só restarem clipes
+    automáticos, eles seguem a ordem normal. Clipe manual não entra no gate.
+    """
+    sql = (
+        "SELECT id FROM jobs WHERE status='pending'"
+        " AND NOT ("
+        " type='scene_clip'"
+        " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1"
+        " AND EXISTS ("
+        " SELECT 1 FROM jobs AS other"
+        " WHERE other.status IN ('pending', 'preparing')"
+        " AND NOT (other.type='scene_clip'"
+        " AND COALESCE(json_extract(other.payload, '$.automatic'), 0) = 1)"
+        " )"
+        " )"
+    )
     params: list = []
     if max_priority is not None:
         sql += " AND priority<=?"
         params.append(int(max_priority))
-    row = conn.execute(sql + " ORDER BY priority ASC, created_at ASC, rowid ASC LIMIT 1",
-                       params).fetchone()
+    row = conn.execute(
+        sql + " ORDER BY priority ASC, created_at ASC, rowid ASC LIMIT 1",
+        params,
+    ).fetchone()
     if not row:
         return None
     cur = conn.execute(
@@ -1838,11 +1871,22 @@ def claim_next_job(conn: sqlite3.Connection, *,
 
 def finish_job(conn: sqlite3.Connection, job_id: str, status: str,
                result: dict | None = None, error: str | None = None) -> bool:
+    """Fecha só preparing ou running. Timeout, cancelamento e done ficam."""
     cur = conn.execute(
         "UPDATE jobs SET status=?, result=?, error=?, finished_at=? WHERE id=?"
-        " AND status<>'canceled'",
+        " AND status IN ('preparing', 'running')",
         (status, _dumps(result, None) if result is not None else None,
          error, utcnow(), job_id),
+    )
+    return cur.rowcount == 1
+
+
+def touch_job(conn: sqlite3.Connection, job_id: str, heartbeat_at: str) -> bool:
+    """Grava `payload.heartbeat_at`. Só um job running aceita o toque."""
+    cur = conn.execute(
+        "UPDATE jobs SET payload=json_set(COALESCE(payload, '{}'), '$.heartbeat_at', ?)"
+        " WHERE id=? AND status='running'",
+        (heartbeat_at, job_id),
     )
     return cur.rowcount == 1
 

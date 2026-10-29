@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app import auth as auth_core
-from app import db, deps, events, jobs, settings_store
+from app import db, deps, events, game_engine, jobs, settings_store
 from conftest import TEST_AUTH_SECRET, add_action, make_adventure, sse_body
 from test_scene import _face
 from test_v2 import PNG_BYTES
@@ -584,7 +584,9 @@ def test_other_portrait_errors_do_not_open_the_oom_hold(client):
     ada = _ada_id(adv["id"])
     with db.session() as conn:
         failed = jobs.enqueue_portrait(conn, adv["id"], ada)
-        db.finish_job(conn, failed["id"], "error", error="HTTP 500 em txt2img: busy")
+        assert db.claim_next_job(conn)["id"] == failed["id"]
+        assert db.finish_job(
+            conn, failed["id"], "error", error="HTTP 500 em txt2img: busy")
         assert jobs.cuda_oom_hold(conn, "character_portrait", ada) is None
         again = jobs.enqueue_portrait(conn, adv["id"], ada)
     assert again["id"] != failed["id"]
@@ -621,3 +623,164 @@ def test_migration_021_upgrades_a_v20_database(tmp_path, monkeypatch):
     assert job["priority"] == jobs.PRIORITY_BACKDROP
     assert job["supersede_key"] == ""
     assert "jobs_queue" in indexes
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def test_automatic_clip_waits_for_stills_and_manual_does_not(tmp_db):
+    """Still vence clipe automático mesmo com prioridade pior. Manual não espera.
+    Clipe automático sozinho roda. Um preparing que não é clipe automático segura
+    o automático e solta quando sai da fila."""
+    adv = make_adventure()
+    with db.session() as conn:
+        auto = jobs.enqueue_scene_clip(
+            conn, adv["id"], "auto", "rain", automatic=True, priority=0)
+        still = jobs.enqueue(
+            conn, "scene_backdrop", adv["id"], "room", {"prompt": "hall"},
+            priority=jobs.PRIORITY_BULK_PORTRAIT)
+        first = db.claim_next_job(conn)
+        second = db.claim_next_job(conn)
+        assert db.claim_next_job(conn) is None
+    assert first["id"] == still["id"]
+    assert second["id"] == auto["id"]
+
+    blocked = make_adventure()
+    with db.session() as conn:
+        preparing = db.insert_job(
+            conn, adventure_id=blocked["id"], type="character_portrait",
+            ref_id="npc", status="preparing")
+        auto = jobs.enqueue_scene_clip(
+            conn, blocked["id"], "auto", "rain", automatic=True, priority=0)
+        manual = jobs.enqueue_scene_clip(
+            conn, blocked["id"], "manual", "keep going")
+        assert db.claim_next_job(conn)["id"] == manual["id"]
+        assert db.claim_next_job(conn) is None
+        db.cancel_job(conn, preparing["id"])
+        assert db.claim_next_job(conn)["id"] == auto["id"]
+
+    alone = make_adventure()
+    with db.session() as conn:
+        auto = jobs.enqueue_scene_clip(
+            conn, alone["id"], "only", "breeze", automatic=True)
+        assert db.claim_next_job(conn)["id"] == auto["id"]
+
+
+def test_heartbeat_is_written_for_running_jobs_and_hidden_after(tmp_db, monkeypatch):
+    assert jobs._HEARTBEAT_INTERVAL_S == 5.0
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: clock["t"])
+    writes = []
+    real_touch = db.touch_job
+
+    def spy(conn, job_id, heartbeat_at):
+        writes.append((job_id, heartbeat_at))
+        return real_touch(conn, job_id, heartbeat_at)
+
+    monkeypatch.setattr(db, "touch_job", spy)
+    adv = make_adventure()
+    with db.session() as conn:
+        pending = jobs.enqueue(
+            conn, "scene_backdrop", adv["id"], "room", {"prompt": "hall"})
+        assert db.touch_job(conn, pending["id"], "not-running") is False
+        running = db.claim_next_job(conn)
+    assert running["id"] == pending["id"]
+    writes.clear()
+    progress = jobs._generation_progress(running, None, watch_cancel=False)
+    progress()
+    progress()
+    assert len(writes) == 1
+    clock["t"] += jobs._HEARTBEAT_INTERVAL_S
+    progress()
+    assert len(writes) == 2
+    stored = _job(running["id"])
+    assert stored["heartbeat_at"] == writes[-1][1]
+    assert stored["payload"]["heartbeat_at"] == stored["heartbeat_at"]
+    with db.session() as conn:
+        assert db.finish_job(conn, running["id"], "error", error="stopped")
+    done = _job(running["id"])
+    assert done["status"] == "error"
+    assert "heartbeat_at" not in done
+    assert "heartbeat_at" not in done["payload"]
+
+
+def test_portrait_prepare_is_single_and_waits_out_the_narrative(tmp_db, monkeypatch):
+    active = {"on": True}
+    monkeypatch.setattr(jobs, "worker_enabled", lambda: True)
+    monkeypatch.setattr(game_engine, "is_any_generation_active", lambda: active["on"])
+    state = {"current": 0, "max": 0, "order": []}
+    guard = threading.Lock()
+    hold = threading.Event()
+    first_entered = threading.Event()
+
+    def prepare(job, transport):
+        wait = False
+        with guard:
+            state["current"] += 1
+            state["max"] = max(state["max"], state["current"])
+            state["order"].append(job["id"])
+            wait = len(state["order"]) == 1
+        if wait:
+            first_entered.set()
+            assert hold.wait(5)
+        with guard:
+            state["current"] -= 1
+
+    monkeypatch.setattr(jobs, "_prepare_portrait_job", prepare)
+    adv = make_adventure()
+    with db.session() as conn:
+        first = db.insert_job(
+            conn, adventure_id=adv["id"], type="character_portrait",
+            ref_id="one", status="preparing", priority=jobs.PRIORITY_PRESENT_PORTRAIT)
+        second = db.insert_job(
+            conn, adventure_id=adv["id"], type="character_portrait",
+            ref_id="two", status="preparing", priority=jobs.PRIORITY_BULK_PORTRAIT)
+    try:
+        jobs._arm_portrait_prepare(first["id"])
+        jobs._arm_portrait_prepare(second["id"])
+        jobs.resume_portrait_prepare()
+        assert not first_entered.wait(0.2)
+        assert state["order"] == []
+        alive = [thread for thread in threading.enumerate()
+                 if thread.name == "portrait-prompt" and thread.is_alive()]
+        assert alive == []
+
+        active["on"] = False
+        jobs.resume_portrait_prepare()
+        assert first_entered.wait(5)
+        assert state["order"] == [first["id"]]
+        assert state["max"] == 1
+        assert state["current"] == 1
+        alive = [thread for thread in threading.enumerate()
+                 if thread.name == "portrait-prompt" and thread.is_alive()]
+        assert len(alive) == 1
+
+        active["on"] = True
+        hold.set()
+        for thread in list(alive):
+            thread.join(5)
+        assert state["order"] == [first["id"]]
+        assert state["current"] == 0
+        jobs.resume_portrait_prepare()
+        assert state["order"] == [first["id"]]
+
+        active["on"] = False
+        jobs.resume_portrait_prepare()
+        _wait(lambda: state["order"] == [first["id"], second["id"]])
+        for thread in threading.enumerate():
+            if thread.name == "portrait-prompt":
+                thread.join(5)
+        assert state["max"] == 1
+        assert state["current"] == 0
+    finally:
+        hold.set()
+        active["on"] = False
+        for thread in threading.enumerate():
+            if thread.name == "portrait-prompt":
+                thread.join(5)
+        with jobs._prepare_lock:
+            jobs._prepare_queue.clear()
+            jobs._prepare_queued.clear()
+            jobs._prepare_inflight.clear()
+            jobs._prepare_running = False

@@ -15,7 +15,8 @@ Providers (settings.image.provider, config efetiva de settings_store):
   retratos com âncora usam seu latent zero e cenas usam EmptyLatentImage.
   `engine=flux2_klein` é opt-in e lê `comfyui_flux2` (UNET FP8, CLIP
   qwen_3_4b type=flux2, flux2-vae): EmptyFlux2LatentImage e Flux2Scheduler
-  no mesmo canvas, 4 passos, CFG 1, euler. Referências passam por LoadImage,
+  no mesmo canvas já múltiplo de 16 (860x820 vira 848x816; Qwen não alinha),
+  4 passos, CFG 1, euler. Referências passam por LoadImage,
   ImageScaleToTotalPixels, VAEEncode e ReferenceLatent (teto 4). Não altera
   `comfyui_unet` nem os grafos LTXV/Wan.
 
@@ -46,7 +47,7 @@ import logging
 import random
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -450,6 +451,24 @@ def _flux2_used_references(init_image: bytes | None,
     return sequence[:limit]
 
 
+def _flux2_canvas(width: int | None, height: int | None,
+                  cfg: dict) -> tuple[int, int]:
+    """Resolve None e 0 pelos defaults do ComfyUI (omissão → 1024).
+
+    Só `flux2_klein` alinha cada lado para baixo ao múltiplo de 16, com piso
+    16: 860x820 vira 848x816. Dimensão já válida é identidade. Qwen e o clipe
+    não passam por este snap — o clipe nem chama este helper.
+    """
+    resolved_w = int(width or cfg.get("comfyui_width") or 1024)
+    resolved_h = int(height or cfg.get("comfyui_height") or 1024)
+    if _comfy_image_engine(cfg) != "flux2_klein":
+        return resolved_w, resolved_h
+    return (
+        max(16, (int(resolved_w) // 16) * 16),
+        max(16, (int(resolved_h) // 16) * 16),
+    )
+
+
 def _validate_flux2_canvas(width: int, height: int) -> None:
     if width % 16 or height % 16:
         raise ImageError(
@@ -512,8 +531,10 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
 
     Cada referência é LoadImage → ImageScaleToTotalPixels → VAEEncode →
     ReferenceLatent, em série, no positivo e no negativo. EmptyFlux2LatentImage
-    e Flux2Scheduler recebem o mesmo width/height.
+    e Flux2Scheduler recebem o mesmo canvas já normalizado.
     """
+    width, height = _flux2_canvas(width, height, cfg)
+    _validate_flux2_canvas(width, height)
     flux = flux2_settings(cfg)
     seed_value = cfg.get("seed")
     noise_seed = (random.randint(0, 2**31 - 1)
@@ -651,10 +672,20 @@ def comfy_poll_interval_s(cfg: dict) -> float:
     return max(0.2, float(cfg.get("comfyui_poll_interval_s") or 0.25))
 
 
+def _emit_progress(progress: Callable[[], None] | None) -> None:
+    if progress is not None:
+        progress()
+
+
 def _comfy_run(cfg: dict, client: httpx.Client, graph: dict, *,
                timeout: float | None = None,
-               fetch=None) -> bytes:
-    """Enfileira o grafo, espera a execução e devolve o arquivo de saída."""
+               fetch=None,
+               progress: Callable[[], None] | None = None) -> bytes:
+    """Enfileira o grafo, espera a execução e devolve o arquivo de saída.
+
+    `progress`, quando não é None, roda depois do /prompt aceito e depois de
+    cada leitura de /history. Exceção do callback propaga e aborta a espera.
+    """
     base = _comfy_base(cfg)
     submitted = _post_json(
         client, f"{base}/prompt",
@@ -666,6 +697,7 @@ def _comfy_run(cfg: dict, client: httpx.Client, graph: dict, *,
     if submitted.get("node_errors"):
         raise ImageError(
             f"workflow recusado pelo ComfyUI: {str(submitted['node_errors'])[:200]}")
+    _emit_progress(progress)
 
     if timeout is None:
         timeout = float(cfg.get("timeout_seconds", 300))
@@ -689,6 +721,7 @@ def _comfy_run(cfg: dict, client: httpx.Client, graph: dict, *,
             history = resp.json()
         except ValueError as exc:
             raise ImageError("resposta de history não é JSON") from exc
+        _emit_progress(progress)
         entry = history.get(prompt_id) if isinstance(history, dict) else None
         if entry:
             status = entry.get("status") or {}
@@ -707,9 +740,9 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
                       width: int | None = None, height: int | None = None,
                       *, init_image: bytes | None = None,
                       reference_images: list[bytes] | None = None,
+                      progress: Callable[[], None] | None = None,
                       ) -> tuple[bytes, int, int]:
-    width = int(width or cfg.get("comfyui_width") or 1024)
-    height = int(height or cfg.get("comfyui_height") or 1024)
+    width, height = _flux2_canvas(width, height, cfg)
     engine = _comfy_image_engine(cfg)
     if engine == "flux2_klein":
         _validate_flux2_canvas(width, height)
@@ -740,7 +773,7 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
         graph = _comfy_qwen_graph(
             cfg, prompt, names, width=width, height=height,
             edit=init_image is not None)
-    content = _comfy_run(cfg, client, graph)
+    content = _comfy_run(cfg, client, graph, progress=progress)
     return content, width, height
 
 
@@ -783,8 +816,7 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
             extra["seed"] = int(cfg["seed"])
     elif provider == "comfyui":
         model = cfg.get("comfyui_unet") or ""
-        size = [int(width or cfg.get("comfyui_width") or 0),
-                int(height or cfg.get("comfyui_height") or 0)]
+        size = list(_flux2_canvas(width, height, cfg))
         extra = {
             "steps": cfg.get("comfyui_steps"),
             "sampler": cfg.get("comfyui_sampler") or "euler",
@@ -1193,7 +1225,8 @@ def _clip_seed(cfg: dict) -> int:
 
 def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                   source_png: bytes,
-                  transport: httpx.BaseTransport | None = None) -> dict:
+                  transport: httpx.BaseTransport | None = None,
+                  progress: Callable[[], None] | None = None) -> dict:
     """Image-to-video no ComfyUI. Exige o PNG de origem, grava `.mp4` e
     devolve file_path, width, height, provider, media_type e duration_ms.
 
@@ -1257,7 +1290,8 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                     video, prompt, name, width=frame_w, height=frame_h,
                     seed=_clip_seed(cfg))
             content = _comfy_run(
-                cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video)
+                cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video,
+                progress=progress)
         file_path = _save_mp4(cfg, adventure_id, image_id, content)
     finally:
         if release_for_forge:
@@ -1308,7 +1342,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                    init_image: bytes | None = None,
                    denoising_strength: float | None = None,
                    negative_extra: str = "",
-                   reference_images: list[bytes] | None = None) -> dict:
+                   reference_images: list[bytes] | None = None,
+                   progress: Callable[[], None] | None = None) -> dict:
     """Gera a imagem no provider efetivo, salva o PNG e devolve metadados
     {file_path (relativo), width, height, provider}. Levanta ImageError subclasses.
 
@@ -1316,6 +1351,9 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     em vez de inventar outro personagem em txt2img.
     reference_images entram no condicionamento visual nativo do Qwen.
     Com engine flux2_klein viram ReferenceLatent, no máximo 4, âncora inclusa.
+    Nesse engine, width/height do retorno são o canvas efetivo (múltiplo de 16).
+    `progress`, se não for None, roda no provider comfyui após o submit e a
+    cada poll. Nos outros providers o argumento é aceito e ignorado.
     """
     provider = cfg.get("provider") or "sdwebui"
     timeout = float(cfg.get("timeout_seconds", 300))
@@ -1333,7 +1371,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         if provider == "comfyui":
             content, width, height = _generate_comfyui(
                 cfg, client, prompt, width, height,
-                init_image=init_image, reference_images=refs)
+                init_image=init_image, reference_images=refs,
+                progress=progress)
         elif init_image is not None:
             if provider == "sdwebui":
                 content, width, height = _generate_sdwebui_img2img(

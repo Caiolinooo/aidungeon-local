@@ -17,9 +17,17 @@ from app import db, llm_client, npc_assets, npc_bonds, npc_life, world_facts
 
 log = logging.getLogger("aidungeon.action_check")
 
-_MAX_CANON = 1500
 _MEMORY_BUDGET = 400
 _MEMORY_TOP_K = 4
+_UI_CHARS = 1200
+_CANON_CHARS = 1200
+_INVENTORY_CHARS = 1200
+_RULES_CHARS = 1200
+_MEMORY_CHARS = 160
+_MEMORY_KEEP = 4
+_ACTION_CHARS = 240
+_ACTION_KEEP = 6
+_ABSENT_KEEP = 20
 
 _SYSTEM = """Você verifica se a ação do jogador é possível neste instante da história.
 Julgue só coerência, possibilidade de estado e física. Não julgue liberdade de roleplay.
@@ -82,26 +90,34 @@ def collect_state(conn, adventure: dict, actions: list[dict], cards: list[dict],
 
 def check_action(action_text: str, action_type: str, state: dict, *,
                  llm_cfg: dict, transport: Any, cfg: dict,
-                 cancel=None) -> Verdict | None:
+                 cancel=None, allow_llm: bool = True,
+                 blockers: list[str] | None = None) -> Verdict | None:
     """Veredito, ou None se a checagem LLM não pôde ser lida.
 
-    Bloqueio já marcado pelo world_facts não consulta o modelo.
+    Bloqueio duro não consulta o modelo. `blockers` informado não é
+    recalculado. `allow_llm=False` não abre rede: devolve o bloqueio
+    determinístico ou um veredito vazio com possible=True.
     """
+    if blockers is None:
+        resolved = hard_blockers(state) if isinstance(state, dict) else []
+    else:
+        resolved = [item.strip() for item in blockers if isinstance(item, str) and item.strip()]
+    if resolved:
+        return Verdict(
+            possible=False,
+            blockers=resolved,
+            risks=[],
+            notes="Contradiz o estado do mundo ja estabelecido.",
+        )
+    if not allow_llm:
+        return Verdict(possible=True)
+    if not isinstance(state, dict):
+        return None
     try:
-        if not isinstance(state, dict):
-            return None
-        blockers = _hard_blockers(state)
-        if blockers:
-            return Verdict(
-                possible=False,
-                blockers=blockers,
-                risks=[],
-                notes="Contradiz o estado do mundo ja estabelecido.",
-            )
         raw = llm_client.chat_completion(
-            llm_cfg,
+            llm_client.role_config(llm_cfg, "turn_check"),
             _messages(action_text, action_type, state),
-            role="meta",
+            role="turn_check",
             temperature=0.15,
             max_tokens=_max_tokens(cfg),
             timeout_s=_timeout(cfg),
@@ -158,7 +174,7 @@ def verdict_block(verdict: Verdict) -> str:
     )
 
 
-def _hard_blockers(state: dict) -> list[str]:
+def hard_blockers(state: dict) -> list[str]:
     blockers: list[str] = []
     for item in _strings(state.get("blocked_items")):
         blockers.append(f"Sem item: {item}.")
@@ -171,15 +187,140 @@ def _hard_blockers(state: dict) -> list[str]:
     return _unique(blockers)
 
 
+def _clip_value(value: Any, limit: int) -> Any:
+    """Corta JSON ou texto no limite. Abaixo do limite o valor original fica."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return npc_assets._clip(value, limit)
+    try:
+        raw = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raw = json.dumps(value, ensure_ascii=False, default=str)
+    if len(raw) <= limit:
+        return value
+    return npc_assets._clip(raw, limit)
+
+
+def _last_dice(value: Any) -> Any:
+    """Só o último resultado. Histórico e anotações saem do prompt."""
+    if isinstance(value, list):
+        return value[-1] if value else None
+    if not isinstance(value, dict):
+        return value
+    if "last" in value:
+        return {"last": value["last"]}
+    for key in ("history", "rolls", "results", "log"):
+        seq = value.get(key)
+        if isinstance(seq, list) and seq:
+            return seq[-1]
+    return value
+
+
+def _memory_text(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        text = item.get("text")
+        return text if isinstance(text, str) else ""
+    return str(item)
+
+
+def _absent_rows(items: Any) -> list[dict]:
+    rows: list[dict] = []
+    if not isinstance(items, list):
+        return rows
+    for item in items:
+        status = ""
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            raw_status = item.get("status")
+            status = raw_status.strip() if isinstance(raw_status, str) else ""
+        elif isinstance(item, str):
+            name = str(item).strip()
+            raw_status = getattr(item, "status", "")
+            status = raw_status.strip() if isinstance(raw_status, str) else ""
+        else:
+            continue
+        if not name:
+            continue
+        rows.append({"name": name, "status": status})
+        if len(rows) >= _ABSENT_KEEP:
+            break
+    return rows
+
+
+def _bound_player(player: dict) -> dict:
+    row = dict(player)
+    if "ui_state" in row:
+        row["ui_state"] = _clip_value(row.get("ui_state"), _UI_CHARS)
+    if "canon" in row:
+        row["canon"] = _clip_value(row.get("canon"), _CANON_CHARS)
+    if "inventory" in row:
+        row["inventory"] = _clip_value(row.get("inventory"), _INVENTORY_CHARS)
+    if "dice" in row:
+        row["dice"] = _last_dice(row.get("dice"))
+    return row
+
+
+def _bound_present(npcs: Any) -> Any:
+    if not isinstance(npcs, list):
+        return npcs
+    rows = []
+    for npc in npcs:
+        if not isinstance(npc, dict):
+            rows.append(npc)
+            continue
+        row = dict(npc)
+        if "canon" in row:
+            row["canon"] = _clip_value(row.get("canon"), _CANON_CHARS)
+        rows.append(row)
+    return rows
+
+
+def _prompt_world(state: dict) -> dict:
+    """Copia o mundo do prompt. Não altera o estado que o turno ainda lê."""
+    world = dict(state)
+    player = world.get("player")
+    if isinstance(player, dict):
+        world["player"] = _bound_player(player)
+    if "present_npcs" in world:
+        world["present_npcs"] = _bound_present(world.get("present_npcs"))
+    if "canon_blob" in world:
+        world["canon_blob"] = _clip_value(world.get("canon_blob") or "", _CANON_CHARS)
+    if "character_rules" in world and world.get("character_rules") is not None:
+        rules = world.get("character_rules")
+        if not isinstance(rules, str):
+            rules = json.dumps(rules, ensure_ascii=False, default=str)
+        world["character_rules"] = npc_assets._clip(rules, _RULES_CHARS)
+    memories = world.get("memories")
+    if isinstance(memories, list):
+        world["memories"] = [
+            npc_assets._clip(_memory_text(item), _MEMORY_CHARS)
+            for item in memories[:_MEMORY_KEEP]
+        ]
+    actions = world.get("recent_actions")
+    if isinstance(actions, list):
+        kept = []
+        for item in actions[-_ACTION_KEEP:]:
+            if isinstance(item, dict):
+                row = dict(item)
+                text = row.get("text")
+                row["text"] = npc_assets._clip(text if isinstance(text, str) else str(text or ""), _ACTION_CHARS)
+                kept.append(row)
+            else:
+                kept.append(item)
+        world["recent_actions"] = kept
+    if "absent" in world:
+        world["absent"] = _absent_rows(world.get("absent"))
+    return world
+
+
 def _messages(action_text: str, action_type: str, state: dict) -> list[dict]:
-    portrait = dict(state)
-    blob = portrait.get("canon_blob") or ""
-    if isinstance(blob, str) and len(blob) > _MAX_CANON:
-        portrait["canon_blob"] = blob[-_MAX_CANON:]
     payload = {
         "action_type": action_type,
         "action": action_text,
-        "world": portrait,
+        "world": _prompt_world(state),
     }
     return [
         {"role": "system", "content": _SYSTEM},
@@ -241,8 +382,30 @@ def _player_view(conn, adventure: dict, user: str) -> dict:
     }
 
 
+class _AbsentRef(str):
+    """Nome ausente com status. Compara como string no filtro do turno."""
+
+    def __new__(cls, name: str, status: str = ""):
+        obj = str.__new__(cls, name)
+        obj.status = status or ""
+        return obj
+
+
+def _remember_absent(absent: list, title: str, status: str) -> None:
+    if not title or world_facts.name_is_absent(title, absent):
+        if title and status:
+            folded = title.casefold()
+            for index, item in enumerate(absent):
+                if str(item).strip().casefold() != folded or getattr(item, "status", ""):
+                    continue
+                absent[index] = _AbsentRef(str(item).strip(), status)
+                break
+        return
+    absent.append(_AbsentRef(title, status))
+
+
 def _split_npcs(conn, adventure_id: str, cards: list[dict],
-                assessment: world_facts.Assessment, actions: list[dict]) -> tuple[list[dict], list[str]]:
+                assessment: world_facts.Assessment, actions: list[dict]) -> tuple[list[dict], list]:
     scene = "\n".join(
         (action.get("text") or "")
         for action in actions
@@ -256,8 +419,8 @@ def _split_npcs(conn, adventure_id: str, cards: list[dict],
             continue
         title = (card.get("title") or "").strip()
         if world_facts.name_is_absent(title, assessment.absent) or not _card_in_text(card, blob):
-            if title and not world_facts.name_is_absent(title, absent):
-                absent.append(title)
+            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+            _remember_absent(absent, title, _sheet_status(sheet))
             continue
         present.append(_npc_view(conn, adventure_id, card))
     return present, _unique(absent)

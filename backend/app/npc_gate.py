@@ -1,9 +1,9 @@
 """Adjudicador do turno: uma chamada LLM separada do narrador.
 
-O adjudicador recebe a ação, a cena, o perfil e o estado de TODOS os
-personagens vivos (ficha, vínculos, memórias, corpo, dor, expressão) e decide
-como o mundo responde. Não existe piso, crítico, muro de poder nem frase
-pronta: números entram como contexto, nunca como sentença.
+O adjudicador recebe a ação, o fim da cena, o perfil e o estado de cada
+personagem presente (ficha, vínculos, memórias, corpo, dor, expressão).
+Ausentes entram só com nome, status e present=false. Não existe piso, crítico,
+muro de poder nem frase pronta: números entram como contexto, nunca como sentença.
 
 Saída canônica (JSON):
     decision: allow | partial | refuse | own_beat
@@ -65,8 +65,10 @@ RULES:
 - If nobody is present, adjudicate the environment/action alone and leave
   reactions empty.
 - If the action is impossible or the world cannot answer, choose refuse and state
-  the concrete reason in outcome. If `world_check.possible` is false, its blockers
-  are physical facts: do not override them, but you still decide how people react.
+  the concrete reason in outcome. Entries in `world_check.action_blockers` are
+  established physical facts, not another model's verdict: do not contradict
+  them, but still decide how people react. Without them, judge possibility from
+  the supplied world and allow fiction that does not contradict established facts.
 - Never mention rules, JSON, fields, numbers, "allow", "partial" or "refuse" to
   the player.
 - Every reaction must include a canonical emotion (joy, anger, fear, sadness,
@@ -231,10 +233,35 @@ def ensure_saved(conn, adventure_id: str) -> int:
     return dirty
 
 
+_SCENE_TAIL = 1600
+_GATE_MEMORY_KEEP = 4
+_GATE_MEMORY_CHARS = 160
+_ABSENT_KEEP = 20
+
+
 def _scene_of(actions: list[dict]) -> str:
-    return "\n".join(
+    text = "\n".join(
         (action.get("text") or "") for action in actions if action.get("type") != "see"
-    )[-4000:]
+    )
+    if len(text) <= _SCENE_TAIL:
+        return text
+    return text[-_SCENE_TAIL:]
+
+
+def _person_status(card: dict) -> str:
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    value = sheet.get("status")
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _absent_context(card: dict) -> dict:
+    return {
+        "name": card.get("title") or "Alguém",
+        "status": _person_status(card),
+        "present": False,
+    }
 
 
 def _card_context(card: dict, *, present: bool) -> dict:
@@ -325,15 +352,14 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
           cancel=None) -> dict | None:
     try:
         raw = llm_client.chat_completion(
-            llm_cfg,
+            llm_client.role_config(llm_cfg, "turn_gate"),
             [
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            role="meta",
+            role="turn_gate",
             temperature=0.35,
             max_tokens=max_tokens,
-            timeout_s=45,
             transport=transport,
             cancel=cancel,
             response_format={"type": "json_schema", "json_schema": {
@@ -414,12 +440,24 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
         mentioned = npc_bonds.characters_in_text(living, plain(text))
         present_ids = {card["id"] for card in mentioned}
     roster = []
+    absent_kept = 0
     for card in living:
-        item = _card_context(card, present=card["id"] in present_ids)
-        memories = npc_life.list_memories(conn, adventure_id, card["id"], limit=8)
+        if card["id"] not in present_ids:
+            if absent_kept >= _ABSENT_KEEP:
+                continue
+            roster.append(_absent_context(card))
+            absent_kept += 1
+            continue
+        item = _card_context(card, present=True)
+        memories = npc_life.list_memories(
+            conn, adventure_id, card["id"], limit=_GATE_MEMORY_KEEP,
+        )
         item["memories"] = [
-            {"kind": row.get("kind"), "text": (row.get("text") or "")[:240]}
-            for row in memories
+            {
+                "kind": row.get("kind"),
+                "text": npc_assets._clip(row.get("text") or "", _GATE_MEMORY_CHARS),
+            }
+            for row in memories[:_GATE_MEMORY_KEEP]
         ]
         roster.append(item)
     player = _player_context(db.player_character(conn, adventure_id, user), user)
@@ -532,7 +570,7 @@ def _roster_ids(payload: dict) -> tuple[set[str], set[str]]:
 def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
     names = [item for item in (payload.get("people") or []) if item.get("name")]
     by_name = {str(item.get("name")).casefold(): item for item in names}
-    by_id = {item.get("card_id"): item for item in names}
+    by_id = {item.get("card_id"): item for item in names if item.get("card_id")}
     if not isinstance(data, dict):
         return None
     decision = str(data.get("decision") or "").strip().lower()

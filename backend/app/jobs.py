@@ -43,6 +43,8 @@ Tipos:
 Aventura apagada no meio do render: o PNG é descartado e o job termina
 cancelado. O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para
 testes determinísticos — a suíte chama `process_pending()` diretamente.
+Um reaper independente, a cada 5 s, fecha `running` cujo `started_at`
+passou do prazo. O heartbeat só informa a UI; não empurra esse prazo.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ import os
 import sqlite3
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -83,7 +86,20 @@ CUDA_OOM_RETRY_CAP = 3
 _wakeup = threading.Event()
 _prepare_lock = threading.Lock()
 _prepare_inflight: set[str] = set()
+_prepare_queue: deque[str] = deque()
+_prepare_queued: set[str] = set()
+_prepare_running = False
 _PREPARE_VISIBLE_S = 120.0
+_HEARTBEAT_INTERVAL_S = 5.0
+_REAPER_INTERVAL_S = 5.0
+_PREEMPT_IMAGE_REASON = "preempted by queued image"
+_IMAGE_JOB_TYPES = (
+    "character_portrait", "scene_backdrop", "see_image", "location_image",
+)
+_heartbeat_lock = threading.Lock()
+_heartbeat_mono: dict[str, float] = {}
+_clip_watch_mono: dict[str, float] = {}
+_clip_interrupted: set[str] = set()
 
 _PORTRAIT_SYSTEM = """You write image generation prompts for character portraits.
 Given the character description and the story context, output a single concise English
@@ -197,6 +213,8 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
                         payload=payload, priority=priority,
                         supersede_key=supersede_key or "", status=status)
     superseded = db.supersede_jobs(conn, supersede_key, job["id"]) if supersede_key else []
+    if type_ in _IMAGE_JOB_TYPES:
+        _cancel_running_automatic_clips(conn)
     events.record(
         conn, adventure_id, "job_queued",
         {"job_id": job["id"], "type": type_, "ref_id": job["ref_id"]},
@@ -431,6 +449,7 @@ def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dic
     with db.session() as conn:
         job = db.insert_job(conn, adventure_id=adventure_id, type="see_image",
                             payload=payload, priority=PRIORITY_SEE, status="preparing")
+        _cancel_running_automatic_clips(conn)
         events.record(
             conn, adventure_id, "job_queued",
             {"job_id": job["id"], "type": "see_image", "ref_id": ""},
@@ -485,20 +504,42 @@ def cancel(conn, job_id: str, *, reason: str | None = None) -> dict | None:
     return job
 
 
+def _cancel_running_automatic_clips(conn) -> list[dict]:
+    """Cancela clipes automáticos running. O interrupt espera o commit."""
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE type='scene_clip' AND status='running'"
+        " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1",
+    ).fetchall()
+    canceled = []
+    for row in rows:
+        job = cancel(conn, row["id"], reason=_PREEMPT_IMAGE_REASON)
+        if job is not None:
+            canceled.append(job)
+    return canceled
+
+
 def interrupt_image(job: dict, transport: Any = None) -> bool:
     """Melhor esforço para interromper o render de um job running cancelado."""
     if job["type"] not in ("character_portrait", "scene_backdrop", "see_image",
                            "location_image", "scene_clip"):
         return False
+    is_clip = job["type"] == "scene_clip"
+    if is_clip:
+        with _heartbeat_lock:
+            if job["id"] in _clip_interrupted:
+                return False
+            _clip_interrupted.add(job["id"])
+    completed = False
     try:
         with db.session() as conn:
             cfg = image_client.effective_settings(conn)
-        if job["type"] == "scene_clip":
+        if is_clip:
             image_client.interrupt_comfy(cfg, transport)
         else:
             if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
                 return False
             image_client.interrupt_sdwebui(cfg, transport)
+        completed = True
     except ImageError as exc:
         log.warning("job %s: interrupt do WebUI falhou: %s", job["id"], exc.message)
         return False
@@ -506,7 +547,75 @@ def interrupt_image(job: dict, transport: Any = None) -> bool:
         log.warning("job %s: interrupt do WebUI indisponível (%s)",
                     job["id"], type(exc).__name__)
         return False
+    finally:
+        if is_clip and not completed:
+            with _heartbeat_lock:
+                _clip_interrupted.discard(job["id"])
     return True
+
+
+def _interval_open(bucket: dict[str, float], job_id: str, *, force: bool = False) -> bool:
+    now = time.monotonic()
+    with _heartbeat_lock:
+        last = bucket.get(job_id)
+        if not force and last is not None and now - last < _HEARTBEAT_INTERVAL_S:
+            return False
+        bucket[job_id] = now
+        return True
+
+
+def _interval_reset(bucket: dict[str, float], job_id: str) -> None:
+    with _heartbeat_lock:
+        bucket.pop(job_id, None)
+
+
+def _forget_job_runtime(job_id: str) -> None:
+    with _heartbeat_lock:
+        _heartbeat_mono.pop(job_id, None)
+        _clip_watch_mono.pop(job_id, None)
+        _clip_interrupted.discard(job_id)
+
+
+def _write_heartbeat(job_id: str, *, force: bool = False) -> bool:
+    """No máximo um write a cada 5 s. O prazo do reaper não usa este carimbo."""
+    if not _interval_open(_heartbeat_mono, job_id, force=force):
+        return False
+    try:
+        with db.session() as conn:
+            return db.touch_job(conn, job_id, db.utcnow())
+    except sqlite3.OperationalError:
+        log.warning("job %s: heartbeat não gravou", job_id)
+        _interval_reset(_heartbeat_mono, job_id)
+        return False
+
+
+def _interrupt_clip_if_stopped(job: dict, transport: Any) -> None:
+    """Lê o status já commitado, no máximo a cada 5 s, e interrompe se parou."""
+    job_id = job["id"]
+    with _heartbeat_lock:
+        if job_id in _clip_interrupted:
+            return
+    if not _interval_open(_clip_watch_mono, job_id):
+        return
+    try:
+        with db.session() as conn:
+            current = db.get_job(conn, job_id)
+    except sqlite3.OperationalError:
+        _interval_reset(_clip_watch_mono, job_id)
+        return
+    if current is not None and current["status"] == "running":
+        return
+    if interrupt_image(job, transport):
+        with _heartbeat_lock:
+            _clip_interrupted.add(job_id)
+
+
+def _generation_progress(job: dict, transport: Any, *, watch_cancel: bool):
+    def progress(*_args, **_kwargs) -> None:
+        _write_heartbeat(job["id"])
+        if watch_cancel:
+            _interrupt_clip_if_stopped(job, transport)
+    return progress
 
 
 def preempt_automatic_clips(adventure_id: str, transport: Any = None) -> int:
@@ -685,7 +794,53 @@ def _prepare_outstanding_portraits(transport: Any) -> None:
             _release_prepare(job_id)
 
 
-def _portrait_prepare_thread(job_id: str) -> None:
+def _pop_queued_portrait() -> str | None:
+    """Só com `_prepare_lock` já tomado."""
+    while _prepare_queue:
+        job_id = _prepare_queue.popleft()
+        _prepare_queued.discard(job_id)
+        if job_id in _prepare_inflight:
+            continue
+        return job_id
+    return None
+
+
+def _want_prepare_worker() -> bool:
+    """Marca a thread global se há fila e ninguém narrando. Exige o lock."""
+    global _prepare_running
+    if _prepare_running or game_engine.is_any_generation_active():
+        return False
+    if not _prepare_queue:
+        return False
+    _prepare_running = True
+    return True
+
+
+def _start_prepare_worker() -> None:
+    global _prepare_running
+    thread = threading.Thread(
+        target=_portrait_prepare_worker, name="portrait-prompt", daemon=True,
+    )
+    try:
+        thread.start()
+    except Exception:
+        with _prepare_lock:
+            _prepare_running = False
+        raise
+
+
+def _portrait_worker_stopped() -> None:
+    """A thread saiu: no máximo uma sucessora, e só sem narrativa."""
+    global _prepare_running
+    start = False
+    with _prepare_lock:
+        _prepare_running = False
+        start = _want_prepare_worker()
+    if start:
+        _start_prepare_worker()
+
+
+def _run_one_portrait_prepare(job_id: str) -> None:
     try:
         deadline = time.monotonic() + _PREPARE_VISIBLE_S
         job = None
@@ -711,29 +866,58 @@ def _portrait_prepare_thread(job_id: str) -> None:
                                 "could not prepare the portrait job")
         except Exception:
             log.exception("portrait %s: fallback de falha também errou", job_id)
+
+
+def _portrait_prepare_worker() -> None:
+    """Uma thread global. Cada volta pega no máximo o próximo da FIFO."""
+    try:
+        while True:
+            with _prepare_lock:
+                if game_engine.is_any_generation_active():
+                    return
+                job_id = _pop_queued_portrait()
+                if job_id is None:
+                    return
+                _prepare_inflight.add(job_id)
+            try:
+                _run_one_portrait_prepare(job_id)
+            finally:
+                _release_prepare(job_id)
     finally:
-        _release_prepare(job_id)
+        _portrait_worker_stopped()
 
 
 def _arm_portrait_prepare(job_id: str) -> None:
-    """Uma thread por job quando o worker está ligado.
+    """Enfileira o retrato. A thread só nasce sem narrativa e sem outra preparação.
 
-    Nos testes o worker fica desligado e `process_pending` prepara no
-    transport falso, sem rede e sem segunda chamada.
+    Com o worker desligado, `process_pending` prepara no transport do teste.
     """
     if not worker_enabled():
         return
-    if not _claim_prepare(job_id):
+    start = False
+    with _prepare_lock:
+        if job_id in _prepare_inflight or job_id in _prepare_queued:
+            return
+        _prepare_queue.append(job_id)
+        _prepare_queued.add(job_id)
+        start = _want_prepare_worker()
+    if start:
+        _start_prepare_worker()
+
+
+def resume_portrait_prepare() -> None:
+    """Solta no máximo a próxima preparação quando a narrativa termina.
+
+    `release_generation_lock` chama isto no sucesso e no erro. Sem worker,
+    não faz nada: os testes continuam síncronos.
+    """
+    if not worker_enabled():
         return
-    thread = threading.Thread(
-        target=_portrait_prepare_thread, args=(job_id,),
-        name="portrait-prompt", daemon=True,
-    )
-    try:
-        thread.start()
-    except Exception:
-        _release_prepare(job_id)
-        raise
+    start = False
+    with _prepare_lock:
+        start = _want_prepare_worker()
+    if start:
+        _start_prepare_worker()
 
 
 def _portrait_bytes(image: dict) -> bytes:
@@ -864,6 +1048,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         denoising_strength=denoise,
         reference_images=(references if img_cfg.get("provider") == "comfyui" else None),
         negative_extra=portrait_ban,
+        progress=_generation_progress(job, transport, watch_cancel=False),
     )
     if not anchor_id:
         generated = _portrait_bytes({"file_path": meta["file_path"]})
@@ -1039,6 +1224,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         image_id=image_id, transport=transport,
         width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
         negative_extra=ban, reference_images=references or None,
+        progress=_generation_progress(job, transport, watch_cancel=False),
     )
     try:
         with db.session() as conn:
@@ -1343,7 +1529,8 @@ def _execute_see(job: dict, transport: Any) -> dict:
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
         transport=transport, negative_extra=negative_extra,
-        reference_images=references or None)
+        reference_images=references or None,
+        progress=_generation_progress(job, transport, watch_cancel=False))
     try:
         image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                           image_id=image_id, prompt=prompt,
@@ -1371,6 +1558,7 @@ def _execute_location_image(job: dict, transport: Any) -> dict:
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"],
         image_id=image_id, transport=transport, width=1344, height=768,
+        progress=_generation_progress(job, transport, watch_cancel=False),
     )
     with db.session() as conn:
         image = db.insert_image(
@@ -1446,7 +1634,8 @@ def _execute_scene_clip(job: dict, transport: Any) -> dict:
         image_id = db.new_id()
         meta = image_client.generate_clip(
             img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
-            source_png=raw, transport=transport)
+            source_png=raw, transport=transport,
+            progress=_generation_progress(job, transport, watch_cancel=True))
     else:
         image_id = db.new_id()
     try:
@@ -1502,31 +1691,35 @@ def _run_job(job: dict, transport: Any) -> None:
     """Executa um job claimed e grava done/error. Aventura apagada no meio
     termina canceled, sem evento (o canal dela já foi fechado)."""
     _progress(job)
+    _write_heartbeat(job["id"], force=True)
     try:
-        executor = _EXECUTORS.get(job["type"])
-        if executor is None:
-            raise GameError(500, "generation_failed", f"unknown job type {job['type']}")
-        result = executor(job, transport)
-    except db.JobCanceled:
-        log.info("job %s (%s): cancelado antes da publicação", job["id"], job["type"])
-    except AdventureGone:
-        log.info("job %s (%s): aventura apagada no meio, PNG descartado",
-                 job["id"], job["type"])
-        with db.session() as conn:
-            db.finish_job(conn, job["id"], "canceled", error="adventure deleted")
-    except (GameError, ImageError, LlmError) as exc:
-        message = getattr(exc, "message", str(exc))
-        log.warning("job %s (%s) falhou: %s", job["id"], job["type"], message)
-        _failed(job, getattr(exc, "code", "generation_failed"), message)
-    except Exception:
-        log.exception("job %s (%s) erro inesperado", job["id"], job["type"])
-        _failed(job, "generation_failed", "unexpected internal error")
-    else:
-        if _finish(job, "done", result=result,
-                   terminal=_terminal_event(job, "done", result, None)):
-            log.info("job %s (%s) concluído", job["id"], job["type"])
-            if job["type"] in ("character_portrait", "scene_backdrop"):
-                _schedule_clip_followup(job, result)
+        try:
+            executor = _EXECUTORS.get(job["type"])
+            if executor is None:
+                raise GameError(500, "generation_failed", f"unknown job type {job['type']}")
+            result = executor(job, transport)
+        except db.JobCanceled:
+            log.info("job %s (%s): cancelado antes da publicação", job["id"], job["type"])
+        except AdventureGone:
+            log.info("job %s (%s): aventura apagada no meio, PNG descartado",
+                     job["id"], job["type"])
+            with db.session() as conn:
+                db.finish_job(conn, job["id"], "canceled", error="adventure deleted")
+        except (GameError, ImageError, LlmError) as exc:
+            message = getattr(exc, "message", str(exc))
+            log.warning("job %s (%s) falhou: %s", job["id"], job["type"], message)
+            _failed(job, getattr(exc, "code", "generation_failed"), message)
+        except Exception:
+            log.exception("job %s (%s) erro inesperado", job["id"], job["type"])
+            _failed(job, "generation_failed", "unexpected internal error")
+        else:
+            if _finish(job, "done", result=result,
+                       terminal=_terminal_event(job, "done", result, None)):
+                log.info("job %s (%s) concluído", job["id"], job["type"])
+                if job["type"] in ("character_portrait", "scene_backdrop"):
+                    _schedule_clip_followup(job, result)
+    finally:
+        _forget_job_runtime(job["id"])
 
 
 def process_pending(transport: Any = None, *, should_pause=None,
@@ -1606,6 +1799,77 @@ def recover_interrupted() -> tuple[int, int]:
     return requeued, failed
 
 
+def _timeout_seconds(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
+        return default
+    return number
+
+
+def _deadline_seconds(job_type: str, img_cfg: dict, llm_cfg: dict) -> float | None:
+    """Segundos desde started_at. Heartbeat não entra na conta."""
+    if job_type in _IMAGE_JOB_TYPES:
+        timeout = _timeout_seconds(img_cfg.get("timeout_seconds"), 300.0)
+        return max(360.0, timeout + 60.0)
+    if job_type == "scene_clip":
+        video = image_client.video_settings(img_cfg)
+        timeout = _timeout_seconds(video.get("timeout_seconds"), 1800.0)
+        return max(1860.0, timeout + 60.0)
+    if job_type == "card_assets":
+        timeout = _timeout_seconds(llm_client.role_timeout(llm_cfg, "assets"), 120.0)
+        return max(180.0, timeout + 60.0)
+    if job_type == "npc_day_tick":
+        return 900.0
+    return None
+
+
+def _aware_utc(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def reap_stalled_jobs(transport: Any = None, now: datetime | None = None) -> int:
+    """Marca timeout dos running vencidos e interrompe o render.
+
+    O update condicional de `finish_job` impede um done tardio. Não depende
+    de `process_pending`.
+    """
+    moment = _aware_utc(now or datetime.now(timezone.utc))
+    stalled: list[dict] = []
+    with db.session() as conn:
+        img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
+        rows = conn.execute("SELECT id FROM jobs WHERE status='running'").fetchall()
+        for row in rows:
+            job = db.get_job(conn, row["id"])
+            if job is None:
+                continue
+            limit = _deadline_seconds(job["type"], img_cfg, llm_cfg)
+            if limit is None:
+                continue
+            started = _utc_stamp(job.get("started_at"))
+            if started is None:
+                continue
+            if (moment - started).total_seconds() >= limit:
+                stalled.append(job)
+    reaped = 0
+    error = "job exceeded its deadline"
+    for job in stalled:
+        result = {"code": "job_timeout"}
+        if _finish(
+            job, "error", result=result, error=error,
+            terminal=_terminal_event(job, "error", result, error),
+        ):
+            reaped += 1
+            interrupt_image(job, transport)
+            log.info("job %s (%s) estourou o prazo", job["id"], job["type"])
+    return reaped
+
+
 # ----------------------------------------------------------------- worker
 async def worker_loop(interval: float = 1.5) -> None:
     """Loop infinito: claim+execução em thread para não bloquear o event loop.
@@ -1624,6 +1888,17 @@ async def worker_loop(interval: float = 1.5) -> None:
         _wakeup.clear()
 
 
+async def reaper_loop(interval: float = _REAPER_INTERVAL_S) -> None:
+    """Loop próprio, de start_worker até stop_worker. Não drena a fila."""
+    log.info("jobs reaper iniciado (intervalo %.1fs)", interval)
+    while True:
+        try:
+            await asyncio.to_thread(reap_stalled_jobs, None)
+        except Exception:
+            log.exception("jobs reaper: erro no ciclo")
+        await asyncio.sleep(interval)
+
+
 def start_worker(app) -> None:
     """Chamado no lifespan; no-op se AIDUNGEON_JOBS_WORKER=0."""
     if not worker_enabled():
@@ -1631,10 +1906,12 @@ def start_worker(app) -> None:
         return
     recover_interrupted()
     app.state.job_worker = asyncio.create_task(worker_loop())
+    app.state.job_reaper = asyncio.create_task(reaper_loop())
 
 
 def stop_worker(app) -> None:
-    task = getattr(app.state, "job_worker", None)
-    if task:
-        task.cancel()
-        wake()
+    for name in ("job_worker", "job_reaper"):
+        task = getattr(app.state, name, None)
+        if task is not None:
+            task.cancel()
+    wake()

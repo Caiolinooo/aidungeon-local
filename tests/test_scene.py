@@ -293,7 +293,8 @@ def test_scene_error_does_not_requeue_until_retry(client, tmp_path):
     with db.session() as conn:
         job = next(item for item in db.list_jobs(conn, adv["id"])
                    if item["type"] == "scene_backdrop")
-        db.finish_job(conn, job["id"], "error", error="boom")
+        conn.execute("UPDATE jobs SET status='running' WHERE id=?", (job["id"],))
+        assert db.finish_job(conn, job["id"], "error", error="boom")
 
     again = client.post(f"/api/adventures/{adv['id']}/scene", json={}).json()
     assert again["backdrop"]["status"] == "error"

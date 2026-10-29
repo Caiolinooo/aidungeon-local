@@ -133,7 +133,7 @@ def test_own_beat_uses_llm_and_returns_initiative(tmp_db, monkeypatch):
         elara = db.insert_card(conn, adv["id"], title="Elara", type="character",
                                entry="Guarda inquieta.")
         db.insert_action(conn, adv["id"], 0, "start", "Elara está aqui.")
-    _capture(monkeypatch, json.dumps({
+    calls = _capture(monkeypatch, json.dumps({
         "decision": "own_beat",
         "outcome": "Elara decide falar.",
         "reactions": [],
@@ -142,6 +142,7 @@ def test_own_beat_uses_llm_and_returns_initiative(tmp_db, monkeypatch):
         "cue": "Deixe Elara agir.",
     }))
     result = npc_gate.own_beat(adv["id"], {}, None)
+    assert calls[0][2]["role"] == "turn_gate"
     assert result["decision"] == "own_beat"
     assert result["initiative"]["npc"] == "Elara"
 
@@ -220,7 +221,7 @@ def test_living_npc_still_calls_llm_with_token_cap(tmp_db, monkeypatch):
     assert result["decision"] == "refuse"
     assert result["reactions"][0]["npc"] == "Elara"
     assert len(calls) == 1
-    assert calls[0][2]["role"] == "meta"
+    assert calls[0][2]["role"] == "turn_gate"
 
 
 def test_cue_block_never_invents_player_prose():
@@ -357,3 +358,103 @@ def test_gate_retries_once_with_legacy_budget_when_json_is_truncated(monkeypatch
     assert result["decision"] == "allow"
     assert budgets == [npc_gate.GATE_MAX_TOKENS, 900]
     assert budgets[1] > budgets[0]
+
+
+def test_gate_payload_keeps_present_sheet_and_bounds_the_rest(tmp_db, monkeypatch):
+    personality = "desconfiada da ponte " * 30
+    long_memory = "MEMORIA-LONGA " + ("lembranca " * 40)
+    opening = "COMECO-UNICO "
+    ending = "Elara permanece FIM-UNICO"
+    scene = opening + ("cena " * 800) + ending
+    with db.session() as conn:
+        adv = db.insert_adventure(conn, title="Limite")
+        elara = db.insert_card(
+            conn, adv["id"], title="Elara", type="character",
+            entry="Guarda na clareira.",
+            sheet=json.dumps({
+                "status": "alive",
+                "class": "ranger",
+                "personality": personality,
+                "body_state": {"v": 1, "pain": 6, "conditions": []},
+                "expression": "guarded",
+                "bonds": {"trust": 12},
+            }),
+        )
+        conn.execute(
+            "UPDATE story_cards SET created_at=? WHERE id=?",
+            ("2026-01-01T00:00:00.000Z", elara["id"]),
+        )
+        for index in range(22):
+            card = db.insert_card(
+                conn, adv["id"], title=f"Longe {index:02d}", type="character",
+                entry="SEGREDO-AUSENTE nao entra no prompt",
+                sheet=json.dumps({"status": "alive", "class": "mercador"}),
+            )
+            conn.execute(
+                "UPDATE story_cards SET created_at=? WHERE id=?",
+                (f"2026-01-01T00:00:01.{index:03d}Z", card["id"]),
+            )
+        db.insert_action(conn, adv["id"], 0, "story", scene)
+        for index in range(5):
+            row = db.insert_npc_memory(
+                conn, adventure_id=adv["id"], card_id=elara["id"], kind="event",
+                text=f"MEMORIA-{index}-CURTA",
+            )
+            conn.execute(
+                "UPDATE npc_memories SET created_at=? WHERE id=?",
+                (f"2026-01-02T00:00:00.{index:03d}Z", row["id"]),
+            )
+        row = db.insert_npc_memory(
+            conn, adventure_id=adv["id"], card_id=elara["id"], kind="event",
+            text=long_memory,
+        )
+        conn.execute(
+            "UPDATE npc_memories SET created_at=? WHERE id=?",
+            ("2026-01-02T00:00:00.010Z", row["id"]),
+        )
+    calls = _capture(monkeypatch, json.dumps({
+        "decision": "allow",
+        "outcome": "Elara deixa a conversa seguir.",
+        "reactions": [],
+        "initiative": None,
+        "relation_updates": [],
+        "cue": "A conversa segue.",
+    }))
+    result = npc_gate.decide(
+        adv["id"], "Eu cumprimento Elara.", {}, None,
+        world_check={"possible": False, "blockers": ["parede de gelo"]},
+    )
+    assert result["decision"] == "allow"
+    assert calls[0][2]["role"] == "turn_gate"
+    payload = json.loads(calls[0][1][1]["content"])
+    assert payload["world_check"]["blockers"] == ["parede de gelo"]
+    assert len(scene) > 1600
+    assert len(payload["scene_tail"]) <= 1600
+    assert payload["scene_tail"].endswith(ending)
+    assert "COMECO-UNICO" not in payload["scene_tail"]
+    people = payload["people"]
+    assert [item["name"] for item in people] == ["Elara", *[f"Longe {i:02d}" for i in range(20)]]
+    present = people[0]
+    assert present["present"] is True
+    assert present["card_id"] == elara["id"]
+    assert present["profile"]["class"] == "ranger"
+    assert present["profile"]["personality"] == personality
+    assert present["body"]["pain"] == 6
+    assert present["bonds"]["trust"] == 12
+    assert "progression" in present and "power" in present
+    memories = present["memories"]
+    assert len(memories) == 4
+    assert len(long_memory) > 160
+    assert memories[0]["text"] == npc_assets._clip(long_memory, 160)
+    assert len(memories[0]["text"]) <= 160
+    assert long_memory.startswith(memories[0]["text"])
+    blob = json.dumps(payload, ensure_ascii=False)
+    assert "MEMORIA-2-CURTA" in blob
+    assert "MEMORIA-0-CURTA" not in blob
+    assert "MEMORIA-1-CURTA" not in blob
+    assert long_memory not in blob
+    assert "SEGREDO-AUSENTE" not in blob
+    for person in people[1:]:
+        assert set(person) == {"name", "status", "present"}
+        assert person["status"] == "alive"
+        assert person["present"] is False

@@ -178,8 +178,59 @@ def apply_llm_update(conn: sqlite3.Connection, update: dict) -> set[str]:
 
 
 # ----------------------------------------------------------- config efetiva
+def _override_slot_value(value: Any) -> int | None:
+    """Slot inteiro >= 0. Ausente ou ilegível não vira 0."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        slot = value
+    elif isinstance(value, float) and value.is_integer():
+        slot = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or not text.lstrip("-").isdigit():
+            return None
+        slot = int(text)
+    else:
+        return None
+    if slot < 0:
+        return None
+    return slot
+
+
+def _normalize_role_overrides(raw: Any) -> dict:
+    """`scheduler.role_overrides` estável. Papel sem campo útil sai fora."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for role, spec in raw.items():
+        if not isinstance(role, str) or not role.strip() or not isinstance(spec, dict):
+            continue
+        item: dict = {}
+        for key in ("base_url", "model_alias"):
+            value = spec.get(key)
+            if isinstance(value, str) and value.strip():
+                item[key] = value.strip()
+        secret_raw = spec.get("api_key")
+        if isinstance(secret_raw, str):
+            secret = _usable_secret(secret_raw.strip())
+            if secret:
+                item["api_key"] = secret
+        if "slot" in spec:
+            slot = _override_slot_value(spec.get("slot"))
+            if slot is not None:
+                item["slot"] = slot
+        if item:
+            out[role.strip()] = item
+    return out
+
+
 def effective_llm_settings(conn: sqlite3.Connection) -> dict:
-    """Config efetiva do servidor LLM (arquivo + overrides + env/.env)."""
+    """Config efetiva do servidor LLM (arquivo + overrides + env/.env).
+
+    `scheduler.role_overrides` vem só do arquivo (padrão {}). Sem a chave,
+    base_url, modelo e slot dos papéis permanecem os do servidor principal.
+    """
     cfg = load_file_settings()
     llm = cfg.get("llm", {})
     sampler = cfg.get("sampler", {})
@@ -237,6 +288,7 @@ def _scheduler_settings(raw: dict) -> dict:
         if raw_path:
             path = Path(raw_path)
             out[key] = str(path if path.is_absolute() else db.REPO_ROOT / path)
+    out["role_overrides"] = _normalize_role_overrides(raw.get("role_overrides"))
     return out
 
 

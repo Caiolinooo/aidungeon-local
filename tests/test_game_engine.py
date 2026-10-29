@@ -6,9 +6,11 @@ O LLM é mockado via httpx.MockTransport (resposta SSE fake de
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
-from app import context_builder, db, game_engine, output_sanitizer
+from app import action_check, context_builder, db, game_engine, npc_gate, output_sanitizer
 from app.world_facts import ATTEMPT_RULE
 from app.errors import GameError
 
@@ -96,6 +98,66 @@ def test_phase_end_is_emitted_when_work_fails(adventure, monkeypatch):
               if event["event"] == "turn_phase" and event["data"]["phase"] == "intent"]
     assert [item["state"] for item in intent] == ["start", "end"]
     assert events[-1]["event"] == "error"
+
+
+def test_action_check_and_gate_overlap_before_narrator(adventure, monkeypatch):
+    barrier = threading.Barrier(2)
+    verdict = action_check.Verdict(
+        possible=False, blockers=["a porta já está trancada"], notes="fato conhecido")
+    adjudication = {
+        "decision": "partial", "outcome": "O guarda recua e bloqueia a passagem.",
+        "reactions": [], "initiative": None,
+    }
+
+    def check(*args, **kwargs):
+        barrier.wait(timeout=2)
+        return verdict
+
+    gate_world_checks: list[dict] = []
+
+    def gate(*args, **kwargs):
+        gate_world_checks.append(kwargs["world_check"])
+        barrier.wait(timeout=2)
+        return adjudication
+
+    monkeypatch.setattr(action_check, "hard_blockers", lambda state: ["a porta já está trancada"])
+    monkeypatch.setattr(action_check, "check_action", check)
+    monkeypatch.setattr(npc_gate, "decide", gate)
+    captured: list[dict] = []
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "do", "wait and observe the room",
+        transport=make_llm_transport(tokens=("O guarda mantém a porta fechada.",),
+                                     capture=captured)))
+
+    assert not barrier.broken
+    assert gate_world_checks == [{"action_blockers": ["a porta já está trancada"]}]
+    assert _done(events)["action_check"] == verdict.to_dict()
+    narrator = next(call for call in captured if call.get("stream"))
+    prompt = narrator["messages"][-1]["content"]
+    assert action_check.verdict_block(verdict) in prompt
+    assert npc_gate.cue_block(adjudication, []) in prompt
+
+
+def test_say_never_calls_action_check_llm(adventure, monkeypatch):
+    monkeypatch.setattr(npc_gate, "decide", lambda *args, **kwargs: {
+        "decision": "allow", "outcome": "", "reactions": [], "initiative": None,
+    })
+    captured: list[dict] = []
+    events = _collect(game_engine.handle_action(
+        adventure["id"], "say", "Ladrão, precisamos sair agora",
+        transport=make_llm_transport(tokens=("O ladrão concorda.",), capture=captured)))
+
+    assert _tokens(events) == "O ladrão concorda."
+    assert any(call.get("stream") for call in captured)
+    assert all(call.get("stream") for call in captured)
+
+
+def test_release_generation_lock_resumes_portrait_preparation(adventure, monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.jobs.resume_portrait_prepare", lambda: calls.append(True))
+    assert game_engine.acquire_generation_lock(adventure["id"])
+    game_engine.release_generation_lock(adventure["id"])
+    assert calls == [True]
 
 
 def test_action_say_formatting(adventure):

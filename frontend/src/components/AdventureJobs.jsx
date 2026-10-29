@@ -43,6 +43,9 @@ const TYPE_LABELS = {
   card_assets: 'Assets do card',
 }
 
+const CONFIG_ERROR_MESSAGE = 'Corrija a configuração de imagem antes de gerar novamente.'
+const HEARTBEAT_STALE_MS = 15000
+
 function formatDate(value) {
   if (!value) return ''
   const date = new Date(value)
@@ -53,6 +56,37 @@ function formatDate(value) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date)
+}
+
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) return minutes ? `${hours} h ${minutes} min` : `${hours} h`
+  if (minutes > 0) return seconds ? `${minutes} min ${seconds} s` : `${minutes} min`
+  return `${seconds} s`
+}
+
+function timeMs(value) {
+  if (!value || typeof value !== 'string') return NaN
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? NaN : time
+}
+
+function jobResultCode(job) {
+  const result = job?.result
+  if (!result || typeof result !== 'object') return ''
+  return typeof result.code === 'string' ? result.code : ''
+}
+
+function jobHeartbeat(job) {
+  if (typeof job?.heartbeat_at === 'string' && job.heartbeat_at) return job.heartbeat_at
+  const payload = job?.payload
+  if (payload && typeof payload === 'object' && typeof payload.heartbeat_at === 'string') {
+    return payload.heartbeat_at
+  }
+  return ''
 }
 
 export default function AdventureJobs({
@@ -156,6 +190,8 @@ export default function AdventureJobs({
 
   const canRetry = (job) => {
     if (!FINISHED_STATUSES.has(job.status) || job.status === 'done') return false
+    // config_error exige correção da imagem. job_timeout continua recuperável.
+    if (jobResultCode(job) === 'config_error') return false
     if (job.type === 'scene_backdrop') return true
     if (job.type === 'character_portrait') return Boolean(job.ref_id)
     return job.type === 'see_image' && Boolean(onRetrySee)
@@ -186,6 +222,8 @@ export default function AdventureJobs({
   const activeCount = jobs.filter((job) => ACTIVE_STATUSES.has(job.status)).length
   const sortedJobs = [...jobs].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
   const visibleJobs = sortedJobs.slice(0, 30)
+  // O poll de 1,5 s (painel aberto ou See) já volta a renderizar; o relógio usa esse ciclo.
+  const now = Date.now()
 
   return (
     <div className="relative shrink-0">
@@ -263,6 +301,13 @@ export default function AdventureJobs({
                   const busy = busyId === job.id
                   const superseded = job.status === 'canceled' && job.error === 'superseded'
                   const preempted = job.status === 'canceled' && job.error === 'preempted for a new action'
+                  const configError = jobResultCode(job) === 'config_error'
+                  const startedMs = job.status === 'running' ? timeMs(job.started_at) : NaN
+                  const heartbeatMs = job.status === 'running' ? timeMs(jobHeartbeat(job)) : NaN
+                  const elapsedLabel = Number.isNaN(startedMs) ? '' : formatElapsed(now - startedMs)
+                  const stalledFor = !Number.isNaN(heartbeatMs) && now - heartbeatMs > HEARTBEAT_STALE_MS
+                    ? formatElapsed(now - heartbeatMs)
+                    : ''
                   return (
                     <li key={job.id} className="rounded-lg border border-subtle bg-elevated/35 p-2.5">
                       <div className="flex items-start justify-between gap-2">
@@ -277,7 +322,12 @@ export default function AdventureJobs({
                         </span>
                       </div>
 
-                      {job.error && !superseded && !preempted && (
+                      {configError && (
+                        <p role="alert" className="mt-2 whitespace-pre-wrap break-words rounded-md bg-danger-800/10 p-2 text-[11px] leading-relaxed text-danger-300">
+                          {CONFIG_ERROR_MESSAGE}
+                        </p>
+                      )}
+                      {job.error && !superseded && !preempted && !configError && (
                         <p role="alert" className="mt-2 whitespace-pre-wrap break-words rounded-md bg-danger-800/10 p-2 text-[11px] leading-relaxed text-danger-300">
                           {String(job.error)}
                         </p>
@@ -287,6 +337,15 @@ export default function AdventureJobs({
                       )}
                       {preempted && (
                         <p className="mt-2 text-[11px] text-muted">A animação automática foi interrompida para sua nova ação responder primeiro.</p>
+                      )}
+
+                      {(elapsedLabel || stalledFor) && (
+                        <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+                          {elapsedLabel ? <span>em execução há {elapsedLabel}</span> : null}
+                          {stalledFor ? (
+                            <span>{elapsedLabel ? ' · ' : ''}sem progresso há {stalledFor}</span>
+                          ) : null}
+                        </p>
                       )}
 
                       <div className="mt-2 flex items-center justify-between gap-2">

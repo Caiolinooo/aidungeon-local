@@ -19,14 +19,17 @@ import httpx
 import pytest
 
 from app import (
+    action_check,
     db,
     deps,
     game_engine,
     llm_client,
+    llm_scheduler,
     meta_commands,
     output_sanitizer,
     settings_store,
 )
+from app.sim import intent
 from conftest import add_action, make_adventure, sse_body
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
@@ -89,7 +92,8 @@ def test_four_slots_follow_the_c1_map():
     transport = _transport(total_slots=4, capture=capture)
     cfg = _cfg()
     expected = {"choices": 1, "chronicle": 2, "summary": 2,
-                "image_prompt": 3, "assistant": 3, "meta": 3}
+                "image_prompt": 3, "assistant": 3, "meta": 3,
+                "sim_intent": 3, "turn_gate": 3, "turn_check": 2}
     for role, slot in expected.items():
         payload = _aux_payload(cfg, transport, role, capture)
         assert payload["id_slot"] == slot, role
@@ -105,7 +109,8 @@ def test_two_slots_pin_every_aux_to_slot_one():
     capture: list = []
     transport = _transport(total_slots=2, capture=capture)
     cfg = _cfg()
-    for role in ("choices", "chronicle", "summary", "image_prompt", "assistant", "meta"):
+    for role in ("choices", "chronicle", "summary", "image_prompt", "assistant", "meta",
+                 "sim_intent", "turn_check", "turn_gate"):
         assert _aux_payload(cfg, transport, role, capture)["id_slot"] == 1, role
     assert _narrative_payload(cfg, transport, capture)["id_slot"] == 0
 
@@ -117,6 +122,9 @@ def test_three_slots_keep_choices_apart():
     assert _aux_payload(cfg, transport, "choices", capture)["id_slot"] == 1
     for role in ("chronicle", "summary", "image_prompt", "assistant", "meta"):
         assert _aux_payload(cfg, transport, role, capture)["id_slot"] == 2, role
+    assert _aux_payload(cfg, transport, "turn_check", capture)["id_slot"] == 1
+    assert _aux_payload(cfg, transport, "sim_intent", capture)["id_slot"] == 2
+    assert _aux_payload(cfg, transport, "turn_gate", capture)["id_slot"] == 2
 
 
 def test_single_slot_server_gets_no_id_slot():
@@ -125,6 +133,8 @@ def test_single_slot_server_gets_no_id_slot():
     cfg = _cfg()
     assert "id_slot" not in _aux_payload(cfg, transport, "choices", capture)
     assert "id_slot" not in _narrative_payload(cfg, transport, capture)
+    for role in ("sim_intent", "turn_check", "turn_gate"):
+        assert _aux_payload(cfg, transport, role, capture)["id_slot"] == 0, role
 
 
 def test_props_failure_is_retried_after_a_short_ttl(monkeypatch):
@@ -182,8 +192,42 @@ def test_role_timeouts_come_from_settings(tmp_db):
     assert llm_client.role_timeout(cfg, "chronicle") == 45.0
     assert llm_client.role_timeout(cfg, "summary") == 60.0
     assert llm_client.role_timeout(cfg, "image_prompt") == 20.0
+    assert llm_client.role_timeout(cfg, "meta") == 45.0
+    assert llm_client.role_timeout(cfg, "sim_intent") == 20.0
+    assert llm_client.role_timeout(cfg, "turn_check") == 12.0
+    assert llm_client.role_timeout(cfg, "turn_gate") == 12.0
+    assert llm_scheduler.PRIORITIES["sim_intent"] == 1
+    assert llm_scheduler.PRIORITIES["turn_check"] == 1
+    assert llm_scheduler.PRIORITIES["turn_gate"] == 1
+    assert llm_scheduler.PRIORITIES["meta"] == 2
+    assert llm_scheduler.PRIORITIES["image_prompt"] == 2
     assert cfg["aux_cache_prompt"] is False
     assert llm_client.role_timeout({"role_timeouts": {"choices": 7}}, "choices") == 7.0
+
+
+def test_intent_and_check_use_their_roles(monkeypatch):
+    seen = []
+
+    def fake(cfg, messages, **kwargs):
+        seen.append(kwargs["role"])
+        if kwargs["role"] == "sim_intent":
+            return '{"kind":"none"}'
+        return json.dumps({
+            "possible": True, "blockers": [], "risks": [],
+            "notes": "", "cost": "", "consequence": "",
+        })
+
+    monkeypatch.setattr(llm_client, "chat_completion", fake)
+    classified = intent.classify(
+        "olho a sala", {}, [], None, {}, None, {"max_tokens": 40},
+    )
+    verdict = action_check.check_action(
+        "olho a sala", "do", {"player": {"name": "Caio", "stats": {"dex": 14}}},
+        llm_cfg={}, transport=None, cfg={},
+    )
+    assert classified["kind"] == "none"
+    assert verdict.possible is True
+    assert seen == ["sim_intent", "turn_check"]
 
 
 def test_long_assistant_output_gets_a_longer_deadline():

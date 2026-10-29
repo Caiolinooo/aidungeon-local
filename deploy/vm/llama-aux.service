@@ -1,0 +1,18 @@
+# /etc/systemd/system/llama-aux.service
+# Qwen2.5-3B-Instruct Q4_K_M só em CPU, para sim_intent / turn_check / turn_gate.
+# Não habilitar antes de tools/eval_turn_aux.py passar. Sem GPU e sem --no-mmap.
+[Unit]
+Description=llama-server auxiliar Qwen2.5-3B-Instruct (CPU)
+After=network.target
+
+[Service]
+Type=simple
+User=caio
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server --host 127.0.0.1 --port 1240 -ngl 0 -t 8 -c 8192 -np 2 -b 512 -ub 512 --alias qwen2.5-3b-instruct-q4_k_m -m /home/caio/qwen2.5-3b-instruct-q4_k_m.gguf
+Restart=on-failure
+RestartSec=5
+MemoryMax=6G
+
+[Install]
+WantedBy=multi-user.target

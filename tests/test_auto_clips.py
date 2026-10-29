@@ -447,13 +447,13 @@ def test_new_action_preempts_only_automatic_clips(tmp_db, monkeypatch):
     with db.session() as conn:
         running = jobs.enqueue_scene_clip(
             conn, adv["id"], "auto-running", "rain moves", automatic=True)
+        claimed = db.claim_next_job(conn)
+        assert claimed["id"] == running["id"]
         pending = jobs.enqueue_scene_clip(
             conn, adv["id"], "auto-pending", "portrait breathes", automatic=True,
             kind="portrait")
         manual = jobs.enqueue_scene_clip(
             conn, adv["id"], "manual", "keep my requested clip")
-        claimed = db.claim_next_job(conn)
-        assert claimed["id"] == running["id"]
     interrupted = []
     monkeypatch.setattr(jobs, "interrupt_image", lambda job, transport=None: (
         interrupted.append(job["id"]) or True))
@@ -470,3 +470,114 @@ def test_new_action_preempts_only_automatic_clips(tmp_db, monkeypatch):
             assert stored["status"] == "canceled"
             assert stored["error"] == "preempted for a new action"
         assert db.get_job(conn, manual["id"])["status"] == "pending"
+
+
+def test_queued_still_cancels_running_auto_clip_after_commit(tmp_db, monkeypatch):
+    """Enqueue de still cancela o automático running e não mexe no manual.
+    O progress do clipe só interrompe depois que o cancelamento commitou,
+    e no máximo a cada 5 s. finish tardio não publica."""
+    assert jobs._HEARTBEAT_INTERVAL_S == 5.0
+    clock = {"t": 2000.0}
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: clock["t"])
+    interrupted = []
+    monkeypatch.setattr(
+        jobs, "interrupt_image",
+        lambda job, transport=None: interrupted.append((job["id"], transport)) or True)
+    adv = make_adventure()
+    with db.session() as conn:
+        auto = jobs.enqueue_scene_clip(
+            conn, adv["id"], "auto-src", "rain moves", automatic=True)
+        assert db.claim_next_job(conn)["id"] == auto["id"]
+        manual = jobs.enqueue_scene_clip(
+            conn, adv["id"], "manual-src", "keep this clip")
+        waiting = jobs.enqueue_scene_clip(
+            conn, adv["id"], "other-auto", "portrait breathes",
+            automatic=True, kind="portrait")
+    running = _jobs_of("scene_clip")
+    current = next(job for job in running if job["id"] == auto["id"])
+    progress = jobs._generation_progress(current, "wire", watch_cancel=True)
+    progress()
+    assert interrupted == []
+    assert _jobs_of("scene_clip")[0]["id"] == auto["id"]
+    stored = next(job for job in _jobs_of("scene_clip") if job["id"] == auto["id"])
+    assert stored.get("heartbeat_at")
+
+    with db.session() as conn:
+        still = jobs.enqueue(
+            conn, "location_image", adv["id"], "dock", {"prompt": "the pier"})
+    progress()
+    assert interrupted == []
+    canceled = next(job for job in _jobs_of("scene_clip") if job["id"] == auto["id"])
+    assert canceled["status"] == "canceled"
+    assert canceled["error"] == "preempted by queued image"
+    assert "heartbeat_at" not in canceled
+    manual_row = next(job for job in _jobs_of("scene_clip") if job["id"] == manual["id"])
+    waiting_row = next(job for job in _jobs_of("scene_clip") if job["id"] == waiting["id"])
+    assert manual_row["status"] == "pending"
+    assert not manual_row.get("error")
+    assert waiting_row["status"] == "pending"
+    assert waiting_row["error"] != "preempted by queued image"
+    with db.session() as conn:
+        assert db.get_job(conn, still["id"])["status"] == "pending"
+
+    clock["t"] += jobs._HEARTBEAT_INTERVAL_S
+    progress()
+    assert interrupted == [(auto["id"], "wire")]
+    with db.session() as conn:
+        assert db.finish_job(
+            conn, auto["id"], "done", result={"image": {"id": "late"}}) is False
+        final = db.get_job(conn, auto["id"])
+    assert final["status"] == "canceled"
+    assert final["error"] == "preempted by queued image"
+
+
+def test_scene_clip_progress_interrupts_only_after_the_still_commits(
+        tmp_db, monkeypatch):
+    clock = {"t": 3000.0}
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: clock["t"])
+    interrupted = []
+    monkeypatch.setattr(
+        jobs, "interrupt_image",
+        lambda job, transport=None: interrupted.append(job["id"]) or True)
+    adv = make_adventure()
+    with db.session() as conn:
+        auto = jobs.enqueue_scene_clip(
+            conn, adv["id"], "src", "curtain", automatic=True)
+        claimed = db.claim_next_job(conn)
+    box = {"id": claimed["id"]}
+
+    def generate_clip(cfg, prompt, *, adventure_id, image_id, source_png,
+                      transport=None, progress=None, **kwargs):
+        assert progress is not None
+        progress()
+        with db.session() as conn:
+            jobs.enqueue(
+                conn, "scene_backdrop", adventure_id, "room", {"prompt": "hall"})
+        progress()
+        assert interrupted == []
+        clock["t"] += jobs._HEARTBEAT_INTERVAL_S
+        progress()
+        assert interrupted == [box["id"]]
+        return {
+            "file_path": "missing.mp4",
+            "provider": "comfyui",
+            "width": 4,
+            "height": 4,
+            "duration_ms": 1000,
+        }
+
+    monkeypatch.setattr(image_client, "generate_clip", generate_clip)
+    monkeypatch.setattr(
+        jobs, "_clip_source_png",
+        lambda job: ({
+            "id": "src",
+            "adventure_id": job["adventure_id"],
+            "file_path": "x.png",
+            "media_type": "image/png",
+        }, _png(4, 4)))
+    jobs._run_job(claimed, None)
+    stored = next(job for job in _jobs_of("scene_clip") if job["id"] == auto["id"])
+    assert stored["status"] == "canceled"
+    assert stored["error"] == "preempted by queued image"
+    backdrops = _jobs_of("scene_backdrop")
+    assert len(backdrops) == 1 and backdrops[0]["status"] == "pending"
