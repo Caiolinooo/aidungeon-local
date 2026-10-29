@@ -1816,7 +1816,7 @@ export default function Play() {
                 <div className="animate-fade-in border-l-2 border-accent-pri/70 pl-4">
                   <div className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-pri">
                     <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-pri" />
-                    {gen.phaseLabel || 'Narrando'}
+                    {gen.phaseLabel || (gen.text ? 'Narrando' : 'Preparando narrativa')}
                   </div>
                   <p className="streaming-cursor whitespace-pre-wrap font-prose text-primary">
                     {loosenProse(gen.text)}
