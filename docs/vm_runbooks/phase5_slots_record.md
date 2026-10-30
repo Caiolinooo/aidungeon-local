@@ -228,3 +228,41 @@ teve TTFT de 93,1 s, agora explicado pela telemetria: a narrativa da aventura
 de teste chegou a aproximadamente **63 mil tokens de prompt**, processados a
 cerca de **840 tokens/s**. Assim, as latências do início e do fim do soak não
 são comparáveis sem considerar o crescimento do histórico.
+
+## 12. Teste A/B de `-ub 2048`
+
+Depois que o usuário autorizou testes abaixo do piso de 900 MiB, um turno real
+com See concorrente terminou com TTFT 76,5 s, FLUX e LTXV `done`, VRAM livre
+mínima 1.044 MiB, RAM disponível mínima 10.336 MiB e swap delta 0. Relatórios:
+`/home/caio/aidungeon-bench/ub2048-turn-see-memory.json` e `.json.log`.
+
+O benchmark direto de prompt, contudo, reprovou a flag: três repetições de
+aproximadamente 12,7 mil tokens mediram p50 **870,5 tok/s** com `-ub 2048`.
+Depois da restauração para `-ub 1024`, o mesmo benchmark mediu **1.247,2
+tok/s** (44 s contra 31 s de wall total). JSONs:
+`/home/caio/aidungeon-bench/ub2048-bench-slots.json` e
+`/home/caio/aidungeon-bench/ub1024-bench-slots.json`. Portanto `-ub 2048` foi
+revertido; a unidade final permanece em `-ub 1024`, `-cram 0` e o teste de
+livelock do 2048 não foi executado porque o benchmark já falhou no gate de
+melhoria.
+
+## 13. Por que o prefixo narrativo não é reutilizado
+
+A investigação do cliente confirmou que a narrativa já envia
+`cache_prompt=true` (`backend/app/llm_client.py:540-543`) e permanece no slot 0.
+O `context_builder` mantém system e histórico antes da user final; lore, estado,
+vereditos e a ação nova já estão nessa user final. Portanto falta de flag ou
+um prefixo dinâmico no início não explicam `cache_n=0`.
+
+O modelo usa Gated DeltaNet. No mecanismo de checkpoint desse llama-server, o
+estado recorrente só pode ser restaurado num checkpoint válido dentro do
+prefixo comum; sem ele, o servidor zera `n_past` e refaz o prefill. Com
+`-cram 8192`, tarefas nos outros slots ainda limpam o slot 0 ocioso, e o
+save/load não preserva os checkpoints híbridos necessários. Isso é consistente
+com o prefill integral medido: 63 mil tokens a cerca de 840 tok/s.
+
+Não há corte seguro no prompt que preserve o conteúdo: os dados variáveis já
+estão na última mensagem. Reutilizar esse prefixo exige um llama-server com os
+fixes de checkpoint híbrido validados também contra o livelock #28280. Até
+existir esse binário validado, a configuração segura final é `-cram 0`,
+`aux_cache_prompt=false`, `-ub 1024`, auxiliar 3B desligado e overrides vazios.
