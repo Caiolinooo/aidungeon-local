@@ -210,6 +210,21 @@ piso de 900. O narrador continua inalterado em `-ub 1024`.
 Com `MemAvailable` acima de 12.288 MiB, o cache foi ativado em `-cram 8192` e
 `scheduler.aux_cache_prompt=true`. O repro externo concluiu 120 requisições,
 zero travamentos e pior requisição de 30,8 s; log:
-`/home/caio/aidungeon-bench/cache-repro-slot-hang.log`. A permanência do cache
-ainda depende do soak de 200 turnos, dos limites de RAM/swap/VRAM e da redução
-mínima de 15% no TTFT p50 contra 24,7 s.
+`/home/caio/aidungeon-bench/cache-repro-slot-hang.log`.
+
+O soak de 200 turnos foi **reprovado e interrompido no turno 70**, não concluído.
+Nos 63 turnos com TTFT válido até esse ponto, o TTFT foi p50 **93,9 s**, p95
+**110,0 s** e máximo 122,1 s, contra 24,7 s de p50 antes do experimento. Os
+turnos 43–49 incluíram `ConnectError` e `Loading model`. O monitor registrou
+VRAM livre mínima 1.176 MiB, RAM disponível mínima 3.667 MiB (abaixo do gate de
+4.096) e swap delta -48 MiB. O replay ficou pausado pelo guard do jogador após
+o turno 70 e foi terminado; não houve relatório de 200 turnos. Logs:
+`/home/caio/aidungeon-bench/cache-soak-200-memory.json.log` e
+`/home/caio/aidungeon-bench/cache-soak-200-memory.json`.
+
+O cache foi revertido para `-cram 0` e `aux_cache_prompt=false` nas duas
+instâncias; o llama voltou a responder `/health` 200. Um turno posterior ainda
+teve TTFT de 93,1 s, agora explicado pela telemetria: a narrativa da aventura
+de teste chegou a aproximadamente **63 mil tokens de prompt**, processados a
+cerca de **840 tokens/s**. Assim, as latências do início e do fim do soak não
+são comparáveis sem considerar o crescimento do histórico.
