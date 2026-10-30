@@ -262,7 +262,52 @@ save/load não preserva os checkpoints híbridos necessários. Isso é consisten
 com o prefill integral medido: 63 mil tokens a cerca de 840 tok/s.
 
 Não há corte seguro no prompt que preserve o conteúdo: os dados variáveis já
-estão na última mensagem. Reutilizar esse prefixo exige um llama-server com os
-fixes de checkpoint híbrido validados também contra o livelock #28280. Até
-existir esse binário validado, a configuração segura final é `-cram 0`,
-`aux_cache_prompt=false`, `-ub 1024`, auxiliar 3B desligado e overrides vazios.
+estão na última mensagem. Reutilizar esse prefixo exigiu um llama-server com os
+fixes de checkpoint híbrido validados também contra o livelock #28280. A
+validação e a promoção estão registradas na seção 14; `-cram 0`,
+`aux_cache_prompt=false`, `-ub 1024`, auxiliar 3B desligado e overrides vazios
+permanecem.
+
+## 14. Checkpoint híbrido: validação e promoção
+
+Os commits `8c6d89ab0` e `d0e1388a0` do PR upstream `ggml-org/llama.cpp#25592`
+foram aplicados sobre o fork de produção `c8064719f`. O binário final é build
+**10283 (`d0e1388a0`)**. O patch toca somente
+`src/llama-memory-hybrid.cpp`, `src/llama-memory-recurrent.cpp` e
+`tools/server/server-context.cpp`: restaura checkpoints recorrentes/híbridos no
+prefixo comum e invalida checkpoints divergentes. Não altera sampler, pesos ou
+parâmetros de geração.
+
+A sonda determinística fria, depois de recompilar baseline e patch com a mesma
+fonte-base e flags, produziu hashes idênticos nos dois casos: curto
+`7f416c7f56e6796cef2ef11134ca07b53b26bb0f7d49f8ee961874a6bda74348` e longo
+`5fff8b681a72ae9ef81f2ceede41cf9b60928c46f0f154941040a9568446a76a`.
+Relatórios: `/home/caio/aidungeon-bench/hybrid-quality-production-baseline.json`
+e `hybrid-quality-exact-patch.json`. Assim, a diferença observada contra o
+binário antigo não veio do patch de cache.
+
+Dois testes diretos de 60 requisições terminaram com **zero stalls**: um com
+crescimento de prefixo e outro alternando conversas e slots. Logs:
+`hybrid-exact-cram0-app10.log` e `hybrid-equivalent-cram0-bug10.log`.
+No replay real de 20 turnos, todas as ações responderam HTTP 200. Depois da
+narrativa fria, `cache_n` avançou de 61.236 para 66.193 tokens e cada turno
+processou somente cerca de 3,0–3,3 mil novos tokens, em vez de refazer mais de
+64 mil. `narrative_ttft` ficou em p50 **7,2 s** e p95 **13,1 s**.
+
+O TTFT total desse replay ficou em p50 **40,2 s** e p95 **55,0 s**, e o turno em
+68,4/85,6 s. Choices teve 18 respostas 503 e duas 200; oito metas de backdrop
+falharam. Portanto as metas globais de latência **não foram atingidas** e não se
+deve comparar esse TTFT diretamente ao replay antigo: a aventura já tinha um
+histórico muito maior. O ganho comprovado do patch é eliminar o prefill integral
+crescente, não resolver toda a fila auxiliar.
+
+O binário foi promovido no serviço persistente com `/health` 200 e versão 10283.
+A pedido explícito do usuário para encerrar sem mais horas de teste, não foi
+aberto outro soak de 200 turnos. No smoke frio, turno e choices responderam
+HTTP 200 e backdrop/clipe terminaram `done`; o turno levou 124,0 s e falhou
+somente a meta de 120 s, com prefill narrativo frio de 84,0 s. O turno quente
+seguinte passou em todas as metas do replay: HTTP 200, TTFT 22,6 s,
+`narrative_ttft` 6,2 s, turno 46,6 s e choices 200 em 14,7 s. Logs:
+`hybrid-postdeploy-smoke.log` e `hybrid-postdeploy-warm.log`. A meta global de
+TTFT continua não atingida. Permanecem `-cram 0`, `-ub 1024`,
+`aux_cache_prompt=false`, auxiliar 3B desligado e overrides vazios.
