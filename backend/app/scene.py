@@ -323,13 +323,20 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     else:
         beat = ""
     if clause and explicit:
+        nude = npc_assets.nude_names(cast, moment)
+        clothed = [card.get("title") for card in cast if card.get("title") not in nude]
+        nudity = "clothes off, fully nude only for " + ", ".join(nude) + ", uncensored" if nude else "clothes off, nude, uncensored"
+        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if clothed else ""
+        composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         parts = [
             sex_line,
             clause,
             reaction,
             layout_guard,
-            "clothes off, nude, do not restore outfits, uncensored",
-            beat[-400:],
+            nudity,
+            clothing,
+            composition,
+            beat,
             style_text,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face and hair",

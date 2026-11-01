@@ -650,8 +650,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if order and not order_lock:
         lead_bits.append(order)
     lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
-    if explicit:
-        lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
         lead_bits.append(", ".join(where))
     if names:
@@ -659,16 +657,31 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
         )
     locked = frame[:likeness.CAST_REFERENCE_LIMIT]
+    if explicit:
+        nude = npc_assets.nude_names(locked, moment, order)
+        clothed = [card.get("title") for card in locked if card.get("title") not in nude]
+        if nude:
+            lead_bits.append("clothes off, fully nude only for " + ", ".join(nude) + ", uncensored")
+        else:
+            lead_bits.append("clothes off, nude, uncensored")
+        if clothed:
+            lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     if len(locked) > 1:
-        positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
-        assignments = ", ".join(
-            f"{card.get('title') or 'person'} on the "
-            f"{positions[index] if index < len(positions) else 'center'}"
-            for index, card in enumerate(locked)
-        )
-        lead_bits.append(
-            "distinct different people, not the same person, no duplicate faces: " + assignments
-        )
+        if explicit:
+            lead_bits.append(
+                "distinct different people in the same shared space, no split screen, "
+                "no collage, no duplicate faces: " + ", ".join(card.get("title") or "person" for card in locked)
+            )
+        else:
+            positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
+            assignments = ", ".join(
+                f"{card.get('title') or 'person'} on the "
+                f"{positions[index] if index < len(positions) else 'center'}"
+                for index, card in enumerate(locked)
+            )
+            lead_bits.append(
+                "distinct different people, not the same person, no duplicate faces: " + assignments
+            )
     if _is_interaction(moment, names):
         if explicit:
             lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")

@@ -1351,6 +1351,27 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
     return CLOTHED_LOCK
 
 
+def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
+    """Quem o pedido/momento realmente descreve nu, não o elenco inteiro."""
+    blob = (order or "").strip() or (moment or "")
+    found: list[str] = []
+    for card in cards:
+        name = " ".join(str(card.get("title") or "").split())
+        if len(name) < 3:
+            continue
+        escaped = re.escape(name)
+        direct = re.search(
+            rf"(?i)\b{escaped}\b\s*(?:,|;|\.)?\s*"
+            rf"(?:is\s+|are\s+|está\s+|estao\s+|fica\s+|now\s+|agora\s+)?"
+            rf"(?:\w+\s+){{0,2}}?(?:nua?s?|naked)\b",
+            blob,
+        )
+        trailing = re.search(rf"(?i)\b(?:nua?s?|naked)\s+{escaped}\b", blob)
+        if direct or trailing:
+            found.append(name)
+    return found
+
+
 def sex_phrase(name: str, label: str, *, explicit: bool, card: dict | None = None) -> str:
     """Frase curta no começo do prompt. O CLIP obedece o início."""
     kind = creature_kind(card, name)

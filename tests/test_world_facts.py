@@ -51,6 +51,10 @@ def test_elara_is_a_woman_and_caio_is_a_man():
         card={"title": "Caio", "entry": "", "sheet": "",
               "portrait_prompt": "A handsome vampire with pale skin"},
     ) == "adult man"
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}, {"title": "Lexi"}],
+        "Caio watches as Lexi, completely naked, kneels.",
+    ) == ["Lexi"]
 
 
 def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
