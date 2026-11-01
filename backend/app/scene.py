@@ -308,7 +308,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
     sex_line = ". ".join(sex_bits)
     creature = any(npc_assets.creature_kind(card) for card in cast)
-    style_text = style
+    style_text = re.sub(r"(?i)\b(?:nude|naked)\b", "", style)
+    style_text = " ".join(style_text.replace(", ,", ",").split()).strip(" ,")
     if creature and "natural skin texture" in style_text:
         style_text = style_text.replace(
             "natural skin texture",

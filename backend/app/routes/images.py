@@ -697,7 +697,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         else:
             lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
     lead = ", ".join(lead_bits)
-    suffix = img_cfg["style_suffix"] or ""
+    suffix = re.sub(r"(?i)\b(?:nude|naked)\b", "", img_cfg["style_suffix"] or "")
+    suffix = " ".join(suffix.replace(", ,", ",").split()).strip(" ,")
     if creature and not explicit and "natural skin texture" in suffix:
         suffix = suffix.replace(
             "natural skin texture",
