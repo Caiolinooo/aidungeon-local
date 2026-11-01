@@ -47,7 +47,7 @@ def test_elara_is_a_woman_and_caio_is_a_man():
     assert npc_assets.sex_label("Elara", "Elara vê o rei ao longe.") == ""
     assert npc_assets.sex_label("Caio", "You place Elara on the bed as Caio watches her.") == ""
     assert npc_assets.sex_label(
-        "Caio", "Caio watches as Lexi removes her dress.",
+        "Caio", "Caio watches as Lexi removes her dress. Ela hesita. Ela respira.",
         card={"title": "Caio", "entry": "", "sheet": "",
               "portrait_prompt": "A handsome vampire with pale skin"},
     ) == "adult man"

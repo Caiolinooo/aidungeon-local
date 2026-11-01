@@ -1263,8 +1263,14 @@ def sex_label(name: str, *blobs: str, card: dict | None = None) -> str:
         return ""
     before, after = _sex_sides("\n".join(blobs), name)
     own = _card_sex_blob(card)
-    female = _word_hits(after, _FEMALE_WORD) + _word_hits(own, _FEMALE_WORD)
-    male = _word_hits(after, _MALE_WORD) + _word_hits(own, _MALE_WORD)
+    own_female = _word_hits(own, _FEMALE_WORD)
+    own_male = _word_hits(own, _MALE_WORD)
+    if own_female > own_male:
+        return "adult woman"
+    if own_male > own_female:
+        return "adult man"
+    female = _word_hits(after, _FEMALE_WORD) + own_female
+    male = _word_hits(after, _MALE_WORD) + own_male
     first = name.split()[0].casefold()
     if first in _FEMALE_TITLE:
         female += 2
