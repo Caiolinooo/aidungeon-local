@@ -37,6 +37,10 @@ def test_mixed_negated_and_person_specific_emotions():
     text = "Elara está feliz, mas Lexi tem medo."
     assert voice_emotion.emotion_near_name(text, "Elara") == "joy"
     assert voice_emotion.emotion_near_name(text, "Lexi") == "fear"
+    assert voice_emotion.emotion_near_name(
+        "You ask Lexi whether she trusts you. She likes you but pretends indifference.",
+        "Lexi",
+    ) == "tenderness"
 
 
 def _transport(capture: list, *, reject_drama: bool = False,

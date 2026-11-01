@@ -88,6 +88,8 @@ OpenAI-compatível.
   os sentimentos de cada NPC, preservam emoções mistas e respeitam negações.
   Voz e cena usam a última oração emocional da pessoa: raiva contida não vira
   alegria, lágrimas de alívio não viram luto e “sem raiva” não vira raiva.
+  Se o adjudicador devolver `neutral` contra uma emoção explícita da ação, a
+  normalização restaura a emoção da pessoa referida, inclusive por pronome.
 - **Relações com evidência**: deltas direcionais NPC→jogador e NPC→NPC usam
   fatos materiais do turno, com limites, histórico e idempotência por `seq`.
   Conversa trivial não altera vínculo; romance só avança com reciprocidade.

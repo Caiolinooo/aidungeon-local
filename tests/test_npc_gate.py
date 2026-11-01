@@ -27,6 +27,37 @@ def _capture(monkeypatch, response: str):
     return calls
 
 
+def test_explicit_action_emotion_survives_a_neutral_llm_reaction():
+    cases = [
+        ("Elara", "You smile at Elara. She is furious but smiles to reassure you.", "anger"),
+        ("Lexi", "You ask Lexi whether she trusts you. She likes you but pretends indifference.", "tenderness"),
+    ]
+    for name, action, expected in cases:
+        result = npc_gate._normalize_payload({
+            "decision": "allow",
+            "reactions": [{
+                "npc": name, "card_id": name.lower(), "reaction": "She smiles.",
+                "emotion": "neutral", "pose": "still",
+            }],
+        }, {
+            "action": action,
+            "people": [{"name": name, "card_id": name.lower()}],
+        })
+        assert result["reactions"][0]["emotion"] == expected
+
+    result = npc_gate._normalize_payload({
+        "decision": "allow",
+        "reactions": [{
+            "npc": "Elara", "card_id": "elara", "reaction": "She watches.",
+            "emotion": "neutral", "pose": "still",
+        }],
+    }, {
+        "action": "You smile at Elara.",
+        "people": [{"name": "Elara", "card_id": "elara"}],
+    })
+    assert result["reactions"][0]["emotion"] == "neutral"
+
+
 def test_ensure_saved_is_idempotent_and_creates_body_state(tmp_db):
     with db.session() as conn:
         adv = db.insert_adventure(conn, title="Adjudicação")

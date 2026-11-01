@@ -25,7 +25,7 @@ import re
 from typing import Any
 
 from app import body_state, db, llm_client, npc_assets, npc_bonds, npc_life
-from app.voice_emotion import EMOTIONS, canonical_emotion
+from app.voice_emotion import EMOTIONS, canonical_emotion, emotion_near_name
 
 log = logging.getLogger("aidungeon.npc_gate")
 
@@ -557,12 +557,20 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
         line = " ".join(str(raw.get("line") or "").split())[:300]
         if not reaction and not line:
             continue
+        visual = _visual_fields(raw)
+        if visual.get("emotion", "neutral") == "neutral":
+            explicit = emotion_near_name(
+                str(payload.get("action") or ""), str(person.get("name") or ""),
+                subject_only=True,
+            )
+            if explicit:
+                visual["emotion"] = explicit
         reactions.append({
             "npc": person.get("name") or "Alguém",
             "card_id": person.get("card_id"),
             "reaction": reaction,
             "line": line,
-            **_visual_fields(raw),
+            **visual,
         })
     initiative = None
     raw_beat = data.get("initiative")

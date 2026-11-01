@@ -32,8 +32,8 @@ _KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "assust*", "aterroriz*", "tremend*",
     )),
     ("anger", (
-        "raiva", "anger", "angry", "rage", "furios*", "irritad*",
-        "grita*", "bravo", "brava",
+        "raiva", "anger", "angry", "rage", "furious", "fury", "furios*",
+        "irritad*", "irritated", "grita*", "bravo", "brava",
     )),
     ("sadness", (
         "triste*", "sad", "sadness", "chora*", "cry", "cries", "crying",
@@ -94,15 +94,17 @@ _SPECIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"alívio|aliviad|relief|relieved|felicidade)")),
     ("sadness", re.compile(r"(?i)(?:\bluto\b|\bpesar\b|grief|desculp|sorry)")),
     ("fear", re.compile(r"(?i)(?:ansiedade|ansios|nervos|preocup|anxious|anxiety)")),
-    ("tenderness", re.compile(r"(?i)(?:\bgosta\b|\bafeto\b|paixão|apaixon)")),
+    ("tenderness", re.compile(
+        r"(?i)(?:\bgost(?:a|o|ava|ou)\b|\blikes?\b|\bliked\b|"
+        r"\bafeto\b|paixão|apaixon)")),
 )
 
 _NEGATED_EMOTIONS = {
     "joy": r"(?:alegria|felicidade|feliz|happy|joy)",
-    "anger": r"(?:raiva|anger|angry)",
+    "anger": r"(?:raiva|anger|angry|furious|fury)",
     "fear": r"(?:medo|fear|afraid|anxiety|ansiedade|preocup)",
     "sadness": r"(?:tristeza|sadness|sad)",
-    "tenderness": r"(?:amor|love|gosta)",
+    "tenderness": r"(?:amor|love|gost(?:a|o|ava|ou)|likes?|liked)",
     "surprise": r"(?:surpresa|surprise)",
     "disgust": r"(?:nojo|disgust)",
 }
@@ -147,16 +149,32 @@ def emotion_from_text(text: str) -> str | None:
     return _emotion_in_text(folded)
 
 
-def emotion_near_name(text: str, name: str) -> str | None:
-    """Última emoção da oração que contém a pessoa, nunca da vizinha."""
+def emotion_near_name(text: str, name: str, *, subject_only: bool = False) -> str | None:
+    """Última emoção da pessoa, incluindo pronome imediatamente referente."""
     result = None
+    referenced = False
     for sentence in re.split(r"(?<=[.!?…])\s+", text or ""):
         clauses = re.split(r"(?i)\b(?:mas|porém|contudo|however|but)\b|;", sentence)
         for clause in clauses:
-            if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", clause, re.IGNORECASE):
+            mentioned = re.search(
+                rf"(?<!\w){re.escape(name)}(?!\w)", clause, re.IGNORECASE,
+            ) is not None
+            named = mentioned
+            if subject_only:
+                named = re.match(
+                    rf"(?i)\s*{re.escape(name)}(?!\w)", clause,
+                ) is not None or re.search(
+                    rf"(?i)(?<!\w){re.escape(name)}(?!\w)\s*,?\s*(?:who|que)\b",
+                    clause,
+                ) is not None
+            pronominal = referenced and re.match(
+                r"(?i)\s*(?:she|he|they|ela|ele)\b", clause,
+            ) is not None
+            if named or pronominal:
                 found = emotion_from_text(clause)
                 if found:
                     result = found
+            referenced = mentioned or pronominal
     return result
 
 
