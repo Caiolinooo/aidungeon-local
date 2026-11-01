@@ -660,7 +660,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         else:
             lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
     from app import consequences
-    visual_effects = consequences.visual_context(adv)
+    visual_effects = consequences.visual_context(adv, persistent_only=True)
     if visual_effects:
         lead_bits.append(visual_effects)
     lead = ", ".join(lead_bits)
@@ -679,9 +679,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         prompt = f"{lead} BREAK {tail}"
     else:
         prompt = lead or tail
-    negative = _dedupe_negative(neg_summary, neg_moment, assessment.image_negative)
+    negative = _dedupe_negative(neg_summary, assessment.image_negative)
     if not explicit:
-        negative = _dedupe_negative(negative, npc_assets.NUDITY_BAN)
+        negative = _dedupe_negative(negative, neg_moment, npc_assets.NUDITY_BAN)
     if clause:
         negative = _dedupe_negative(negative, npc_assets.IDENTITY_NEGATIVE)
     if _is_interaction(moment, names):

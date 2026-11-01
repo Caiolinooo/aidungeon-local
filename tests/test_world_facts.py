@@ -46,11 +46,25 @@ def test_elara_is_a_woman_and_caio_is_a_man():
     ) == "adult woman"
     assert npc_assets.sex_label("Elara", "Elara vê o rei ao longe.") == ""
     assert npc_assets.sex_label("Caio", "You place Elara on the bed as Caio watches her.") == ""
+    assert npc_assets.sex_label(
+        "Caio", "Caio watches as Lexi removes her dress.",
+        card={"title": "Caio", "entry": "", "sheet": "",
+              "portrait_prompt": "A handsome vampire with pale skin"},
+    ) == "adult man"
 
 
 def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
+    effects = {"world_effects": [
+        {"kind": "physical", "target": "Elara", "duration": "scene",
+         "summary": "A saia subiu.", "visual_en": "skirt lifted by invisible touch"},
+        {"kind": "social", "target": "Elara", "duration": "permanent",
+         "summary": "Ela virou Lexi.", "visual_en": "name Lexi floating in air"},
+        {"kind": "reality", "target": "world", "duration": "permanent",
+         "summary": "Chuva permanente.", "visual_en": "rain over the apartment"},
+    ]}
     with db.session() as conn:
+        db.update_adventure_ui_state(conn, adv["id"], effects)
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
         card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
@@ -58,7 +72,7 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
         )
     _face(adv["id"], card["id"], b"\x89PNG\r\nelara-woman")
     add_action(adv["id"], 0, "start", "Elara está no quarto. Ela observa. Caio está vestido. Ele espera.")
-    add_action(adv["id"], 1, "continue", "Ela está nua. You place Elara on the bed as Caio watches.")
+    add_action(adv["id"], 1, "continue", "Ela remove o vestido que cobria seu corpo e está nua. You place Elara on the bed as Caio watches.")
     # O ato chega ao CLIP pela frase do modelo (prosa crua não entra mais).
     _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport("Caio places Elara on the bed."))
@@ -78,6 +92,10 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     with db.session() as conn:
         negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
     assert "masculine body" not in negative
+    assert "remove o vestido" not in negative
+    assert "skirt lifted" not in prompt
+    assert "floating in air" not in prompt
+    assert "rain over the apartment" in prompt
 
 
 def test_opening_does_not_invent_a_room_or_obedient_elara(tmp_db):

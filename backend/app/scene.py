@@ -317,9 +317,9 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     lock = npc_assets.coverage_lock(*cast, explicit=explicit)
     if clause:
         # images.py importa scene no topo; o scrub fica aqui por isso.
-        from app.routes.images import contradicting_looks
+        from app.routes.images import clip_words, contradicting_looks
         beat, _banned = contradicting_looks(moment, clause)
-        beat = " ".join(beat.split())
+        beat = clip_words(" ".join(beat.split()), 400)
     else:
         beat = ""
     if clause and explicit:
@@ -340,7 +340,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         text = " ".join(part.strip() for part in parts if part and part.strip())
         return text[:1400], True
     if clause:
-        beat = beat[-280:]
+        beat = clip_words(beat, 280)
         parts = [
             sex_line,
             clause,
@@ -516,7 +516,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
     )
     # ComfyUI usa âncoras regionais; SDWebUI faz passes InstantID mascarados.
     from app import consequences
-    visual_effects = consequences.visual_context(adventure)
+    visual_effects = consequences.visual_context(adventure, persistent_only=True)
     if visual_effects:
         prompt = f"{prompt}, {visual_effects}"[:1400]
     plan = {

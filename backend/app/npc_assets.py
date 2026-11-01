@@ -1222,16 +1222,15 @@ def _card_sex_blob(card: dict | None) -> str:
 
 
 def _after_name(text: str, end: int) -> str:
-    """O resto da frase, e o pronome que abre a frase seguinte."""
+    """Só o pronome que abre a frase seguinte, nunca o objeto da ação."""
     rest = text[end:end + 140]
     pieces = re.split(r"[.!?]", rest, maxsplit=1)
-    same = pieces[0]
     if len(pieces) < 2:
-        return same
+        return ""
     word = pieces[1].lstrip().split(" ", 1)[0].strip(",;:")
     if word.casefold() in set(_FEMALE_WORD) | set(_MALE_WORD):
-        return same + " " + word
-    return same
+        return word
+    return ""
 
 
 def _sex_sides(text: str, name: str) -> tuple[str, str]:
@@ -1381,7 +1380,7 @@ _FEMALE_WORD = (
 )
 _MALE_WORD = (
     "man", "men", "male", "boy", "gentleman", "he",
-    "homem", "menino", "garoto", "rapaz", "ele", "dele", "nele",
+    "homem", "menino", "garoto", "rapaz", "ele", "dele", "nele", "handsome",
     "marido", "husband", "father", "son", "masculino", "irmão", "irmao",
 )
 _FEMALE_TITLE = ("princess", "princesa", "queen", "rainha", "lady", "senhora", "duchess")

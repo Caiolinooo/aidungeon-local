@@ -90,12 +90,21 @@ def effect_context(adventure: dict, *, target: str = "") -> str:
     return "\n".join(lines)
 
 
-def visual_context(adventure: dict, *, target: str = "") -> str:
-    """Somente efeitos com representação visual explícita."""
+_TEXT_ARTIFACT = re.compile(
+    r"\b(?:floating in air|floating text|text|letters|words|caption|label|sign|logo|watermark)\b",
+    re.IGNORECASE,
+)
+
+
+def visual_context(adventure: dict, *, target: str = "",
+                   persistent_only: bool = False) -> str:
+    """Efeitos visuais válidos, sem ações antigas nem artefatos de texto."""
     bits = []
     for item in active_effects(adventure, target=target):
+        if persistent_only and item.get("duration") != "permanent":
+            continue
         visual = " ".join(str(item.get("visual_en") or "").split())
-        if visual:
+        if visual and not _TEXT_ARTIFACT.search(visual):
             bits.append(visual)
     return ", ".join(dict.fromkeys(bits))
 
