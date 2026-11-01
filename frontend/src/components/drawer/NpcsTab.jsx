@@ -589,12 +589,12 @@ function NpcRow({
               className={`${inputCls} resize-y`}
             />
           </label>
-          <label className="flex items-center gap-2 text-sm text-secondary">
+          <label className="flex flex-wrap items-center gap-2 text-sm text-secondary">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted">Voice</span>
             <select
               value={form.voice}
               onChange={(e) => setForm({ ...form, voice: e.target.value })}
-              className="rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri"
+              className="min-w-0 flex-1 rounded-lg border border-subtle bg-surface px-2 py-1 text-sm outline-none focus:border-accent-pri"
             >
               <option value="">Sem voz</option>
               {['M1', 'M2', 'M3', 'F1', 'F2', 'F3'].map((v) => (
