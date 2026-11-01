@@ -661,7 +661,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         alias_cards = [
             {**card, "aliases": [
                 name for name, resolved_card in resolved.items()
-                if resolved_card and (
+                if resolved_card is None or (
                     resolved_card is card or resolved_card.get("id") == card.get("id")
                 )
             ]}
