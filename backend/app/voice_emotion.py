@@ -87,15 +87,77 @@ def _hit(text: str, needle: str) -> bool:
     return re.search(pattern, text) is not None
 
 
+# Casos que o vocabulário simples não cobre: alívio, luto, ansiedade e afeto.
+_SPECIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("joy", re.compile(
+        r"(?i)(?:lágrimas?\s+de\s+(?:alegria|felicidade)|tears?\s+of\s+joy|"
+        r"alívio|aliviad|relief|relieved|felicidade)")),
+    ("sadness", re.compile(r"(?i)(?:\bluto\b|\bpesar\b|grief|desculp|sorry)")),
+    ("fear", re.compile(r"(?i)(?:ansiedade|ansios|nervos|preocup|anxious|anxiety)")),
+    ("tenderness", re.compile(r"(?i)(?:\bgosta\b|\bafeto\b|paixão|apaixon)")),
+)
+
+_NEGATED_EMOTIONS = {
+    "joy": r"(?:alegria|felicidade|feliz|happy|joy)",
+    "anger": r"(?:raiva|anger|angry)",
+    "fear": r"(?:medo|fear|afraid|anxiety|ansiedade|preocup)",
+    "sadness": r"(?:tristeza|sadness|sad)",
+    "tenderness": r"(?:amor|love|gosta)",
+    "surprise": r"(?:surpresa|surprise)",
+    "disgust": r"(?:nojo|disgust)",
+}
+
+
+def _negated(text: str, emotion: str) -> bool:
+    needle = _NEGATED_EMOTIONS[emotion]
+    return re.search(
+        rf"(?i)\b(?:not|no|never|nao|não|nunca|nem|sem)\s+"
+        rf"(?:\w+\s+){{0,2}}{needle}",
+        text,
+    ) is not None
+
+
+def _emotion_in_text(text: str, *, include_expression: bool = True) -> str | None:
+    for emotion, pattern in _SPECIAL_PATTERNS:
+        if pattern.search(text) and not _negated(text, emotion):
+            return emotion
+    for emotion, needles in _KEYWORDS:
+        if _negated(text, emotion):
+            continue
+        if not include_expression and emotion == "joy":
+            needles = tuple(needle for needle in needles
+                            if needle not in {"sorri*", "smile*", "laugh*"})
+        if any(_hit(text, needle) for needle in needles):
+            return emotion
+    return None
+
+
 def emotion_from_text(text: str) -> str | None:
-    """Emoção explícita na frase, ou None se a frase não declara nenhuma."""
+    """Emoção explícita na frase, com contraste e negação por emoção."""
     folded = (text or "").casefold()
     if not folded.strip():
         return None
-    for emotion, needles in _KEYWORDS:
-        if any(_hit(folded, needle) for needle in needles):
-            return emotion
-    return None
+    contrast = re.split(r"(?i)\b(?:mas|porém|contudo|however|but)\b", folded)
+    if len(contrast) > 1:
+        # Um sorriso após "mas" pode esconder a emoção anterior; outra emoção
+        # declarada ("feliz, mas nervosa") muda a dominante.
+        found = _emotion_in_text(contrast[-1], include_expression=False)
+        if found:
+            return found
+    return _emotion_in_text(folded)
+
+
+def emotion_near_name(text: str, name: str) -> str | None:
+    """Última emoção da oração que contém a pessoa, nunca da vizinha."""
+    result = None
+    for sentence in re.split(r"(?<=[.!?…])\s+", text or ""):
+        clauses = re.split(r"(?i)\b(?:mas|porém|contudo|however|but)\b|;", sentence)
+        for clause in clauses:
+            if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", clause, re.IGNORECASE):
+                found = emotion_from_text(clause)
+                if found:
+                    result = found
+    return result
 
 
 def choose_emotion(text: str, *, npc_emotion: str | None = None,

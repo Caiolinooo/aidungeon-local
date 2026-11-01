@@ -71,8 +71,15 @@ RULES:
   the player.
 - Every reaction must include a canonical emotion (joy, anger, fear, sadness,
   tenderness, surprise, disgust, neutral) and a short visible pose. Use neutral
-  when feelings are restrained; never omit either field. Reactions stay valid
-  when initiative is null. Do not invent an emotion for the player.
+  only when no feeling is evidenced; restraint does not erase an explicitly
+  stated emotion. Never omit either field. Reactions stay valid when initiative
+  is null. Do not invent an emotion for the player.
+- Infer each person's emotion from their own speech, body and relation to the
+  event, never from another person's mood or the scene's general tone. Mixed
+  signals keep the dominant feeling: furious but smiling = anger; relieved
+  tears = joy; smiling while grieving = sadness. A negated feeling is absent:
+  "sem raiva" / "without anger" is not anger. Anxiety and nervousness are fear;
+  relief is joy; grief and remorse are sadness; affection is tenderness.
 - relation_updates change how the NPC feels. card_id is a living NPC from
   people. target is "player" or another living NPC card_id. Never use the
   player card id. Never update the player as if they were an NPC.

@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app import db, jobs, likeness, npc_assets, npc_bonds, settings_store, world_facts
+from app import db, jobs, likeness, npc_assets, npc_bonds, settings_store, voice_emotion, world_facts
 from app.errors import GameError
 
 # Clima que muda o fundo mesmo sem trocar de lugar. Ordem estável na assinatura.
@@ -32,14 +32,6 @@ _ATMOSPHERE = (
     ("fire", ("fire", "fogo", "flame", "chama", "burning", "incêndio", "incendio")),
     ("snow", ("snow", "neve", "blizzard", "nevasca")),
     ("blood", ("blood", "sangue", "gore")),
-)
-
-_MOODS = (
-    ("happy", ("feliz", "happy", "sorri", "smile", "laugh", "alegre")),
-    ("sad", ("triste", "sad", "chora", "cry", "lágrima")),
-    ("angry", ("furios", "angry", "raiva", "grita", "rage")),
-    ("fear", ("medo", "fear", "assust", "terror", "scared", "afraid")),
-    ("love", ("amor", "love", "beij", "kiss", "abraç")),
 )
 
 _CAST_LIMIT = 4
@@ -161,33 +153,16 @@ def atmosphere_of(text: str) -> str:
 
 
 def _mood_near(text: str, name: str) -> str | None:
-    """Mood cuja palavra cai mais perto da última menção do NPC.
-
-    A janela pode cobrir a menção anterior (outra emoção); vence a mais próxima.
-    """
-    index = _last_mention(text, name)
-    if index < 0:
-        return None
-    start = max(0, index - 200)
-    window = text[start:index + len(name) + 200].lower()
-    mention_at = index - start
-    best: tuple[int, str] | None = None
-    for mood, words in _MOODS:
-        for word in words:
-            search = 0
-            while True:
-                found = window.find(word, search)
-                if found < 0:
-                    break
-                distance = abs(found - mention_at)
-                if best is None or distance < best[0]:
-                    best = (distance, mood)
-                search = found + len(word)
-    return best[1] if best else None
+    """Emoção apenas da oração da pessoa, no vocabulário visual existente."""
+    emotion = voice_emotion.emotion_near_name(text, name)
+    return {
+        "joy": "happy", "sadness": "sad", "anger": "angry",
+        "tenderness": "love",
+    }.get(emotion, emotion)
 
 
 def _cast_mood(text: str, name: str, sheet: dict) -> str | None:
-    """Emoção já commitada. Sem ela, a palavra de mood mais perto do nome."""
+    """Emoção commitada; sem ela, a emoção explícita na cláusula do NPC."""
     emotion = npc_assets.visual_reaction(sheet).get("emotion") or ""
     if emotion:
         return emotion

@@ -24,6 +24,21 @@ def test_emotion_comes_from_the_line_before_the_npc():
     assert voice_emotion.direction_for("fear").startswith("[frightened")
 
 
+def test_mixed_negated_and_person_specific_emotions():
+    assert voice_emotion.emotion_from_text(
+        "Elara está furiosa, mas sorri para não preocupar Caio.") == "anger"
+    assert voice_emotion.emotion_from_text(
+        "Elara está aliviada, quase chorando de felicidade.") == "joy"
+    assert voice_emotion.emotion_from_text("Elara recusa com calma, sem raiva.") is None
+    assert voice_emotion.emotion_from_text("Ela não sente nada.") is None
+    assert voice_emotion.emotion_from_text("Elara sorri, ainda de luto.") == "sadness"
+    assert voice_emotion.emotion_from_text(
+        "Lexi gosta dele, mas finge indiferença.") == "tenderness"
+    text = "Elara está feliz, mas Lexi tem medo."
+    assert voice_emotion.emotion_near_name(text, "Elara") == "joy"
+    assert voice_emotion.emotion_near_name(text, "Lexi") == "fear"
+
+
 def _transport(capture: list, *, reject_drama: bool = False,
                fail_auth_on_drama: bool = False) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:

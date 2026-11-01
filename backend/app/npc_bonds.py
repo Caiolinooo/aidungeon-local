@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 
-from app import db, npc_assets, progression
+from app import db, npc_assets, progression, voice_emotion
 from app.voice_emotion import canonical_emotion, emotion_from_text
 
 BOND_KEYS = ("relationship", "trust", "distrust", "fear", "desire", "boldness")
@@ -577,15 +577,6 @@ def characters_in_text(cards: list[dict], text: str) -> list[dict]:
     return [card for _pos, card in found]
 
 
-def _window_around(text: str, name: str) -> str:
-    at = _last_mention(text, name)
-    if at < 0:
-        return ""
-    start = max(0, at - 180)
-    end = min(len(text), at + len(name) + 180)
-    return text[start:end]
-
-
 def emotion_for_card(card: dict, text: str, bonds: dict[str, int]) -> str:
     """O humor simulado vence a prosa; sem humor, a prosa vence o número."""
     sheet = npc_assets.parse_sheet(card.get("sheet") or "")
@@ -596,7 +587,7 @@ def emotion_for_card(card: dict, text: str, bonds: dict[str, int]) -> str:
         if mapped:
             return mapped
     for name in _names(card):
-        found = emotion_from_text(_window_around(text, name))
+        found = voice_emotion.emotion_near_name(text, name)
         if found:
             return found
     return emotion_from_bonds(bonds)

@@ -20,6 +20,14 @@ def _update(card_id, target, delta, *, reason, evidence):
     }
 
 
+def test_emotion_for_card_does_not_borrow_the_other_persons_mood():
+    elara = {"title": "Elara", "triggers": [], "sheet": "{}"}
+    lexi = {"title": "Lexi", "triggers": [], "sheet": "{}"}
+    text = "Elara está furiosa, mas sorri. Lexi está aliviada."
+    assert npc_bonds.emotion_for_card(elara, text, npc_bonds.DEFAULTS) == "anger"
+    assert npc_bonds.emotion_for_card(lexi, text, npc_bonds.DEFAULTS) == "joy"
+
+
 def test_material_deltas_persist_and_words_alone_do_not(tmp_db):
     adv = make_adventure(title="Bonds")
     with db.session() as conn:

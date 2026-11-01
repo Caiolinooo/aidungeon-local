@@ -29,6 +29,11 @@ Output STRICT JSON (no markdown) with exactly this shape:
 ]}
 Use the canonical name. Bond numbers in the user message are read-only context.
 Do not output bonds, trust, fear, affinity or any relationship value.
+Infer mood and sentiments separately for each person from their own experience,
+never from the scene's general tone or another character's emotion. Preserve
+mixed signals: angry restraint is anger, relieved tears are joy, and a grieving
+smile is sadness. Negated feelings are absent. Anxiety/nervousness means fear;
+relief means joy; grief/remorse means sadness; affection means tenderness.
 Do not change who the person is. Pain, injuries and conditions come from the
 chronicle; read them and let them shape mood/expression, but do not invent or
 heal a wound here. expression must be short and visual (English) and must not

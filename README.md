@@ -84,6 +84,10 @@ OpenAI-compatível.
   mudanças de relação sem expor instruções ou motivos privados.
   A adjudicação pública fica na `Action`: reload e retry restauram reação, motivo
   e deltas sem reaplicá-los; o `cue` interno não é persistido nem exposto.
+- **Emoção contextual por pessoa**: narrador, adjudicador e vida interior separam
+  os sentimentos de cada NPC, preservam emoções mistas e respeitam negações.
+  Voz e cena usam a última oração emocional da pessoa: raiva contida não vira
+  alegria, lágrimas de alívio não viram luto e “sem raiva” não vira raiva.
 - **Relações com evidência**: deltas direcionais NPC→jogador e NPC→NPC usam
   fatos materiais do turno, com limites, histórico e idempotência por `seq`.
   Conversa trivial não altera vínculo; romance só avança com reciprocidade.
