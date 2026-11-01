@@ -645,7 +645,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if not explicit:
         # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
         lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
-    if sentence and not refusal:
+    if sentence and not refusal and not order_lock:
         lead_bits.append(sentence)
     if order and not order_lock:
         lead_bits.append(order)

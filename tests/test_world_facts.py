@@ -93,7 +93,6 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert "caio is an adult man" in head.lower()
     assert "Elara (adult woman)" in head
     assert "Caio (adult man)" in head
-    assert head.lower().index("elara is an adult woman") < head.lower().index("places elara")
     with db.session() as conn:
         negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
     assert "masculine body" not in negative
