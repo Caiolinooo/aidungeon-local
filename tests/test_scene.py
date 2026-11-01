@@ -686,6 +686,53 @@ def test_second_anchor_invalidates_only_that_scene(client, tmp_path):
         reference_images=[ada_bytes]) == solo
 
 
+def test_execution_recomputes_cache_after_config_change(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    _use_comfy()
+    adv = make_adventure()
+    with db.session() as conn:
+        ada = db.insert_card(
+            conn, adv["id"], type="character", title="Ada", triggers=["Ada"],
+            entry="Barkeep.", portrait_prompt="silver hair",
+        )
+    _face(adv["id"], ada["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "continue", "Ada waits outside.")
+    response = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert response.status_code == 200
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+        old_key = job["payload"]["cache_key"]
+        db.set_setting(conn, "image.seed", "42")
+    assert jobs.process_pending(pipeline_transport()) == 1
+    with db.session() as conn:
+        image = db.latest_image(conn, adv["id"], "backdrop")
+    assert image["cache_key"] != old_key
+
+
+def test_see_execution_recomputes_cache_and_negative_after_config_change(tmp_db, tmp_path):
+    use_tmp_storage(tmp_path)
+    _use_comfy()
+    adv = make_adventure()
+    with db.session() as conn:
+        job = db.insert_job(
+            conn, adventure_id=adv["id"], type="see_image", ref_id="", status="pending",
+            payload={
+                "prompt": "Ada is naked outside", "caption": "Ada outside",
+                "negative_extra": "nude", "negative_prompt": "nude, text",
+                "cache_key": "stale", "explicit": True,
+                "reference_image_ids": [], "reference_hashes": [],
+            }, priority=jobs.PRIORITY_SEE,
+        )
+        db.set_setting(conn, "image.seed", "42")
+    assert jobs.process_pending(pipeline_transport()) == 1
+    with db.session() as conn:
+        image = db.latest_image(conn, adv["id"], "scene")
+    assert image["cache_key"] != "stale"
+    assert "nude" not in image["negative_prompt"].lower()
+    assert "text" in image["negative_prompt"].lower()
+
+
 def test_missing_reference_file_fails_the_backdrop_job(client, tmp_path):
     use_tmp_storage(tmp_path)
     _use_comfy()

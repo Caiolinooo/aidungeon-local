@@ -428,17 +428,11 @@ def _is_interaction(text: str, names: list[str]) -> bool:
 
 
 def _explicit_order_lock(order: str) -> str:
-    """Nudez completa do pedido vem antes da roupa da referência."""
+    """Instrução original prioritária; nudez específica sai de nude_names."""
     folded = (order or "").casefold()
     if not re.search(r"(?:\bnud|\bnua\b|\bnude\b|\bnaked\b|sem roupa|tirar\w*\s+(?:a\s+)?roupa)", folded):
         return ""
-    bits = [
-        f"Player instruction, highest priority: {order}",
-        "fully nude, no underwear, no bra, no panties",
-    ]
-    if not re.search(r"(?:stockings?|meias?)", folded):
-        bits.append("no stockings")
-    return ", ".join(bits)
+    return f"Player instruction, highest priority: {order}"
 
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
@@ -481,7 +475,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # A recusa por menor usa o texto cru da cena — mesmo quando
     # o world-facts rebaixa o explícito para a recusa canônica.
     # A segurança olha o pedido do jogador tambem.
-    decision = likeness.decide_frame(frame, explicit=scene.is_explicit(guard_text))
+    decision = likeness.decide_frame(
+        frame, explicit=scene.is_explicit(raw_moment) or scene.is_explicit(order))
     if decision.refusal:
         raise GameError(422, decision.refusal, decision.message)
     frame = list(decision.cast)[:likeness.CAST_REFERENCE_LIMIT]
@@ -489,11 +484,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     _require_cast(adv["id"], cast_locked)
     # A pintura segue a narracao: um pedido do jogador nao veste a cena.
     # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
-    explicit = decision.allow_explicit and scene.is_explicit(
-        scene.narration_moment(actions, body.action_seq)
-    )
-    if assessment.image_directive:
-        # recusa/bloqueio canônico: a cena pintada não é explícita
+    explicit = scene.is_explicit(scene.narration_moment(actions, body.action_seq)) or scene.is_explicit(order)
+    if world_facts.REFUSAL_IMAGE in assessment.image_directive:
+        # Apenas uma recusa estabelecida rebaixa a instrução explícita.
         explicit = explicit and scene.is_explicit(assessment.safe_excerpt)
     if not explicit:
         order = likeness.strip_explicit(order)
@@ -672,8 +665,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         if nude:
             lead_bits.append("clothes off, fully nude only for " + ", ".join(nude) + ", uncensored")
         else:
-            lead_bits.append("clothes off, nude, uncensored")
-        if clothed:
+            lead_bits.append("uncensored")
+        if nude and clothed:
             lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     if len(locked) > 1:
         if explicit:
@@ -792,10 +785,14 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         # OpenAI-compatible não tem âncoras visuais de identidade.
         reference_image_ids = []
         references = []
+    base_negative = (
+        npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"])
+        if explicit else img_cfg["negative_prompt"]
+    )
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
-        "negative_prompt": _dedupe_negative(img_cfg["negative_prompt"], negative_extra),
+        "negative_prompt": _dedupe_negative(base_negative, negative_extra),
         "caption": caption,
         "cast_card_ids": cast_card_ids,
         "reference_image_ids": reference_image_ids,
@@ -803,7 +800,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         "expected_people": expected_people,
         "explicit": explicit,
         "cache_key": image_client.request_key(
-            img_cfg, prompt, negative_extra=negative_extra, variation=variation,
+            {**img_cfg, "negative_prompt": base_negative}, prompt, negative_extra=negative_extra, variation=variation,
             reference_images=references or None),
     }
 

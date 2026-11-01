@@ -259,13 +259,21 @@ def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     return likeness.opening_clause(cast, explicit=explicit)
 
 
-def _reference_layout_guard(cast: list[dict]) -> str:
+def _reference_layout_guard(cast: list[dict], *, explicit: bool = False) -> str:
     """Referência de identidade não pode virar estúdio, grade ou split na cena."""
     for card in cast:
         raw_sheet = card.get("sheet") or ""
         sheet = raw_sheet if isinstance(raw_sheet, dict) else npc_assets.parse_sheet(raw_sheet)
         reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
         if isinstance(reference.get("turnaround"), dict):
+            if explicit:
+                return (
+                    "Use the reference images only for the named characters' identity, face, "
+                    "hair and distinctive facial details. Ignore outfits, grey studio "
+                    "backgrounds, multi-panel layouts, split screens, neutral poses and framing. "
+                    "Do not copy the reference composition or clothing; depict only the place "
+                    "and action below."
+                )
             return (
                 "Use the reference images only for the named characters' identity, face, "
                 "hair, body, outfit and distinctive details. Ignore their grey studio "
@@ -293,7 +301,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
     reaction = _reaction_clause(cast) if clause else ""
-    layout_guard = _reference_layout_guard(cast) if clause else ""
+    layout_guard = _reference_layout_guard(cast, explicit=explicit) if clause else ""
     sex_bits = []
     for card in cast:
         person = (card.get("title") or "").strip()
@@ -326,8 +334,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     if clause and explicit:
         nude = npc_assets.nude_names(cast, moment)
         clothed = [card.get("title") for card in cast if card.get("title") not in nude]
-        nudity = "clothes off, fully nude only for " + ", ".join(nude) + ", uncensored" if nude else "clothes off, nude, uncensored"
-        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if clothed else ""
+        nudity = "clothes off, fully nude only for " + ", ".join(nude) + ", uncensored" if nude else "uncensored"
+        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if nude and clothed else ""
         composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         parts = [
             sex_line,

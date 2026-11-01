@@ -350,6 +350,13 @@ def test_complete_references_prioritize_master_sheet_and_distinct_angles(tmp_db,
         assert include_people
         assert "Do not copy the reference composition" in prompt
         assert "First waits beside the exit" in prompt
+        explicit_prompt, _ = scene._prompt(
+            "Rainy alley", "wet stone and neon signs", "photorealistic", "rain",
+            [{**first, "portrait_prompt": "short red hair, green eyes, leather coat"}],
+            "First is naked beside the exit.",
+        )
+        assert "Ignore outfits" in explicit_prompt
+        assert "body, outfit" not in explicit_prompt
 
 
 def test_portrait_schedules_complete_reference_only_once(tmp_db, tmp_path, monkeypatch):

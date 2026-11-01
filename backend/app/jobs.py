@@ -988,13 +988,14 @@ _BACKDROP_HEIGHT = 768
 
 
 def backdrop_negative(img_cfg: dict, *, include_people: bool, explicit: bool) -> str:
+    base = npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"]) if explicit else img_cfg["negative_prompt"]
     if explicit:
         ban = _CAST_NEGATIVE_EXPLICIT
     elif include_people:
         ban = _CAST_NEGATIVE
     else:
         ban = _BACKDROP_NEGATIVE
-    return ", ".join(part for part in (img_cfg["negative_prompt"], ban) if part)
+    return ", ".join(part for part in (base, ban) if part)
 
 
 def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
@@ -1008,7 +1009,14 @@ def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
     else:
         ban = _BACKDROP_NEGATIVE
     return image_client.request_key(
-        img_cfg, prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
+        {
+            **img_cfg,
+            "negative_prompt": (
+                npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"])
+                if explicit else img_cfg["negative_prompt"]
+            ),
+        },
+        prompt, width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
         negative_extra=ban, reference_images=reference_images,
     )
 
@@ -1031,14 +1039,19 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         ban = _CAST_NEGATIVE
     else:
         ban = _BACKDROP_NEGATIVE
-    negative = ", ".join(
-        part for part in (img_cfg["negative_prompt"], ban) if part
+    base_negative = (
+        npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"])
+        if payload.get("explicit") else img_cfg["negative_prompt"]
     )
+    negative = ", ".join(
+        part for part in (base_negative, ban) if part
+    )
+    img_cfg["negative_prompt"] = base_negative
     references = (
         _reference_blobs(job, people=bool(payload.get("include_people")))
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
-    cache_key = str(payload.get("cache_key") or "") or backdrop_cache_key(
+    cache_key = backdrop_cache_key(
         img_cfg, prompt,
         include_people=bool(payload.get("include_people")),
         explicit=bool(payload.get("explicit")),
@@ -1428,11 +1441,18 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     negative_extra = str(payload.get("negative_extra") or "")
+    if payload.get("explicit"):
+        negative_extra = npc_assets.negative_without_nudity_ban(negative_extra)
+    if payload.get("explicit"):
+        img_cfg["negative_prompt"] = npc_assets.negative_without_nudity_ban(
+            img_cfg["negative_prompt"])
+    negative_prompt = ", ".join(
+        part for part in (img_cfg["negative_prompt"], negative_extra) if part)
     references = (
         _reference_blobs(job, people=False)
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
-    cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
+    cache_key = image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
         variation=payload.get("variation"), reference_images=references or None)
     with db.session() as conn:
@@ -1448,7 +1468,7 @@ def _execute_see(job: dict, transport: Any) -> dict:
         image = store_see(
             job["adventure_id"], str(payload.get("caption") or ""), meta,
             image_id=db.new_id(), prompt=prompt,
-            negative_prompt=str(payload.get("negative_prompt") or ""),
+            negative_prompt=negative_prompt,
             cache_key=cache_key, reused_from=cached["id"], job_id=job["id"],
         )
         return {"image": image, "reused": True}
@@ -1461,7 +1481,7 @@ def _execute_see(job: dict, transport: Any) -> dict:
     try:
         image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                           image_id=image_id, prompt=prompt,
-                          negative_prompt=str(payload.get("negative_prompt") or ""),
+                          negative_prompt=negative_prompt,
                           cache_key=cache_key, job_id=job["id"])
     except db.JobCanceled:
         _discard_png(meta["file_path"])

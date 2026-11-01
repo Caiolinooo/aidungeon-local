@@ -59,6 +59,20 @@ def test_elara_is_a_woman_and_caio_is_a_man():
         [{"title": "Caio"}, {"title": "A Donzela da Noite", "aliases": ["Lexi"]}],
         "lexi completamente nua na minha frente",
     ) == ["A Donzela da Noite"]
+    assert npc_assets.nude_names(
+        [{"title": "Zendaya"}, {"title": "Clara"}],
+        "Zendaya and Clara are naked together.",
+    ) == ["Zendaya", "Clara"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}, {"title": "Lexi"}], "Caio sees Lexi naked.",
+    ) == ["Lexi"]
+    assert npc_assets.nude_names(
+        [{"title": "Zendaya"}, {"title": "Elara"}],
+        "Zendaya is naked. Elara is not naked.",
+    ) == ["Zendaya"]
+    assert npc_assets.nude_names(
+        [{"title": "Thalita Massoto"}], "Thalita está pelada.",
+    ) == ["Thalita Massoto"]
 
 
 def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
@@ -74,13 +88,14 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     with db.session() as conn:
         db.update_adventure_ui_state(conn, adv["id"], effects)
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        db.set_setting(conn, "image.negative_prompt", json.dumps("nude, text, watermark"))
         card = db.insert_card(
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="Uma mulher de cabelos negros.",
         )
     _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "start", "Elara está no quarto. Ela observa. Caio está vestido. Ele espera.")
-    add_action(adv["id"], 1, "continue", "Ela remove o vestido que cobria seu corpo e está nua. You place Elara on the bed as Caio watches.")
+    add_action(adv["id"], 1, "continue", "Elara está vestida e observa Caio.")
     # O ato chega ao CLIP pela frase do modelo (prosa crua não entra mais).
     _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport("Caio places Elara on the bed."))
@@ -94,16 +109,16 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
     assert prompt.startswith("Player instruction, highest priority: Elara completely naked")
-    assert "no stockings" in prompt
+    assert "fully nude only for Elara" in prompt
+    assert "no stockings" not in prompt
     head = prompt.split("BREAK", 1)[0]
     assert "elara is an adult woman" in head.lower()
     assert "female body" in head.lower()
-    assert "caio is an adult man" in head.lower()
-    assert "Elara (adult woman)" in head
-    assert "Caio (adult man)" in head
     with db.session() as conn:
         negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
     assert "masculine body" not in negative
+    assert "nude" not in negative
+    assert "text" in negative
     assert "remove o vestido" not in negative
     assert "skirt lifted" not in prompt
     assert "floating in air" not in prompt

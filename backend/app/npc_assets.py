@@ -1322,6 +1322,15 @@ NUDITY_BAN = (
 )
 
 
+def negative_without_nudity_ban(text: str) -> str:
+    """Mantém outros negatives, mas nunca proíbe a nudez já autorizada."""
+    banned = {part.casefold() for part in NUDITY_BAN.split(", ")}
+    return ", ".join(
+        part.strip() for part in (text or "").split(",")
+        if part.strip() and part.strip().casefold() not in banned
+    )
+
+
 def creature_kind(card: dict | None = None, name: str = "") -> str:
     """Espécie não humana do card. Vazio se a ficha não diz."""
     sheet = parse_sheet((card or {}).get("sheet") or "") if card else {}
@@ -1352,24 +1361,42 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
 
 
 def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
-    """Quem o pedido/momento realmente descreve nu, não o elenco inteiro."""
+    """Quem o pedido/momento realmente descreve nu, sem cruzar sujeitos."""
     blob = (order or "").strip() or (moment or "")
     found: list[str] = []
-    for card in cards:
-        title = " ".join(str(card.get("title") or "").split())
-        aliases = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
-        for name in dict.fromkeys(alias for alias in aliases if len(alias) >= 3):
-            escaped = re.escape(name)
-            direct = re.search(
-                rf"(?i)\b{escaped}\b\s*(?:,|;|\.)?\s*"
-                rf"(?:is\s+|are\s+|está\s+|estao\s+|fica\s+|now\s+|agora\s+)?"
-                rf"(?:\w+\s+){{0,2}}?(?:nua?s?|naked)\b",
-                blob,
-            )
-            trailing = re.search(rf"(?i)\b(?:nua?s?|naked)\s+{escaped}\b", blob)
-            if direct or trailing:
-                found.append(title)
-                break
+    clauses = re.split(r"(?<=[.!?…])\s+", blob)
+    negation = re.compile(r"(?i)\b(?:not|never|no|nao|não|nunca|nem)\b")
+    nude = r"(?:naked|nudes?|nua?s?|nu|pelad[oa]s?|desnud[oa]s?)"
+    adverbs = (
+        "is", "are", "está", "estao", "fica", "now", "agora", "completely",
+        "completamente", "totally", "totalmente", "already", "já", "finally",
+        "finalmente", "both", "ambos", "and", "e", "the", "a", "o",
+    )
+    for clause in clauses:
+        if negation.search(clause):
+            continue
+        for card in cards:
+            title = " ".join(str(card.get("title") or "").split())
+            aliases = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
+            if len(title.split()) > 1:
+                aliases.append(title.split()[0])
+            for name in dict.fromkeys(alias for alias in aliases if len(alias) >= 3):
+                escaped = re.escape(name)
+                direct = re.search(
+                    rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*"
+                    rf"(?:(?:{'|'.join(adverbs)})\s+){{0,2}}?{nude}\b",
+                    clause,
+                )
+                trailing = re.search(rf"(?i)\b{nude}\s+{escaped}\b", clause)
+                compound = re.search(
+                    rf"(?i)\b{escaped}\b.*\b(?:are|estão|estao|fica|ficam|estavam)\s+"
+                    rf"(?:\w+\s+){{0,2}}?{nude}\b",
+                    clause,
+                )
+                if direct or trailing or compound:
+                    if title not in found:
+                        found.append(title)
+                    break
     return found
 
 
