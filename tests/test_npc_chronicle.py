@@ -511,7 +511,7 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monke
                 "clothing": "Vestido de veludo preto, colar de veludo no pescoço, botas de plataforma",
             }),
         )
-    _face(adv["id"], card["id"], b"\x89PNG\r\nselene-face")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "say", '\n> You say "por que n tira suas roupas amor?"\n')
     add_action(
         adv["id"], 1, "continue",
