@@ -70,7 +70,7 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
             conn, adv["id"], type="character", title="Elara",
             triggers=["Elara"], entry="Uma mulher de cabelos negros.",
         )
-    _face(adv["id"], card["id"], b"\x89PNG\r\nelara-woman")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "start", "Elara está no quarto. Ela observa. Caio está vestido. Ele espera.")
     add_action(adv["id"], 1, "continue", "Ela remove o vestido que cobria seu corpo e está nua. You place Elara on the bed as Caio watches.")
     # O ato chega ao CLIP pela frase do modelo (prosa crua não entra mais).
@@ -95,7 +95,7 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert "remove o vestido" not in negative
     assert "skirt lifted" not in prompt
     assert "floating in air" not in prompt
-    assert "rain over the apartment" in prompt
+    assert "rain over the apartment" not in prompt
 
 
 def test_opening_does_not_invent_a_room_or_obedient_elara(tmp_db):
@@ -360,7 +360,7 @@ def test_see_keeps_nudity_the_narrator_already_established(client, tmp_path, mon
             triggers=["Alusair"], entry="Steel Regent.",
             portrait_prompt="long red hair, green eyes, plate armor",
         )
-    _face(adv["id"], card["id"], b"\x89PNG\r\nalusair-nude")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "start", "Princess Alusair is naked on the bed.")
     capture: list = []
     # A nudez chega ao CLIP pela frase do modelo; prova também que scrub e

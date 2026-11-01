@@ -370,12 +370,16 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
 
 
 def cast_reference_plan(conn, adventure_id: str, cast: list[dict], *,
-                        provider: str = "sdwebui") -> dict:
+                        provider: str = "sdwebui", explicit: bool = False) -> dict:
     """Âncoras e, no ComfyUI, vistas do elenco. Sem PNG, `portrait_required`.
 
-    Lista vazia é cena sem gente: não há referência para exigir.
+    Lista vazia é cena sem gente: não há referência para exigir. Em cena
+    explícita usa uma âncora por pessoa, sem folhas de roupa ou composição.
     """
-    card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
+    if explicit:
+        card_ids, image_ids = likeness.cast_reference_ids(cast)
+    else:
+        card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
     if any(not image_id for image_id in image_ids):
         raise likeness.portrait_required()
     blobs = (
@@ -516,9 +520,6 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
     )
     # ComfyUI usa âncoras regionais; SDWebUI faz passes InstantID mascarados.
     from app import consequences
-    visual_effects = consequences.visual_context(adventure, persistent_only=True)
-    if visual_effects:
-        prompt = f"{prompt}, {visual_effects}"[:1400]
     plan = {
         "cast_card_ids": [],
         "reference_image_ids": [],
@@ -531,7 +532,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         try:
             plan = cast_reference_plan(
                 conn, adventure_id, paint_cast,
-                provider=str(img_cfg.get("provider") or "sdwebui"),
+                provider=str(img_cfg.get("provider") or "sdwebui"), explicit=explicit,
             )
         except GameError as exc:
             if exc.code != "portrait_required":

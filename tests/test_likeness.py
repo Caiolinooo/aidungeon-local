@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import threading
 import time
@@ -10,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from app import db, events, image_client, jobs, likeness, npc_assets
 from app.routes.images import _plan_see
@@ -89,6 +91,20 @@ def _character(adventure_id: str, title: str, **sheet: object) -> dict:
             triggers=[title], entry="A person in the story.",
             sheet=json.dumps(sheet, ensure_ascii=False) if sheet else "",
         )
+
+
+def test_identity_face_pngs_removes_body_and_clothing_below_shoulders():
+    source = Image.new("RGB", (100, 200), (0, 0, 255))
+    source.paste(Image.new("RGB", (100, 100), (255, 0, 0)), (0, 0))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+
+    cropped = likeness.identity_face_pngs([buffer.getvalue()])[0]
+
+    with Image.open(io.BytesIO(cropped)) as image:
+        assert image.size == (100, 110)
+        assert image.getpixel((50, 50)) == (255, 0, 0)
+        assert image.getpixel((50, 100)) == (0, 0, 255)
 
 
 def test_real_person_in_a_safe_scene_is_not_explicit():
@@ -329,8 +345,8 @@ def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path, monkey
     zendaya = _character(adv["id"], "Zendaya", real_person=True, real_name="Zendaya",
                          appearance="dark curly hair")
     clara = _character(adv["id"], "Clara", appearance="long red hair, green eyes")
-    _face(adv["id"], zendaya["id"], b"\x89PNG\r\nzendaya-face")
-    _face(adv["id"], clara["id"], b"\x89PNG\r\nclara-face")
+    _face(adv["id"], zendaya["id"], PNG_BYTES)
+    _face(adv["id"], clara["id"], PNG_BYTES)
     # story = o jogador narra: cânone. A nudez está estabelecida e os dois ficam.
     add_action(adv["id"], 0, "story", "Zendaya and Clara are naked together.")
     _capture_generate(monkeypatch, tmp_path)

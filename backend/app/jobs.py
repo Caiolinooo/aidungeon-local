@@ -434,6 +434,8 @@ def _reference_blobs(job: dict, *, people: bool) -> list[bytes]:
     found = likeness.reference_hashes(blobs)
     if "reference_hashes" in payload and list(payload.get("reference_hashes") or []) != found:
         raise likeness.portrait_required()
+    if payload.get("explicit"):
+        return likeness.identity_face_pngs(blobs)
     return blobs
 
 

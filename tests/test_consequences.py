@@ -50,18 +50,6 @@ def test_reality_and_perception_effects_feed_images_and_adjudication():
     assert consequences.private_facts_for(adventure, "Alok") == ["Ele foi instruído mentalmente."]
 
 
-def test_visual_context_keeps_only_permanent_non_text_effects_for_new_scenes():
-    adventure = {"ui_state": {"world_effects": [
-        {"kind": "physical", "target": "Elara", "duration": "scene",
-         "summary": "A saia subiu.", "visual_en": "skirt lifted by invisible touch"},
-        {"kind": "social", "target": "Elara", "duration": "permanent",
-         "summary": "Ela virou Lexi.", "visual_en": "name Lexi floating in air"},
-        {"kind": "reality", "target": "world", "duration": "permanent",
-         "summary": "Chuva permanente.", "visual_en": "rain over the apartment"},
-    ]}}
-    assert consequences.visual_context(adventure, persistent_only=True) == "rain over the apartment"
-
-
 def test_private_facts_are_saved_as_npc_memories(tmp_db):
     with db.session() as conn:
         adv = db.insert_adventure(conn, title="Costazul")

@@ -206,7 +206,7 @@ def test_explicit_scene_does_not_restore_the_outfit(client, tmp_path, monkeypatc
                 "clothing": "plate armor",
             }),
         )
-    _face(adv["id"], card["id"], b"\x89PNG\r\nalusair-nude-face")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "continue", "Princess Alusair is naked on the bed.")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert resp.status_code == 200, resp.text
@@ -246,7 +246,7 @@ def test_explicit_backdrop_locks_the_vampire_face(client, tmp_path, monkeypatch)
                 "clothing": "Vestido de veludo preto",
             }),
         )
-    _face(adv["id"], card["id"], b"\x89PNG\r\nselene-face")
+    _face(adv["id"], card["id"], PNG_BYTES)
     add_action(adv["id"], 0, "continue", "Selene is naked on the sofa, rain on the window.")
     resp = client.post(f"/api/adventures/{adv['id']}/scene", json={})
     assert resp.status_code == 200, resp.text
@@ -338,7 +338,7 @@ def _fairy(adventure_id: str) -> None:
             triggers=["Elara", "rainha"], entry="Rainha de cristal.",
             portrait_prompt=_FAIRY_PROMPT,
         )
-    _face(adventure_id, card["id"], b"\x89PNG\r\nfairy-face")
+    _face(adventure_id, card["id"], PNG_BYTES)
 
 
 def _fairy_protest(adventure_id: str) -> None:
