@@ -77,13 +77,18 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport("Caio places Elara on the bed."))
     try:
-        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
+        resp = client.post(
+            f"/api/adventures/{adv['id']}/see",
+            json={"action_seq": 1, "extra_prompt": "Elara completely naked"},
+        )
     finally:
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
+    assert prompt.startswith("Player instruction, highest priority: Elara completely naked")
+    assert "no stockings" in prompt
     head = prompt.split("BREAK", 1)[0]
-    assert head.lower().startswith("elara is an adult woman")
+    assert "elara is an adult woman" in head.lower()
     assert "female body" in head.lower()
     assert "caio is an adult man" in head.lower()
     assert "Elara (adult woman)" in head

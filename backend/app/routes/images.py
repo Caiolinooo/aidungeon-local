@@ -427,6 +427,20 @@ def _is_interaction(text: str, names: list[str]) -> bool:
     return len([name for name in names if name.strip()]) >= 2
 
 
+def _explicit_order_lock(order: str) -> str:
+    """Nudez completa do pedido vem antes da roupa da referência."""
+    folded = (order or "").casefold()
+    if not re.search(r"(?:\bnud|\bnua\b|\bnude\b|\bnaked\b|sem roupa|tirar\w*\s+(?:a\s+)?roupa)", folded):
+        return ""
+    bits = [
+        f"Player instruction, highest priority: {order}",
+        "fully nude, no underwear, no bra, no panties",
+    ]
+    if not re.search(r"(?:stockings?|meias?)", folded):
+        bits.append("no stockings")
+    return ", ".join(bits)
+
+
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
                         transport: Any) -> tuple[
@@ -611,7 +625,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(location)
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
-    lead_bits = []
+    order_lock = _explicit_order_lock(order) if explicit else ""
+    lead_bits = [order_lock] if order_lock else []
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
     # normal: o rosto lidera o primeiro chunk — "kisses on the sofa" na
@@ -632,7 +647,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
     if sentence and not refusal:
         lead_bits.append(sentence)
-    if order:
+    if order and not order_lock:
         lead_bits.append(order)
     lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
     if explicit:
