@@ -1356,19 +1356,20 @@ def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
     blob = (order or "").strip() or (moment or "")
     found: list[str] = []
     for card in cards:
-        name = " ".join(str(card.get("title") or "").split())
-        if len(name) < 3:
-            continue
-        escaped = re.escape(name)
-        direct = re.search(
-            rf"(?i)\b{escaped}\b\s*(?:,|;|\.)?\s*"
-            rf"(?:is\s+|are\s+|está\s+|estao\s+|fica\s+|now\s+|agora\s+)?"
-            rf"(?:\w+\s+){{0,2}}?(?:nua?s?|naked)\b",
-            blob,
-        )
-        trailing = re.search(rf"(?i)\b(?:nua?s?|naked)\s+{escaped}\b", blob)
-        if direct or trailing:
-            found.append(name)
+        title = " ".join(str(card.get("title") or "").split())
+        aliases = [title, *(card.get("aliases") or [])]
+        for name in dict.fromkeys(alias for alias in aliases if len(alias) >= 3):
+            escaped = re.escape(name)
+            direct = re.search(
+                rf"(?i)\b{escaped}\b\s*(?:,|;|\.)?\s*"
+                rf"(?:is\s+|are\s+|está\s+|estao\s+|fica\s+|now\s+|agora\s+)?"
+                rf"(?:\w+\s+){{0,2}}?(?:nua?s?|naked)\b",
+                blob,
+            )
+            trailing = re.search(rf"(?i)\b(?:nua?s?|naked)\s+{escaped}\b", blob)
+            if direct or trailing:
+                found.append(title)
+                break
     return found
 
 

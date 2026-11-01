@@ -658,7 +658,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         )
     locked = frame[:likeness.CAST_REFERENCE_LIMIT]
     if explicit:
-        nude = npc_assets.nude_names(locked, moment, order)
+        alias_cards = [
+            {**card, "aliases": [
+                name for name, resolved_card in resolved.items()
+                if resolved_card and (
+                    resolved_card is card or resolved_card.get("id") == card.get("id")
+                )
+            ]}
+            for card in locked
+        ]
+        nude = npc_assets.nude_names(alias_cards, moment, order)
         clothed = [card.get("title") for card in locked if card.get("title") not in nude]
         if nude:
             lead_bits.append("clothes off, fully nude only for " + ", ".join(nude) + ", uncensored")

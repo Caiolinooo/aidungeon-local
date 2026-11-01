@@ -55,6 +55,10 @@ def test_elara_is_a_woman_and_caio_is_a_man():
         [{"title": "Caio"}, {"title": "Lexi"}],
         "Caio watches as Lexi, completely naked, kneels.",
     ) == ["Lexi"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}, {"title": "A Donzela da Noite", "aliases": ["Lexi"]}],
+        "lexi completamente nua na minha frente",
+    ) == ["A Donzela da Noite"]
 
 
 def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
