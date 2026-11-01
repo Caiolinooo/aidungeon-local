@@ -86,11 +86,14 @@ def _jobs_worker_off(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _auto_clips_off(monkeypatch):
-    """Testes legados drenam só os jobs que criaram; auto clipes têm opt-in explícito."""
+    """Testes legados drenam só os jobs criados; follow-ups automáticos são opt-in."""
     real = image_client.video_settings
 
     def isolated(cfg):
-        return {**real(cfg), "auto_scene": False, "auto_portraits": False}
+        return {
+            **real(cfg), "auto_scene": False, "auto_portraits": False,
+            "auto_turnaround": False,
+        }
 
     monkeypatch.setattr(image_client, "video_settings", isolated)
 

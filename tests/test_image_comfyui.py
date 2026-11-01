@@ -170,10 +170,10 @@ def test_comfyui_portrait_edit_uses_encoder_latent(tmp_path):
     assert nodes["TextEncodeQwenImage21"]["inputs"]["images"]["image_1"] == ["20", 0]
 
 
-def test_other_providers_reject_visual_references(tmp_path):
-    with pytest.raises(image_client.ImageError, match="require ComfyUI Qwen"):
+def test_openai_provider_rejects_visual_references(tmp_path):
+    with pytest.raises(image_client.ImageError, match="require ComfyUI or SDWebUI"):
         image_client.generate_image(
-            _cfg(tmp_path, provider="sdwebui"), "same person",
+            _cfg(tmp_path, provider="openai_compatible"), "same person",
             adventure_id="adv-1", image_id="img-4",
             reference_images=[b"\x89PNG-one"])
 

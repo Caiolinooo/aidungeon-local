@@ -45,9 +45,11 @@ WantedBy=multi-user.target
 ## Desempenho
 
 - O app usa contexto de 32768 tokens, escala dinâmica 1.0 e DRY nos últimos 512 tokens. O NPC gate é ignorado quando não existe NPC vivo e, quando necessário, tem teto de 400 tokens de saída.
+- **Benchmark LLM de 1 nov 2026:** 128 tokens com thinking desabilitado; TTFT 1,89 s, geração 6,49 s, total 8,38 s e 19,73 tok/s. A credencial foi validada sem ser persistida nem impressa.
 - O prompt textual de retratos é preparado antes de entrar na fila do worker de GPU. O polling do ComfyUI usa 0,25 s; o piso de configuração é 0,2 s.
 - O cliente de voz mantém conexões HTTP por endpoint e faz upload do RVQ de uma voz clonada uma vez por processo, validando o hash local antes do PUT.
 - Em `/home/caio/Desktop/abz-voice-local/audio_server.py`, o streaming OmniVoice precisa usar `proc.stdout.read1(65536)`. `read(65536)` segura PCM até encher o buffer ou encerrar o processo. No benchmark M1 com 169 caracteres, `read1` antecipou o primeiro PCM de 10,709 s para 8,814 s e o WAV completo de 10,974 s para 9,059 s, sem mudar modelo, texto ou bytes PCM.
+- **1 nov 2026.** Um `omnivoice-tts -o -` abandonado ficou bloqueado em `anon_pipe_write`; o pai manteve `_omni_lock` e todas as sínteses seguintes estouraram `ReadTimeout`, embora `/health` e o serviço continuassem ativos. Encerrar o filho não bastou; `systemctl restart abz-voice-audio` liberou o lock e o TTS voltou em 7,822 s. O cache LRU novo, testado com o mesmo texto/voz/emoção, respondeu a primeira síntese em 5,033 s e a repetição idêntica em 0,0114 s. Health simples não detecta esse deadlock; em timeout, inspecionar filhos `omnivoice-tts` e o lock antes de reiniciar.
 
 
 Esta versão também aplica as migrations `035_story_starts.sql` (inícios),

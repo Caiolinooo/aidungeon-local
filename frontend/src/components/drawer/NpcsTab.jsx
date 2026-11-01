@@ -23,6 +23,10 @@ function initials(title) {
   return words.slice(0, 2).map((w) => w[0].toUpperCase()).join('')
 }
 
+function isActiveJob(job) {
+  return Boolean(job && ['preparing', 'pending', 'running'].includes(job.status))
+}
+
 // Frase curta p/ o preview de voz do NPC (v0.4.0): primeira sentença do
 // entry/description (cap 200 chars); fallback com o nome quando vazio.
 function previewText(form) {
@@ -77,6 +81,74 @@ function PortraitThumb({ card, activeJob }) {
           </span>
         </div>
       )}
+    </div>
+  )
+}
+
+function TurnaroundPreview({ turnaround, title }) {
+  const [urls, setUrls] = useState({ master: null, sheet: null, clip: null })
+  const masterId = turnaround?.master_image_id
+  const sheetId = turnaround?.design_sheet_image_id || turnaround?.sheet_image_id
+  const clipId = turnaround?.clip_image_id
+
+  useEffect(() => {
+    setUrls({ master: null, sheet: null, clip: null })
+    if (!masterId && !sheetId && !clipId) return undefined
+    let stale = false
+    const objectUrls = []
+    const load = (imageId, key) => {
+      if (!imageId) return
+      api.fetchImageBlob(imageId)
+        .then((blob) => {
+          const url = URL.createObjectURL(blob)
+          if (stale) {
+            URL.revokeObjectURL(url)
+            return
+          }
+          objectUrls.push(url)
+          setUrls((current) => ({ ...current, [key]: url }))
+        })
+        .catch(() => { /* mantém o preview indisponível sem quebrar a ficha */ })
+    }
+    load(masterId, 'master')
+    load(sheetId, 'sheet')
+    load(clipId, 'clip')
+    return () => {
+      stale = true
+      objectUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [masterId, sheetId, clipId])
+
+  if (!masterId && !sheetId && !clipId) return null
+  return (
+    <div className="mt-2 rounded-lg border border-subtle bg-elevated/40 p-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Referências 360°</p>
+      <div className="mt-2 flex flex-col gap-2">
+        {urls.master && (
+          <img
+            src={urls.master}
+            alt={`Retrato-mestre de corpo inteiro de ${title || 'NPC'}`}
+            className="w-full rounded-md border border-subtle bg-surface object-contain"
+          />
+        )}
+        {urls.sheet && (
+          <img
+            src={urls.sheet}
+            alt={`Folha de referências 360° de ${title || 'NPC'}`}
+            className="w-full rounded-md border border-subtle bg-surface object-contain"
+          />
+        )}
+        {urls.clip && (
+          <video
+            src={urls.clip}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={`Vídeo de referências 360° de ${title || 'NPC'}`}
+            className="w-full rounded-md border border-subtle bg-black"
+          />
+        )}
+      </div>
     </div>
   )
 }
@@ -388,7 +460,7 @@ function BondGlance({ sheet, peers }) {
 function NpcRow({
   card, job, adventureId, peers, onSave, onRegenerate, onEnrich, onDelete,
   onRegenerateField, onRegenerateAll, onUploadPhoto, onDeleteReference,
-  onDeletePortrait, onPortraitFromPhoto, saving, enriching, regenerating,
+  onDeletePortrait, onPortraitFromPhoto, onGenerateTurnaround, saving, enriching, regenerating,
   clonedVoices, onVoiceSaved, onVoiceDeleted,
 }) {
   const toast = useToast()
@@ -408,6 +480,8 @@ function NpcRow({
   const fileRef = useRef(null)
   const referencePath = form.sheet?.reference?.image_path || ''
   const referenceCount = (form.sheet?.reference?.images?.length || (referencePath ? 1 : 0))
+  const turnaround = form.sheet?.reference?.turnaround
+  const jobActive = isActiveJob(job)
   const life = form.sheet?.life || {}
 
   useEffect(() => {
@@ -480,7 +554,7 @@ function NpcRow({
   return (
     <li className="min-w-0 rounded-lg border border-subtle bg-surface/50 p-3">
       <div className="flex min-w-0 gap-3">
-        <PortraitThumb card={card} activeJob={job && (job.status === 'pending' || job.status === 'running') ? job : null} />
+        <PortraitThumb card={card} activeJob={jobActive ? job : null} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <input
             value={form.title}
@@ -606,6 +680,7 @@ function NpcRow({
         )}
       </div>
       <BondGlance sheet={form.sheet} peers={peers} />
+      <TurnaroundPreview turnaround={turnaround} title={card.title} />
       <div className="mt-2 flex w-full min-w-0 flex-wrap items-center gap-1">
         <input
           ref={fileRef}
@@ -684,8 +759,19 @@ function NpcRow({
           {regenerating ? 'Regenerating…' : '🎲 Regenerate all'}
         </button>
         <button
+          type="button"
+          onClick={() => onGenerateTurnaround?.(card)}
+          disabled={!card.portrait?.id || jobActive}
+          title={!card.portrait?.id
+            ? 'Gere um retrato antes das referências 360°'
+            : jobActive ? 'Aguarde o job atual deste NPC terminar' : 'Gerar clipe e quatro vistas a partir do retrato'}
+          className="rounded-md border border-accent-800 px-2 py-1 text-xs text-accent-pri hover:bg-accent-950 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {turnaround?.master_image_id ? 'Refazer referências 360°' : 'Gerar referências 360°'}
+        </button>
+        <button
           onClick={() => onRegenerate(card)}
-          disabled={!!job && (job.status === 'pending' || job.status === 'running')}
+          disabled={jobActive}
           title="Nova imagem deste NPC, a partir do rosto salvo"
           className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
         >
@@ -741,6 +827,7 @@ export default function NpcsTab({ adventure }) {
       const detail = ev.detail || {}
       if (detail.adventureId !== adventure.id) return
       if (detail.type !== 'portrait_ready'
+        && detail.type !== 'turnaround_ready'
         && detail.type !== 'card_assets_ready'
         && detail.type !== 'card_changed') return
       reload()
@@ -757,21 +844,21 @@ export default function NpcsTab({ adventure }) {
     }
   }, [adventure.id, reload])
 
-  // Fallback: fila de jobs. Retrato pronto também recarrega se o evento SSE faltar.
+  // Fallback: fila de jobs. Assets prontos também recarregam se o evento SSE faltar.
   // npc_day_tick não tem evento próprio — continua por aqui.
   const fetchJobs = useCallback(async () => {
     try {
       const list = await api.listJobs(adventure.id)
       setJobs(list)
-      let portraitDone = false
+      let assetsDone = false
       for (const j of list) {
-        if (j.type === 'character_portrait' || j.type === 'npc_day_tick') {
+        if (j.type === 'character_portrait' || j.type === 'character_turnaround' || j.type === 'npc_day_tick') {
           const prev = prevStatuses.current[j.id]
-          if (prev && prev !== 'done' && j.status === 'done') portraitDone = true
+          if (prev && prev !== 'done' && j.status === 'done') assetsDone = true
         }
         prevStatuses.current[j.id] = j.status
       }
-      if (portraitDone) reload()
+      if (assetsDone) reload()
     } catch (e) {
       toast(e.message)
     }
@@ -784,7 +871,7 @@ export default function NpcsTab({ adventure }) {
 
   // Enquanto houver job pending/running, repolla a cada 3s; para quando
   // a fila esvaziar (o intervalo é recriado/destruído conforme hasActive).
-  const hasActive = jobs.some((j) => j.status === 'pending' || j.status === 'running')
+  const hasActive = jobs.some(isActiveJob)
   useEffect(() => {
     if (!hasActive) return undefined
     const t = setInterval(fetchJobs, 3000)
@@ -799,11 +886,11 @@ export default function NpcsTab({ adventure }) {
     return (c.title || '').toLowerCase().includes(q) || (c.entry || '').toLowerCase().includes(q)
   })
 
-  // Último job (qualquer status) de cada NPC, para overlay/erro/disable.
+  // Último job de retrato/360° (qualquer status) de cada NPC, para overlay/erro/disable.
   const latestJobFor = (cardId) => {
     let best = null
     for (const j of jobs) {
-      if (j.type !== 'character_portrait' || j.ref_id !== cardId) continue
+      if ((j.type !== 'character_portrait' && j.type !== 'character_turnaround') || j.ref_id !== cardId) continue
       if (!best || String(j.created_at) > String(best.created_at)) best = j
     }
     return best
@@ -924,6 +1011,21 @@ export default function NpcsTab({ adventure }) {
       await api.regeneratePortrait(adventure.id, card.id)
       toast('Portrait job queued.', 'ok')
       fetchJobs()
+    } catch (e) {
+      toast(e.message)
+    }
+  }
+
+  const generateTurnaround = async (card) => {
+    const saved = parseSheet(card.sheet)?.reference?.turnaround
+    try {
+      const queued = await api.generateTurnaround(
+        adventure.id, card.id, Boolean(saved?.master_image_id))
+      toast(queued.status === 'done'
+        ? 'Referências 360° já estavam prontas.'
+        : 'Referências 360° em fila.', 'ok')
+      if (queued.status === 'done') reload()
+      else fetchJobs()
     } catch (e) {
       toast(e.message)
     }
@@ -1086,6 +1188,7 @@ export default function NpcsTab({ adventure }) {
                 onDeleteReference={deleteReference}
                 onDeletePortrait={deletePortrait}
                 onPortraitFromPhoto={portraitFromPhoto}
+                onGenerateTurnaround={generateTurnaround}
                 onDelete={remove}
                 clonedVoices={clonedVoices}
                 onVoiceSaved={(voice) => setClonedVoices((list) => (
@@ -1095,7 +1198,10 @@ export default function NpcsTab({ adventure }) {
               />
               {showError && (
                 <div className="mt-1 flex items-start justify-between gap-2 rounded-lg border border-danger-900 bg-danger-950/60 px-3 py-2 text-xs text-danger-300">
-                  <span className="break-words">Portrait generation failed: {job.error}</span>
+                  <span className="break-words">
+                    {job.type === 'character_turnaround' ? '360° reference generation failed: ' : 'Portrait generation failed: '}
+                    {job.error}
+                  </span>
                   <button
                     onClick={() => dismissError(job.id)}
                     className="shrink-0 text-secondary hover:text-primary"

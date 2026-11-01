@@ -284,6 +284,10 @@ export const api = {
     request(`/adventures/${advId}/jobs/${jobId}`, { method: 'DELETE' }),
   regeneratePortrait: (advId, cardId, body) =>
     request(`/adventures/${advId}/cards/${cardId}/portrait`, { method: 'POST', body }),
+  generateTurnaround: (advId, cardId, force = false) =>
+    request(`/adventures/${advId}/cards/${cardId}/turnaround`, {
+      method: 'POST', body: { force },
+    }),
   uploadReference: (advId, cardId, file, mode) => {
     const body = new FormData()
     body.append('file', file)

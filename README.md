@@ -221,8 +221,10 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   da VM — **OmniVoice** (TTS, vozes M1–M3/F1–F3 e clones) e **Whisper** (STT,
   fale a ação pelo microfone). `POST /api/tts` devolve MP3 completo;
   `POST /api/tts/stream` devolve WAV PCM16 mono 24 kHz progressivamente;
-  `POST /api/stt` recebe multipart e devolve `{"text": ...}`. Voz por NPC na
-  ficha (aba NPCs), voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
+  `POST /api/stt` recebe multipart e devolve `{"text": ...}`. MP3 e WAV idênticos
+  (mesmo modelo, voz, texto, emoção e formato) reutilizam um LRU de 16 áudios;
+  streams interrompidos não entram no cache. Voz por NPC na ficha (aba NPCs),
+  voz do narrador e endpoint/chave em `GET/PUT /api/settings/voice`
   (chave via `VOICE_API_KEY` no `.env`, sempre mascarada na API).
 - **Avatares 3D (TalkingHead)**: aba "Avatars" no painel lateral — avatar GLB
   (Ready Player Me / VRoid convertido, via `@met4citizen/talkinghead` sobre
@@ -252,6 +254,8 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   FineView Qwen Image 2.1 Turbo Fixed (`engine=qwen`) e epiCRealism/Forge
   (`provider=sdwebui`) continuam disponíveis para comparação e rollback.
   Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
+  No SDWebUI, uma referência usa InstantID no txt2img; cenas com vários NPCs
+  detectam os rostos e recebem um passe img2img restrito à cabeça de cada pessoa.
 - **Cena e retratos animados**: LTXV 2B distilled transforma o PNG vigente em
   MP4 real de aproximadamente 5 s (768×448, 121 frames, 8 passos). Wan 2.2
   continua disponível com `video.engine=wan`. Novo backdrop dispara o vídeo da situação;
@@ -265,8 +269,22 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   tem prioridade sobre retratos e o narrador/voz continuam disponíveis. Uma nova
   ação/continuação/retry cancela os clipes automáticos pendentes ou em execução
   para devolver a GPU ao turno; clipes manuais não são interrompidos.
-  As flags `video.auto_scene` e `video.auto_portraits` ficam ativas nesta
-  configuração; desative ambas nas instalações sem o LTXV.
+  As flags `video.auto_scene`, `video.auto_portraits` e `video.auto_turnaround` ficam
+  ativas nesta configuração; desative as três nas instalações sem o LTXV.
+- **Turnaround 360° local para consistência**: o primeiro retrato de cada personagem
+  dispara uma única cadeia de identidade (`video.auto_turnaround=true`): retrato-mestre
+  de corpo inteiro → ficha com seis vistas → clipe de rotação 360°. São apenas **duas
+  inferências de imagem**: o split corpo/rosto é montado localmente pelo Pillow com o
+  corpo do mestre e o rosto da âncora original, evitando uma terceira geração e sua deriva. O endpoint `POST
+  /api/adventures/{adventure_id}/cards/{card_id}/turnaround` reutiliza o resultado da
+  mesma âncora; `{"force": true}` só é necessário para refazer uma referência revisada.
+  OpenCV extrai as vistas 0/90/180/270 e o Pillow monta a folha 2×2, sem Higgsfield
+  nem FFmpeg. Todos os assets ficam vinculados em `reference.turnaround` e chegam pelo
+  SSE `turnaround_ready`. Nas cenas, cada personagem usa somente mestre+ficha,
+  evitando latents redundantes; com três ou quatro, garante uma referência primária
+  por pessoa. O prompt manda ignorar estúdio, grade, split e pose neutra das referências.
+  SDWebUI mantém uma âncora por pessoa. A síntese ainda pode trocar rosto, roupa, proporções ou inventar costas e
+  lados: é uma referência visual persistente, **não um modelo 3D fiel**, e precisa de revisão.
 - **Escolhas múltiplas**: após cada turno, o LLM sugere 3 próximas ações clicáveis
   (chips acima da entrada) — desligável em `config/settings.json` (`choices.enabled`).
 - **Múltiplas histórias**: aventuras ilimitadas na Home, cada uma com memória, story

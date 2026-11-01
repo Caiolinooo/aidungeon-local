@@ -259,6 +259,22 @@ def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     return likeness.opening_clause(cast, explicit=explicit)
 
 
+def _reference_layout_guard(cast: list[dict]) -> str:
+    """Referência de identidade não pode virar estúdio, grade ou split na cena."""
+    for card in cast:
+        raw_sheet = card.get("sheet") or ""
+        sheet = raw_sheet if isinstance(raw_sheet, dict) else npc_assets.parse_sheet(raw_sheet)
+        reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+        if isinstance(reference.get("turnaround"), dict):
+            return (
+                "Use the reference images only for the named characters' identity, face, "
+                "hair, body, outfit and distinctive details. Ignore their grey studio "
+                "backgrounds, multi-panel layouts, split screens, neutral poses and framing. "
+                "Do not copy the reference composition; depict only the place and action below."
+            )
+    return ""
+
+
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
             cast: list[dict], moment: str = "") -> tuple[str, bool]:
     """Lugar, e as pessoas só quando o card já tem o rosto.
@@ -277,6 +293,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
     reaction = _reaction_clause(cast) if clause else ""
+    layout_guard = _reference_layout_guard(cast) if clause else ""
     sex_bits = []
     for card in cast:
         person = (card.get("title") or "").strip()
@@ -310,6 +327,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             sex_line,
             clause,
             reaction,
+            layout_guard,
             "clothes off, nude, do not restore outfits, uncensored",
             beat[-400:],
             style_text,
@@ -327,6 +345,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             sex_line,
             clause,
             reaction,
+            layout_guard,
             lock,
             style_text,
             f"wide cinematic shot of {title}, only the characters named above, "
@@ -350,12 +369,13 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     return text[:1400], False
 
 
-def cast_reference_plan(conn, adventure_id: str, cast: list[dict]) -> dict:
-    """Âncoras do elenco, em ordem. Sem PNG de alguém, `portrait_required`.
+def cast_reference_plan(conn, adventure_id: str, cast: list[dict], *,
+                        provider: str = "sdwebui") -> dict:
+    """Âncoras e, no ComfyUI, vistas do elenco. Sem PNG, `portrait_required`.
 
     Lista vazia é cena sem gente: não há referência para exigir.
     """
-    card_ids, image_ids = likeness.cast_reference_ids(cast)
+    card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
     if any(not image_id for image_id in image_ids):
         raise likeness.portrait_required()
     blobs = (
@@ -398,7 +418,7 @@ def queue_missing_portraits(adventure_id: str, cast: list[dict]) -> None:
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
                     include_people: bool = False, explicit: bool = False,
-                    cache_key: str = "",
+                    cache_key: str = "", expected_people: int = 0,
                     cast_card_ids: list[str] | None = None,
                     reference_image_ids: list[str] | None = None,
                     reference_hashes: list[str] | None = None) -> dict:
@@ -437,6 +457,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         "include_people": include_people,
         "cache_key": cache_key,
         "explicit": explicit,
+        "expected_people": expected_people,
         "cast_card_ids": list(cast_card_ids or []),
         "reference_image_ids": list(reference_image_ids or []),
         "reference_hashes": list(reference_hashes or []),
@@ -493,9 +514,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
         paint_text,
     )
-    # O ComfyUI aceita várias âncoras regionais. O SDXL anterior usa img2img
-    # nos retratos; nas cenas, o elenco entra pelo prompt, sem fingir controle
-    # multirreferência que o provider não possui.
+    # ComfyUI usa âncoras regionais; SDWebUI faz passes InstantID mascarados.
     from app import consequences
     visual_effects = consequences.visual_context(adventure)
     if visual_effects:
@@ -507,10 +526,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         "blobs": [],
     }
     waiting = None
-    if (img_cfg.get("provider") == "comfyui" and img_cfg.get("enabled")
+    if (img_cfg.get("provider") in ("comfyui", "sdwebui") and img_cfg.get("enabled")
             and include_people and paint_cast):
         try:
-            plan = cast_reference_plan(conn, adventure_id, paint_cast)
+            plan = cast_reference_plan(
+                conn, adventure_id, paint_cast,
+                provider=str(img_cfg.get("provider") or "sdwebui"),
+            )
         except GameError as exc:
             if exc.code != "portrait_required":
                 raise
@@ -535,11 +557,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
             include_people=include_people,
             explicit=explicit, cache_key=cache_key,
+            expected_people=len(paint_cast) if include_people else 0,
             cast_card_ids=plan["cast_card_ids"],
             reference_image_ids=plan["reference_image_ids"],
             reference_hashes=plan["reference_hashes"],
         )
     signature = cache_key[:40]
+
 
     cast = []
     for card in cast_cards:

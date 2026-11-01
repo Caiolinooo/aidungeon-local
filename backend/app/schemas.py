@@ -93,6 +93,10 @@ class PortraitSourceRequest(BaseModel):
     source: Literal["anchor", "reference"] = "anchor"
 
 
+class TurnaroundRequest(BaseModel):
+    force: bool = False
+
+
 class CardRegenerateRequest(BaseModel):
     scope: Literal["all", "field"]
     field: str | None = None

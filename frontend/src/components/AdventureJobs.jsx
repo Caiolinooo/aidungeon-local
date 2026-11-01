@@ -36,6 +36,7 @@ const STATUS_CLASSES = {
 
 const TYPE_LABELS = {
   character_portrait: 'Retrato de personagem',
+  character_turnaround: 'Referências 360°',
   scene_backdrop: 'Fundo da cena',
   see_image: 'Imagem da cena',
   scene_clip: jobTypeLabel('scene_clip'),

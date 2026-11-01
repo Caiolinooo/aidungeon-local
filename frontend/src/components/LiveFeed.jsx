@@ -23,6 +23,7 @@ const TYPE_LABELS = {
   clip_ready: 'Clipe',
   see_ready: 'Imagem',
   portrait_ready: 'Retrato',
+  turnaround_ready: 'Referências 360°',
   adjudication: 'Reação',
   card_changed: 'Ficha',
   undo: 'Desfazer',
@@ -39,8 +40,13 @@ const TYPE_LABELS = {
 
 function categoryOf(type) {
   if (type?.startsWith('life_') || type === 'sim_changed') return 'life'
-  if (type?.includes('job') || type?.includes('see') || type?.includes('portrait') || type?.includes('backdrop') || type?.includes('card_assets') || type?.includes('clip')) return 'jobs'
+  if (type?.includes('job') || type?.includes('see') || type?.includes('portrait') || type?.includes('turnaround') || type?.includes('backdrop') || type?.includes('card_assets') || type?.includes('clip')) return 'jobs'
   return 'narrative'
+}
+
+function liveJobTypeLabel(type) {
+  if (type === 'character_turnaround') return 'Referências 360°'
+  return jobTypeLabel(type) || type || 'Job'
 }
 
 function eventText(event) {
@@ -67,17 +73,18 @@ function eventText(event) {
   if (type === 'action') return data.text || 'Nova resposta da IA.'
   if (type === 'player_action') return data.text || 'Nova ação do jogador.'
   if (type === 'job_progress') {
-    const name = jobTypeLabel(data.type) || data.type || 'Job'
+    const name = liveJobTypeLabel(data.type)
     return `${name}: ${data.status || 'atualizado'}.`
   }
   if (type === 'job_queued') {
-    const name = jobTypeLabel(data.type) || data.type || 'Job'
+    const name = liveJobTypeLabel(data.type)
     return `${name} entrou na fila.`
   }
   if (type === 'clip_ready') return 'Clipe de 5 s pronto.'
   if (type === 'see_ready') return 'Imagem da cena concluída.'
   if (type === 'backdrop_ready') return 'Fundo da cena atualizado.'
   if (type === 'portrait_ready') return 'Retrato atualizado.'
+  if (type === 'turnaround_ready') return 'Referências 360° atualizadas.'
   if (type === 'adjudication') {
     const outcome = typeof data.outcome === 'string' ? data.outcome : ''
     const names = Array.isArray(data.reactions)

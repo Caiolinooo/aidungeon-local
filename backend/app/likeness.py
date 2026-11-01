@@ -386,6 +386,60 @@ def cast_reference_ids(cast: list[dict]) -> tuple[list[str], list[str]]:
     return card_ids, image_ids
 
 
+def cast_reference_ids_for_provider(cast: list[dict], provider: str) -> tuple[list[str], list[str]]:
+    """ComfyUI: mestre+ficha; legado: âncora+vistas, sem repetir a frontal.
+
+    Um personagem usa mestre+ficha, sem latents redundantes. Dois dividem os
+    quatro slots entre mestre e ficha. Com três ou quatro, cada um mantém seu
+    mestre/âncora e nenhum recebe condicionamento extra em detrimento dos outros.
+    """
+    card_ids, anchor_ids = cast_reference_ids(cast)
+    if provider != "comfyui":
+        return card_ids, anchor_ids
+    characters = [card for card in cast if card.get("type") == "character"][:CAST_REFERENCE_LIMIT]
+    records: list[dict] = []
+    for card, anchor_id in zip(characters, anchor_ids):
+        sheet = sheet_of(card)
+        reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+        turnaround = (reference.get("turnaround")
+                      if isinstance(reference.get("turnaround"), dict) else {})
+        master_id = str(turnaround.get("master_image_id") or "")
+        design_sheet_id = str(turnaround.get("design_sheet_image_id") or "")
+        raw_views = turnaround.get("view_image_ids")
+        views = [
+            str(image_id) for image_id in (raw_views if isinstance(raw_views, list) else [])
+            if str(image_id or "").strip()
+        ][:4]
+        extras: list[str] = []
+        if design_sheet_id:
+            # Mestre+ficha já traz frente, perfis, costas e close-ups. Acrescentar
+            # âncora/vistas duplica condicionamento e aumenta render e mistura.
+            extras.append(design_sheet_id)
+        else:
+            if master_id and anchor_id and anchor_id != master_id:
+                extras.append(anchor_id)
+            # Legado: a vista 0 repete a frontal; perfil/costas agregam informação.
+            extras.extend(views[1:])
+        records.append({"primary": master_id or anchor_id, "extras": extras})
+    image_ids = [record["primary"] for record in records]
+    if len(records) <= 2:
+        view_index = 0
+        while len(image_ids) < CAST_REFERENCE_LIMIT:
+            added = False
+            for record in records:
+                extras = record["extras"]
+                if view_index >= len(extras):
+                    continue
+                image_ids.append(extras[view_index])
+                added = True
+                if len(image_ids) >= CAST_REFERENCE_LIMIT:
+                    break
+            if not added:
+                break
+            view_index += 1
+    return card_ids, image_ids
+
+
 def reference_hashes(blobs: list[bytes]) -> list[str]:
     """SHA-256 de cada PNG, na mesma ordem enviada ao provider."""
     return [hashlib.sha256(blob).hexdigest() for blob in blobs]
@@ -906,6 +960,34 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
     return _store_sheet(conn, card, sheet)
 
 
+def set_turnaround(conn, card: dict, reference: dict, *, job_id: str) -> dict:
+    """Liga a folha ao card somente enquanto o job produtor continua running."""
+    sheet = sheet_of(card)
+    raw = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+    raw["turnaround"] = {
+        "source_image_id": str(reference["source_image_id"]),
+        "master_image_id": str(reference["master_image_id"]),
+        "design_sheet_image_id": str(reference["design_sheet_image_id"]),
+        "split_image_id": str(reference["split_image_id"]),
+        "sheet_image_id": str(reference["sheet_image_id"]),
+        "clip_image_id": str(reference["clip_image_id"]),
+        "view_image_ids": [str(value) for value in reference["view_image_ids"]],
+    }
+    sheet["reference"] = raw
+    cur = conn.execute(
+        "UPDATE story_cards SET sheet=?, updated_at=? WHERE id=? AND adventure_id=?"
+        " AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND status='running')",
+        (json.dumps(sheet, ensure_ascii=False), db.utcnow(), card["id"],
+         card["adventure_id"], job_id),
+    )
+    if cur.rowcount != 1:
+        job = db.get_job(conn, job_id)
+        if job is None or job["status"] != "running":
+            raise db.JobCanceled(job_id)
+        raise GameError.not_found(f"card {card['id']} not found")
+    return db.get_card(conn, card["adventure_id"], card["id"])
+
+
 def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
                 mode: str = "reference") -> dict:
     """Upload manual. `reference` não marca pessoa real; `real_person` marca."""
@@ -940,6 +1022,8 @@ def save_upload(conn, card: dict, content: bytes, *, filename: str = "",
         "mode": mode,
         "created_at": db.utcnow(),
     }
+    if isinstance(previous.get("turnaround"), dict):
+        sheet["reference"]["turnaround"] = previous["turnaround"]
     if mode == "real_person":
         previous = likeness_of(card)
         sheet["real_person"] = True

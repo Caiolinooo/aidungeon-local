@@ -230,6 +230,12 @@ async def post_tts(request: Request, body: TtsRequest,
                    info: auth.AuthInfo = Depends(auth.require_auth),
                    transport: Any = Depends(get_http_transport)) -> Response:
     cfg, text, voice, emotion, cloned = await _prepare_tts(request, body, info, transport)
+    cache_key = voice_client.speech_cache_key(
+        cfg, text, voice, emotion, "mp3", transport)
+    cached = voice_client.cached_speech(cache_key)
+    if cached is not None:
+        return Response(content=cached, media_type="audio/mpeg",
+                        headers={"X-Voice-Emotion": emotion})
 
     async def speak() -> bytes:
         return await _await_until_disconnect(
@@ -243,6 +249,7 @@ async def post_tts(request: Request, body: TtsRequest,
     except voice_client.VoiceError as exc:
         audio = await _retry_if_clone_missing(
             request, cfg, voice, cloned, transport, exc, speak)
+    voice_client.remember_speech(cache_key, audio)
     return Response(content=audio, media_type="audio/mpeg",
                     headers={"X-Voice-Emotion": emotion})
 
@@ -252,6 +259,15 @@ async def post_tts_stream(request: Request, body: TtsRequest,
                           info: auth.AuthInfo = Depends(auth.require_auth),
                           transport: Any = Depends(get_http_transport)) -> StreamingResponse:
     cfg, text, voice, emotion, cloned = await _prepare_tts(request, body, info, transport)
+    cache_key = voice_client.speech_cache_key(
+        cfg, text, voice, emotion, "wav", transport)
+    cached = voice_client.cached_speech(cache_key)
+    if cached is not None:
+        async def cached_chunks():
+            yield cached
+        return StreamingResponse(
+            cached_chunks(), media_type="audio/wav",
+            headers={"X-Voice-Emotion": emotion, "Cache-Control": "no-store"})
 
     async def open_stream():
         return await _await_until_disconnect(
@@ -267,13 +283,16 @@ async def post_tts_stream(request: Request, body: TtsRequest,
             request, cfg, voice, cloned, transport, exc, open_stream)
 
     async def chunks():
+        complete = bytearray()
         try:
             while True:
                 chunk = await _await_until_disconnect(
                     request, asyncio.to_thread(voice_client.next_speech_chunk, speech))
                 if chunk is None:
                     break
+                complete.extend(chunk)
                 yield chunk
+            voice_client.remember_speech(cache_key, bytes(complete))
         finally:
             await asyncio.to_thread(speech.close)
 

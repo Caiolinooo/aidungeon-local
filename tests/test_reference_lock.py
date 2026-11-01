@@ -6,6 +6,7 @@ import base64
 import json
 
 import httpx
+import pytest
 
 from app import db, image_client, jobs, likeness
 from conftest import add_action, make_adventure
@@ -43,6 +44,35 @@ def _capture_generate(monkeypatch, tmp_path) -> list[dict]:
 def _unused_transport() -> httpx.MockTransport:
     return httpx.MockTransport(
         lambda request: httpx.Response(404, json={"error": "unused"}))
+
+
+def _sd_handler(seen: list) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [{"id": "mock-model", "object": "model"}],
+            })
+        if path.endswith("/chat/completions"):
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "Clara steps into the rain."}}],
+            })
+        if path.endswith("/sdapi/v1/txt2img") or path.endswith("/sdapi/v1/img2img"):
+            seen.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={
+                "images": [base64.b64encode(PNG_BYTES).decode("ascii")],
+                "parameters": {},
+            })
+        return httpx.Response(404, json={"error": f"no mock route: {path}"})
+
+    return httpx.MockTransport(handler)
+
+
+def _unit(payload: dict) -> dict:
+    args = payload["alwayson_scripts"]["controlnet"]["args"]
+    assert len(args) == 1
+    return args[0]
 
 
 def _upload(client, adv_id: str, card_id: str) -> None:
@@ -178,22 +208,134 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
     assert seen[0]["reference_images"] == [PNG_BYTES, other]
 
 
-def test_multiple_npcs_use_regional_reference_masks():
-    payload = image_client._attach_references(
-        {"prompt": "two women"},
-        [PNG_BYTES, b"second-face"],
-        width=1344, height=768,
+def test_sdwebui_multiple_reference_photos_use_primary_controlnet(
+        client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Clara", entry="A ranger.")
+    _upload(client, adv["id"], card["id"])
+    other = b"\x89PNG\r\n\x1a\nsecond-photo"
+    resp = client.put(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/reference",
+        files={"file": ("second.png", other, "image/png")},
+        data={"mode": "reference"},
     )
-    args = payload["alwayson_scripts"]["controlnet"]["args"]
-    assert len(args) == 2
-    assert args[0]["mask_image"] != args[1]["mask_image"]
-    assert args[0]["weight"] == 0.55
-    assert args[1]["weight"] == 0.55
-    assert base64.b64decode(args[0]["mask_image"]) != base64.b64decode(args[1]["mask_image"])
-    # Uma referência sozinha não precisa de máscara regional.
-    single = image_client._attach_references(
-        {"prompt": "one woman"}, [PNG_BYTES], width=1344, height=768)
-    assert "mask_image" not in single["alwayson_scripts"]["controlnet"]["args"][0]
+    assert resp.status_code == 200, resp.text
+    with db.session() as conn:
+        queued = jobs.enqueue_portrait(
+            conn, adv["id"], card["id"], replace=True, force_reference=True)
+    assert queued is not None
+    seen: list[dict] = []
+    assert jobs.process_pending(_sd_handler(seen)) == 1
+    args = seen[0]["alwayson_scripts"]["controlnet"]["args"]
+    assert len(args) == 1
+    assert base64.b64decode(args[0]["image"]) == PNG_BYTES
+
+
+def test_multiple_npcs_use_independent_regional_face_identities(
+        client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    use_tmp_storage(tmp_path)
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    second_photo = b"\x89PNG\r\n\x1a\nsecond-face"
+    with db.session() as conn:
+        clara = db.insert_card(
+            conn, adv["id"], type="character", title="Clara",
+            triggers=["Clara"], entry="A ranger.",
+        )
+        sofia = db.insert_card(
+            conn, adv["id"], type="character", title="Sofia",
+            triggers=["Sofia"], entry="A mage.",
+        )
+    _upload(client, adv["id"], clara["id"])
+    _face(adv["id"], clara["id"], PNG_BYTES)
+    resp = client.put(
+        f"/api/adventures/{adv['id']}/cards/{sofia['id']}/reference",
+        files={"file": ("sofia.png", second_photo, "image/png")},
+        data={"mode": "reference"},
+    )
+    assert resp.status_code == 200, resp.text
+    _face(adv["id"], sofia["id"], second_photo)
+    add_action(adv["id"], 0, "start", "The road is empty.")
+    add_action(adv["id"], 1, "continue", "Clara and Sofia step into the rain.")
+    seen: list[dict] = []
+    expected_counts = []
+    def fake_match(content, *, width, height, count, expected_people):
+        expected_counts.append(expected_people)
+        return [(100, 100, 120, 140), (600, 100, 120, 140)][:count]
+
+    monkeypatch.setattr(image_client.face_regions, "match_faces", fake_match)
+    override_transport(client, _sd_handler(seen))
+    try:
+        resp = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 1})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    # Uma composição seguida de um passe mascarado por NPC: nunca dois
+    # embeddings InstantID competindo no mesmo condicionamento.
+    assert len(seen) == 3
+    assert "alwayson_scripts" not in seen[0]
+    left, right = seen[1:]
+    assert base64.b64decode(right["init_images"][0]) == PNG_BYTES
+    for payload, photo in ((left, PNG_BYTES), (right, second_photo)):
+        assert payload["denoising_strength"] == 0.45
+        assert payload["inpainting_fill"] == 1
+        assert payload["inpaint_full_res"] is True
+        assert payload["inpaint_full_res_padding"] == 32
+        assert payload["mask"]
+        unit = _unit(payload)
+        assert unit["module"] == "InsightFace (InstantID)"
+        assert unit["model"] == "ip-adapter-instantid"
+        assert unit["weight"] == 1.0
+        assert "mask_image" not in unit
+        assert base64.b64decode(unit["image"]) == photo
+    assert "Exactly 2 people, no more, no fewer" in seen[0]["prompt"]
+    assert expected_counts == [2]
+    import io
+    from PIL import Image, ImageChops
+    left_mask = Image.open(io.BytesIO(base64.b64decode(left["mask"])))
+    right_mask = Image.open(io.BytesIO(base64.b64decode(right["mask"])))
+    assert ImageChops.multiply(left_mask, right_mask).getbbox() is None
+
+
+def test_multi_reference_does_not_destroy_scene_when_face_detection_fails(
+        monkeypatch):
+    def fail_detection(content, *, width, height, count, expected_people):
+        raise image_client.face_regions.FaceDetectionError("nenhum rosto")
+
+    monkeypatch.setattr(image_client.face_regions, "match_faces", fail_detection)
+    cfg = {
+        "sdwebui_base_url": "http://sd",
+        "txt2img_path": "/sdapi/v1/txt2img",
+        "sdwebui_width": 800,
+        "sdwebui_height": 720,
+        "sdwebui_steps": 20,
+        "negative_prompt": "",
+    }
+    seen: list[dict] = []
+    with httpx.Client(transport=_sd_handler(seen)) as client:
+        with pytest.raises(image_client.ImageError, match="face_detection"):
+            image_client._generate_sdwebui(
+                cfg, client, "two distinct people",
+                references=[PNG_BYTES, b"second-face"],
+            )
+    assert len(seen) == 1
+    assert "alwayson_scripts" not in seen[0]
+
+
+def test_face_mask_does_not_cover_the_scene():
+    import io
+    from PIL import Image
+
+    mask = Image.open(io.BytesIO(
+        image_client._face_mask(800, 720, (100, 100, 80, 100))))
+    assert mask.getbbox()
+    assert mask.getpixel((140, 150)) == 255
+    assert mask.getpixel((700, 600)) == 0
+    assert mask.getpixel((400, 360)) == 0
 
 
 def test_see_locks_the_uploaded_photo_without_img2img(client, tmp_path, monkeypatch):
@@ -279,7 +421,7 @@ def test_backdrop_and_portrait_use_the_same_uploaded_photo(client, tmp_path, mon
     assert scenes[0]["reference_images"] == [PNG_BYTES]
 
 
-def test_sdxl_variant_uses_img2img_and_scene_uses_text_prompt(
+def test_sdxl_variant_uses_img2img_and_scene_uses_reference(
         client, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
     adv = make_adventure()
@@ -314,15 +456,15 @@ def test_sdxl_variant_uses_img2img_and_scene_uses_text_prompt(
 
     variant = next(item for item in seen if item.get("init_image") is not None)
     assert variant["init_image"] == PNG_BYTES
-    assert variant["reference_images"] is None
+    assert variant["reference_images"] == [PNG_BYTES]
     assert 0 < variant["denoising_strength"] < 1
     backdrop = next(item for item in seen if item.get("width") == 1344)
     assert backdrop.get("init_image") is None
-    assert backdrop["reference_images"] is None
+    assert backdrop["reference_images"] == [PNG_BYTES]
     with db.session() as conn:
         job = next(item for item in db.list_jobs(conn, adv["id"])
                    if item["type"] == "scene_backdrop")
-    assert job["payload"]["reference_image_ids"] == []
+    assert job["payload"]["reference_image_ids"]
 
 
 def test_cache_key_changes_when_the_reference_changes():

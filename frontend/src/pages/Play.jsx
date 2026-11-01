@@ -664,6 +664,9 @@ export default function Play() {
     const onPortrait = (ev) => {
       fan('portrait_ready', parse(ev))
     }
+    const onTurnaround = (ev) => {
+      fan('turnaround_ready', parse(ev))
+    }
     const onJobChanged = (ev) => {
       fan('job_changed', parse(ev))
       fan('job_progress', parse(ev))
@@ -759,6 +762,7 @@ export default function Play() {
     es.addEventListener('choices_ready', onChoices)
     es.addEventListener('choices_failed', onChoicesFailed)
     es.addEventListener('portrait_ready', onPortrait)
+    es.addEventListener('turnaround_ready', onTurnaround)
     es.addEventListener('backdrop_ready', onBackdrop)
     es.addEventListener('clip_ready', onClip)
     es.addEventListener('see_ready', onSee)
@@ -803,6 +807,7 @@ export default function Play() {
       es.removeEventListener('choices_ready', onChoices)
       es.removeEventListener('choices_failed', onChoicesFailed)
       es.removeEventListener('portrait_ready', onPortrait)
+      es.removeEventListener('turnaround_ready', onTurnaround)
       es.removeEventListener('backdrop_ready', onBackdrop)
       es.removeEventListener('clip_ready', onClip)
       es.removeEventListener('see_ready', onSee)

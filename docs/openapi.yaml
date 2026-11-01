@@ -1198,6 +1198,51 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/adventures/{adventureId}/cards/{cardId}/turnaround:
+    post:
+      tags: [assets]
+      summary: Gerar clipe e referências 360° de um NPC
+      operationId: enqueueTurnaround
+      description: |
+        Enfileira character_turnaround a partir do retrato-âncora PNG. O ComfyUI gera
+        mestre de corpo inteiro e ficha com seis vistas; o Pillow monta o split com o
+        corpo do mestre e o rosto da âncora, sem uma terceira inferência, e o ComfyUI
+        gera a rotação 360°. O backend extrai quatro vistas com OpenCV, monta uma folha 2×2
+        e publica reference.turnaround no card. A mesma âncora reutiliza o job concluído;
+        force=true refaz a cadeia para revisão manual. Com video.auto_turnaround=true,
+        o primeiro retrato enfileira a cadeia automaticamente. O evento terminal
+        turnaround_ready contém card_id, master, design_sheet, split, sheet, clip e views.
+        Cenas ComfyUI priorizam mestre+ficha e recebem instrução para ignorar estúdio,
+        grade, split e poses das referências; SDWebUI mantém uma âncora por pessoa.
+        As vistas são sintetizadas, não um modelo 3D fiel, e precisam de revisão.
+      parameters:
+        - $ref: '#/components/parameters/AdventureId'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Refaz a cadeia mesmo quando a âncora já tem referência completa.
+      responses:
+        '202':
+          description: Job enfileirado, ativo ou concluído reutilizado para a mesma âncora.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Card sem retrato-âncora PNG legível (reference_required).
+        '503':
+          description: Geração de imagem/vídeo desativada (image_disabled).
+
   /api/adventures/{adventureId}/cards/{cardId}/enrich:
     post:
       tags: [assets]
@@ -2612,7 +2657,8 @@ paths:
         `narrator_voice` da config. `emotion` é dica; a linha vence e, sem
         palavra de emoção, vale a ficha do NPC citado em `adventure_id`.
         A emoção escolhida volta no header `X-Voice-Emotion` e no campo
-        `instructions` do provider. Com `drama3_enabled` falso o texto falado
+        `instructions` do provider. Após uma síntese completa, a mesma configuração,
+        voz, texto e emoção reutiliza o MP3 de um LRU de 16 entradas. Com `drama3_enabled` falso o texto falado
         continua limpo (Supertonic). Validações: `voice_disabled` (400),
         `invalid_payload` (texto vazio, 400), `text_too_long` (acima de
         max_text_chars, 400), `invalid_voice` (fora da lista ou '', 400).
@@ -2658,7 +2704,8 @@ paths:
         Usa as mesmas validações, voz, clone e emoção de `/api/tts`, mas chama o
         OmniVoice com `response_format=wav` e transmite os chunks sem esperar o
         áudio completo. Não usa fallback Drama-3. Cancelamento fecha o HTTP do
-        provider; `/api/tts` continua devolvendo MP3 completo.
+        provider e descarta o parcial; após EOF, o WAV completo entra no mesmo LRU
+        de 16 entradas de `/api/tts`. `/api/tts` continua devolvendo MP3 completo.
       requestBody:
         required: true
         content:
@@ -5221,7 +5268,7 @@ components:
           type: string
         type:
           type: string
-          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick, card_assets, scene_clip]
+          enum: [character_portrait, scene_backdrop, see_image, npc_day_tick, card_assets, scene_clip, character_turnaround]
         status:
           type: string
           enum: [preparing, pending, running, done, error, canceled]

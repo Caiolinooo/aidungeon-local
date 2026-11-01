@@ -50,7 +50,7 @@ from typing import Any
 
 import httpx
 
-from app import db
+from app import db, face_regions
 
 log = logging.getLogger("aidungeon.image")
 
@@ -236,23 +236,22 @@ def _first_image(data: dict, what: str) -> bytes:
     if not isinstance(images, list) or not images:
         raise ImageError(f"resposta de {what} sem lista 'images'")
     return _decode_b64(str(images[0]), what)
-# InstantID: preserva melhor a identidade facial que o FaceID genérico.
-# O modelo e o antelopev2 ficam na instalação do Forge Neo.
+# InstantID preserva uma identidade por condicionamento. Com vários NPCs,
+# unidades paralelas misturam os rostos; cada referência entra num passe
+# img2img mascarado separado, mantendo as demais regiões intactas.
 _REFERENCE_MODULE = "InsightFace (InstantID)"
 _REFERENCE_MODEL = "ip-adapter-instantid"
-_MULTI_REFERENCE_MODEL = "ip-adapter-instantid"
 _REFERENCE_WEIGHT = 1.0
+_REGION_DENOISE = 0.45
 _MAX_REFERENCES = 6
 
 
-def _reference_unit(image: bytes, *, mask: bytes | None = None,
-                    weight: float | None = None,
-                    model: str | None = None) -> dict:
-    unit = {
+def _reference_unit(image: bytes) -> dict:
+    return {
         "enabled": True,
         "module": _REFERENCE_MODULE,
-        "model": model or _REFERENCE_MODEL,
-        "weight": float(weight if weight is not None else _REFERENCE_WEIGHT),
+        "model": _REFERENCE_MODEL,
+        "weight": _REFERENCE_WEIGHT,
         "image": base64.b64encode(image).decode("ascii"),
         "resize_mode": "Crop and Resize",
         "processor_res": -1,
@@ -263,67 +262,98 @@ def _reference_unit(image: bytes, *, mask: bytes | None = None,
         "pixel_perfect": False,
         "control_mode": "ControlNet is more important",
     }
-    if mask is not None:
-        unit["mask_image"] = base64.b64encode(mask).decode("ascii")
-    return unit
 
 
-def _region_mask(width: int, height: int, index: int, count: int) -> bytes:
-    """Máscara PNG da região atribuída ao NPC."""
+def _face_mask(width: int, height: int,
+               box: tuple[float, float, float, float]) -> bytes:
+    """Máscara elíptica da cabeça; corpo, outras pessoas e cenário ficam fora."""
     import io
     from PIL import Image, ImageDraw, ImageFilter
-    width, height = int(width), int(height)
-    if count <= 2:
-        x0 = width * index // count
-        x1 = width * (index + 1) // count
-        y0, y1 = 0, height
-    else:
-        col, row = index % 2, index // 2
-        x0, x1 = width * col // 2, width * (col + 1) // 2
-        y0, y1 = height * row // 2, height * (row + 1) // 2
-    x0, x1 = max(0, x0), min(width, x1)
-    y0, y1 = max(0, y0), min(height, y1)
+    x, y, face_width, face_height = box
+    x0 = max(0, round(x - face_width * 0.35))
+    y0 = max(0, round(y - face_height * 0.45))
+    x1 = min(width, round(x + face_width * 1.35))
+    y1 = min(height, round(y + face_height * 1.35))
     image = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((x0, y0, max(x0, x1 - 1), max(y0, y1 - 1)), fill=255)
-    image = image.filter(ImageFilter.GaussianBlur(radius=max(8, width // 40)))
+    ImageDraw.Draw(image).ellipse((x0, y0, x1, y1), fill=255)
+    image = image.filter(ImageFilter.GaussianBlur(
+        radius=max(4, round(face_width * 0.12))))
     output = io.BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
 
+def _mask_without_previous(mask: bytes, previous_masks: list[bytes]) -> bytes:
+    """Bloqueia rostos já refinados, inclusive onde elipses se sobrepõem."""
+    import io
+    from PIL import Image
+    current = Image.open(io.BytesIO(mask)).convert("L")
+    for previous in previous_masks:
+        protected = Image.open(io.BytesIO(previous)).convert("L").point(
+            lambda value: 255 if value else 0)
+        current = Image.composite(Image.new("L", current.size, 0), current, protected)
+    output = io.BytesIO()
+    current.save(output, format="PNG")
+    return output.getvalue()
 
-def _attach_references(payload: dict, references: list[bytes] | None,
-                       *, width: int, height: int) -> dict:
-    images = [raw for raw in (references or []) if raw][:_MAX_REFERENCES]
-    if not images:
-        return payload
-    units = []
-    for index, raw in enumerate(images):
-        mask = None
-        if len(images) > 1:
-            mask = _region_mask(width, height, index, len(images))
-        units.append(_reference_unit(
-            raw, mask=mask,
-            weight=_REFERENCE_WEIGHT if len(images) == 1 else 0.55,
-            model=_REFERENCE_MODEL if len(images) == 1 else _MULTI_REFERENCE_MODEL,
-        ))
-    payload["alwayson_scripts"] = {"controlnet": {"args": units}}
+
+def _attach_reference(payload: dict, image: bytes | None) -> dict:
+    if image:
+        payload["alwayson_scripts"] = {
+            "controlnet": {"args": [_reference_unit(image)]},
+        }
     return payload
+
+
+def _refine_region(cfg: dict, client: httpx.Client, prompt: str,
+                   init_image: bytes, reference: bytes, mask: bytes,
+                   *, width: int, height: int) -> bytes:
+    payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
+    payload.update({
+        "init_images": [base64.b64encode(init_image).decode("ascii")],
+        "mask": base64.b64encode(mask).decode("ascii"),
+        "denoising_strength": _REGION_DENOISE,
+        "inpainting_fill": 1,
+        "inpaint_full_res": True,
+        "inpaint_full_res_padding": 32,
+        "inpainting_mask_invert": 0,
+    })
+    _attach_reference(payload, reference)
+    path = cfg.get("img2img_path") or "/sdapi/v1/img2img"
+    data = _post_json(client, f"{_sd_base(cfg)}{path}", payload,
+                      {"Accept": "application/json"}, "img2img")
+    return _first_image(data, "img2img")
 
 
 def _generate_sdwebui(cfg: dict, client: httpx.Client, prompt: str,
                       width: int | None = None, height: int | None = None,
                       references: list[bytes] | None = None,
+                      expected_people: int | None = None,
                       ) -> tuple[bytes, int, int]:
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
-    payload = _attach_references(
-        _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height)),
-        references, width=width, height=height,
-    )
+    images = [raw for raw in (references or []) if raw][:_MAX_REFERENCES]
+    payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
+    if len(images) == 1:
+        _attach_reference(payload, images[0])
     data = _post_json(client, f"{_sd_base(cfg)}{cfg['txt2img_path']}",
                       payload, {"Accept": "application/json"}, "txt2img")
-    return _first_image(data, "txt2img"), width, height
+    content = _first_image(data, "txt2img")
+    if len(images) > 1:
+        try:
+            boxes = face_regions.match_faces(
+                content, width=width, height=height, count=len(images),
+                expected_people=expected_people)
+        except face_regions.FaceDetectionError as exc:
+            raise ImageError(f"multi_reference_face_detection: {exc}") from exc
+        masks = [_face_mask(width, height, box) for box in boxes]
+        for index, (reference, mask) in enumerate(zip(images, masks)):
+            if index:
+                mask = _mask_without_previous(mask, masks[:index])
+            content = _refine_region(
+                cfg, client, prompt, content, reference, mask,
+                width=width, height=height,
+            )
+    return content, width, height
 
 
 def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
@@ -332,13 +362,16 @@ def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
                               denoising_strength: float,
                               references: list[bytes] | None = None,
                               ) -> tuple[bytes, int, int]:
-    """Pinta a partir de um PNG já salvo. denoising baixo mantém o mesmo rosto."""
+    """Pinta a partir de um PNG já salvo. denoise baixo mantém o mesmo rosto."""
     width = int(width or cfg["sdwebui_width"])
     height = int(height or cfg["sdwebui_height"])
+    images = [raw for raw in (references or []) if raw][:_MAX_REFERENCES]
+    if len(images) > 1:
+        raise ImageError("img2img aceita uma referência por passe")
     payload = _apply_checkpoint(cfg, _sd_payload(cfg, prompt, width, height))
     payload["init_images"] = [base64.b64encode(init_image).decode("ascii")]
     payload["denoising_strength"] = denoising_strength
-    payload = _attach_references(payload, references, width=width, height=height)
+    _attach_reference(payload, images[0] if images else None)
     path = cfg.get("img2img_path") or "/sdapi/v1/img2img"
     data = _post_json(client, f"{_sd_base(cfg)}{path}", payload,
                       {"Accept": "application/json"}, "img2img")
@@ -841,6 +874,9 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
         if refs:
             payload["refs"] = [hashlib.sha256(raw).hexdigest() for raw in refs]
+            if len(refs) > 1 and provider == "sdwebui":
+                # Não reutilizar cenas dos algoritmos paralelo ou de meia região.
+                payload["reference_pipeline"] = "instantid-detected-faces-v1"
     variation_value = cfg.get("variation", 0) if variation is None else variation
     if variation_value not in (None, "", 0, "0"):
         payload["variation"] = str(variation_value)
@@ -867,7 +903,7 @@ _LTXV_NEGATIVE = (
     "weird hand, ugly"
 )
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_CLIP_CACHE_SKIP = ("timeout_seconds", "note", "auto_scene", "auto_portraits")
+_CLIP_CACHE_SKIP = ("timeout_seconds", "note", "auto_scene", "auto_portraits", "auto_turnaround")
 _VIDEO_DEFAULTS = {
     # LTXV 2B 0.9.6 distilled é o default (768x448, 8 passos, CFG 1).
     # `engine=wan` é opt-in: unet/vae/shift continuam no bloco.
@@ -889,6 +925,7 @@ _VIDEO_DEFAULTS = {
     # Só agendam o follow-up. Fora do grafo e da chave de cache.
     "auto_scene": False,
     "auto_portraits": False,
+    "auto_turnaround": False,
 }
 
 
@@ -897,7 +934,8 @@ def video_settings(cfg: dict) -> dict:
 
     `engine` falta ou vem vazio → `ltxv`. `engine=wan` é opt-in e não apaga
     `unet`/`vae`. `auto_scene` e `auto_portraits` só ligam o clipe depois
-    do PNG. Default false. Não entram no grafo.
+    do PNG. `auto_turnaround` agenda mestre+ficha+split+360 depois do retrato.
+    Defaults false. Não entram no grafo nem na chave de cache.
     """
     raw = cfg.get("comfyui_video")
     if not isinstance(raw, dict):
@@ -1308,7 +1346,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                    init_image: bytes | None = None,
                    denoising_strength: float | None = None,
                    negative_extra: str = "",
-                   reference_images: list[bytes] | None = None) -> dict:
+                   reference_images: list[bytes] | None = None,
+                   expected_people: int | None = None) -> dict:
     """Gera a imagem no provider efetivo, salva o PNG e devolve metadados
     {file_path (relativo), width, height, provider}. Levanta ImageError subclasses.
 
@@ -1327,8 +1366,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         )
     with _make_client(transport, timeout) as client:
         refs = [raw for raw in (reference_images or []) if raw][:_MAX_REFERENCES]
-        if refs and provider != "comfyui":
-            raise ImageError("config_error: visual references require ComfyUI Qwen")
+        if refs and provider not in ("comfyui", "sdwebui"):
+            raise ImageError("config_error: visual references require ComfyUI or SDWebUI")
         denoise = float(denoising_strength if denoising_strength is not None else 0.35)
         if provider == "comfyui":
             content, width, height = _generate_comfyui(
@@ -1343,7 +1382,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                     "cannot keep the same face: this image provider has no img2img")
         elif provider == "sdwebui":
             content, width, height = _generate_sdwebui(
-                cfg, client, prompt, width, height, refs)
+                cfg, client, prompt, width, height, references=refs,
+                expected_people=expected_people)
         elif provider == "openai_compatible":
             content, width, height = _generate_openai(cfg, client, prompt)
         else:

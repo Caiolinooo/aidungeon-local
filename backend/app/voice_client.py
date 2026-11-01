@@ -5,6 +5,8 @@ Provider único (settings.voice, config efetiva de settings_store):
 - TTS: POST {base_url}/audio/speech com Bearer, JSON {model: tts_model,
   voice, input, response_format: "mp3", instructions?} → 200 audio/mpeg
   (bytes devolvidos ao chamador sem tocar em disco — passthrough para a UI).
+  A rota mantém um LRU de 16 MP3/WAV completos por modelo+voz+texto+emoção;
+  desconexões e áudios parciais não são cacheados.
   `instructions` leva a direção emocional. O modelo drama-3 só entra se
   voice.drama3_enabled estiver ligado; senão o texto falado fica limpo.
 - STT: POST {base_url}/audio/transcriptions multipart (campo `file` com
@@ -23,6 +25,7 @@ import base64
 import hashlib
 import logging
 import threading
+from collections import OrderedDict
 from typing import Any
 
 import httpx
@@ -73,6 +76,37 @@ _shared_lock = threading.Lock()
 _shared_sync: dict[tuple[str, float], httpx.Client] = {}
 _shared_async: dict[tuple[str, float, int], httpx.AsyncClient] = {}
 _clone_sent: dict[str, str] = {}
+_SPEECH_CACHE_ENTRIES = 16
+_speech_cache: OrderedDict[tuple, bytes] = OrderedDict()
+
+
+def speech_cache_key(cfg: dict, text: str, voice: str, emotion: str,
+                     response_format: str, transport: Any) -> tuple:
+    """Conteúdo completo da fala; transporte injetado isola testes/clientes."""
+    return (
+        _base(cfg), cfg.get("tts_model") or "", cfg.get("drama3_model") or "",
+        bool(cfg.get("drama3_enabled")), voice, text, emotion, response_format,
+        transport,
+    )
+
+
+def cached_speech(key: tuple) -> bytes | None:
+    with _shared_lock:
+        audio = _speech_cache.get(key)
+        if audio is not None:
+            _speech_cache.move_to_end(key)
+        return audio
+
+
+def remember_speech(key: tuple, audio: bytes) -> None:
+    """Só o caller com síntese completa grava; LRU evita reter áudio sem teto."""
+    if not audio:
+        return
+    with _shared_lock:
+        _speech_cache[key] = audio
+        _speech_cache.move_to_end(key)
+        while len(_speech_cache) > _SPEECH_CACHE_ENTRIES:
+            _speech_cache.popitem(last=False)
 
 
 def _borrow_sync(base_url: str, timeout: float,
@@ -112,6 +146,7 @@ def reset_voice_clients() -> None:
         _shared_sync.clear()
         _shared_async.clear()
         _clone_sent.clear()
+        _speech_cache.clear()
     for client in sync_clients:
         try:
             client.close()

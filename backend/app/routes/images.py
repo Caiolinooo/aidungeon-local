@@ -429,11 +429,13 @@ def _is_interaction(text: str, names: list[str]) -> bool:
 
 def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                         img_cfg: dict, llm_cfg: dict, cards: list[dict],
-                        transport: Any) -> tuple[str, str, str, list, list[str], list[str]]:
+                        transport: Any) -> tuple[
+                            str, str, str, list, list[str], list[str], int]:
     """O momento atual + o rosto do card.
 
-    Devolve prompt, negative, caption, frame, cast_card_ids e
-    reference_image_ids. Os ids seguem `decision.cast`, protagonista incluso.
+    Devolve prompt, negative, caption, frame, cast_card_ids,
+    reference_image_ids e expected_people. Os ids seguem `decision.cast`,
+    protagonista incluso.
 
     O CLIP pinta o começo de cada bloco. O primeiro bloco abre com o rosto
     do card (cabelo, pele, porte); a frase em inglês vem em seguida. A
@@ -632,13 +634,15 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(sentence)
     if order:
         lead_bits.append(order)
-    lead_bits.append("the action just described, same continuous scene, coherent bodies")
+    lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
     if explicit:
         lead_bits.append("clothes off, nude, do not restore outfits, uncensored")
     if where:
         lead_bits.append(", ".join(where))
     if names:
-        lead_bits.append("people present: " + ", ".join(who_bits))
+        lead_bits.append(
+            f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
+        )
     locked = frame[:likeness.CAST_REFERENCE_LIMIT]
     if len(locked) > 1:
         positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
@@ -687,8 +691,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if [card.get("id") for card in final_cast] != [card.get("id") for card in cast_locked]:
         _require_cast(adv["id"], final_cast)
         cast_locked = final_cast
-    cast_card_ids, reference_image_ids = likeness.cast_reference_ids(cast_locked)
-    return prompt, negative, caption, frame, cast_card_ids, reference_image_ids
+    cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
+        cast_locked, str(img_cfg.get("provider") or "sdwebui"))
+    return (prompt, negative, caption, frame, cast_card_ids,
+            reference_image_ids, len(names))
 
 
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
@@ -726,10 +732,9 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
     try:
-        prompt, negative_extra, caption, frame, cast_card_ids, reference_image_ids = (
-            _build_final_prompt(
-                adv, actions, body, img_cfg, llm_cfg, cards, transport)
-        )
+        (prompt, negative_extra, caption, frame, cast_card_ids,
+         reference_image_ids, expected_people) = _build_final_prompt(
+            adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     try:
@@ -743,9 +748,8 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
             scene.queue_missing_portraits(
                 adventure_id, frame[:likeness.CAST_REFERENCE_LIMIT])
         raise
-    if img_cfg.get("provider") != "comfyui":
-        # SDXL/Forge não tem máscaras regionais de várias referências. A cena
-        # conserva a descrição do elenco no prompt; retratos continuam img2img.
+    if img_cfg.get("provider") not in ("comfyui", "sdwebui"):
+        # OpenAI-compatible não tem âncoras visuais de identidade.
         reference_image_ids = []
         references = []
     return {
@@ -756,6 +760,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         "cast_card_ids": cast_card_ids,
         "reference_image_ids": reference_image_ids,
         "reference_hashes": likeness.reference_hashes(references),
+        "expected_people": expected_people,
         "cache_key": image_client.request_key(
             img_cfg, prompt, negative_extra=negative_extra, variation=variation,
             reference_images=references or None),
@@ -821,7 +826,8 @@ def post_see(adventure_id: str, body: SeeRequest,
         result = image_client.generate_image(
             img_cfg, plan["prompt"], adventure_id=adventure_id, image_id=image_id,
             transport=transport, negative_extra=plan["negative_extra"],
-            reference_images=references or None)
+            reference_images=references or None,
+            expected_people=plan.get("expected_people"))
     except image_client.ImageError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     image = jobs.store_see(adventure_id, plan["caption"], result, image_id=image_id,

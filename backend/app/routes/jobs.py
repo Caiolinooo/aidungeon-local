@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app import access, auth, db, jobs, npc_assets
+from app import access, auth, db, image_client, jobs, likeness, npc_assets
 from app.errors import GameError
-from app.schemas import PortraitSourceRequest
+from app.schemas import PortraitSourceRequest, TurnaroundRequest
 
 router = APIRouter()
 by_id = APIRouter()
@@ -54,6 +54,32 @@ def enqueue_portrait(adventure_id: str, card_id: str,
             conn, adventure_id, card_id, replace=True,
             force_reference=source == "reference",
         )
+
+
+@router.post("/{adventure_id}/cards/{card_id}/turnaround", status_code=202)
+def enqueue_turnaround(adventure_id: str, card_id: str,
+                       body: TurnaroundRequest | None = None) -> dict:
+    """Enfileira a cadeia completa; `force` refaz uma referência revisada."""
+    with db.session() as conn:
+        card = db.get_card(conn, adventure_id, card_id)
+        if not card:
+            raise GameError.not_found(f"card {card_id} not found")
+        img_cfg = image_client.effective_settings(conn)
+        if not img_cfg["enabled"]:
+            raise GameError(503, "image_disabled",
+                            "image generation is disabled (settings.image.enabled)")
+        source_id = likeness.reference_image_id(card)
+        source = db.get_image(conn, source_id) if source_id else None
+        try:
+            raw = likeness.read_stored_image_bytes(source or {})
+        except (OSError, FileNotFoundError):
+            raw = b""
+        if (not source or source.get("adventure_id") != adventure_id
+                or not raw.startswith(b"\x89PNG\r\n\x1a\n")):
+            raise GameError(422, "reference_required",
+                            "Este NPC não tem um retrato-âncora PNG legível.")
+        return jobs.enqueue_turnaround(
+            conn, adventure_id, card_id, source["id"], force=bool(body and body.force))
 
 
 @router.get("/{adventure_id}/jobs")

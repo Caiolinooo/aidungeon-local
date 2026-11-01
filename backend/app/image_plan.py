@@ -1,8 +1,8 @@
 """Plano de imagem (contrato C4).
 
-Foto enviada e referência de pessoa real entram no Forge como ControlNet
-`reference_adain+attn` (See e fundo). O retrato ainda usa a mesma foto
-como img2img, com denoise baixo quando o usuário enviou o arquivo.
+Foto enviada e referência de pessoa real entram no Forge como InstantID. Com
+várias pessoas, YuNet localiza os rostos e cada um recebe um passe img2img
+restrito à cabeça. O retrato usa img2img com denoise baixo.
 """
 
 from __future__ import annotations

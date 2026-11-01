@@ -230,7 +230,7 @@ def _clone(client, name: str = "Clara"):
     )
 
 
-def test_second_tts_skips_clone_and_keeps_payload(client) -> None:
+def test_second_tts_skips_clone_and_reuses_identical_audio(client) -> None:
     voice_client.reset_voice_clients()
     capture: list[tuple] = []
     _use(client, _clone_transport(capture, speech_status=200))
@@ -253,10 +253,30 @@ def test_second_tts_skips_clone_and_keeps_payload(client) -> None:
     puts, speeches = _voice_calls(capture)
     assert len(puts) == 1
     assert puts[0][1]["rvq_b64"] == RVQ
-    assert len(speeches) == 2
-    assert speeches[0] == speeches[1]
+    assert len(speeches) == 1
     assert speeches[0]["voice"] == voice_id
     assert speeches[0]["input"] == "O vento sopra."
+
+
+def test_repeated_stream_reuses_complete_audio_but_not_another_emotion(client) -> None:
+    voice_client.reset_voice_clients()
+    capture: list[tuple] = []
+    _use(client, _clone_transport(capture, speech_status=200))
+    try:
+        first = client.post("/api/tts/stream", json={"text": "O vento sopra.", "voice": "F2"})
+        second = client.post("/api/tts/stream", json={"text": "O vento sopra.", "voice": "F2"})
+        other_emotion = client.post("/api/tts/stream", json={
+            "text": "O vento sopra.", "voice": "F2", "emotion": "joy",
+        })
+    finally:
+        client.app.dependency_overrides.clear()
+        voice_client.reset_voice_clients()
+    assert first.status_code == second.status_code == other_emotion.status_code == 200
+    assert first.content == second.content == other_emotion.content == WAV
+    _puts, speeches = _voice_calls(capture)
+    assert len(speeches) == 2
+    assert speeches[0]["response_format"] == speeches[1]["response_format"] == "wav"
+    assert speeches[0].get("instructions") != speeches[1].get("instructions")
 
 
 def test_missing_clone_is_resent_once(client) -> None:

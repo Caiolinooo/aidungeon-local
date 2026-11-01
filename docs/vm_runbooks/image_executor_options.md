@@ -6,6 +6,8 @@ Leitura feita em 19 out 2026 na VM `caio@vm.groupabz.com`. Nada foi instalado. `
 >
 > **28 out 2026.** O provider ativo é `comfyui` com `engine=flux2_klein`: `flux-2-klein-4b-fp8.safetensors`, `qwen_3_4b.safetensors` (`CLIPLoader` type `flux2`) e `flux2-vae.safetensors`. Canvas único em `EmptyFlux2LatentImage` e `Flux2Scheduler`, 4 passos, CFG 1, euler. Referências: `LoadImage` → `ImageScaleToTotalPixels` (0,25 MP por âncora) → `VAEEncode` → `ReferenceLatent` no positivo e no negativo, teto 4. `engine=qwen` mantém o FineView; LTXV e Wan não mudam.
 
+> **1 nov 2026.** A cadeia de identidade faz duas inferências de imagem (mestre e ficha), não três: o split usa o corpo do mestre e o rosto da âncora via Pillow. Cenas com a cadeia completa enviam somente mestre+ficha por personagem; âncora e vistas extras não viram latents redundantes. **Benchmark na L4:** 1 referência 5,885 s; 2 referências 6,914/6,656 s (média 6,785 s); 4 referências 8,441/8,450 s (média 8,446 s). Duas referências foram 19,7% mais rápidas que quatro. A cadeia completa fria concluiu em 66,701 s: mestre 24,334 s, ficha 7,395 s e LTXV 33,214 s.
+
 O app fala HTTP com o executor em `backend/app/image_client.py`: `POST {base}/sdapi/v1/txt2img` e, no retrato por foto, `POST /sdapi/v1/img2img`. A resposta usada é `images[0]` em base64. O corpo está fixo em `DPM++ 2M`, scheduler `Karras`, `cfg_scale` 5 — o que o epiCRealism XL pede.
 
 ## O que a L4 está segurando agora

@@ -39,6 +39,11 @@ Tipos:
   follow-up não cancela um clipe manual ativo na mesma fonte; o pedido
   explícito continua substituindo o pendente. Falha nesse follow-up não muda
   o job de origem. Não chama narrador, voz nem LLM extra.
+- `character_turnaround` — gera mestre de corpo inteiro e ficha multivista; o
+  Pillow monta o split com o rosto canônico, sem outra inferência. Usa o split
+  no giro 360°, extrai 0/90/180/270 com OpenCV e monta a folha 2×2. Publica todos
+  os assets e atualiza `reference.turnaround` no mesmo commit; termina em `turnaround_ready`. Cancelamento interrompe o Comfy
+  e remove todos os arquivos ainda não publicados.
 
 Aventura apagada no meio do render: o PNG é descartado e o job termina
 cancelado. O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para
@@ -59,7 +64,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app import (db, events, game_engine, image_client, likeness, llm_client,
-                    npc_assets, settings_store)
+                    npc_assets, settings_store, turnaround)
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -148,6 +153,14 @@ def _terminal_event(job: dict, status: str, result: dict | None,
         return ("backdrop_ready", {**data, "ref_id": job.get("ref_id") or ""})
     if job["type"] == "see_image":
         return ("see_ready", data)
+    if job["type"] == "character_turnaround":
+        return ("turnaround_ready", {
+            **data,
+            "card_id": result["card_id"],
+            "sheet": result["sheet"],
+            "clip": result["clip"],
+            "views": result["views"],
+        })
     if job["type"] == "scene_clip":
         image = result.get("image") or {}
         return ("clip_ready", {
@@ -488,12 +501,12 @@ def cancel(conn, job_id: str, *, reason: str | None = None) -> dict | None:
 def interrupt_image(job: dict, transport: Any = None) -> bool:
     """Melhor esforço para interromper o render de um job running cancelado."""
     if job["type"] not in ("character_portrait", "scene_backdrop", "see_image",
-                           "location_image", "scene_clip"):
+                           "location_image", "scene_clip", "character_turnaround"):
         return False
     try:
         with db.session() as conn:
             cfg = image_client.effective_settings(conn)
-        if job["type"] == "scene_clip":
+        if job["type"] in ("scene_clip", "character_turnaround"):
             image_client.interrupt_comfy(cfg, transport)
         else:
             if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
@@ -862,7 +875,11 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         width=init_width, height=init_height,
         init_image=init_bytes,
         denoising_strength=denoise,
-        reference_images=(references if img_cfg.get("provider") == "comfyui" else None),
+        reference_images=(
+            references if img_cfg.get("provider") == "comfyui"
+            else references[:1] if img_cfg.get("provider") == "sdwebui"
+            else None
+        ),
         negative_extra=portrait_ban,
     )
     if not anchor_id:
@@ -1017,7 +1034,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     )
     references = (
         _reference_blobs(job, people=bool(payload.get("include_people")))
-        if img_cfg.get("provider") == "comfyui" else []
+        if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
     cache_key = str(payload.get("cache_key") or "") or backdrop_cache_key(
         img_cfg, prompt,
@@ -1039,6 +1056,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         image_id=image_id, transport=transport,
         width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
         negative_extra=ban, reference_images=references or None,
+        expected_people=int(payload.get("expected_people") or 0) or None,
     )
     try:
         with db.session() as conn:
@@ -1086,6 +1104,47 @@ _SCENE_CLIP_MOTION = (
     "Keep the same place, lighting and the identity of anyone already visible."
 )
 _PORTRAIT_CLIP_HOLD = "Preserve the same face, clothes and framing. Stable camera."
+def _turnaround_prompts(card: dict) -> dict[str, str]:
+    """Mestre, ficha e giro com a mesma identidade; o split é local."""
+    identity = likeness.opening_clause([card])
+    if not identity:
+        bits = npc_assets.scene_bits(card)
+        name = str(card.get("title") or "character").strip()
+        identity = f"{name}: {'; '.join(bits)}" if bits else name
+    identity = identity[:700]
+    sides = (
+        "Keep every distinctive and asymmetrical detail on the character's own "
+        "LEFT or RIGHT side exactly as shown; never mirror or move it."
+    )
+    master = (
+        f"Create a full-body master portrait of this exact character. {identity}. "
+        "Standing upright in a relaxed neutral pose, facing the camera, arms at the "
+        "sides, feet slightly apart, entire body and shoes visible. Preserve the face, "
+        f"hair, body, outfit and accessories exactly. {sides} Clean seamless light grey "
+        "studio background, soft even three-point lighting, sharp focus head to toe, "
+        "85mm lens. No text, no labels, no logos."
+    )
+    sheet = (
+        "Turn this exact character into a clean professional character reference sheet. "
+        f"Keep {identity}, body, outfit and accessories exactly identical to the reference. "
+        f"{sides} Two rows on a seamless light grey background. Top row: three full-body "
+        "views at the same scale and in the same neutral pose: front, RIGHT profile, back. "
+        "Bottom row: three head-and-shoulders close-ups: front, three-quarter, side profile. "
+        "Even studio lighting, aligned panels, consistent colour. No text, no labels, "
+        "no arrows, no logos."
+    )
+    clip = (
+        "Locked-off static camera, no camera movement, no zoom, no cuts. Turntable character "
+        "reference. Both figures of the same character rotate in place through one complete, "
+        "smooth, constant-speed 360 degree turn, clockwise, in perfect sync. The full-body "
+        "figure on the left and the large close-up on the right show front, side, back, other "
+        "side and front again. Neutral standing pose and calm expression, no talking. Keep "
+        f"{identity}, body, outfit and accessories exactly unchanged throughout. {sides} "
+        "Even studio lighting and seamless grey background; both panels and the divider stay "
+        "fixed. No scene changes, no extra people, no text."
+    )
+    return {"master": master, "design_sheet": sheet, "clip": clip}
+
 _PORTRAIT_CLIP_STILL = (
     "No stated action, emotion or pose. Do not invent a gesture. "
     "Subtle environmental motion only."
@@ -1221,6 +1280,36 @@ def enqueue_scene_clip(conn, adventure_id: str, source_image_id: str, prompt: st
     )
 
 
+def enqueue_turnaround(conn, adventure_id: str, card_id: str,
+                       source_image_id: str, *, force: bool = False) -> dict:
+    """Uma cadeia completa por âncora; `force` só atende à revisão manual."""
+    card = db.get_card(conn, adventure_id, card_id)
+    if card and not force:
+        sheet = _card_sheet(card)
+        reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+        saved = reference.get("turnaround") if isinstance(reference.get("turnaround"), dict) else {}
+        if (saved.get("master_image_id") and saved.get("design_sheet_image_id")
+                and str(saved.get("source_image_id") or "") == source_image_id):
+            latest = db.latest_job(conn, "character_turnaround", card_id)
+            if latest and latest.get("status") == "done":
+                return latest
+    active = db.find_active_job(conn, "character_turnaround", card_id)
+    if active and str((active.get("payload") or {}).get("source_image_id") or "") \
+            == source_image_id:
+        return active
+    prompts = _turnaround_prompts(card or {"id": card_id, "title": "character"})
+    return enqueue(
+        conn, "character_turnaround", adventure_id, card_id,
+        {
+            "source_image_id": source_image_id,
+            "prompt": prompts["clip"],
+            "reference_prompts": prompts,
+        },
+        priority=PRIORITY_PORTRAIT_CLIP,
+        supersede_key=f"turnaround:{adventure_id}:{card_id}",
+    )
+
+
 def _portrait_auto_clip(job: dict, card: dict) -> bool:
     """Retrato presente já reagiu a um turno; inicial e lote ficam estáticos."""
     try:
@@ -1287,6 +1376,28 @@ def _schedule_clip_followup(job: dict, result: dict | None) -> None:
         )
 
 
+def _schedule_turnaround_followup(job: dict) -> None:
+    """Cria a referência completa uma vez; falha não reabre o retrato."""
+    if job.get("type") != "character_portrait":
+        return
+    try:
+        with db.session() as conn:
+            cfg = image_client.effective_settings(conn)
+            if not image_client.video_settings(cfg).get("auto_turnaround"):
+                return
+            card = db.get_card(conn, job["adventure_id"], job.get("ref_id") or "")
+            if not card:
+                return
+            source_id = likeness.reference_image_id(card)
+            if source_id:
+                enqueue_turnaround(conn, job["adventure_id"], card["id"], source_id)
+    except Exception:
+        log.exception(
+            "job %s (%s): referências 360 automáticas não entraram na fila",
+            job.get("id"), job.get("type"),
+        )
+
+
 def enqueue_day_tick(conn, adventure_id: str, *, reason: str = "auto") -> dict:
     """Um dia fora de cena. Não roda o LLM aqui: o worker chama tick_day."""
     active = db.find_active_job(conn, "npc_day_tick", adventure_id)
@@ -1317,7 +1428,7 @@ def _execute_see(job: dict, transport: Any) -> dict:
     negative_extra = str(payload.get("negative_extra") or "")
     references = (
         _reference_blobs(job, people=False)
-        if img_cfg.get("provider") == "comfyui" else []
+        if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
     cache_key = str(payload.get("cache_key") or "") or image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
@@ -1343,7 +1454,8 @@ def _execute_see(job: dict, transport: Any) -> dict:
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
         transport=transport, negative_extra=negative_extra,
-        reference_images=references or None)
+        reference_images=references or None,
+        expected_people=payload.get("expected_people"))
     try:
         image = store_see(job["adventure_id"], str(payload.get("caption") or ""), meta,
                           image_id=image_id, prompt=prompt,
@@ -1481,6 +1593,164 @@ def _execute_scene_clip(job: dict, transport: Any) -> dict:
     }
 
 
+def _execute_turnaround(job: dict, transport: Any) -> dict:
+    """Mestre → ficha → split → 360; publica tudo ou não publica nada."""
+    with db.session() as conn:
+        img_cfg = image_client.effective_settings(conn)
+        card_id = str(job.get("ref_id") or "")
+        card = db.get_card(conn, job["adventure_id"], card_id)
+        if card is None:
+            raise GameError.not_found(f"card {card_id} not found")
+        prompts = (job.get("payload") or {}).get("reference_prompts")
+        if not isinstance(prompts, dict):
+            prompts = _turnaround_prompts(card)
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_disabled",
+                        "image generation is disabled (settings.image.enabled)")
+    source, raw = _clip_source_png(job)
+    reference_cfg = {**img_cfg, "provider": "comfyui"}
+    created_paths: list[str] = []
+    assets: dict[str, dict] = {}
+
+    def ensure_running() -> None:
+        with db.session() as conn:
+            current = db.get_job(conn, job["id"])
+        if not current or current.get("status") != "running":
+            raise db.JobCanceled(job["id"])
+
+    try:
+        reference = raw
+        reference_id = source["id"]
+        master_raw = b""
+        for key, kind, width, height in (
+            ("master", "character_master", 768, 1152),
+            ("design_sheet", "character_sheet", 1344, 768),
+        ):
+            image_id = db.new_id()
+            meta = image_client.generate_image(
+                reference_cfg, prompts[key], adventure_id=job["adventure_id"],
+                image_id=image_id, transport=transport, width=width, height=height,
+                reference_images=[reference],
+            )
+            created_paths.append(str(meta["file_path"]))
+            generated = likeness.read_stored_image_bytes(meta)
+            assets[key] = {
+                "id": image_id, "kind": kind, "meta": meta,
+                "prompt": prompts[key], "source_image_id": reference_id,
+            }
+            if key == "master":
+                master_raw = generated
+                reference = generated
+                reference_id = image_id
+            ensure_running()
+
+        split_id = db.new_id()
+        master_path = likeness.stored_image_path(assets["master"]["meta"]["file_path"])
+        split_path = master_path.parent / f"{split_id}.png"
+        width, height = turnaround.build_split_frame(raw, master_raw, split_path)
+        created_paths.append(str(split_path))
+        assets["split"] = {
+            "id": split_id, "kind": "turnaround_start",
+            "meta": {
+                "file_path": str(split_path), "provider": "pillow",
+                "width": width, "height": height,
+            },
+            "prompt": "Deterministic split: canonical anchor face and full-body master",
+            "source_image_id": assets["master"]["id"],
+        }
+        split_raw = likeness.read_stored_image_bytes(assets["split"]["meta"])
+        ensure_running()
+
+        clip_id = db.new_id()
+        clip_meta = image_client.generate_clip(
+            img_cfg, prompts["clip"], adventure_id=job["adventure_id"],
+            image_id=clip_id, source_png=split_raw, transport=transport,
+        )
+        created_paths.append(str(clip_meta["file_path"]))
+        ensure_running()
+        clip_path = likeness.stored_image_path(clip_meta["file_path"])
+        view_ids = [db.new_id() for _ in range(4)]
+        sheet_id = db.new_id()
+        view_paths = [clip_path.parent / f"{image_id}.png" for image_id in view_ids]
+        sheet_path = clip_path.parent / f"{sheet_id}.png"
+        created_paths.extend(str(path) for path in (*view_paths, sheet_path))
+        width, height = turnaround.extract_turnaround(clip_path, view_paths, sheet_path)
+        with db.session() as conn:
+            card = db.get_card(conn, job["adventure_id"], card_id)
+            if card is None:
+                raise GameError.not_found(f"card {card_id} not found")
+            rows = {}
+            for key, asset in assets.items():
+                meta = asset["meta"]
+                rows[key] = db.insert_image(
+                    conn, adventure_id=job["adventure_id"], action_seq=-1,
+                    file_path=meta["file_path"], prompt=asset["prompt"],
+                    negative_prompt=img_cfg.get("negative_prompt") or "",
+                    provider=meta.get("provider") or "comfyui",
+                    width=meta.get("width"), height=meta.get("height"),
+                    image_id=asset["id"], kind=asset["kind"], ref_id=card_id,
+                    job_id=job["id"], source_image_id=asset["source_image_id"],
+                )
+            clip = db.insert_image(
+                conn, adventure_id=job["adventure_id"], action_seq=-1,
+                file_path=clip_meta["file_path"], prompt=prompts["clip"],
+                provider=clip_meta.get("provider") or "comfyui",
+                width=clip_meta.get("width"), height=clip_meta.get("height"),
+                image_id=clip_id, kind="turnaround_clip", ref_id=card_id,
+                job_id=job["id"], media_type="video/mp4",
+                duration_ms=clip_meta.get("duration_ms"), source_image_id=assets["split"]["id"],
+            )
+            views = [
+                db.insert_image(
+                    conn, adventure_id=job["adventure_id"], action_seq=-1,
+                    file_path=str(path), prompt=prompts["clip"],
+                    provider=clip_meta.get("provider") or "comfyui",
+                    width=width, height=height, image_id=image_id,
+                    kind="reference_view", ref_id=card_id, job_id=job["id"],
+                    source_image_id=clip_id,
+                )
+                for image_id, path in zip(view_ids, view_paths)
+            ]
+            sheet = db.insert_image(
+                conn, adventure_id=job["adventure_id"], action_seq=-1,
+                file_path=str(sheet_path), prompt=prompts["clip"],
+                provider=clip_meta.get("provider") or "comfyui",
+                width=width * 2, height=height * 2, image_id=sheet_id,
+                kind="reference_sheet", ref_id=card_id, job_id=job["id"],
+                source_image_id=clip_id,
+            )
+            reference = {
+                "source_image_id": source["id"],
+                "master_image_id": rows["master"]["id"],
+                "design_sheet_image_id": rows["design_sheet"]["id"],
+                "split_image_id": rows["split"]["id"],
+                "sheet_image_id": sheet["id"],
+                "clip_image_id": clip["id"],
+                "view_image_ids": [view["id"] for view in views],
+            }
+            likeness.set_turnaround(conn, card, reference, job_id=job["id"])
+    except sqlite3.IntegrityError:
+        for path in created_paths:
+            _discard_render(path)
+        _raise_if_gone(job["adventure_id"], clip_meta["file_path"])
+        raise
+    except Exception:
+        for path in created_paths:
+            _discard_render(path)
+        raise
+    sheet_ref = db.image_ref(sheet)
+    return {
+        "card_id": card_id,
+        "image": sheet_ref,
+        "master": db.image_ref(rows["master"]),
+        "design_sheet": db.image_ref(rows["design_sheet"]),
+        "split": db.image_ref(rows["split"]),
+        "sheet": sheet_ref,
+        "clip": db.image_ref(clip),
+        "views": [db.image_ref(view) for view in views],
+    }
+
+
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "character_portrait": _execute_portrait,
     "card_assets": _execute_card_assets,
@@ -1489,6 +1759,7 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "npc_day_tick": _execute_day_tick,
     "location_image": _execute_location_image,
     "scene_clip": _execute_scene_clip,
+    "character_turnaround": _execute_turnaround,
 }
 
 
@@ -1527,6 +1798,8 @@ def _run_job(job: dict, transport: Any) -> None:
             log.info("job %s (%s) concluído", job["id"], job["type"])
             if job["type"] in ("character_portrait", "scene_backdrop"):
                 _schedule_clip_followup(job, result)
+            if job["type"] == "character_portrait":
+                _schedule_turnaround_followup(job)
 
 
 def process_pending(transport: Any = None, *, should_pause=None,

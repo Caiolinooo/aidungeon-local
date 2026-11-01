@@ -199,7 +199,8 @@
           "vertical_height": 768,
           "auto_scene": true,
           "auto_portraits": true,
-          "note": "LTXV 2B 0.9.6 distilled é o clipe padrão: CheckpointLoaderSimple, CLIPLoader type=ltxv (T5 FP8), LTXVImgToVideo, 8 passos CFG 1, 121 frames a 24 fps, 768x448 (vertical 448x768), SaveVideo H.264. unet/vae do Wan permanecem para engine=wan (opt-in: troque também o clip para umt5, steps 20, cfg 5 e 1280x704). Não troca image.provider nem o UNET de imagem. auto_scene e auto_portraits enfileiram o clipe do PNG recém-concluído; desative ambos se o LTXV não estiver instalado."
+          "auto_turnaround": true,
+          "note": "LTXV 2B 0.9.6 distilled é o clipe padrão: CheckpointLoaderSimple, CLIPLoader type=ltxv (T5 FP8), LTXVImgToVideo, 8 passos CFG 1, 121 frames a 24 fps, 768x448 (vertical 448x768), SaveVideo H.264. unet/vae do Wan permanecem para engine=wan (opt-in: troque também o clip para umt5, steps 20, cfg 5 e 1280x704). Não troca image.provider nem o UNET de imagem. auto_scene e auto_portraits enfileiram o clipe do PNG recém-concluído; auto_turnaround enfileira uma única cadeia mestre→ficha→split local→360 por âncora. Desative as três flags se o LTXV não estiver instalado."
         },
         "note": "FineView Qwen Image 2.1 Turbo Fixed FP8 via ComfyUI (porta 8188): UNETLoader default + CLIPLoader qwen_image (Qwen3-VL 8B INT8) + texture-fix VAE. TextEncodeQwenImage21 recebe as referencias; ModelSamplingAuraFlow shift 1.31, ManualSigmas oficial de 8 passos e SamplerCustom euler. clip_device=cpu reserva VRAM para o narrador. engine=qwen (default) preserva esse grafo. engine=flux2_klein é opt-in e lê o bloco flux2 (flux-2-klein-4b-fp8, qwen_3_4b type=flux2, flux2-vae, 4 passos, CFG 1, euler, ReferenceLatent, teto 4). Não troca image.provider nem o vídeo LTXV/Wan."
       },
