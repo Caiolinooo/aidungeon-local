@@ -1325,10 +1325,21 @@ NUDITY_BAN = (
 def negative_without_nudity_ban(text: str) -> str:
     """Mantém outros negatives, mas nunca proíbe a nudez já autorizada."""
     banned = {part.casefold() for part in NUDITY_BAN.split(", ")}
-    return ", ".join(
-        part.strip() for part in (text or "").split(",")
-        if part.strip() and part.strip().casefold() not in banned
-    )
+    kept: list[str] = []
+    for part in (text or "").split(","):
+        cleaned = part.strip()
+        key = cleaned.casefold()
+        while key.startswith("(") and key.endswith(")"):
+            key = key[1:-1].strip()
+        weighted = re.fullmatch(
+            r"\(?\s*(.*?)\s*:\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*\)?",
+            key,
+        )
+        if weighted:
+            key = weighted.group(1).strip()
+        if cleaned and key not in banned:
+            kept.append(cleaned)
+    return ", ".join(kept)
 
 
 def creature_kind(card: dict | None = None, name: str = "") -> str:
@@ -1360,44 +1371,112 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
     return CLOTHED_LOCK
 
 
-def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
-    """Quem o pedido/momento realmente descreve nu, sem cruzar sujeitos."""
-    blob = (order or "").strip() or (moment or "")
-    found: list[str] = []
-    clauses = re.split(r"(?<=[.!?…])\s+", blob)
-    negation = re.compile(r"(?i)\b(?:not|never|no|nao|não|nunca|nem)\b")
+def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
+    """Estados locais por card: nudez afirmada e nudez negada/roupa."""
+    titles = [" ".join(str(card.get("title") or "").split()) for card in cards]
+    first_counts: dict[str, int] = {}
+    for title in titles:
+        parts = title.split()
+        if parts:
+            first = parts[0].casefold()
+            first_counts[first] = first_counts.get(first, 0) + 1
+    aliases: list[list[str]] = []
+    for card, title in zip(cards, titles):
+        names = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
+        parts = title.split()
+        if len(parts) > 1 and first_counts[parts[0].casefold()] == 1:
+            names.append(parts[0])
+        aliases.append(list(dict.fromkeys(
+            str(name) for name in names if len(str(name)) >= 3
+        )))
+    everyone = sorted({name for names in aliases for name in names},
+                      key=len, reverse=True)
+    if not everyone or not text:
+        return set(), set()
+    coordinated_names = "|".join(re.escape(name) for name in everyone)
+    coordinated = rf"(?:\s*(?:,|and|e)\s*(?:{coordinated_names}))*"
     nude = r"(?:naked|nudes?|nua?s?|nu|pelad[oa]s?|desnud[oa]s?)"
-    adverbs = (
-        "is", "are", "está", "estao", "fica", "now", "agora", "completely",
-        "completamente", "totally", "totalmente", "already", "já", "finally",
-        "finalmente", "both", "ambos", "and", "e", "the", "a", "o",
+    covered = (
+        r"(?:clothed|dressed|vestid[oa]s?|cobert[oa]s?|wearing\s+clothes|"
+        r"com\s+roupa|de\s+roupa|keeps?\s+(?:(?:her|his|their)\s+)?clothes\s+on)"
     )
-    for clause in clauses:
-        if negation.search(clause):
-            continue
-        for card in cards:
-            title = " ".join(str(card.get("title") or "").split())
-            aliases = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
-            if len(title.split()) > 1:
-                aliases.append(title.split()[0])
-            for name in dict.fromkeys(alias for alias in aliases if len(alias) >= 3):
-                escaped = re.escape(name)
-                direct = re.search(
-                    rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*"
-                    rf"(?:(?:{'|'.join(adverbs)})\s+){{0,2}}?{nude}\b",
-                    clause,
-                )
-                trailing = re.search(rf"(?i)\b{nude}\s+{escaped}\b", clause)
-                compound = re.search(
-                    rf"(?i)\b{escaped}\b.*\b(?:are|estão|estao|fica|ficam|estavam)\s+"
-                    rf"(?:\w+\s+){{0,2}}?{nude}\b",
-                    clause,
-                )
-                if direct or trailing or compound:
-                    if title not in found:
-                        found.append(title)
-                    break
-    return found
+    words = (
+        "is", "are", "was", "were", "está", "estao", "estava", "estavam",
+        "estão", "fica", "ficam", "now", "agora", "completely",
+        "completamente", "totally", "totalmente", "already", "já", "finally",
+        "finalmente", "both", "ambos", "and", "e", "the", "a", "o", "fully",
+        "still", "ainda", "stay", "stays", "remain", "remains", "keep", "keeps",
+        "not", "never", "no", "nao", "não", "nunca", "nem",
+    )
+    between = rf"(?P<between>(?:(?:{'|'.join(words)})\s+){{0,4}}?)"
+    after_state = rf"(?:(?:{'|'.join(words)})\s+){{0,4}}?"
+    state_verbs = r"(?:is|are|was|were|está|estao|estava|estavam|estão|fica|ficam)"
+    negation = re.compile(
+        r"(?i)\b(?:not|never|no|nao|não|nunca|nem)\b"
+        r"(?:\s+[\w'-]+){0,2}\s*$"
+    )
+    states: dict[int, bool] = {}
+    for index, names in enumerate(aliases):
+        other_names = [
+            other for other_index, other_aliases in enumerate(aliases)
+            if other_index != index for other in other_aliases
+        ]
+        matches: list[tuple[int, bool]] = []
+        for name in names:
+            escaped = re.escape(name)
+            direct_nude = rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*{between}{nude}\b"
+            trailing_nude = (
+                rf"(?i)\b(?P<between>(?:(?:not|never|no|nao|não|nunca|nem)\s+)?)"
+                rf"{nude}\s+{escaped}\b"
+            )
+            compound_nude = (
+                rf"(?i)\b{escaped}\b{coordinated}\s+"
+                rf"(?:are|were|estão|estao|estavam|ficam)\s+{between}{nude}\b"
+            )
+            direct_covered = rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*{between}{covered}\b"
+            compound_covered = (
+                rf"(?i)\b{escaped}\b{coordinated}\s+"
+                rf"(?:are|were|estão|estao|estavam|ficam)\s+{between}{covered}\b"
+            )
+            action_nude = (
+                rf"(?i)\b{escaped}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
+                rf"\b{state_verbs}\s+{after_state}){nude}\b"
+            )
+            action_covered = (
+                rf"(?i)\b{escaped}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
+                rf"\b{state_verbs}\s+{after_state}){covered}\b"
+            )
+            for pattern, covered_term, guard_people in (
+                (direct_nude, False, False), (trailing_nude, False, False),
+                (compound_nude, False, False), (direct_covered, True, False),
+                (compound_covered, True, False), (action_nude, False, True),
+                (action_covered, True, True),
+            ):
+                for match in re.finditer(pattern, text or ""):
+                    local = match.group("between") or ""
+                    if guard_people and any(re.search(
+                        rf"(?<!\w){re.escape(other)}(?!\w)", local, re.IGNORECASE,
+                    ) for other in other_names):
+                        continue
+                    negated = negation.search(local) is not None
+                    is_covered = not negated if covered_term else negated
+                    matches.append((match.end(), is_covered))
+        for _at, is_covered in sorted(matches):
+            states[index] = is_covered
+    nude_titles = {titles[index] for index, covered_state in states.items()
+                   if not covered_state and titles[index]}
+    covered_titles = {titles[index] for index, covered_state in states.items()
+                      if covered_state and titles[index]}
+    return nude_titles, covered_titles
+
+
+def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
+    """`(nude_moment - cobertos_order) ∪ nude_order`, sem cruzar sujeitos."""
+    nude_moment, _covered_moment = _nude_states(cards, moment)
+    nude_order, covered_order = _nude_states(cards, order)
+    found = (nude_moment - covered_order) | nude_order
+    return [title for card in cards
+            if (title := " ".join(str(card.get("title") or "").split())) in found]
 
 
 def sex_phrase(name: str, label: str, *, explicit: bool, card: dict | None = None) -> str:

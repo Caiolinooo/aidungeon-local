@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from app import context_builder as cb
-from app import db, npc_assets, npc_bonds, npc_chronicle, settings_store
+from app import db, npc_assets, npc_bonds, npc_chronicle, npc_gate, settings_store
 
 from conftest import add_action, make_adventure
 
@@ -21,11 +21,54 @@ def _update(card_id, target, delta, *, reason, evidence):
 
 
 def test_emotion_for_card_does_not_borrow_the_other_persons_mood():
-    elara = {"title": "Elara", "triggers": [], "sheet": "{}"}
-    lexi = {"title": "Lexi", "triggers": [], "sheet": "{}"}
+    elara = {"id": "elara", "title": "Elara", "triggers": [], "sheet": "{}"}
+    lexi = {"id": "lexi", "title": "Lexi", "triggers": [], "sheet": "{}"}
     text = "Elara está furiosa, mas sorri. Lexi está aliviada."
-    assert npc_bonds.emotion_for_card(elara, text, npc_bonds.DEFAULTS) == "anger"
-    assert npc_bonds.emotion_for_card(lexi, text, npc_bonds.DEFAULTS) == "joy"
+    emotions = npc_bonds.emotions_for_cards([elara, lexi], text)
+    assert emotions["elara"] == "anger"
+    assert emotions["lexi"] == "joy"
+
+
+def test_life_mood_canonical_neutral_wins_over_bonds_and_free_mood_still_maps():
+    neutral = {
+        "id": "elara", "title": "Elara", "triggers": [],
+        "sheet": json.dumps({"life": {"mood": "neutral"}, "bonds": {"fear": 90}}),
+    }
+    happy = {
+        "id": "lexi", "title": "Lexi", "triggers": [],
+        "sheet": json.dumps({"life": {"mood": "muito feliz"}}),
+    }
+    emotions = npc_bonds.emotions_for_cards([neutral, happy], "Elara and Lexi wait.")
+    assert emotions["elara"] == "neutral"
+    assert emotions["lexi"] == "joy"
+
+
+def test_reaction_and_initiative_persist_the_recovered_emotion(tmp_db):
+    adv = make_adventure(title="Emoção persistida")
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], title="Elara", type="character", sheet="{}")
+        payload = {
+            "action": "Elara is furious.",
+            "people": [{"name": "Elara", "card_id": card["id"], "aliases": ["Elara"]}],
+        }
+        result = npc_gate._normalize_payload({
+            "decision": "allow",
+            "reactions": [{"npc": "Elara", "card_id": card["id"], "reaction": "She smiles.", "emotion": "neutral"}],
+            "initiative": {"npc": "Elara", "card_id": card["id"], "line": "She smiles.", "emotion": "neutral"},
+        }, payload)
+        npc_bonds.apply_adjudication(
+            conn, adv["id"], result, seq=1, player_text=payload["action"])
+        sheet = npc_assets.parse_sheet(db.get_card(conn, adv["id"], card["id"])["sheet"])
+    assert sheet["visual_state"]["emotion"] == "anger"
+
+
+def test_player_card_is_not_selected_as_npc_for_voice():
+    cards = [
+        {"id": "elara", "title": "Elara", "type": "character", "triggers": [], "sheet": "{}"},
+        {"id": "caio", "title": "Caio", "type": "character", "triggers": [],
+         "player_username": "caio", "sheet": "{}"},
+    ]
+    assert npc_bonds.npc_emotion_for_line(cards, "Elara is afraid for Caio.") == "fear"
 
 
 def test_material_deltas_persist_and_words_alone_do_not(tmp_db):

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 
 from app import context_builder as cb
-from app import db, image_client, settings_store, world_facts
+from app import db, image_client, jobs, settings_store, world_facts
 from app.npc_chronicle import apply_chronicle
 
 from conftest import add_action, make_adventure
-from test_scene import _face
+from test_scene import _face, _reference_image_nodes, pipeline_transport
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
 
 
@@ -75,6 +76,61 @@ def test_elara_is_a_woman_and_caio_is_a_man():
     ) == ["Thalita Massoto"]
 
 
+def test_nude_names_combines_moment_and_order_without_crossing_people():
+    from app import npc_assets
+
+    cards = [{"title": "Caio"}, {"title": "Lexi"}, {"title": "Clara"}]
+    assert npc_assets.nude_names(
+        [{"title": "Elara"}],
+        "Elara desliza o vestido de seda e fica nua, a pele na luz da lua.",
+    ) == ["Elara"]
+    moment = "Caio is naked. Lexi is naked."
+    assert npc_assets.nude_names(cards, moment, "wide shot") == ["Caio", "Lexi"]
+    assert npc_assets.nude_names(cards, moment, "Caio is clothed") == ["Lexi"]
+    assert npc_assets.nude_names(cards, moment, "Clara was naked") == [
+        "Caio", "Lexi", "Clara",
+    ]
+    assert npc_assets.nude_names(cards, moment, "Caio is not naked") == ["Lexi"]
+    assert npc_assets.nude_names(
+        cards, "Caio observa enquanto Lexi fica nua.",
+    ) == ["Lexi"]
+    assert npc_assets.nude_names(
+        cards, "Caio não está nu; Lexi está nua.",
+    ) == ["Lexi"]
+    assert npc_assets.nude_names(
+        cards, "Caio was naked and Lexi is still naked.",
+    ) == ["Caio", "Lexi"]
+    assert npc_assets.nude_names(
+        cards, "Lexi is naked, no underwear.",
+    ) == ["Lexi"]
+    assert npc_assets.nude_names(
+        [{"title": "Thalita Massoto"}, {"title": "Thalita Smith"}],
+        "Thalita está nua.",
+    ) == []
+    assert npc_assets.nude_names(
+        [{"title": "Thalita"}, {"title": "Thalita Massoto"}],
+        "Thalita está nua.",
+    ) == ["Thalita"]
+    assert npc_assets.nude_names(
+        [{"title": "Elara"}], "Elara is naked.",
+        "Elara waits and is not naked",
+    ) == []
+    assert npc_assets.nude_names(
+        [{"title": "Elara"}], "Elara is clothed and then is naked.",
+    ) == ["Elara"]
+    assert npc_assets.nude_names(
+        [{"title": "Elara"}], "", "Elara is clothed; Caio is naked",
+    ) == []
+
+
+def test_negative_without_nudity_ban_handles_nested_weights():
+    from app import npc_assets
+
+    assert npc_assets.negative_without_nudity_ban(
+        "((nude:1.2)), naked:1.4, text, (blurry:1.3)",
+    ) == "text, (blurry:1.3)"
+
+
 def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     adv = make_adventure(plot_essentials="[Name: Caio]")
     effects = {"world_effects": [
@@ -123,6 +179,230 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert "skirt lifted" not in prompt
     assert "floating in air" not in prompt
     assert "rain over the apartment" not in prompt
+
+
+def test_explicit_see_sync_and_async_send_sanitized_negative(client, tmp_path):
+    adv = make_adventure()
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        db.set_setting(
+            conn, "image.negative_prompt",
+            json.dumps("(nude:1.2), naked:1.4, text, watermark"),
+        )
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Elara",
+            triggers=["Elara"], entry="A woman with black hair.",
+            portrait_prompt="black hair, green eyes",
+        )
+    _face(adv["id"], card["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "start", "Elara waits in the room.")
+    capture: dict = {}
+    transport = pipeline_transport("Elara waits naked in the room.", capture)
+
+    def wait_pending(job_id: str) -> None:
+        deadline = time.monotonic() + 5
+        while True:
+            with db.session() as conn:
+                status = db.get_job(conn, job_id)["status"]
+            if status == "pending":
+                return
+            assert status != "error"
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+    override_transport(client, transport)
+    try:
+        sync = client.post(
+            f"/api/adventures/{adv['id']}/see",
+            json={"action_seq": 0, "extra_prompt": "Elara is naked, no underwear"},
+        )
+        assert sync.status_code == 200, sync.text
+        queued = client.post(
+            f"/api/adventures/{adv['id']}/see?async=1&variation=1",
+            json={"action_seq": 0, "extra_prompt": "Elara is naked, no underwear"},
+        )
+        assert queued.status_code == 202, queued.text
+        wait_pending(queued.json()["job_id"])
+        assert jobs.process_pending(transport) == 1
+
+        with db.session() as conn:
+            db.set_setting(conn, "image.provider", json.dumps("openai_compatible"))
+        switched = client.post(
+            f"/api/adventures/{adv['id']}/see?async=1&variation=2",
+            json={"action_seq": 0, "extra_prompt": "Elara is naked, no underwear"},
+        )
+        assert switched.status_code == 202, switched.text
+        wait_pending(switched.json()["job_id"])
+        with db.session() as conn:
+            db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+        assert jobs.process_pending(transport) == 1
+    finally:
+        client.app.dependency_overrides.clear()
+
+    assert len(capture["graphs"]) == 3
+    for graph in capture["graphs"]:
+        qwen = next((node["inputs"] for node in graph.values()
+                     if node["class_type"] == "TextEncodeQwenImage21"), None)
+        if qwen is not None:
+            negative = qwen["negative_prompt"].lower()
+            assert "nude" not in negative
+            assert "naked" not in negative
+            assert "text" in negative
+            assert "watermark" in negative
+        else:
+            zero = next(node for node in graph.values()
+                        if node["class_type"] == "ConditioningZeroOut")
+            assert zero["inputs"]["conditioning"] == ["4", 0]
+    assert _reference_image_nodes(capture["graphs"][-1])
+
+
+def test_see_does_not_borrow_nudity_from_unresolved_player(client, tmp_path, monkeypatch):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Elara",
+            triggers=["Elara"], entry="A woman with black hair.",
+            portrait_prompt="black hair, green eyes",
+        )
+    _face(adv["id"], card["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "start", "Elara waits with you.")
+    _stub_painter(monkeypatch, tmp_path)
+    override_transport(client, make_v2_transport("Elara waits."))
+    try:
+        response = client.post(
+            f"/api/adventures/{adv['id']}/see",
+            json={"action_seq": 0, "extra_prompt": "Elara is clothed; Caio is naked"},
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    prompt = response.json()["prompt"]
+    assert "fully nude only for" not in prompt
+    assert "fully clothed, keep their current outfits: Elara" in prompt
+
+
+def test_previous_nudity_does_not_reactivate_explicit_outside_minor_guard(
+        client, tmp_path, monkeypatch):
+    adv = make_adventure()
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        lia = db.insert_card(
+            conn, adv["id"], type="character", title="Lia", triggers=["Lia"],
+            entry="A young woman.", portrait_prompt="short black hair",
+            sheet=json.dumps({"minor": True, "age": 16}),
+        )
+        ana = db.insert_card(
+            conn, adv["id"], type="character", title="Ana", triggers=["Ana"],
+            entry="An adult woman.", portrait_prompt="long red hair",
+        )
+    _face(adv["id"], lia["id"], PNG_BYTES)
+    _face(adv["id"], ana["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "start", "Lia and Ana are naked.")
+    add_action(adv["id"], 1, "do", "Lia waits.")
+    add_action(adv["id"], 2, "do", "Ana waves.")
+    _stub_painter(monkeypatch, tmp_path)
+    override_transport(client, make_v2_transport("Lia waits while Ana waves."))
+    try:
+        response = client.post(
+            f"/api/adventures/{adv['id']}/see", json={"action_seq": 2},
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    with db.session() as conn:
+        image = db.get_image(conn, response.json()["id"])
+    assert "nude" in image["negative_prompt"].lower()
+    assert "fully clothed" in response.json()["prompt"].lower()
+
+
+def test_fifth_person_cannot_reenter_see_without_frame_validation(
+        client, tmp_path, monkeypatch):
+    _stub_painter(monkeypatch, tmp_path)
+    override_transport(client, make_v2_transport("The group waits."))
+    try:
+        adult = make_adventure(title="Quinto adulto")
+        with db.session() as conn:
+            db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+            cards = []
+            for name in ("Ada", "Elara", "Lexi", "Bela", "Caio"):
+                cards.append(db.insert_card(
+                    conn, adult["id"], type="character", title=name, triggers=[name],
+                    entry="An adult.", portrait_prompt=f"{name} portrait",
+                ))
+        for card in cards:
+            _face(adult["id"], card["id"], PNG_BYTES)
+        add_action(adult["id"], 0, "start",
+                   "Ada, Elara, Lexi and Bela are naked. Caio is clothed.")
+        response = client.post(f"/api/adventures/{adult['id']}/see", json={"action_seq": 0})
+        assert response.status_code == 200, response.text
+        prompt = response.json()["prompt"]
+        assert "Exactly 4 people" in prompt
+        assert "Exactly 5 people" not in prompt
+        assert "fully clothed" in prompt
+
+        minor = make_adventure(title="Quinto menor")
+        with db.session() as conn:
+            db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+            cards = []
+            for name in ("Ada", "Elara", "Lexi", "Bela", "Minor"):
+                cards.append(db.insert_card(
+                    conn, minor["id"], type="character", title=name, triggers=[name],
+                    entry="A person.", portrait_prompt=f"{name} portrait",
+                    sheet=json.dumps({"minor": True, "age": 16}) if name == "Minor" else "{}",
+                ))
+        for card in cards:
+            _face(minor["id"], card["id"], PNG_BYTES)
+        add_action(minor["id"], 0, "start", "Ada, Elara, Lexi, Bela and Minor are naked.")
+        response = client.post(
+            f"/api/adventures/{minor['id']}/see?async=1", json={"action_seq": 0})
+        if response.status_code == 202:
+            deadline = time.monotonic() + 5
+            while True:
+                with db.session() as conn:
+                    job = db.get_job(conn, response.json()["job_id"])
+                    status = job["status"]
+                if status == "pending":
+                    break
+                assert status != "error"
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            assert "Minor" not in job["payload"]["prompt"]
+            assert "Exactly 4 people" in job["payload"]["prompt"]
+        else:
+            assert response.status_code == 422
+            assert response.json()["error"]["code"] == "minor"
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_dead_minor_cannot_reenter_after_frame_decision(client, tmp_path, monkeypatch):
+    adv = make_adventure(title="Morto e menor")
+    with db.session() as conn:
+        db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
+        ada = db.insert_card(
+            conn, adv["id"], type="character", title="Ada", triggers=["Ada"],
+            entry="An adult.", portrait_prompt="Ada portrait",
+        )
+        minor = db.insert_card(
+            conn, adv["id"], type="character", title="Minor", triggers=["Minor"],
+            entry="A dead person.", portrait_prompt="Minor portrait",
+            sheet=json.dumps({"status": "dead", "minor": True, "age": 16}),
+        )
+    _face(adv["id"], ada["id"], PNG_BYTES)
+    _face(adv["id"], minor["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "start", "Ada is naked. Minor is naked.")
+    _stub_painter(monkeypatch, tmp_path)
+    override_transport(client, make_v2_transport("Ada waits."))
+    try:
+        response = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
+    finally:
+        client.app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    prompt = response.json()["prompt"]
+    assert "Exactly 1 people" in prompt
+    assert "Minor" not in prompt
 
 
 def test_opening_does_not_invent_a_room_or_obedient_elara(tmp_db):

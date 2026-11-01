@@ -783,8 +783,15 @@ def test_prompt_mood_follow_visual_state_not_bond_numbers():
     assert "current reaction" in folded
     assert "42" not in prompt
     assert "trust" not in folded
-    assert scene._cast_mood("Ada smiles, happy to see you.", "Ada", json.loads(card["sheet"])) == "wary"
-    assert scene._cast_mood("Ada smiles, happy to see you.", "Ada", {}) == "happy"
+    assert scene._cast_moods([card], "Ada smiles, happy to see you.")["Ada"] == "wary"
+    assert scene._cast_moods(
+        [{"title": "Ada", "sheet": "{}"}], "Ada smiles, happy to see you.",
+    )["Ada"] == "happy"
+    moods = scene._cast_moods(
+        [{"title": "Ada", "sheet": "{}"}, {"title": "Lexi", "sheet": "{}"}],
+        "Ada is happy and Lexi is afraid.",
+    )
+    assert moods == {"Ada": "happy", "Lexi": "fear"}
 
     bare = {
         "title": "Ada",
@@ -880,4 +887,32 @@ def test_visual_state_paints_the_backdrop_once_until_it_changes(client, tmp_path
     assert "draws a sword" in live[0]["payload"]["prompt"].lower()
     assert "angry" in live[0]["payload"]["prompt"].lower()
     assert stored["portrait_anchor_id"] == image["id"]
+
+
+def test_long_identity_prompt_preserves_action_location_and_per_person_clothing():
+    cards = []
+    for name in ("Ada", "Elara", "Lexi", "Caio"):
+        cards.append({
+            "title": name,
+            "type": "character",
+            "portrait_prompt": "silver hair, sharp eyes, " * 30,
+            "portrait_image_id": f"{name}-img",
+            "sheet": json.dumps({
+                "reference": {"turnaround": {}},
+                "visual_state": {
+                    "action": "raises a detailed lantern and turns toward the crowd",
+                    "emotion": "anger", "pose": "half turned", "seq": 1,
+                },
+            }),
+        })
+    prompt, people = scene._prompt(
+        "The Ancient Tavern", "A crowded room.", "cinematic", "night", cards,
+        "Ada is naked and dances on the central tavern table.",
+    )
+    assert people is True
+    assert len(prompt) <= 1400
+    assert "dances on the central tavern table" in prompt
+    assert "The Ancient Tavern" in prompt
+    assert "Ignore outfits only for Ada" in prompt
+    assert "keep their current outfits: Elara, Lexi, Caio" in prompt
 

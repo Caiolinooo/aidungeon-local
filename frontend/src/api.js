@@ -514,8 +514,8 @@ export const api = {
     },
     // POST /tts: sucesso = bytes audio/mpeg (não-JSON!) → blob; erro = envelope
     // JSON {"error": {...}} (voice inválida, texto longo, voice_disabled etc.).
-    // extra: { emotion, adventureId, signal } — a emoção da linha e, se a linha
-    // não disser, a ficha do NPC citado nessa aventura.
+    // extra: { emotion, adventureId, signal } — com NPC identificado, usa a
+    // emoção atribuída a ele; sem NPC, linha global → ficha → dica.
     tts: async (text, voice, extra) => {
       const res = await postTts('/tts', text, voice, extra)
       const contentType = res.headers.get('content-type') || ''

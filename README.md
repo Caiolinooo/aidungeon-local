@@ -86,10 +86,10 @@ OpenAI-compatível.
   e deltas sem reaplicá-los; o `cue` interno não é persistido nem exposto.
 - **Emoção contextual por pessoa**: narrador, adjudicador e vida interior separam
   os sentimentos de cada NPC, preservam emoções mistas e respeitam negações.
-  Voz e cena usam a última oração emocional da pessoa: raiva contida não vira
-  alegria, lágrimas de alívio não viram luto e “sem raiva” não vira raiva.
-  Se o adjudicador devolver `neutral` contra uma emoção explícita da ação, a
-  normalização restaura a emoção da pessoa referida, inclusive por pronome.
+  Um resolvedor único por sujeitos/aliases trata coordenação, contraste e pronome
+  com antecedente único. TTS usa a emoção do NPC identificado antes de varredura
+  global/hint; reação e iniciativa compartilham a proteção contra `neutral`
+  indevido, sem restaurar emoção que a própria fala encerrou.
 - **Relações com evidência**: deltas direcionais NPC→jogador e NPC→NPC usam
   fatos materiais do turno, com limites, histórico e idempotência por `seq`.
   Conversa trivial não altera vínculo; romance só avança com reciprocidade.
@@ -98,6 +98,10 @@ OpenAI-compatível.
   retratos usam img2img da âncora e cenas usam a descrição visual do elenco.
   O avatar usa MP4 do próprio retrato quando a animação está pronta e imagem
   estática como fallback/reduced motion; o PCM continua sem fingir lip-sync.
+- **Geração visual coerente**: See síncrono/assíncrono envia e cacheia o mesmo
+  negative; nudez e roupa são atribuídas por pessoa, sem ordem global de despir.
+  Backdrop usa a referência efetiva na cache key e replaneja âncoras se o provider
+  mudar antes do worker. Prompts longos preservam ação e lugar atuais.
 
 ## Funcionalidades (v0.10.0)
 

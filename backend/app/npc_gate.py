@@ -25,7 +25,9 @@ import re
 from typing import Any
 
 from app import body_state, db, llm_client, npc_assets, npc_bonds, npc_life
-from app.voice_emotion import EMOTIONS, canonical_emotion, emotion_near_name
+from app.voice_emotion import (
+    EMOTIONS, canonical_emotion, emotion_is_negated, emotions_for_subjects,
+)
 
 log = logging.getLogger("aidungeon.npc_gate")
 
@@ -252,6 +254,7 @@ def _card_context(card: dict, *, present: bool) -> dict:
     return {
         "card_id": card.get("id"),
         "name": card.get("title") or "Alguém",
+        "aliases": npc_bonds._names(card),
         "present": present,
         "profile": {
             "class": sheet.get("class") or "",
@@ -525,6 +528,14 @@ def _visual_fields(raw: dict) -> dict[str, str]:
     return extra
 
 
+def _visual_with_explicit(raw: dict, local_text: str, explicit: str | None) -> dict[str, str]:
+    visual = _visual_fields(raw)
+    if visual.get("emotion", "neutral") == "neutral" \
+            and explicit and not emotion_is_negated(local_text, explicit):
+        visual["emotion"] = explicit
+    return visual
+
+
 def _roster_ids(payload: dict) -> tuple[set[str], set[str]]:
     people = payload.get("people") if isinstance(payload.get("people"), list) else []
     roster = {
@@ -545,6 +556,14 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
     decision = str(data.get("decision") or "").strip().lower()
     if decision not in DECISIONS:
         decision = "allow"
+    subjects = {
+        str(item.get("card_id")): list(item.get("aliases") or [item.get("name")])
+        for item in names
+    }
+    player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
+    if player.get("name"):
+        subjects[str(player.get("card_id") or "__player__")] = [str(player["name"])]
+    explicit_emotions = emotions_for_subjects(str(payload.get("action") or ""), subjects)
     reactions = []
     for raw in (data.get("reactions") or [])[:24]:
         if not isinstance(raw, dict):
@@ -557,14 +576,10 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
         line = " ".join(str(raw.get("line") or "").split())[:300]
         if not reaction and not line:
             continue
-        visual = _visual_fields(raw)
-        if visual.get("emotion", "neutral") == "neutral":
-            explicit = emotion_near_name(
-                str(payload.get("action") or ""), str(person.get("name") or ""),
-                subject_only=True,
-            )
-            if explicit:
-                visual["emotion"] = explicit
+        visual = _visual_with_explicit(
+            raw, " ".join((reaction, line)),
+            explicit_emotions.get(str(person.get("card_id"))),
+        )
         reactions.append({
             "npc": person.get("name") or "Alguém",
             "card_id": person.get("card_id"),
@@ -583,7 +598,10 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
                 "npc": person.get("name") or "Alguém",
                 "card_id": person.get("card_id"),
                 "line": line,
-                **_visual_fields(raw_beat),
+                **_visual_with_explicit(
+                    raw_beat, line,
+                    explicit_emotions.get(str(person.get("card_id"))),
+                ),
             }
     outcome = " ".join(str(data.get("outcome") or "").split())[:900]
     cue = " ".join(str(data.get("cue") or "").split())[:900]

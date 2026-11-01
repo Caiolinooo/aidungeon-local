@@ -537,7 +537,10 @@ def emotion_from_bonds(bonds: dict[str, int]) -> str:
 
 
 def _names(card: dict) -> list[str]:
-    raw = [card.get("title") or "", *(card.get("triggers") or [])]
+    title = " ".join(str(card.get("title") or "").split())
+    raw = [title, *(card.get("triggers") or [])]
+    if len(title.split()) > 1:
+        raw.append(title.split()[0])
     names: list[str] = []
     for item in raw:
         name = " ".join(str(item).split()).strip()
@@ -577,37 +580,41 @@ def characters_in_text(cards: list[dict], text: str) -> list[dict]:
     return [card for _pos, card in found]
 
 
-def emotion_for_card(card: dict, text: str, bonds: dict[str, int]) -> str:
-    """O humor simulado vence a prosa; sem humor, a prosa vence o número."""
-    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-    life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
-    mood = str(life.get("mood") or "").strip()
-    if mood:
-        mapped = emotion_from_text(mood)
-        if mapped:
-            return mapped
-    for name in _names(card):
-        found = voice_emotion.emotion_near_name(text, name)
-        if found:
-            return found
-    return emotion_from_bonds(bonds)
+def emotions_for_cards(cards: list[dict], text: str) -> dict[str, str]:
+    """Humor persistente, atribuição na cena e bonds, nessa ordem."""
+    attributed = voice_emotion.emotions_for_subjects(
+        text,
+        {
+            str(card.get("id") or card.get("title")): _names(card)
+            for card in cards
+            if (card.get("type") or "character") == "character"
+        },
+    )
+    resolved: dict[str, str] = {}
+    for card in cards:
+        key = str(card.get("id") or card.get("title"))
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        life = sheet.get("life") if isinstance(sheet.get("life"), dict) else {}
+        mood = str(life.get("mood") or "").strip()
+        bonds = read_bonds(sheet)
+        emotion = canonical_emotion(mood) or emotion_from_text(mood)
+        resolved[key] = emotion or attributed.get(key) or emotion_from_bonds(bonds)
+    return resolved
 
 
 def npc_emotion_for_line(cards: list[dict], text: str) -> str | None:
-    """Emoção de ficha do NPC citado por último na linha, se não for neutra."""
+    """Emoção resolvida do NPC citado por último, inclusive neutral."""
+    emotions = emotions_for_cards(cards, text)
     best_at = -1
     best: str | None = None
-    for card in characters_in_text(cards, text):
-        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-        bonds = read_bonds(sheet)
-        emotion = emotion_from_bonds(bonds)
-        if emotion == "neutral":
-            continue
+    npc_cards = [card for card in cards if not card.get("player_username")]
+    for card in characters_in_text(npc_cards, text):
+        key = str(card.get("id") or card.get("title"))
         for name in _names(card):
             at = _last_mention(text, name)
             if at >= best_at:
                 best_at = at
-                best = emotion
+                best = emotions.get(key) or "neutral"
     return best
 
 
@@ -617,7 +624,7 @@ def _living(sheet: dict) -> bool:
 
 
 
-def _moment_line(card: dict, text: str) -> str:
+def _moment_line(card: dict, emotion: str) -> str:
     sheet = npc_assets.parse_sheet(card.get("sheet") or "")
     bonds = read_bonds(sheet)
     name = " ".join(str(card.get("title") or "NPC").split())[:40] or "NPC"
@@ -625,12 +632,10 @@ def _moment_line(card: dict, text: str) -> str:
     if status == "dead":
         emotion, want, stance = "sadness", "stay dead and not act", "resist"
     elif status == "missing":
-        emotion = emotion_for_card(card, text, bonds)
         if emotion == "neutral":
             emotion = "sadness"
         want, stance = "stay out of the scene", "flee"
     else:
-        emotion = emotion_for_card(card, text, bonds)
         stance = stance_of(bonds, obedience=_obedience_of(card))
         want = _WANTS[stance]
     numbers = " ".join(f"{key} {bonds[key]}" for key in BOND_KEYS)
@@ -645,7 +650,11 @@ def format_moment(cards: list[dict], scene_text: str) -> str:
     if not present:
         return ""
     lines = [f"{MOMENT_MARKER} {_MOMENT_CUE}"]
-    lines.extend(_moment_line(card, scene_text) for card in present)
+    emotions = emotions_for_cards(present, scene_text)
+    lines.extend(
+        _moment_line(card, emotions.get(str(card.get("id") or card.get("title")), "neutral"))
+        for card in present
+    )
     return "\n".join(lines)
 
 def _obedience_of(card: dict) -> str:

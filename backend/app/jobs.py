@@ -412,28 +412,51 @@ def enqueue_incomplete_sheets(conn, adventure_id: str) -> list[dict]:
     return queued
 
 
-def _reference_blobs(job: dict, *, people: bool) -> list[bytes]:
-    """Recarrega as âncoras persistidas. A ordem e os hashes são os do enqueue.
+def _reference_blobs(job: dict, *, people: bool, provider: str) -> list[bytes]:
+    """Recarrega âncoras persistidas e replaneja quando o provider mudou.
 
     Sem a chave no payload, um fundo sem gente segue sem referência. Cena com
     gente sem ids, arquivo sumido ou pixels diferentes falha: não pinta parcial.
     """
     payload = job.get("payload") or {}
-    if "reference_image_ids" not in payload:
-        if people:
+    provider = str(provider or "sdwebui")
+    planned_provider = str(payload.get("reference_provider") or provider)
+    if planned_provider != provider:
+        from app import scene
+
+        card_ids = [str(item) for item in (payload.get("cast_card_ids") or [])]
+        if people and not card_ids:
             raise likeness.portrait_required()
-        return []
-    ids = [str(item) for item in (payload.get("reference_image_ids") or [])]
-    if people and not ids:
-        raise likeness.portrait_required()
-    with db.session() as conn:
-        blobs = (
-            likeness.load_reference_images(conn, job["adventure_id"], ids)
-            if ids else []
-        )
-    found = likeness.reference_hashes(blobs)
-    if "reference_hashes" in payload and list(payload.get("reference_hashes") or []) != found:
-        raise likeness.portrait_required()
+        with db.session() as conn:
+            cards = [db.get_card(conn, job["adventure_id"], card_id)
+                     for card_id in card_ids]
+            if any(card is None for card in cards):
+                raise likeness.portrait_required()
+            plan = scene.cast_reference_plan(
+                conn, job["adventure_id"], cards,
+                provider=provider, explicit=bool(payload.get("explicit")),
+            )
+        ids = list(plan["reference_image_ids"])
+        blobs = list(plan["blobs"])
+        payload["reference_image_ids"] = ids
+        payload["reference_hashes"] = list(plan["reference_hashes"])
+        payload["reference_provider"] = provider
+    else:
+        if "reference_image_ids" not in payload:
+            if people:
+                raise likeness.portrait_required()
+            return []
+        ids = [str(item) for item in (payload.get("reference_image_ids") or [])]
+        if people and not ids:
+            raise likeness.portrait_required()
+        with db.session() as conn:
+            blobs = (
+                likeness.load_reference_images(conn, job["adventure_id"], ids)
+                if ids else []
+            )
+        found = likeness.reference_hashes(blobs)
+        if "reference_hashes" in payload and list(payload.get("reference_hashes") or []) != found:
+            raise likeness.portrait_required()
     if payload.get("explicit"):
         return likeness.identity_face_pngs(blobs)
     return blobs
@@ -1048,7 +1071,10 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     )
     img_cfg["negative_prompt"] = base_negative
     references = (
-        _reference_blobs(job, people=bool(payload.get("include_people")))
+        _reference_blobs(
+            job, people=bool(payload.get("include_people")),
+            provider=str(img_cfg.get("provider") or "sdwebui"),
+        )
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
     cache_key = backdrop_cache_key(
@@ -1057,13 +1083,14 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         explicit=bool(payload.get("explicit")),
         reference_images=references or None,
     )
+    effective_ref = f"{job['adventure_id']}:{cache_key[:40]}"
     with db.session() as conn:
         cached = db.find_cached_image(
             conn, job["adventure_id"], kind="backdrop",
-            ref_id=job["ref_id"] or "", cache_key=cache_key,
+            ref_id=effective_ref, cache_key=cache_key,
         )
         if cached:
-            return {"image": db.image_ref(cached), "ref_id": job["ref_id"],
+            return {"image": db.image_ref(cached), "ref_id": effective_ref,
                     "reused": True}
     image_id = db.new_id()
     meta = image_client.generate_image(
@@ -1080,7 +1107,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
                 file_path=meta["file_path"], prompt=prompt,
                 negative_prompt=negative,
                 provider=meta["provider"], width=meta["width"], height=meta["height"],
-                image_id=image_id, kind="backdrop", ref_id=job["ref_id"] or "",
+                image_id=image_id, kind="backdrop", ref_id=effective_ref,
                 cache_key=cache_key, job_id=job["id"],
             )
     except db.JobCanceled:
@@ -1089,7 +1116,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     except sqlite3.IntegrityError:
         _raise_if_gone(job["adventure_id"], meta["file_path"])
         raise
-    return {"image": db.image_ref(image), "ref_id": job["ref_id"]}
+    return {"image": db.image_ref(image), "ref_id": effective_ref}
 
 
 def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
@@ -1449,7 +1476,10 @@ def _execute_see(job: dict, transport: Any) -> dict:
     negative_prompt = ", ".join(
         part for part in (img_cfg["negative_prompt"], negative_extra) if part)
     references = (
-        _reference_blobs(job, people=False)
+        _reference_blobs(
+            job, people=False,
+            provider=str(img_cfg.get("provider") or "sdwebui"),
+        )
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
     cache_key = image_client.request_key(

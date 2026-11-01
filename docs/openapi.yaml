@@ -2654,8 +2654,9 @@ paths:
       description: |
         Chama `POST {voice.base_url}/audio/speech` (Supertonic, formato OpenAI
         TTS) e devolve os bytes em passthrough. `voice` omitida (null) usa
-        `narrator_voice` da config. `emotion` é dica; a linha vence e, sem
-        palavra de emoção, vale a ficha do NPC citado em `adventure_id`.
+        `narrator_voice` da config. `emotion` é dica; com NPC identificado em
+        `adventure_id`, a emoção atribuída a ele vence a varredura global e a
+        dica. Sem NPC, a linha global vence.
         A emoção escolhida volta no header `X-Voice-Emotion` e no campo
         `instructions` do provider. Após uma síntese completa, a mesma configuração,
         voz, texto e emoção reutiliza o MP3 de um LRU de 16 entradas. Com `drama3_enabled` falso o texto falado
@@ -6287,7 +6288,8 @@ components:
           nullable: true
           description: >
             Dica de emoção (joy, anger, fear, sadness, tenderness, surprise,
-            disgust, neutral; apelidos happy/sad/angry/love também). A linha
+            disgust, neutral; apelidos happy/sad/angry/love também). Com NPC
+            identificado, vale a emoção atribuída a ele; sem NPC, a linha global
             vence. Omitida, o servidor escolhe.
         adventure_id:
           type: string

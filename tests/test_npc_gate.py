@@ -31,6 +31,7 @@ def test_explicit_action_emotion_survives_a_neutral_llm_reaction():
     cases = [
         ("Elara", "You smile at Elara. She is furious but smiles to reassure you.", "anger"),
         ("Lexi", "You ask Lexi whether she trusts you. She likes you but pretends indifference.", "tenderness"),
+        ("A Donzela da Noite", "Lexi está furiosa.", "anger"),
     ]
     for name, action, expected in cases:
         result = npc_gate._normalize_payload({
@@ -41,7 +42,7 @@ def test_explicit_action_emotion_survives_a_neutral_llm_reaction():
             }],
         }, {
             "action": action,
-            "people": [{"name": name, "card_id": name.lower()}],
+            "people": [{"name": name, "card_id": name.lower(), "aliases": [name, "Lexi"]}],
         })
         assert result["reactions"][0]["emotion"] == expected
 
@@ -56,6 +57,27 @@ def test_explicit_action_emotion_survives_a_neutral_llm_reaction():
         "people": [{"name": "Elara", "card_id": "elara"}],
     })
     assert result["reactions"][0]["emotion"] == "neutral"
+
+
+def test_initiative_recovers_explicit_emotion_but_not_after_it_ends():
+    payload = {
+        "action": "Elara is furious.",
+        "people": [{"name": "Elara", "card_id": "elara", "aliases": ["Elara"]}],
+    }
+    result = npc_gate._normalize_payload({
+        "decision": "allow",
+        "reactions": [{"npc": "Elara", "card_id": "elara", "reaction": "She does not move.", "emotion": "neutral"}],
+        "initiative": {"npc": "Elara", "card_id": "elara", "line": "I am not leaving.", "emotion": "neutral"},
+    }, payload)
+    assert result["reactions"][0]["emotion"] == "anger"
+    assert result["initiative"]["emotion"] == "anger"
+    result = npc_gate._normalize_payload({
+        "decision": "allow",
+        "reactions": [{"npc": "Elara", "card_id": "elara", "reaction": "She smiles.", "emotion": "neutral"}],
+        "initiative": {"npc": "Elara", "card_id": "elara", "line": "She is no longer angry.", "emotion": "neutral"},
+    }, payload)
+    assert result["reactions"][0]["emotion"] == "anger"
+    assert result["initiative"]["emotion"] == "neutral"
 
 
 def test_ensure_saved_is_idempotent_and_creates_body_state(tmp_db):

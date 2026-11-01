@@ -1,4 +1,4 @@
-"""Emoção da fala, escolhida da linha e, se a linha não disser, do NPC.
+"""Emoção da fala, atribuída ao NPC ou escolhida da linha quando não há NPC.
 
 O servidor de voz de hoje (Supertonic 3) não atua. A direção em colchetes
 é o formato do Drama-3 (Fish Audio): um recado curto antes das palavras,
@@ -33,7 +33,7 @@ _KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("anger", (
         "raiva", "anger", "angry", "rage", "furious", "fury", "furios*",
-        "irritad*", "irritated", "grita*", "bravo", "brava",
+        "irritad*", "irritat*", "grita*", "bravo", "brava",
     )),
     ("sadness", (
         "triste*", "sad", "sadness", "chora*", "cry", "cries", "crying",
@@ -75,62 +75,76 @@ def canonical_emotion(value: str | None) -> str | None:
     return None
 
 
-def _hit(text: str, needle: str) -> bool:
-    prefix = needle.endswith("*")
-    word = needle[:-1] if prefix else needle
-    if not word:
-        return False
-    if prefix:
-        pattern = rf"(?<!\w){re.escape(word)}"
-    else:
-        pattern = rf"(?<!\w){re.escape(word)}(?!\w)"
-    return re.search(pattern, text) is not None
-
-
 # Casos que o vocabulário simples não cobre: alívio, luto, ansiedade e afeto.
 _SPECIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("joy", re.compile(
         r"(?i)(?:lágrimas?\s+de\s+(?:alegria|felicidade)|tears?\s+of\s+joy|"
         r"alívio|aliviad|relief|relieved|felicidade)")),
-    ("sadness", re.compile(r"(?i)(?:\bluto\b|\bpesar\b|grief|desculp|sorry)")),
-    ("fear", re.compile(r"(?i)(?:ansiedade|ansios|nervos|preocup|anxious|anxiety)")),
+    ("sadness", re.compile(
+        r"(?i)(?:\bluto\b|\bpesar\b|grief|griev|remors|sorry|"
+        r"pede\s+desculpas|desculpa-se|arrepend)")),
+    ("fear", re.compile(
+        r"(?i)(?:ansiedade|ansios|nervos|nervous|preocup|"
+        r"anxious|anxiety|worried|worry)")),
     ("tenderness", re.compile(
-        r"(?i)(?:\bgost(?:a|o|ava|ou)\b|\blikes?\b|\bliked\b|"
-        r"\bafeto\b|paixão|apaixon)")),
+        r"(?i)(?:\bgost(?:a|o|ava|ou)\b|\blikes\b|\bliked\b|"
+        r"\blike\s+(?:you|him|her|them)\b|\bafeto\b|affection|"
+        r"paixão|apaixon)")),
 )
 
-_NEGATED_EMOTIONS = {
-    "joy": r"(?:alegria|felicidade|feliz|happy|joy)",
-    "anger": r"(?:raiva|anger|angry|furious|fury)",
-    "fear": r"(?:medo|fear|afraid|anxiety|ansiedade|preocup)",
-    "sadness": r"(?:tristeza|sadness|sad)",
-    "tenderness": r"(?:amor|love|gost(?:a|o|ava|ou)|likes?|liked)",
-    "surprise": r"(?:surpresa|surprise)",
-    "disgust": r"(?:nojo|disgust)",
-}
+_EXPRESSION_NEEDLES = {"sorri*", "smile*", "laugh*"}
+_NEGATION_BEFORE = re.compile(
+    r"(?i)(?:\b(?:not|no|never|without|nao|não|nunca|nem|sem)\b|n't)"
+    r"\s*(?:[\wÀ-ÿ'-]+\s*){0,2}$"
+)
 
 
-def _negated(text: str, emotion: str) -> bool:
-    needle = _NEGATED_EMOTIONS[emotion]
-    return re.search(
-        rf"(?i)\b(?:not|no|never|nao|não|nunca|nem|sem)\s+"
-        rf"(?:\w+\s+){{0,2}}{needle}",
-        text,
-    ) is not None
+def _needle_pattern(needle: str) -> re.Pattern[str]:
+    prefix = needle.endswith("*")
+    word = needle[:-1] if prefix else needle
+    suffix = "" if prefix else r"(?!\w)"
+    return re.compile(rf"(?i)(?<!\w){re.escape(word)}{suffix}")
+
+
+def _negated_at(text: str, start: int) -> bool:
+    prefix = text[:start]
+    boundary = list(re.finditer(r"(?i)\b(?:only|só)\b", prefix))
+    if boundary:
+        prefix = prefix[boundary[-1].end():]
+    return _NEGATION_BEFORE.search(prefix) is not None
+
+
+def _first_unnegated(text: str, pattern: re.Pattern[str]) -> bool:
+    return any(not _negated_at(text, match.start()) for match in pattern.finditer(text))
+
+
+def emotion_is_negated(text: str, emotion: str) -> bool:
+    """True quando uma ocorrência dessa emoção está negada localmente."""
+    for candidate, pattern in _SPECIAL_PATTERNS:
+        if candidate == emotion and any(
+            _negated_at(text, match.start()) for match in pattern.finditer(text)
+        ):
+            return True
+    for candidate, needles in _KEYWORDS:
+        if candidate != emotion:
+            continue
+        for needle in needles:
+            pattern = _needle_pattern(needle)
+            if any(_negated_at(text, match.start()) for match in pattern.finditer(text)):
+                return True
+    return False
 
 
 def _emotion_in_text(text: str, *, include_expression: bool = True) -> str | None:
     for emotion, pattern in _SPECIAL_PATTERNS:
-        if pattern.search(text) and not _negated(text, emotion):
+        if _first_unnegated(text, pattern):
             return emotion
     for emotion, needles in _KEYWORDS:
-        if _negated(text, emotion):
-            continue
-        if not include_expression and emotion == "joy":
-            needles = tuple(needle for needle in needles
-                            if needle not in {"sorri*", "smile*", "laugh*"})
-        if any(_hit(text, needle) for needle in needles):
-            return emotion
+        for needle in needles:
+            if not include_expression and needle in _EXPRESSION_NEEDLES:
+                continue
+            if _first_unnegated(text, _needle_pattern(needle)):
+                return emotion
     return None
 
 
@@ -149,42 +163,131 @@ def emotion_from_text(text: str) -> str | None:
     return _emotion_in_text(folded)
 
 
-def emotion_near_name(text: str, name: str, *, subject_only: bool = False) -> str | None:
-    """Última emoção da pessoa, incluindo pronome imediatamente referente."""
-    result = None
-    referenced = False
+_SUBJECT_SPLIT = re.compile(r"(?i)\b(mas|porém|contudo|however|but|and|e)\b")
+_PRONOUN_START = re.compile(r"(?i)\s*(?:she|he|they|ela|ele)\b")
+_PREDICATE = re.compile(
+    r"(?i)\b(?:is|are|was|were|feels?|has|had|likes?|looks?|seems?|"
+    r"está|estao|estão|estava|sente|tem|fica|ficam|gosta|sorri|parece)\b"
+)
+_CAPITALIZED = re.compile(r"(?<!\w)[A-ZÀ-Ý][\wÀ-ÿ'-]*")
+_NAME_STOPWORDS = {
+    "A", "An", "And", "But", "El", "Ela", "Ele", "E", "He", "I", "Mas",
+    "She", "The", "They", "You",
+}
+
+
+def _alias_patterns(subjects: dict[str, list[str]]) -> list[tuple[str, re.Pattern[str]]]:
+    owners: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for subject, aliases in subjects.items():
+        for alias in aliases:
+            folded = " ".join(str(alias or "").casefold().split())
+            if len(folded) < 2:
+                continue
+            if folded in owners and owners[folded] != subject:
+                ambiguous.add(folded)
+            else:
+                owners[folded] = subject
+    patterns = []
+    for alias, subject in owners.items():
+        if alias in ambiguous:
+            continue
+        body = r"\s+".join(re.escape(part) for part in alias.split())
+        patterns.append((subject, re.compile(rf"(?i)(?<!\w){body}(?!\w)")))
+    return patterns
+
+
+def _segments(sentence: str):
+    start = 0
+    connector = ""
+    for match in _SUBJECT_SPLIT.finditer(sentence):
+        yield connector, sentence[start:match.start()]
+        connector = match.group(1).casefold()
+        start = match.end()
+    yield connector, sentence[start:]
+
+
+def _mentions(clause: str, patterns: list[tuple[str, re.Pattern[str]]]):
+    mentioned: set[str] = set()
+    subjects: set[str] = set()
+    spans: list[tuple[int, int]] = []
+    for subject, pattern in patterns:
+        for match in pattern.finditer(clause):
+            mentioned.add(subject)
+            spans.append(match.span())
+            before = clause[:match.start()].strip()
+            after = clause[match.end():]
+            if not before or re.match(r"(?i)\s*,?\s*(?:who|que)\b", after):
+                subjects.add(subject)
+    unknown = False
+    for match in _CAPITALIZED.finditer(clause):
+        if match.group(0) in _NAME_STOPWORDS:
+            continue
+        if not any(start <= match.start() < end for start, end in spans):
+            unknown = True
+            break
+    return mentioned, subjects, unknown
+
+
+def emotions_for_subjects(text: str, subjects: dict[str, list[str]]) -> dict[str, str]:
+    """Última emoção atribuída a cada sujeito, numa única varredura."""
+    patterns = _alias_patterns(subjects)
+    found: dict[str, str] = {}
+    antecedent: set[str] = set()
     for sentence in re.split(r"(?<=[.!?…])\s+", text or ""):
-        clauses = re.split(r"(?i)\b(?:mas|porém|contudo|however|but)\b|;", sentence)
-        for clause in clauses:
-            mentioned = re.search(
-                rf"(?<!\w){re.escape(name)}(?!\w)", clause, re.IGNORECASE,
-            ) is not None
-            named = mentioned
-            if subject_only:
-                named = re.match(
-                    rf"(?i)\s*{re.escape(name)}(?!\w)", clause,
-                ) is not None or re.search(
-                    rf"(?i)(?<!\w){re.escape(name)}(?!\w)\s*,?\s*(?:who|que)\b",
-                    clause,
-                ) is not None
-            pronominal = referenced and re.match(
-                r"(?i)\s*(?:she|he|they|ela|ele)\b", clause,
-            ) is not None
-            if named or pronominal:
-                found = emotion_from_text(clause)
-                if found:
-                    result = found
-            referenced = mentioned or pronominal
-    return result
+        current: set[str] = set()
+        previous_clause = ""
+        for connector, clause in _segments(sentence):
+            mentioned, named_subjects, unknown = _mentions(clause, patterns)
+            pronominal = _PRONOUN_START.match(clause) is not None
+            if mentioned:
+                previous_current = set(current)
+                previous_only = any(
+                    pattern.fullmatch(previous_clause.strip())
+                    for _subject, pattern in patterns
+                ) if connector in {"and", "e"} and current else False
+                shared_predicate = previous_only
+                compound_antecedent = shared_predicate or (
+                    connector in {"and", "e"} and current and not _PREDICATE.search(clause)
+                )
+                if shared_predicate:
+                    current = current | mentioned
+                    named_subjects = named_subjects | current
+                else:
+                    current = mentioned
+                antecedent = set() if unknown else (
+                    set(previous_current | mentioned) if compound_antecedent else set(current)
+                )
+            candidates = named_subjects
+            if not candidates and pronominal and len(antecedent) == 1:
+                candidates = set(antecedent)
+                current = set(antecedent)
+            elif not candidates and connector and current and not unknown:
+                candidates = set(current)
+            emotion = emotion_from_text(clause)
+            if emotion and candidates:
+                explicit = _emotion_in_text(clause, include_expression=False)
+                for subject in candidates:
+                    # Sorriso/riso coordenado não apaga emoção explícita anterior.
+                    if subject in found and found[subject] != emotion and not explicit:
+                        continue
+                    found[subject] = emotion
+            if unknown or (not mentioned and not pronominal and not connector):
+                current = set()
+                antecedent = set()
+            previous_clause = clause
+    return found
 
 
 def choose_emotion(text: str, *, npc_emotion: str | None = None,
-                   hint: str | None = None) -> str:
-    """A linha vence. Sem palavra de emoção, vale o estado do NPC. Senão a dica."""
+                   hint: str | None = None, prefer_npc: bool = False) -> str:
+    """NPC identificado pode vencer varredura global; sem ele, linha → ficha → dica."""
+    npc = canonical_emotion(npc_emotion)
+    if prefer_npc and npc:
+        return npc
     found = emotion_from_text(text)
     if found:
         return found
-    npc = canonical_emotion(npc_emotion)
     if npc and npc != "neutral":
         return npc
     client = canonical_emotion(hint)

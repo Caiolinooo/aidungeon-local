@@ -48,8 +48,8 @@ If a player instruction for the picture is given, obey it.
 No dialogue, no quotes, no style words. Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
-Write a single English sentence whose subject is the nudity or the sex act happening right now: who is naked, who does what to whom, in the place.
-Use plain words. Do not add clothes. Do not fade to black. Do not censor adult nudity or sex.
+Write a single English sentence describing the action happening right now: who does what to whom, in the place.
+Use plain words. Preserve each person's stated clothing state. Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add people who are not in the moment. Do not change the place.
@@ -484,7 +484,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     _require_cast(adv["id"], cast_locked)
     # A pintura segue a narracao: um pedido do jogador nao veste a cena.
     # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
-    explicit = scene.is_explicit(scene.narration_moment(actions, body.action_seq)) or scene.is_explicit(order)
+    explicit = decision.allow_explicit and (
+        scene.is_explicit(scene.narration_moment(actions, body.action_seq))
+        or scene.is_explicit(order)
+    )
     if world_facts.REFUSAL_IMAGE in assessment.image_directive:
         # Apenas uma recusa estabelecida rebaixa a instrução explícita.
         explicit = explicit and scene.is_explicit(assessment.safe_excerpt)
@@ -503,18 +506,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     story_blob = "\n".join(
         (action.get("text") or "") for action in visible if (action.get("text") or "").strip()
     )
-    by_name = {card.get("title"): card for card in frame if card.get("title")}
-    for card in cards:
-        title = (card.get("title") or "").strip()
-        if title and npc_assets._mentioned(raw_moment, title) and title not in by_name:
-            if not (assessment.absent and world_facts.name_is_absent(title, assessment.absent)):
-                if any(_same_person(title, name) for name in names):
-                    by_name.setdefault(title, card)
-                else:
-                    by_name[title] = card
-                    names.append(title)
-                    if len(frame) < likeness.CAST_REFERENCE_LIMIT:
-                        frame.append(card)
+    by_name = {card.get("title"): card for card in cast_locked if card.get("title")}
     collapsed: list[str] = []
     for name in names:
         twin = next((other for other in collapsed if _same_person(name, other)), "")
@@ -524,6 +516,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             continue
         collapsed.append(name)
     names = collapsed
+    allowed = [card.get("title") or "" for card in cast_locked]
+    names = [
+        name for name in names
+        if _same_person(player_name, name)
+        or any(_same_person(allowed_name, name) for allowed_name in allowed)
+    ]
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
     # Criatura não vira "adult woman": isso pinta um humano nu.
     sex_bits = []
@@ -555,9 +553,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     canon = ""
     if clause and explicit:
         canon = (
-            "Identity only, face and hair, not their usual clothes: "
+            "Identity only, face and hair: "
             + clause
-            + ". Do not restore outfits. Depict the adult nudity and the act."
+            + ". Preserve each person's requested clothing state and action."
         )
     elif clause:
         canon = (
@@ -649,14 +647,17 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
         )
-    locked = frame[:likeness.CAST_REFERENCE_LIMIT]
+    locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
     if explicit:
         alias_cards = [
             {**card, "aliases": [
-                name for name, resolved_card in resolved.items()
-                if resolved_card is None or (
-                    resolved_card is card or resolved_card.get("id") == card.get("id")
-                )
+                *(card.get("aliases") or []),
+                *[
+                    name for name, resolved_card in resolved.items()
+                    if resolved_card is not None and (
+                        resolved_card is card or resolved_card.get("id") == card.get("id")
+                    )
+                ],
             ]}
             for card in locked
         ]
@@ -666,7 +667,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             lead_bits.append("clothes off, fully nude only for " + ", ".join(nude) + ", uncensored")
         else:
             lead_bits.append("uncensored")
-        if nude and clothed:
+        if clothed:
             lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     if len(locked) > 1:
         if explicit:
@@ -789,14 +790,18 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"])
         if explicit else img_cfg["negative_prompt"]
     )
+    if explicit:
+        negative_extra = npc_assets.negative_without_nudity_ban(negative_extra)
     return {
         "prompt": prompt,
         "negative_extra": negative_extra,
         "negative_prompt": _dedupe_negative(base_negative, negative_extra),
+        "base_negative": base_negative,
         "caption": caption,
         "cast_card_ids": cast_card_ids,
         "reference_image_ids": reference_image_ids,
         "reference_hashes": original_hashes,
+        "reference_provider": str(img_cfg.get("provider") or "sdwebui"),
         "expected_people": expected_people,
         "explicit": explicit,
         "cache_key": image_client.request_key(
@@ -864,7 +869,8 @@ def post_see(adventure_id: str, body: SeeRequest,
         if plan.get("explicit"):
             references = likeness.identity_face_pngs(references)
         result = image_client.generate_image(
-            img_cfg, plan["prompt"], adventure_id=adventure_id, image_id=image_id,
+            {**img_cfg, "negative_prompt": plan["base_negative"]},
+            plan["prompt"], adventure_id=adventure_id, image_id=image_id,
             transport=transport, negative_extra=plan["negative_extra"],
             reference_images=references or None,
             expected_people=plan.get("expected_people"))

@@ -152,21 +152,26 @@ def atmosphere_of(text: str) -> str:
     return "+".join(hits) or "neutral"
 
 
-def _mood_near(text: str, name: str) -> str | None:
-    """Emoção apenas da oração da pessoa, no vocabulário visual existente."""
-    emotion = voice_emotion.emotion_near_name(text, name)
-    return {
-        "joy": "happy", "sadness": "sad", "anger": "angry",
-        "tenderness": "love",
-    }.get(emotion, emotion)
-
-
-def _cast_mood(text: str, name: str, sheet: dict) -> str | None:
-    """Emoção commitada; sem ela, a emoção explícita na cláusula do NPC."""
-    emotion = npc_assets.visual_reaction(sheet).get("emotion") or ""
-    if emotion:
-        return emotion
-    return _mood_near(text, name)
+def _cast_moods(cast: list[dict], text: str) -> dict[str, str | None]:
+    """Emoção commitada não neutra, senão última evidência por sujeito."""
+    attributed = voice_emotion.emotions_for_subjects(
+        text,
+        {
+            str(card.get("id") or card.get("title")): _mention_names(card)
+            for card in cast
+        },
+    )
+    moods: dict[str, str | None] = {}
+    for card in cast:
+        key = str(card.get("id") or card.get("title"))
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        committed = npc_assets.visual_reaction(sheet).get("emotion") or ""
+        emotion = committed if committed and committed != "neutral" else attributed.get(key) or committed
+        moods[key] = {
+            "joy": "happy", "sadness": "sad", "anger": "angry",
+            "tenderness": "love",
+        }.get(emotion, emotion)
+    return moods
 
 
 def _location(cards: list[dict], text: str) -> tuple[str, str]:
@@ -234,7 +239,8 @@ def _visual_clause(cast: list[dict], *, explicit: bool = False) -> str:
     return likeness.opening_clause(cast, explicit=explicit)
 
 
-def _reference_layout_guard(cast: list[dict], *, explicit: bool = False) -> str:
+def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
+                            nude: list[str] | None = None) -> str:
     """Referência de identidade não pode virar estúdio, grade ou split na cena."""
     for card in cast:
         raw_sheet = card.get("sheet") or ""
@@ -242,12 +248,17 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False) -> str:
         reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
         if isinstance(reference.get("turnaround"), dict):
             if explicit:
+                outfit_rule = (
+                    "Ignore outfits only for " + ", ".join(nude)
+                    + "; preserve the current outfits of everyone else."
+                    if nude else "Preserve everyone's current outfits."
+                )
                 return (
                     "Use the reference images only for the named characters' identity, face, "
-                    "hair and distinctive facial details. Ignore outfits, grey studio "
-                    "backgrounds, multi-panel layouts, split screens, neutral poses and framing. "
-                    "Do not copy the reference composition or clothing; depict only the place "
-                    "and action below."
+                    "hair and distinctive facial details. " + outfit_rule +
+                    " Ignore grey studio backgrounds, multi-panel layouts, split screens, "
+                    "neutral poses and framing. Do not copy the reference composition; "
+                    "depict only the place and action below."
                 )
             return (
                 "Use the reference images only for the named characters' identity, face, "
@@ -275,8 +286,13 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         cast = decision.cast
         explicit = decision.allow_explicit
     clause = _visual_clause(cast, explicit=explicit)
-    reaction = _reaction_clause(cast) if clause else ""
-    layout_guard = _reference_layout_guard(cast, explicit=explicit) if clause else ""
+    if clause:
+        # images.py importa scene no topo; helpers ficam aqui por isso.
+        from app.routes.images import clip_words, contradicting_looks
+        clause = clip_words(clause, 400)
+    reaction = clip_words(_reaction_clause(cast), 250) if clause else ""
+    nude = npc_assets.nude_names(cast, moment) if clause and explicit else []
+    layout_guard = _reference_layout_guard(cast, explicit=explicit, nude=nude) if clause else ""
     sex_bits = []
     for card in cast:
         person = (card.get("title") or "").strip()
@@ -289,7 +305,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         if phrase:
             sex_bits.append(phrase)
     sex_bits.sort(key=lambda bit: 0 if "adult woman" in bit else 1)
-    sex_line = ". ".join(sex_bits)
+    sex_line = clip_words(". ".join(sex_bits), 300) if clause else ". ".join(sex_bits)
     creature = any(npc_assets.creature_kind(card) for card in cast)
     style_text = re.sub(r"(?i)\b(?:nude|naked)\b", "", style)
     style_text = " ".join(style_text.replace(", ,", ",").split()).strip(" ,")
@@ -300,32 +316,29 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         )
     lock = npc_assets.coverage_lock(*cast, explicit=explicit)
     if clause:
-        # images.py importa scene no topo; o scrub fica aqui por isso.
-        from app.routes.images import clip_words, contradicting_looks
         beat, _banned = contradicting_looks(moment, clause)
         beat = clip_words(" ".join(beat.split()), 400)
     else:
         beat = ""
     if clause and explicit:
-        nude = npc_assets.nude_names(cast, moment)
         clothed = [card.get("title") for card in cast if card.get("title") not in nude]
         nudity = "clothes off, fully nude only for " + ", ".join(nude) + ", uncensored" if nude else "uncensored"
-        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if nude and clothed else ""
+        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if clothed else ""
         composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         parts = [
             sex_line,
             clause,
+            beat,
+            f"wide cinematic shot of {title}, only the characters named above, "
+            "each with that exact face and hair",
+            f"atmosphere: {atmosphere}",
             reaction,
             layout_guard,
             nudity,
             clothing,
             composition,
-            beat,
             style_text,
-            f"wide cinematic shot of {title}, only the characters named above, "
-            "each with that exact face and hair",
             (entry or "")[:400],
-            f"atmosphere: {atmosphere}",
             "detailed scene painting, no text, no watermark, no logo",
         ]
         text = " ".join(part.strip() for part in parts if part and part.strip())
@@ -335,15 +348,15 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         parts = [
             sex_line,
             clause,
+            beat,
+            f"wide cinematic shot of {title}, only the characters named above, "
+            "each with that exact face, hair, age and clothing",
+            f"atmosphere: {atmosphere}",
             reaction,
             layout_guard,
             lock,
             style_text,
-            f"wide cinematic shot of {title}, only the characters named above, "
-            "each with that exact face, hair, age and clothing",
-            beat,
             (entry or "")[:400],
-            f"atmosphere: {atmosphere}",
             "what is happening now, same continuous scene, coherent bodies, "
             "detailed scene painting, no text, no watermark, no logo",
         ]
@@ -416,7 +429,8 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     cache_key: str = "", expected_people: int = 0,
                     cast_card_ids: list[str] | None = None,
                     reference_image_ids: list[str] | None = None,
-                    reference_hashes: list[str] | None = None) -> dict:
+                    reference_hashes: list[str] | None = None,
+                    reference_provider: str = "") -> dict:
     """Decide ready/pending/error/disabled e enfileira no máximo um job."""
     current = db.latest_image(conn, adventure_id, "backdrop", ref)
     if not current and cache_key:
@@ -456,6 +470,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         "cast_card_ids": list(cast_card_ids or []),
         "reference_image_ids": list(reference_image_ids or []),
         "reference_hashes": list(reference_hashes or []),
+        "reference_provider": reference_provider,
     }, priority=jobs.PRIORITY_BACKDROP, supersede_key=f"backdrop:{adventure_id}")
     return {"status": "pending", "image": image, "error": None}
 
@@ -512,7 +527,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
     # ComfyUI usa âncoras regionais; SDWebUI faz passes InstantID mascarados.
     from app import consequences
     plan = {
-        "cast_card_ids": [],
+        "cast_card_ids": [card["id"] for card in paint_cast] if include_people else [],
         "reference_image_ids": [],
         "reference_hashes": [],
         "blobs": [],
@@ -540,9 +555,12 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             img_cfg, prompt, include_people=include_people, explicit=explicit)
         backdrop = waiting
     else:
+        reference_blobs = (
+            likeness.identity_face_pngs(plan["blobs"]) if explicit else plan["blobs"]
+        )
         cache_key = jobs.backdrop_cache_key(
             img_cfg, prompt, include_people=include_people, explicit=explicit,
-            reference_images=plan["blobs"] or None)
+            reference_images=reference_blobs or None)
         ref = f"{adventure_id}:{cache_key[:40]}"
         backdrop = _backdrop_state(
             conn, adventure_id, ref,
@@ -553,11 +571,13 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             cast_card_ids=plan["cast_card_ids"],
             reference_image_ids=plan["reference_image_ids"],
             reference_hashes=plan["reference_hashes"],
+            reference_provider=str(img_cfg.get("provider") or ""),
         )
     signature = cache_key[:40]
 
 
     cast = []
+    moods = _cast_moods(cast_cards, text)
     for card in cast_cards:
         if not card.get("portrait") and img_cfg.get("enabled"):
             jobs.enqueue_portrait(conn, adventure_id, card["id"])
@@ -566,7 +586,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             "id": card["id"],
             "title": card.get("title") or "",
             "portrait": card.get("portrait"),
-            "mood": _cast_mood(text, card.get("title") or "", sheet),
+            "mood": moods.get(str(card.get("id") or card.get("title"))),
             "stance": npc_bonds.stance_of(
                 npc_bonds.read_bonds(sheet),
                 obedience=world_facts.obedience_of(card),

@@ -13,7 +13,8 @@ from PIL import Image
 
 from app import db, events, image_client, jobs, likeness, scene
 from app import turnaround as turnaround_module
-from conftest import make_adventure
+from conftest import add_action, make_adventure
+from test_scene import _face, _reference_image_nodes, pipeline_transport
 from test_v3 import PNG_BYTES, use_tmp_storage
 
 
@@ -357,6 +358,127 @@ def test_complete_references_prioritize_master_sheet_and_distinct_angles(tmp_db,
         )
         assert "Ignore outfits" in explicit_prompt
         assert "body, outfit" not in explicit_prompt
+
+
+def test_worker_replans_reference_ids_when_provider_changes(tmp_db, tmp_path):
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path, "First")
+    with db.session() as conn:
+        rows = {}
+        for key, kind in (("master", "character_master"), ("design", "character_sheet")):
+            path = tmp_path / f"First-{key}.png"
+            path.write_bytes(PNG_BYTES)
+            rows[key] = db.insert_image(
+                conn, adventure_id=adv["id"], action_seq=-1,
+                file_path=str(path), kind=kind, ref_id=card["id"])
+        sheet = json.loads(card["sheet"] or "{}")
+        sheet["reference"] = {"turnaround": {
+            "master_image_id": rows["master"]["id"],
+            "design_sheet_image_id": rows["design"]["id"],
+        }}
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+        plan = scene.cast_reference_plan(conn, adv["id"], [card], provider="comfyui")
+
+    payload = {
+        "cast_card_ids": [card["id"]],
+        "reference_image_ids": plan["reference_image_ids"],
+        "reference_hashes": plan["reference_hashes"],
+        "reference_provider": "comfyui",
+        "explicit": False,
+    }
+    job = {"adventure_id": adv["id"], "payload": payload}
+
+    sd_blobs = jobs._reference_blobs(job, people=False, provider="sdwebui")
+    assert sd_blobs == [PNG_BYTES]
+    assert payload["reference_provider"] == "sdwebui"
+    assert payload["reference_image_ids"] == [anchor["id"]]
+    assert payload["reference_hashes"] == likeness.reference_hashes(sd_blobs)
+
+    comfy_blobs = jobs._reference_blobs(job, people=False, provider="comfyui")
+    assert comfy_blobs == [PNG_BYTES, PNG_BYTES]
+    assert payload["reference_provider"] == "comfyui"
+    assert payload["reference_image_ids"] == [
+        rows["master"]["id"], rows["design"]["id"],
+    ]
+    assert payload["reference_hashes"] == likeness.reference_hashes(comfy_blobs)
+
+    payload.update({
+        "reference_provider": "openai_compatible",
+        "reference_image_ids": [], "reference_hashes": [],
+    })
+    reopened = jobs._reference_blobs(job, people=True, provider="comfyui")
+    assert reopened == [PNG_BYTES, PNG_BYTES]
+    assert payload["reference_image_ids"] == [
+        rows["master"]["id"], rows["design"]["id"],
+    ]
+
+
+def test_backdrop_worker_reuses_image_under_recomputed_ref(tmp_db, tmp_path):
+    use_tmp_storage(tmp_path)
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+    adv = make_adventure()
+    payload = {
+        "prompt": "An empty room", "include_people": False, "explicit": False,
+        "cache_key": "stale", "cast_card_ids": [],
+        "reference_image_ids": [], "reference_hashes": [],
+        "reference_provider": "comfyui",
+    }
+    with db.session() as conn:
+        queued = db.insert_job(
+            conn, adventure_id=adv["id"], type="scene_backdrop", ref_id="old-ref",
+            status="pending", payload=payload, priority=jobs.PRIORITY_BACKDROP,
+        )
+        running = db.claim_next_job(conn)
+    capture: dict = {}
+    transport = pipeline_transport(capture=capture)
+    result = jobs._execute_backdrop(running, transport)
+    with db.session() as conn:
+        image = db.get_image(conn, result["image"]["id"])
+        expected_ref = f"{adv['id']}:{image['cache_key'][:40]}"
+        assert image["ref_id"] == expected_ref
+        assert result["ref_id"] == expected_ref
+        db.finish_job(conn, queued["id"], "done", result)
+        second = db.insert_job(
+            conn, adventure_id=adv["id"], type="scene_backdrop", ref_id="old-ref",
+            status="pending", payload=payload, priority=jobs.PRIORITY_BACKDROP,
+        )
+        running_second = db.claim_next_job(conn)
+    reused = jobs._execute_backdrop(running_second, transport)
+    assert reused["reused"] is True
+    assert reused["image"]["id"] == image["id"]
+    assert reused["ref_id"] == expected_ref
+    assert len(capture["graphs"]) == 1
+    with db.session() as conn:
+        db.finish_job(conn, second["id"], "done", reused)
+
+
+def test_openai_backdrop_replans_cast_when_comfy_executes(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("openai_compatible"))
+        card = db.insert_card(
+            conn, adv["id"], type="character", title="Ada", triggers=["Ada"],
+            entry="Barkeep.", portrait_prompt="silver hair",
+        )
+    _face(adv["id"], card["id"], PNG_BYTES)
+    add_action(adv["id"], 0, "continue", "Ada waits outside.")
+    response = client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    assert response.status_code == 200
+    with db.session() as conn:
+        job = next(item for item in db.list_jobs(conn, adv["id"])
+                   if item["type"] == "scene_backdrop")
+        assert job["payload"]["reference_provider"] == "openai_compatible"
+        assert job["payload"]["cast_card_ids"] == [card["id"]]
+        assert job["payload"]["reference_image_ids"] == []
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+
+    capture: dict = {}
+    assert jobs.process_pending(pipeline_transport(capture=capture)) == 1
+    assert _reference_image_nodes(capture["graphs"][0])
+    with db.session() as conn:
+        assert db.get_job(conn, job["id"])["status"] == "done"
 
 
 def test_portrait_schedules_complete_reference_only_once(tmp_db, tmp_path, monkeypatch):

@@ -331,8 +331,8 @@ class TtsRequest(BaseModel):
     """POST /api/tts — voice omitida (null) usa narrator_voice da config.
 
     `emotion` é uma dica (joy, anger, fear, sadness, tenderness, surprise,
-    disgust, neutral). A linha vence; sem palavra de emoção, vale a ficha
-    do NPC citado quando `adventure_id` vem junto.
+    disgust, neutral). Com `adventure_id`, a emoção atribuída ao NPC citado
+    por último vence a varredura global e a dica; sem NPC, a linha global vence.
     """
     text: str
     voice: str | None = None

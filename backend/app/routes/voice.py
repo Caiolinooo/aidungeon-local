@@ -221,7 +221,8 @@ async def _prepare_tts(request: Request, body: TtsRequest,
                 cards = db.list_cards(conn, adventure_id)
                 npc_emotion = npc_bonds.npc_emotion_for_line(cards, text)
     emotion = voice_emotion.choose_emotion(
-        text, npc_emotion=npc_emotion, hint=body.emotion)
+        text, npc_emotion=npc_emotion, hint=body.emotion,
+        prefer_npc=npc_emotion is not None)
     return cfg, text, voice, emotion, cloned
 
 
