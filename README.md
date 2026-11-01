@@ -256,6 +256,15 @@ service worker descritos aqui foram substituídos pela v0.9.0 acima.
   Provedores: **sdwebui**, **comfyui** ou **openai_compatible**.
   No SDWebUI, uma referência usa InstantID no txt2img; cenas com vários NPCs
   detectam os rostos e recebem um passe img2img restrito à cabeça de cada pessoa.
+- **Fidelidade da ação visual**: o prompt usa o momento atual, sem efeitos de cenas
+  antigas. Aliases/gatilhos ligam nomes da narrativa aos cards; sexo declarado no card
+  prevalece sobre pronomes de outras pessoas. Nudez é aplicada por personagem, quem
+  continua vestido mantém a roupa, e o estilo global não força nudez no elenco inteiro.
+  Em cena explícita, as âncoras são recortadas para cabeça/ombros para não competir
+  com a ação. Instruções explícitas substituem exceções de roupa do momento e proíbem
+  split-screen. **Limite medido:** FLUX.2 mantém melhor as identidades, mas pode cobrir
+  o corpo; epiCRealism/Qwen podem gerar nudez, mas também apagar ou duplicar pessoas.
+  A composição continua exigindo revisão visual, não é garantia do prompt.
 - **Cena e retratos animados**: LTXV 2B distilled transforma o PNG vigente em
   MP4 real de aproximadamente 5 s (768×448, 121 frames, 8 passos). Wan 2.2
   continua disponível com `video.engine=wan`. Novo backdrop dispara o vídeo da situação;
