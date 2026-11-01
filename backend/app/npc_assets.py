@@ -1357,7 +1357,7 @@ def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
     found: list[str] = []
     for card in cards:
         title = " ".join(str(card.get("title") or "").split())
-        aliases = [title, *(card.get("aliases") or [])]
+        aliases = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
         for name in dict.fromkeys(alias for alias in aliases if len(alias) >= 3):
             escaped = re.escape(name)
             direct = re.search(
