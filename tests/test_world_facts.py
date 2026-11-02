@@ -165,11 +165,12 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
     assert prompt.startswith("Player instruction, highest priority: Elara completely naked")
-    assert "fully nude only for Elara" in prompt
+    assert "fully nude" in prompt
+    assert "no underwear" in prompt
+    assert prompt.index("fully nude") < prompt.index("same continuous scene")
     assert "no stockings" not in prompt
     head = prompt.split("BREAK", 1)[0]
     assert "elara is an adult woman" in head.lower()
-    assert "female body" in head.lower()
     with db.session() as conn:
         negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
     assert "masculine body" not in negative

@@ -1488,11 +1488,11 @@ def sex_phrase(name: str, label: str, *, explicit: bool, card: dict | None = Non
     if kind:
         return f"{name} is a {kind}, creature body, not a human"
     if label == "adult woman" and explicit:
-        return f"{name} is an adult woman with a female body, breasts and a feminine face"
+        return f"{name} is an adult woman with a feminine face"
     if label == "adult woman":
         return f"{name} is an adult woman"
     if label == "adult man" and explicit:
-        return f"{name} is an adult man with a male body"
+        return f"{name} is an adult man with a masculine face"
     if label == "adult man":
         return f"{name} is an adult man"
     return ""

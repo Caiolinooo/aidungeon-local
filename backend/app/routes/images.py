@@ -618,6 +618,31 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(atmosphere.replace("+", " "))
     order_lock = _explicit_order_lock(order) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
+    locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
+    if explicit:
+        alias_cards = [
+            {**card, "aliases": [
+                *(card.get("aliases") or []),
+                *[
+                    name for name, resolved_card in resolved.items()
+                    if resolved_card is not None and (
+                        resolved_card is card or resolved_card.get("id") == card.get("id")
+                    )
+                ],
+            ]}
+            for card in locked
+        ]
+        nude = npc_assets.nude_names(alias_cards, moment, order)
+        clothed = [card.get("title") for card in locked if card.get("title") not in nude]
+        if nude:
+            lead_bits.append(
+                "clothes off, fully nude, no underwear, no bra, no panties, only for "
+                + ", ".join(nude) + ", uncensored"
+            )
+        else:
+            lead_bits.append("uncensored")
+        if clothed:
+            lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
     # normal: o rosto lidera o primeiro chunk — "kisses on the sofa" na
@@ -648,28 +673,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
         )
         lead_bits.append("no other people in the background or elsewhere, no patrons, no bystanders")
-    locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
-    if explicit:
-        alias_cards = [
-            {**card, "aliases": [
-                *(card.get("aliases") or []),
-                *[
-                    name for name, resolved_card in resolved.items()
-                    if resolved_card is not None and (
-                        resolved_card is card or resolved_card.get("id") == card.get("id")
-                    )
-                ],
-            ]}
-            for card in locked
-        ]
-        nude = npc_assets.nude_names(alias_cards, moment, order)
-        clothed = [card.get("title") for card in locked if card.get("title") not in nude]
-        if nude:
-            lead_bits.append("clothes off, fully nude only for " + ", ".join(nude) + ", uncensored")
-        else:
-            lead_bits.append("uncensored")
-        if clothed:
-            lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     if len(locked) > 1:
         if explicit:
             lead_bits.append(
