@@ -74,6 +74,32 @@ def test_elara_is_a_woman_and_caio_is_a_man():
     assert npc_assets.nude_names(
         [{"title": "Thalita Massoto"}], "Thalita está pelada.",
     ) == ["Thalita Massoto"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}], "Caio stands fully nude in the room.",
+    ) == ["Caio"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}], "Caio sits naked on the bed.",
+    ) == ["Caio"]
+
+
+def test_scene_clothing_lets_the_order_choose_who_is_nude():
+    from app import npc_assets
+
+    cards = [
+        {"title": "Caio"},
+        {"title": "A Donzela da Noite", "triggers": ["gótica", "ela"]},
+    ]
+    moment = "Caio stands nude in the apartment. A Donzela da Noite watches him."
+    nude, covered = npc_assets.scene_clothing(cards, moment, "donzela sem roupa")
+    assert nude == {"A Donzela da Noite"}
+    assert covered == set()
+    # Sem pedido, o momento continua mandando.
+    nude, _ = npc_assets.scene_clothing(cards, moment, "")
+    assert nude == {"Caio"}
+    # O pedido pode vestir alguém que o momento despiu.
+    nude, _ = npc_assets.scene_clothing(
+        cards, "Caio is naked. A Donzela da Noite is naked.", "Caio is clothed")
+    assert nude == {"A Donzela da Noite"}
 
 
 def test_nude_names_combines_moment_and_order_without_crossing_people():
@@ -836,10 +862,11 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
         "Caio está no apartamento, no Refúgio de Sangue. A Nóvoa cai lá fora.")
     add_action(
         adv["id"], 1, "continue",
-        "A Donzela da Noite observa Caio, ainda vestida.")
+        "Caio está nu no apartamento. A Donzela da Noite observa, ainda vestida.")
     _stub_painter(monkeypatch, tmp_path)
     override_transport(client, make_v2_transport(
-        "The Donzela da Noite stands fully nude before Caio in the apartment."))
+        "Caio stands nude in the apartment, his pale body exposed, while the "
+        "Donzela da Noite gently touches his chest."))
     try:
         resp = client.post(
             f"/api/adventures/{adv['id']}/see",
@@ -864,3 +891,11 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
     assert "vestindo" not in folded
     assert "terno escuro" not in folded
     assert "fully nude" in folded
+    # A prosa dizia "Caio está nu" e o builder repetia "Caio stands nude".
+    # O pedido manda no estado: só a Donzela fica nua e a frase de ação não
+    # pode reverter isso.
+    assert "caio stands nude" not in folded
+    assert "caio is naked" not in folded
+    assert "his pale body exposed" not in folded
+    assert "everyone else stays fully clothed in their current outfits: caio" in folded
+    assert "nude" not in resp.json()["action"]["text"].casefold()

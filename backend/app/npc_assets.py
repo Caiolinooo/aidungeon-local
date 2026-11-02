@@ -697,6 +697,37 @@ def without_outfit(text: str) -> str:
     return _drop_clauses(trimmed, tuple(word for word in _OUTFIT_WORDS if word != "wearing"))
 
 
+_POSE_WORDS = (
+    "pose", "poses", "posed", "posing", "resting", "rests", "rested",
+    "chin", "hand on", "one hand", "leaning", "leans", "leaned",
+    "sitting", "sits", "sat", "standing", "stands", "stood",
+    "kneeling", "kneels", "knelt", "looking", "gazing", "facing",
+    "turned", "smiling", "smile", "expression", "head tilted",
+)
+_POSE_CLAUSE = re.compile(
+    r"(?i)(?:,|;|\band\b|\bwhile\b|\bwith\b)\s*[^.;,]*\b(?:"
+    + "|".join(re.escape(word) for word in _POSE_WORDS)
+    + r")\b[^.;,]*"
+)
+
+
+def without_pose(text: str) -> str:
+    """Tira pose de retrato da identidade. A pose da cena vem da ação."""
+    parts: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        cleaned = _POSE_CLAUSE.sub("", sentence)
+        cleaned = re.sub(
+            r"(?i)\b(?:poses?|posing|resting|standing|sitting|kneeling|"
+            r"leaning|looking|gazing|facing|smiling)\b[^.;,]*",
+            "",
+            cleaned,
+        )
+        cleaned = " ".join(cleaned.split()).strip(" ,.;")
+        if cleaned:
+            parts.append(cleaned)
+    return ", ".join(parts)
+
+
 _PORTRAIT_OF = re.compile(
     r"(?i)^(?:a\s+|an\s+)?(?:bust\s+|headshot\s+|close-up\s+|closeup\s+)?portrait\s+of\s+"
 )
@@ -771,7 +802,7 @@ def _portrait_face(card: dict) -> str:
     prompt = " ".join(str(card.get("portrait_prompt") or "").split())
     if not prompt:
         return ""
-    return _clip(without_framing(without_outfit(prompt)))
+    return _clip(without_pose(without_framing(without_outfit(prompt))))
 
 
 def _sheet_person_parts(card: dict) -> list[str]:
@@ -781,7 +812,9 @@ def _sheet_person_parts(card: dict) -> list[str]:
         value = sheet.get(key)
         if not isinstance(value, str) or not value.strip():
             continue
-        text = without_framing(without_outfit(english_appearance(value)))
+        text = without_pose(
+            without_framing(without_outfit(english_appearance(value)))
+        )
         if text:
             parts.append(text)
     return parts
@@ -833,9 +866,10 @@ def identity_bits(card: dict) -> list[str]:
         if portrait_colors and colors and colors.isdisjoint(portrait_colors):
             continue
         agreed.append(part)
-    joined = " ".join(agreed)
-    sheet_has_portrait_hair = bool(portrait_colors & _hair_colors(joined))
-    if portrait and (not _has_face(joined) or (portrait_colors and not sheet_has_portrait_hair)):
+    if portrait:
+        # O retrato aceito é a âncora do rosto. A ficha só acrescenta o que
+        # ele não cobre (porte, tom de pele), nunca uma segunda descrição
+        # concorrente que o CLIP possa escolher.
         extras = [part for part in agreed if not _covered(part, portrait)]
         return [bit for bit in (portrait, *extras) if bit]
     return agreed
@@ -1452,11 +1486,23 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
         "completamente", "totally", "totalmente", "already", "já", "finally",
         "finalmente", "both", "ambos", "and", "e", "the", "a", "o", "fully",
         "still", "ainda", "stay", "stays", "remain", "remains", "keep", "keeps",
+        # Postura também é estado: "Caio stands nude" ficava de fora e a
+        # cena o vestia contra a narração.
+        "stand", "stands", "standing", "stood", "sit", "sits", "sitting", "sat",
+        "lie", "lies", "lying", "lay", "kneel", "kneels", "kneeling", "knelt",
+        "lean", "leans", "leaning", "recline", "reclines", "reclining",
+        "pose", "poses", "posing", "appear", "appears", "appeared", "wait",
+        "waits", "waiting", "walk", "walks", "walking", "tower", "towers",
         "not", "never", "no", "nao", "não", "nunca", "nem",
     )
     between = rf"(?P<between>(?:(?:{'|'.join(words)})\s+){{0,4}}?)"
     after_state = rf"(?:(?:{'|'.join(words)})\s+){{0,4}}?"
-    state_verbs = r"(?:is|are|was|were|está|estao|estava|estavam|estão|fica|ficam)"
+    state_verbs = (
+        r"(?:is|are|was|were|está|estao|estava|estavam|estão|fica|ficam|"
+        r"stand|stands|stood|sit|sits|sat|lie|lies|lay|kneel|kneels|knelt|"
+        r"lean|leans|recline|reclines|pose|poses|appear|appears|wait|waits|"
+        r"walk|walks)"
+    )
     negation = re.compile(
         r"(?i)\b(?:not|never|no|nao|não|nunca|nem)\b"
         r"(?:\s+[\w'-]+){0,2}\s*$"
@@ -1529,6 +1575,24 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
     covered_titles = {titles[index] for index, covered_state in states.items()
                       if covered_state and titles[index]}
     return nude_titles, covered_titles
+
+
+def scene_clothing(cards: list[dict], moment: str, order: str = "") -> tuple[set[str], set[str]]:
+    """Estados de roupa para a pintura, com o pedido do jogador mandando.
+
+    `nude_names` combina momento e pedido (additive): serve para o cânone.
+    No See, porém, "donzela sem roupa" é uma instrução sobre a foto. Se ela
+    nomeia quem fica nu, o resto do elenco fica vestido — mesmo que a prosa
+    anterior tenha despido o protagonista. Sem nudez no pedido, o momento
+    continua mandando, descontando quem o pedido vestiu.
+
+    Devolve (títulos nus, títulos vestidos pelo pedido).
+    """
+    nude_moment, _covered_moment = _nude_states(cards, moment)
+    nude_order, covered_order = _nude_states(cards, order)
+    if nude_order:
+        return nude_order, covered_order
+    return nude_moment - covered_order, covered_order
 
 
 def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:

@@ -49,8 +49,8 @@ No dialogue, no quotes, no style words. Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write a single English sentence describing the action happening right now: who does what to whom, in the place.
-Use plain words. Preserve each person's stated clothing state. Do not fade to black. Do not censor adult nudity or sex.
-If the player instruction says someone is nude, naked, undressed or "sem roupa", that person is fully nude now: ignore any earlier clothing, do not write "wearing", and never carry a dress or suit into the sentence. If the instruction asks to remove clothes, paint the result (nude), not the act of holding the garment.
+Use plain words. The renderer applies the authoritative clothing states separately, so do not describe clothing, nudity, undress or bare skin in the sentence. Never write "wearing", "dressed in", "nude", "naked", "undressed", "bare chest" or any garment.
+Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add people who are not in the moment. Do not change the place.
@@ -210,6 +210,82 @@ def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
     cleaned = re.sub(r",\s*,+", ", ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;")
     return cleaned, ", ".join(dict.fromkeys(banned))
+
+
+_CLOTHING_STATE = re.compile(
+    r"(?i)(?:\b(?:fully|completely|totally|entirely|still|now|already)\s+)?"
+    r"\b(?:nude|naked|topless|undressed|clothed|dressed|clad)\b"
+)
+_CLOTHING_ACTION = re.compile(
+    r"(?i)\b(?:after|while|before|by)\s+"
+    r"(?:removing|taking\s+off|slipping\s+out\s+of|pulling\s+off|unbuttoning|unzipping)\s+"
+    r"(?:his|her|their|the)\s+"
+    r"(?:clothes|clothing|suit|dress|shirt|top|blouse|pants|trousers|skirt|robe|gown|coat|jacket|uniform|outfit)\b"
+    r"(?:\s+[^,.;]{0,40})?"
+)
+_CLOTHING_PHRASE = re.compile(
+    r"(?i)\b(?:wearing|dressed\s+in|clad\s+in|in)\s+"
+    r"(?:a|an|the|his|her|their)?\s*"
+    r"(?:[a-z-]+\s+){0,3}"
+    r"(?:suit|dress|shirt|top|blouse|pants|trousers|skirt|gown|robe|coat|jacket|"
+    r"armor|armour|cloak|cape|tie|underwear|bra|panties|uniform|outfit)\b"
+    r"(?:\s+[^,.;]{0,50})?"
+)
+_BODY_EXPOSED = re.compile(
+    r"(?i),\s*(?:his|her|their)\s+[^,.;]{0,100}?\b(?:body|skin|chest|torso)\b"
+    r"[^,.;]{0,100}?(?=,|\.|$)"
+)
+_BARE_BODY = re.compile(
+    r"(?i)\b(?:bare|naked|nude)\s+(?=(?:chest|body|skin|torso|shoulders?|legs?|arms?|back|breasts?|buttocks?)\b)"
+)
+
+
+def scrub_clothing_states(text: str) -> str:
+    """Remove roupa e nudez da frase de ação.
+
+    O estado de roupa é aplicado no começo do prompt, de forma autoritativa.
+    A frase do LLM pode contradizê-lo ("Caio stands nude" com o Caio vestido)
+    e o CLIP obedece a frase. Aqui a frase fica só com a ação.
+    """
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    cleaned = _BODY_EXPOSED.sub("", cleaned)
+    cleaned = _CLOTHING_ACTION.sub("", cleaned)
+    cleaned = _CLOTHING_PHRASE.sub("", cleaned)
+    cleaned = _BARE_BODY.sub("", cleaned)
+    cleaned = _CLOTHING_STATE.sub("", cleaned)
+    cleaned = re.sub(r"\s+([,.;])", r"\1", cleaned)
+    cleaned = re.sub(r"(?:\s*,\s*){2,}", ", ", cleaned)
+    cleaned = re.sub(r",\s*(?=(?:while|and)\b)", " ", cleaned)
+    cleaned = re.sub(r"\b(while|and)\s*,", r"\1 ", cleaned)
+    return " ".join(cleaned.split()).strip(" ,.;")
+
+
+def clothing_conflict(cards: list[dict], text: str, nude: list[str]) -> bool:
+    """A frase ainda afirma nudez/roupa contrária ao estado autoritativo?"""
+    if _CLOTHING_STATE.search(text or ""):
+        return True
+    nude_titles, covered_titles = npc_assets._nude_states(cards, text or "")
+    nude_keys = {name.casefold() for name in nude if name}
+    for title in nude_titles:
+        if title.casefold() not in nude_keys:
+            return True
+    for title in covered_titles:
+        if title.casefold() in nude_keys:
+            return True
+    return False
+
+
+def clothing_safe_fallback(names: list[str], place: str) -> str:
+    """Última linha de defesa: ação neutra, sem roupa nem nudez."""
+    clean = [name for name in names if name]
+    where = place or "the current scene"
+    if len(clean) == 1:
+        return f"{clean[0]} is in {where}."
+    if len(clean) >= 2:
+        return f"{clean[0]} and {clean[1]} are together in {where}."
+    return f"The scene is in {where}."
 
 
 def clip_words(text: str, limit: int) -> str:
@@ -530,6 +606,20 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         if _same_person(player_name, name)
         or any(_same_person(allowed_name, name) for allowed_name in allowed)
     ]
+    # O estado de roupa é decidido antes do LLM: o pedido do jogador manda
+    # quando nomeia quem fica nu; o resto do elenco continua vestido.
+    locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
+    nude_titles, _covered_titles = npc_assets.scene_clothing(locked, moment, order)
+    nude_keys = {title.casefold() for title in nude_titles if title}
+    nude = [
+        card.get("title") for card in locked
+        if (card.get("title") or "").casefold() in nude_keys
+    ]
+    clothed = [
+        card.get("title") for card in locked
+        if (card.get("title") or "").casefold() not in nude_keys
+        and not npc_assets.creature_kind(card, card.get("title") or "")
+    ]
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
     # Criatura não vira "adult woman": isso pinta um humano nu.
     sex_bits = []
@@ -590,6 +680,19 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if location and location != "the current scene":
         place = f"Place: {location}. {clip_words(entry or '', 200)}\n"
     who = ", ".join(who_bits) if who_bits else "only the people named in the moment"
+    clothing_states = ""
+    if explicit:
+        states = []
+        if nude:
+            states.append("fully nude, no clothes: " + ", ".join(nude))
+        if clothed:
+            states.append("fully clothed in their current outfit, not nude: "
+                          + ", ".join(clothed))
+        if states:
+            clothing_states = (
+                "Authoritative clothing states (obey exactly; never contradict them): "
+                + "; ".join(states) + ".\n"
+            )
     # Com diretiva (recusa/bloqueio), o builder recebe a versão canônica —
     # a tentativa crua do jogador não chega nem ao LLM de prompt.
     painted_source = moment if assessment.image_directive else \
@@ -599,6 +702,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         ("Player instruction for the picture (highest priority; obey it and remove any conflicting clothing, pose or composition from the moment): " + order + "\n" if order else "")
         + (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
+        + clothing_states
         + place
         + "Moment to paint:\n"
         + painted
@@ -623,6 +727,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # modelo resumidor poderia pintar o ato recusado.
     if world_facts.REFUSAL_IMAGE in assessment.image_directive:
         sentence = world_facts.REFUSAL_IMAGE
+    elif explicit:
+        # O builder pode inverter os estados ("Caio stands nude" com o Caio
+        # vestido). A frase fica só com a ação; a roupa vem do bloco
+        # autoritativo acima.
+        cleaned = scrub_clothing_states(sentence)
+        if clothing_conflict(locked, cleaned, nude):
+            cleaned = ""
+        sentence = cleaned or clothing_safe_fallback(names, location)
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
@@ -630,38 +742,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(atmosphere.replace("+", " "))
     order_lock = _explicit_order_lock(order) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
-    locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
-    nude: list[str] = []
-    clothed: list[str] = []
     if explicit:
         if len(names) == 1:
             lead_bits.append(f"{names[0]} is the only person in the entire scene, no one else")
         lead_bits.append("wide full-body composition, entire body visible, not a close-up portrait")
-        alias_cards = [
-            {**card, "aliases": [
-                *(card.get("aliases") or []),
-                *[
-                    name for name, resolved_card in resolved.items()
-                    if resolved_card is not None and (
-                        resolved_card is card or resolved_card.get("id") == card.get("id")
-                    )
-                ],
-            ]}
-            for card in locked
-        ]
-        # Sem card não há rosto para travar: o protagonista só entra na cena
-        # depois que `ensure_player_card` cria a ficha dele. Um card sintético
-        # aqui pintava uma pessoa sem referência e, no See, o jogador
-        # "não resolvido" emprestava a nudez para o resto do elenco.
-        nude = npc_assets.nude_names(alias_cards, moment, order)
-        nude_keys = {name.casefold() for name in nude}
-        clothed = [
-            card.get("title") for card in locked
-            if (card.get("title") or "").casefold() not in nude_keys
-        ]
         if nude:
             lead_bits.append(
-                "clothes off, fully nude, bare skin, completely unclothed, only for "
+                "clothes off, fully nude, naked, bare skin, completely unclothed, only for "
                 + ", ".join(nude) + ", uncensored"
             )
         else:
