@@ -196,7 +196,7 @@ export default function AdventureJobs({
         aria-label="Central de jobs da aventura"
         aria-expanded={open}
         title="Jobs de imagem e simulação"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:bg-elevated hover:text-primary transition"
+        className="relative flex h-9 w-9 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary sm:h-10 sm:w-10"
       >
         {activeCount > 0
           ? <LoaderCircle className="h-4 w-4 animate-spin text-accent-pri" />

@@ -50,11 +50,11 @@ export function InspectorPane({
       className={`flex h-full min-w-0 max-w-full flex-col bg-surface border-subtle ${
         isDocked
           ? 'w-full border-l'
-          : 'h-full w-[min(24rem,calc(100%-1rem))] border-l shadow-2xl pb-safe'
+          : 'h-full w-full border-l shadow-2xl pb-safe sm:w-[min(24rem,calc(100%-1rem))]'
       }`}
     >
       {/* Inspector Header with Tab Navigation */}
-      <div className="flex items-start justify-between gap-1.5 border-b border-subtle px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] bg-surface/90">
+      <div className="flex items-start justify-between gap-1 border-b border-subtle bg-surface/90 px-2 py-1.5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-1.5 sm:px-3 sm:py-2">
         <div className="grid min-w-0 flex-1 grid-cols-3 gap-1">
           {INSPECTOR_TABS.map((t) => {
             const Icon = t.icon
@@ -63,7 +63,7 @@ export function InspectorPane({
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border px-1 py-1.5 text-[10px] font-medium leading-tight transition ${
+                className={`flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl border px-1 py-1 text-[10px] font-medium leading-tight transition sm:min-h-14 sm:gap-1 sm:py-1.5 ${
                   active
                     ? 'border-accent-pri bg-accent-pri/15 text-accent-pri'
                     : 'border-subtle bg-elevated/40 text-secondary hover:bg-elevated hover:text-primary'
@@ -88,7 +88,7 @@ export function InspectorPane({
       </div>
 
       {/* Tab Content Body */}
-      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 text-primary">
+      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 text-primary sm:p-4">
         {tab === 'cards' && <CardsTab adventure={adventure} />}
         {tab === 'npcs' && <NpcsTab adventure={adventure} />}
         {tab === 'memory' && <MemoryTab adventure={adventure} />}

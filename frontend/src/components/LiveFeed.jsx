@@ -189,7 +189,7 @@ export default function LiveFeed({ adventureId }) {
         aria-label="Atividade do mundo"
         aria-expanded={open}
         title="Livefeed de vida, narrativa e mídia"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:bg-elevated hover:text-primary transition"
+        className="relative flex h-9 w-9 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary sm:h-10 sm:w-10"
       >
         <Activity className="h-4 w-4 text-accent-pri" />
         {activeCount > 0 && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent-pri px-1 text-center text-[9px] font-bold leading-4 text-canvas">{Math.min(activeCount, 99)}</span>}

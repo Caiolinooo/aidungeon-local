@@ -309,7 +309,7 @@ export default function Settings() {
   return (
     <div className="flex h-full flex-col bg-canvas text-primary">
       {/* Top Header */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-subtle bg-surface px-4 sm:px-6">
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-subtle bg-surface px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:flex-nowrap sm:px-6">
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate(-1)}
@@ -372,7 +372,7 @@ export default function Settings() {
         </nav>
 
         {/* Tab Body */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-4xl">
+        <main className="min-w-0 w-full max-w-4xl flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6">
           {loading ? (
             <div className="flex h-64 items-center justify-center text-xs text-muted">
               Carregando configurações…

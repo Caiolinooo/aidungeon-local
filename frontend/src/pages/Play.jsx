@@ -50,6 +50,7 @@ import {
   Sliders,
   ChevronRight,
   X,
+  MoreHorizontal,
 } from 'lucide-react'
 
 // Dock de retratos 2D, carregado sob demanda.
@@ -290,6 +291,7 @@ export default function Play() {
   const [error, setError] = useState(null)
   const [gen, setGen] = useState(null) // { kind: 'action'|'continue'|'retry', text }
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [seeing, setSeeing] = useState(false)
   const [seeOpen, setSeeOpen] = useState(false)
@@ -1464,7 +1466,7 @@ export default function Play() {
       onClick={() => setShareOpen(true)}
       aria-label="Compartilhar aventura"
       title="Compartilhar aventura"
-      className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-sm text-secondary hover:text-primary hover:bg-elevated transition"
+      className="hidden h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-sm text-secondary hover:bg-elevated hover:text-primary transition sm:flex"
     >
       👥
     </button>
@@ -1530,7 +1532,7 @@ export default function Play() {
           </div>
 
           {/* Action Toolbar */}
-          <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
+          <div className="relative flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-1 sm:w-auto sm:gap-1.5">
             <GenerationPreferences
               adventure={adventure}
               onSaved={(uiState) => setAdventure((current) => ({ ...current, ui_state: uiState }))}
@@ -1548,7 +1550,7 @@ export default function Play() {
                 {shareButton}
                 <button
                   onClick={stop}
-                  className="flex h-10 items-center gap-1.5 rounded-full bg-danger-800 px-4 text-xs font-semibold text-white hover:bg-danger-700 shadow transition"
+                  className="flex h-9 items-center gap-1.5 rounded-full bg-danger-800 px-3 text-xs font-semibold text-white shadow transition hover:bg-danger-700 sm:h-10 sm:px-4"
                   title="Parar a geração"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
@@ -1563,7 +1565,7 @@ export default function Play() {
                     disabled={!canRetry}
                     aria-label="Tentar a última resposta de novo"
                     title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : (canRetry ? 'Gerar de novo a última resposta' : 'Disponível depois de uma resposta da IA'))}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10"
                   >
                     <RotateCcw className="w-4 h-4" />
                   </button>
@@ -1573,7 +1575,7 @@ export default function Play() {
                     disabled={!canUndo}
                     aria-label="Desfazer o último turno"
                     title="Desfaz a última ação sua e a resposta da IA"
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10"
                   >
                     <Undo2 className="w-4 h-4" />
                   </button>
@@ -1583,21 +1585,12 @@ export default function Play() {
                     disabled={generating || turnBlocked || needsCharacter}
                     aria-label="Continuar a narração"
                     title={needsCharacter ? 'Crie seu personagem para jogar' : (turnBlocked ? 'Aguarde a sua vez' : 'A IA escreve o próximo parágrafo')}
-                    className="flex h-10 items-center gap-1.5 rounded-full bg-accent-pri px-4 text-xs font-semibold text-canvas hover:bg-accent-hov shadow transition disabled:opacity-40"
+                    className="flex h-9 items-center gap-1.5 rounded-full bg-accent-pri px-3 text-xs font-semibold text-canvas shadow transition hover:bg-accent-hov disabled:opacity-40 sm:h-10 sm:px-4"
                   >
                     <PlayIcon className="w-3.5 h-3.5 fill-current" />
                     <span className="hidden sm:inline">Continuar</span>
                   </button>
                 </div>
-
-                {shareButton}
-
-                {canShare && (
-                  <>
-                    <button onClick={() => setPublishOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Publicar</button>
-                    <button onClick={() => setModsOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Mods</button>
-                  </>
-                )}
 
                 <button
                   onClick={() => {
@@ -1612,10 +1605,20 @@ export default function Play() {
                   disabled={seeing || generating}
                   aria-label={seeing ? 'Gerando a imagem da cena' : 'Gerar imagem da cena'}
                   title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 transition"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10"
                 >
                   <ImageIcon className="w-4 h-4 text-accent-pri" />
                 </button>
+
+                <div className="hidden items-center gap-1 sm:flex">
+                  {shareButton}
+
+                  {canShare && (
+                    <>
+                      <button onClick={() => setPublishOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Publicar</button>
+                      <button onClick={() => setModsOpen(true)} className="h-10 rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Mods</button>
+                    </>
+                  )}
 
                 {/* Reader Typography Controls Popover */}
                 <button
@@ -1657,6 +1660,96 @@ export default function Play() {
                     <PanelRight className="w-4 h-4 text-secondary" />
                   )}
                 </button>
+                </div>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              aria-label="Mais ações"
+              aria-haspopup="menu"
+              aria-expanded={mobileMenuOpen}
+              title="Mais ações"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary sm:hidden"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+
+            {mobileMenuOpen && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Fechar menu de ações"
+                  className="fixed inset-0 z-40 cursor-default"
+                  onClick={() => setMobileMenuOpen(false)}
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-xl border border-subtle bg-surface p-1 shadow-2xl sm:hidden"
+                >
+                  {canShare && (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { setMobileMenuOpen(false); setShareOpen(true) }}
+                        className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                      >
+                        Compartilhar
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { setMobileMenuOpen(false); setPublishOpen(true) }}
+                        className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                      >
+                        Publicar
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { setMobileMenuOpen(false); setModsOpen(true) }}
+                        className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                      >
+                        Mods
+                      </button>
+                      <div className="my-1 h-px bg-subtle" />
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setMobileMenuOpen(false); setShowReaderModal(true) }}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                  >
+                    Tipografia e tema
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setMobileMenuOpen(false); setMapOpen(true) }}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                  >
+                    Mapa e journal
+                  </button>
+                  <Link
+                    to={`/adventures/${id}/novel`}
+                    role="menuitem"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                  >
+                    Visual Novel
+                  </Link>
+                  <Link
+                    to="/settings"
+                    role="menuitem"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-secondary hover:bg-elevated hover:text-primary"
+                  >
+                    Configurações
+                  </Link>
+                </div>
               </>
             )}
           </div>

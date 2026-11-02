@@ -34,7 +34,7 @@ export default function GenerationPreferences({ adventure, onSaved }) {
         aria-label="Preferências desta aventura"
         aria-expanded={open}
         title="Resposta, voz e imagem desta aventura"
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:bg-elevated hover:text-primary transition"
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary sm:h-10 sm:w-10"
       >
         <SlidersHorizontal className="h-4 w-4 text-accent-pri" />
       </button>

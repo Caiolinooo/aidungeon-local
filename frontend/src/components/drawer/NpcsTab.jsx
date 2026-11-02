@@ -65,7 +65,7 @@ function PortraitThumb({ card, activeJob }) {
   }, [card.portrait?.id])
 
   return (
-    <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-subtle bg-surface">
+    <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-subtle bg-surface sm:h-24 sm:w-24">
       {url ? (
         <img src={url} alt={card.title || 'NPC portrait'} className="h-full w-full object-cover" />
       ) : (
@@ -549,11 +549,11 @@ function NpcRow({
     JSON.stringify(form.sheet) !== JSON.stringify(parseSheet(card.sheet))
 
   const inputCls =
-    'w-full rounded-lg border border-subtle bg-surface px-3 py-2 text-sm outline-none focus:border-accent-pri'
+    'w-full rounded-lg border border-subtle bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent-pri sm:px-3 sm:py-2'
 
   return (
-    <li className="min-w-0 rounded-lg border border-subtle bg-surface/50 p-3">
-      <div className="flex min-w-0 gap-3">
+    <li className="min-w-0 rounded-lg border border-subtle bg-surface/50 p-2.5 sm:p-3">
+      <div className="flex min-w-0 gap-2 sm:gap-3">
         <PortraitThumb card={card} activeJob={jobActive ? job : null} />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <input
@@ -803,6 +803,7 @@ export default function NpcsTab({ adventure }) {
   const [webSources, setWebSources] = useState([])
   const [regeneratingId, setRegeneratingId] = useState(null)
   const [clonedVoices, setClonedVoices] = useState([])
+  const [dismissed, setDismissed] = useState(() => new Set())
   const prevStatuses = useRef({})
 
   const reload = useCallback(async () => {
@@ -1110,41 +1111,46 @@ export default function NpcsTab({ adventure }) {
           </div>
         </div>
       )}
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-secondary">
-          NPCs ({npcs.length})
-        </h3>
-        <div className="flex gap-1">
+      <div className="mb-3 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-secondary">
+            NPCs ({npcs.length})
+          </h3>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary" title="Pesquisar na internet ao enriquecer NPCs">
+            <input
+              type="checkbox"
+              checked={webOn}
+              onChange={(e) => setWebOn(e.target.checked)}
+              className="rounded accent-emerald-600"
+            />
+            <span>🌐 web</span>
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-1">
           <button
             onClick={() => { setNpcName(''); setNamingNpc(true) }}
-            className="rounded-md bg-accent-pri px-3 py-1.5 text-sm font-medium text-canvas hover:bg-accent-hov"
+            className="min-h-9 flex-1 rounded-md bg-accent-pri px-2 py-1.5 text-xs font-medium text-canvas hover:bg-accent-hov sm:flex-none sm:px-3 sm:text-sm"
           >
-            + Adicionar NPC
+            <span className="sm:hidden">+ NPC</span>
+            <span className="hidden sm:inline">+ Adicionar NPC</span>
           </button>
           <button
             onClick={simulateDay}
             title="Invent one off-screen day for every NPC"
-            className="rounded-md border border-subtle px-3 py-1.5 text-sm text-secondary hover:bg-elevated"
+            className="min-h-9 flex-1 rounded-md border border-subtle px-2 py-1.5 text-xs text-secondary hover:bg-elevated sm:flex-none sm:px-3 sm:text-sm"
           >
-            ⏩ Simulate a day
+            <span className="sm:hidden">⏩ Dia</span>
+            <span className="hidden sm:inline">⏩ Simulate a day</span>
           </button>
           <button
             onClick={generateAll}
             title="Only NPCs that don't have a portrait yet. Saved faces stay."
-            className="rounded-md border border-subtle px-3 py-1.5 text-sm text-secondary hover:bg-elevated"
+            className="min-h-9 flex-1 rounded-md border border-subtle px-2 py-1.5 text-xs text-secondary hover:bg-elevated sm:flex-none sm:px-3 sm:text-sm"
           >
-            Generate missing portraits
+            <span className="sm:hidden">Retratos</span>
+            <span className="hidden sm:inline">Generate missing portraits</span>
           </button>
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-secondary cursor-pointer" title="Pesquisar na internet ao enriquecer NPCs">
-          <input
-            type="checkbox"
-            checked={webOn}
-            onChange={(e) => setWebOn(e.target.checked)}
-            className="accent-emerald-600 rounded"
-          />
-          <span>🌐 web</span>
-        </label>
       </div>
 
       <div className="mb-3">

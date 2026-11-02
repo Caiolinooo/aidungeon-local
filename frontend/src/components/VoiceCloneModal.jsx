@@ -235,11 +235,11 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
       onClick={() => { if (!busy) close(null) }}
     >
       <div
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-subtle bg-surface p-4 text-secondary"
+        className="h-[100dvh] max-h-[100dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-none border-0 bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-secondary sm:h-auto sm:max-h-[90dvh] sm:rounded-xl sm:border sm:border-subtle"
         onClick={(event) => event.stopPropagation()}
       >
         <h2 className="text-base font-semibold">Clonar voz</h2>
@@ -303,15 +303,15 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
 
         {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
 
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" disabled={busy} onClick={() => close(null)} className="rounded-lg px-3 py-2 text-sm">
+        <div className="sticky bottom-0 -mx-4 mt-4 flex flex-col-reverse gap-2 border-t border-subtle bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:static sm:mx-0 sm:flex-row sm:justify-end sm:border-0 sm:p-0">
+          <button type="button" disabled={busy} onClick={() => close(null)} className="min-h-10 w-full rounded-lg px-3 py-2 text-sm sm:min-h-0 sm:w-auto">
             Cancelar
           </button>
           <button
             type="button"
             disabled={!canSave}
             onClick={save}
-            className="rounded-lg border border-subtle px-3 py-2 text-sm disabled:opacity-40"
+            className="min-h-10 w-full rounded-lg border border-subtle px-3 py-2 text-sm disabled:opacity-40 sm:min-h-0 sm:w-auto"
           >
             {busy ? 'Salvando…' : 'Salvar e usar'}
           </button>
