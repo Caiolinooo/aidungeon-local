@@ -322,7 +322,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         beat = ""
     if clause and explicit:
         clothed = [card.get("title") for card in cast if card.get("title") not in nude]
-        nudity = "clothes off, fully nude, no underwear, no bra, no panties, no pants, no dress, no skirt, only for " + ", ".join(nude) + ", uncensored" if nude else "uncensored"
+        nudity = "clothes off, fully nude, bare skin, completely unclothed, only for " + ", ".join(nude) + ", uncensored" if nude else "uncensored"
         clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if clothed else ""
         composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         full_body = "wide full-body composition, entire body visible, not a close-up portrait"

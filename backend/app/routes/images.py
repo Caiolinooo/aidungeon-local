@@ -639,8 +639,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         clothed = [card.get("title") for card in locked if card.get("title") not in nude]
         if nude:
             lead_bits.append(
-                "clothes off, fully nude, no underwear, no bra, no panties, no pants, "
-                "no dress, no skirt, only for "
+                "clothes off, fully nude, bare skin, completely unclothed, only for "
                 + ", ".join(nude) + ", uncensored"
             )
         else:
@@ -716,6 +715,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     else:
         prompt = lead or tail
     negative = _dedupe_negative(neg_summary, assessment.image_negative)
+    if explicit and nude and not clothed:
+        negative = _dedupe_negative(
+            negative, "underwear, bra, panties, pants, dress, skirt, clothes")
     if not explicit:
         negative = _dedupe_negative(negative, neg_moment, npc_assets.NUDITY_BAN)
     if clause:
