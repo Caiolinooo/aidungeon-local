@@ -102,9 +102,9 @@ def test_identity_face_pngs_removes_body_and_clothing_below_shoulders():
     cropped = likeness.identity_face_pngs([buffer.getvalue()])[0]
 
     with Image.open(io.BytesIO(cropped)) as image:
-        assert image.size == (100, 110)
+        assert image.size == (100, 84)
         assert image.getpixel((50, 50)) == (255, 0, 0)
-        assert image.getpixel((50, 100)) == (0, 0, 255)
+        assert image.getpixel((50, 83)) == (255, 0, 0)
 
 
 def test_real_person_in_a_safe_scene_is_not_explicit():

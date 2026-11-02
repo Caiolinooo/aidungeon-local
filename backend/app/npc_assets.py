@@ -568,7 +568,10 @@ _FRAMING_WORDS = (
 )
 
 # Negative quando o card já tem rosto. Não lista a roupa: cena nua pode trocá-la.
-IDENTITY_NEGATIVE = "different person, wrong hair color, wrong skin tone, extra unnamed person"
+IDENTITY_NEGATIVE = (
+    "different person, wrong hair color, wrong skin tone, extra unnamed person, "
+    "extra people, crowd, background people, patrons, bystanders, onlookers"
+)
 
 _HAIR_COLORS = (
     "black", "blonde", "brown", "red", "white", "gray", "grey", "silver",

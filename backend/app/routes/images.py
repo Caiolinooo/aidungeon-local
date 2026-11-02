@@ -647,6 +647,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
         )
+        lead_bits.append("no other people in the background or elsewhere, no patrons, no bystanders")
     locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
     if explicit:
         alias_cards = [

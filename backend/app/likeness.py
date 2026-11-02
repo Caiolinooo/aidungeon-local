@@ -496,14 +496,14 @@ def load_reference_images(conn, adventure_id: str, image_ids: list[str]) -> list
 
 
 def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
-    """Recorta cabeça/ombros para cenas em que a roupa de referência não vale."""
+    """Recorta rosto/cabelo; ombros, roupa e pose da referência ficam fora."""
     from PIL import Image
 
     found: list[bytes] = []
     for raw in blobs:
         with Image.open(io.BytesIO(raw)) as source:
             image = source.convert("RGB")
-        face = image.crop((0, 0, image.width, max(1, round(image.height * 0.55))))
+        face = image.crop((0, 0, image.width, max(1, round(image.height * 0.42))))
         output = io.BytesIO()
         face.save(output, format="PNG")
         found.append(output.getvalue())
