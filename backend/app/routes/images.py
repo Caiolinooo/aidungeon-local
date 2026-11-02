@@ -620,6 +620,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     lead_bits = [order_lock] if order_lock else []
     locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
     if explicit:
+        if len(names) == 1:
+            lead_bits.append(f"{names[0]} is the only person in the entire scene, no one else")
+        lead_bits.append("wide full-body composition, entire body visible, not a close-up portrait")
         alias_cards = [
             {**card, "aliases": [
                 *(card.get("aliases") or []),
@@ -636,7 +639,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         clothed = [card.get("title") for card in locked if card.get("title") not in nude]
         if nude:
             lead_bits.append(
-                "clothes off, fully nude, no underwear, no bra, no panties, only for "
+                "clothes off, fully nude, no underwear, no bra, no panties, no pants, "
+                "no dress, no skirt, only for "
                 + ", ".join(nude) + ", uncensored"
             )
         else:
