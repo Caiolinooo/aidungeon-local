@@ -118,15 +118,14 @@ def test_identity_face_pngs_drops_a_panoramic_turnaround_without_a_face():
     assert likeness.identity_face_pngs([buffer.getvalue()]) == []
 
 
-def test_the_bundled_face_cascade_works_without_opencv_data():
+def test_the_bundled_face_detector_loads_without_opencv_data():
     cv2 = pytest.importorskip("cv2")
-    cascade = likeness._face_cascade()
-    assert cascade is not None, "o XML local precisa existir no pacote"
-    fallback = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-    # O cv2 5.x não traz mais o arquivo; o pacote precisa do próprio.
-    assert likeness._FACE_CASCADE_PATH.is_file()
-    if not fallback.is_file():
-        assert Path(likeness._FACE_CASCADE_PATH).stat().st_size > 100_000
+    if not hasattr(cv2, "FaceDetectorYN") and not hasattr(cv2, "FaceDetectorYN_create"):
+        pytest.skip("OpenCV sem FaceDetectorYN")
+    # O cv2 5.x não tem CascadeClassifier; o modelo local é o detector real.
+    assert likeness._FACE_MODEL_PATH.is_file()
+    assert likeness._FACE_MODEL_PATH.stat().st_size > 100_000
+    assert likeness._face_detector() is not None
 
 
 def test_identity_face_crop_follows_the_detected_face(monkeypatch):

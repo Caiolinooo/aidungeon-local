@@ -499,16 +499,48 @@ def load_reference_images(conn, adventure_id: str, image_ids: list[str]) -> list
     return blobs
 
 
+_FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
+_FACE_MODEL_PATH = Path(__file__).with_name("assets") / _FACE_MODEL_FILE
 _FACE_CASCADE_FILE = "haarcascade_frontalface_default.xml"
 _FACE_CASCADE_PATH = Path(__file__).with_name("assets") / _FACE_CASCADE_FILE
 
 
-@lru_cache(maxsize=1)
-def _face_cascade():
-    """Haar cascade local; o cv2 5.x não empacota mais o XML de dados."""
+def _face_detector():
+    """YuNet DNN local. O OpenCV 5 removeu o CascadeClassifier.
+
+    O modelo é pequeno (~230 KB) e já vem no pacote; sem ele o OpenCV 5
+    não tem nenhum detector de rosto utilizável. Um detector por chamada
+    evita corrida de `setInputSize` entre workers.
+    """
     try:
         import cv2
 
+        if not _FACE_MODEL_PATH.is_file():
+            log.warning("likeness: %s ausente", _FACE_MODEL_PATH)
+            return None
+        create = getattr(cv2, "FaceDetectorYN_create", None)
+        if create is None:
+            factory = getattr(cv2, "FaceDetectorYN", None)
+            create = getattr(factory, "create", None)
+        if create is None:
+            log.warning("likeness: OpenCV sem FaceDetectorYN")
+            return None
+        detector = create(str(_FACE_MODEL_PATH), "", (320, 320), 0.6, 0.3, 5000)
+        log.debug("likeness: face detector %s", _FACE_MODEL_PATH)
+        return detector
+    except Exception:  # pragma: no cover - ambiente sem OpenCV
+        return None
+
+
+@lru_cache(maxsize=1)
+def _face_cascade():
+    """Haar cascade de reserva para OpenCV antigo; o 5.x não tem a classe."""
+    try:
+        import cv2
+
+        classifier = getattr(cv2, "CascadeClassifier", None)
+        if classifier is None:
+            return None
         candidates = [_FACE_CASCADE_PATH]
         try:
             candidates.append(Path(cv2.data.haarcascades) / _FACE_CASCADE_FILE)
@@ -517,28 +549,33 @@ def _face_cascade():
         for path in candidates:
             if not path.is_file():
                 continue
-            cascade = cv2.CascadeClassifier(str(path))
+            cascade = classifier(str(path))
             if not cascade.empty():
                 log.info("likeness: face cascade %s", path)
                 return cascade
-        log.warning(
-            "likeness: %s ausente; identidade explícita usará recorte central",
-            _FACE_CASCADE_PATH,
-        )
         return None
     except Exception:  # pragma: no cover - ambiente sem OpenCV
         return None
 
 
 def _largest_face_box(image) -> tuple[int, int, int, int] | None:
-    cascade = _face_cascade()
-    if cascade is None:
-        return None
     try:
         import cv2
         import numpy as np
 
         pixels = np.asarray(image.convert("RGB"))
+        detector = _face_detector()
+        if detector is not None:
+            height, width = pixels.shape[:2]
+            detector.setInputSize((int(width), int(height)))
+            _ok, faces = detector.detect(cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
+            if faces is not None and len(faces):
+                x, y, w, h = max(
+                    faces, key=lambda box: float(box[2]) * float(box[3]))[:4]
+                return int(x), int(y), int(w), int(h)
+        cascade = _face_cascade()
+        if cascade is None:
+            return None
         gray = cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY)
         side = max(24, min(gray.shape[:2]) // 12)
         faces = cascade.detectMultiScale(
