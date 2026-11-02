@@ -50,6 +50,7 @@ No dialogue, no quotes, no style words. Output ONLY that sentence."""
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write a single English sentence describing the action happening right now: who does what to whom, in the place.
 Use plain words. Preserve each person's stated clothing state. Do not fade to black. Do not censor adult nudity or sex.
+If the player instruction says someone is nude, naked, undressed or "sem roupa", that person is fully nude now: ignore any earlier clothing, do not write "wearing", and never carry a dress or suit into the sentence. If the instruction asks to remove clothes, paint the result (nude), not the act of holding the garment.
 Do not describe hair, face, eyes or age.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add people who are not in the moment. Do not change the place.
@@ -197,8 +198,16 @@ def contradicting_looks(text: str, canon: str) -> tuple[str, str]:
         return " "
 
     cleaned = pattern.sub(scrub, text)
+    # O trecho de roupa some inteiro, mas o verbo fica: "A, wearing,
+    # presses..." virava uma frase quebrada e o modelo pintava roupa.
+    cleaned = re.sub(
+        r"(?i)(?<!\w)(?:wearing|dressed\s+in|clad\s+in|vestindo|usando)\s*(?=[,.;]|$)",
+        "",
+        cleaned,
+    )
     cleaned = re.sub(r"\s+([,.;])", r"\1", cleaned)
     cleaned = re.sub(r"(?:\s*[,.;]\s*){2,}", ", ", cleaned)
+    cleaned = re.sub(r",\s*,+", ", ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;")
     return cleaned, ", ".join(dict.fromkeys(banned))
 
@@ -342,8 +351,7 @@ def cancel_image_job(job_id: str,
 
 # -------------------------------------------------------------------- /see
 def _protagonist_name(plot: str) -> str:
-    match = re.search(r"Name:\s*([^\]\n;]+)", plot or "", re.IGNORECASE)
-    return " ".join(match.group(1).split()) if match else ""
+    return jobs.protagonist_from_plot(plot).get("name") or ""
 
 
 def _same_person(left: str, right: str) -> bool:
@@ -564,14 +572,18 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             + ". Keep the same face, hair, age and build. The player's requested "
             "moment, clothing and action take priority over older descriptions."
         )
-    location, entry = scene._location(cards, assessment.safe_excerpt or moment)
-    if assessment.image_directive and assessment.where != "unestablished":
+    # O cânone inteiro, não só o último trecho: o lugar pode ter sido
+    # estabelecido na abertura e a narração recente só falar de chuva.
+    location, entry = scene._location(cards, assessment.canon_blob or moment)
+    if (assessment.where != "unestablished"
+            and not world_facts.is_atmospheric_place_name(assessment.where, cards)):
         # Lugar canônico vence: pinta o lugar real, não o destino da tentativa.
         location = assessment.where
+        entry = ""
         for card in cards:
             if (card.get("type") or "") == "location" and \
                     (card.get("title") or "").casefold() == location.casefold():
-                entry = card.get("entry") or entry
+                entry = card.get("entry") or ""
                 break
     atmosphere = scene.atmosphere_of(assessment.safe_excerpt or moment)
     place = ""
@@ -619,6 +631,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     order_lock = _explicit_order_lock(order) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
     locked = cast_locked[:likeness.CAST_REFERENCE_LIMIT]
+    nude: list[str] = []
+    clothed: list[str] = []
     if explicit:
         if len(names) == 1:
             lead_bits.append(f"{names[0]} is the only person in the entire scene, no one else")
@@ -635,8 +649,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             ]}
             for card in locked
         ]
+        # Sem card não há rosto para travar: o protagonista só entra na cena
+        # depois que `ensure_player_card` cria a ficha dele. Um card sintético
+        # aqui pintava uma pessoa sem referência e, no See, o jogador
+        # "não resolvido" emprestava a nudez para o resto do elenco.
         nude = npc_assets.nude_names(alias_cards, moment, order)
-        clothed = [card.get("title") for card in locked if card.get("title") not in nude]
+        nude_keys = {name.casefold() for name in nude}
+        clothed = [
+            card.get("title") for card in locked
+            if (card.get("title") or "").casefold() not in nude_keys
+        ]
         if nude:
             lead_bits.append(
                 "clothes off, fully nude, bare skin, completely unclothed, only for "
@@ -645,7 +667,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         else:
             lead_bits.append("uncensored")
         if clothed:
-            lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
+            if nude:
+                # "fully clothed" solto ao lado de "fully nude" veste os dois.
+                lead_bits.append(
+                    "everyone else stays fully clothed in their current outfits: "
+                    + ", ".join(clothed)
+                )
+            else:
+                lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
     # normal: o rosto lidera o primeiro chunk — "kisses on the sofa" na
@@ -664,13 +693,15 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if not explicit:
         # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
         lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
-    if sentence and not refusal and not order_lock:
+    # A instrução do jogador não engole mais a ação: antes o order_lock
+    # omitia a frase do momento, e "donzela sem roupa" virava só um retrato.
+    if sentence and not refusal:
         lead_bits.append(sentence)
     if order and not order_lock:
         lead_bits.append(order)
-    lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
     if where:
-        lead_bits.append(", ".join(where))
+        lead_bits.append("Place: " + ", ".join(where))
+    lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
     if names:
         lead_bits.append(
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
@@ -729,11 +760,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if [card.get("id") for card in final_cast] != [card.get("id") for card in cast_locked]:
         _require_cast(adv["id"], final_cast)
         cast_locked = final_cast
-    if explicit:
-        cast_card_ids, reference_image_ids = likeness.cast_reference_ids(cast_locked)
-    else:
-        cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
-            cast_locked, str(img_cfg.get("provider") or "sdwebui"))
+    # Cena explícita usa o mestre de corpo inteiro + ficha, não só o busto:
+    # o rosto continua travado, mas a pessoa tem corpo e ângulos coerentes.
+    cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
+        cast_locked, str(img_cfg.get("provider") or "sdwebui"))
     return (prompt, negative, caption, frame, cast_card_ids,
             reference_image_ids, len(names), explicit)
 
@@ -767,6 +797,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         adv = db.get_adventure(conn, adventure_id)
         if not adv:
             raise GameError.not_found(f"adventure {adventure_id} not found")
+        jobs.ensure_player_card(conn, adv)
         actions = db.list_actions(conn, adventure_id)
         cards = [npc_assets.ensure_portrait_prompt(conn, card)
                  for card in db.list_cards(conn, adventure_id)]

@@ -913,13 +913,14 @@ def _merge_player_sheet(current_raw: str, incoming_raw: str) -> str:
 
 
 def upsert_player_character(conn: sqlite3.Connection, adventure_id: str, username: str,
-                            *, title: str, sheet: str, portrait_prompt: str | None = None) -> dict:
+                            *, title: str, sheet: str, entry: str = "",
+                            portrait_prompt: str | None = None) -> dict:
     """Cria ou atualiza o card do jogador. Id e retrato já gravados ficam."""
     current = player_character(conn, adventure_id, username)
     if current is None:
         return insert_card(
             conn, adventure_id, title=title, type="character",
-            use_for_character_creation=True, sheet=sheet,
+            entry=entry, use_for_character_creation=True, sheet=sheet,
             portrait_prompt=portrait_prompt or "", player_username=username,
         )
     fields: dict[str, Any] = {
@@ -929,6 +930,8 @@ def upsert_player_character(conn: sqlite3.Connection, adventure_id: str, usernam
         "use_for_character_creation": True,
         "player_username": username,
     }
+    if entry:
+        fields["entry"] = entry
     if portrait_prompt is not None:
         fields["portrait_prompt"] = portrait_prompt
     updated = update_card(conn, adventure_id, current["id"], fields)

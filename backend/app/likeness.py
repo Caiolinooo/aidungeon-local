@@ -22,6 +22,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -495,15 +496,72 @@ def load_reference_images(conn, adventure_id: str, image_ids: list[str]) -> list
     return blobs
 
 
+@lru_cache(maxsize=1)
+def _face_cascade():
+    """Haar cascade do OpenCV. Ausente ou quebrado: cai no recorte antigo."""
+    try:
+        import cv2
+
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        return None if cascade.empty() else cascade
+    except Exception:  # pragma: no cover - ambiente sem OpenCV
+        return None
+
+
+def _largest_face_box(image) -> tuple[int, int, int, int] | None:
+    cascade = _face_cascade()
+    if cascade is None:
+        return None
+    try:
+        import cv2
+        import numpy as np
+
+        pixels = np.asarray(image.convert("RGB"))
+        gray = cv2.cvtColor(pixels, cv2.COLOR_RGB2GRAY)
+        side = max(24, min(gray.shape[:2]) // 12)
+        faces = cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(side, side))
+        if len(faces) == 0:
+            return None
+        x, y, w, h = max(faces, key=lambda box: int(box[2]) * int(box[3]))
+        return int(x), int(y), int(w), int(h)
+    except Exception:  # pragma: no cover - OpenCV falhou em runtime
+        return None
+
+
+def _face_only_crop(image, box: tuple[int, int, int, int]):
+    """Rosto + cabelo + pescoço. Sem ombros, roupa, corpo ou fundo de estúdio."""
+    x, y, w, h = box
+    left = round(x - w * 0.75)
+    right = round(x + w + w * 0.75)
+    top = round(y - h * 0.60)
+    bottom = round(y + h + h * 0.28)
+    left = max(0, min(left, image.width - 1))
+    top = max(0, min(top, image.height - 1))
+    right = max(left + 1, min(right, image.width))
+    bottom = max(top + 1, min(bottom, image.height))
+    return image.crop((left, top, right, bottom))
+
+
 def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
-    """Recorta rosto/cabelo; ombros, roupa e pose da referência ficam fora."""
+    """Recorta rosto/cabelo; ombros, roupa e pose da referência ficam fora.
+
+    O recorte fixo dos 42% superiores ainda levava a blusa branca e o fundo
+    cinza do retrato para a cena explícita. Com o OpenCV, o recorte segue o
+    rosto detectado; sem detecção, o enquadramento antigo é o fallback.
+    """
     from PIL import Image
 
     found: list[bytes] = []
     for raw in blobs:
         with Image.open(io.BytesIO(raw)) as source:
             image = source.convert("RGB")
-        face = image.crop((0, 0, image.width, max(1, round(image.height * 0.42))))
+        box = _largest_face_box(image)
+        face = (
+            _face_only_crop(image, box) if box
+            else image.crop((0, 0, image.width, max(1, round(image.height * 0.42))))
+        )
         output = io.BytesIO()
         face.save(output, format="PNG")
         found.append(output.getvalue())

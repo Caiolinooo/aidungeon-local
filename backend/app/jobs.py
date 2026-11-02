@@ -56,6 +56,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -379,6 +380,138 @@ def enqueue_all_portraits(conn, adventure_id: str) -> list[dict]:
         if job:
             queued.append(job)
     return queued
+
+
+# O plot essentials é o único lugar que guarda o protagonista quando a
+# aventura foi criada sem ficha de jogador (import antigo, cenário gerado
+# antes do card do jogador). Sem este card não há rosto nem sexo travados, e
+# "Caio" saía como um estranho ou ficava de fora da cena.
+_PROTAGONIST_FIELD = re.compile(
+    r"(?i)\b(name|nome|role|papel|class|classe|appearance|aparência|aparencia)"
+    r"\s*:\s*([^;\[\]\n]+)"
+)
+_PROTAGONIST_KEYS = {
+    "name": "name", "nome": "name",
+    "role": "role", "papel": "role", "class": "role", "classe": "role",
+    "appearance": "appearance", "aparência": "appearance", "aparencia": "appearance",
+}
+_PROTAGONIST_TRIM = " \t\r\n.,;:—–-"
+_PLAYER_OUTFIT = re.compile(
+    r"(?i)\b(?:wearing|dressed\s+in|clad\s+in|vestindo|usando)\b\s*(.+)$"
+)
+
+
+def _fold_name(text: str) -> str:
+    return " ".join(str(text or "").casefold().split())
+
+
+def protagonist_from_plot(plot: str) -> dict:
+    """Nome, papel e aparência do protagonista no plot essentials.
+
+    O primeiro bloco `[Name: ...]` é o jogador; os seguintes são NPCs. Também
+    entende `Nome:`/`Papel:`/`Aparência:` e o prefixo "Protagonista — ...".
+    """
+    text = " ".join(str(plot or "").split())
+    if not text:
+        return {}
+    blocks = re.findall(r"\[([^\]]+)\]", text) or [text]
+    for block in blocks:
+        fields: dict[str, str] = {}
+        for match in _PROTAGONIST_FIELD.finditer(block):
+            key = _PROTAGONIST_KEYS.get(match.group(1).casefold())
+            value = match.group(2).strip(_PROTAGONIST_TRIM)
+            if key and value and key not in fields:
+                fields[key] = value
+        name = fields.get("name") or ""
+        if 2 <= len(name) <= 80 and 1 <= len(name.split()) <= 6:
+            return fields
+    return {}
+
+
+def _player_sheet_from_protagonist(info: dict) -> dict:
+    """Ficha mínima para o retrato e as cenas: aparência, corpo e roupa."""
+    from app import stats as stats_mod
+
+    appearance = " ".join(str(info.get("appearance") or "").split())
+    role = " ".join(str(info.get("role") or "").split())
+    body = npc_assets.without_outfit(appearance) if appearance else ""
+    outfit = ""
+    match = _PLAYER_OUTFIT.search(appearance)
+    if match:
+        outfit = match.group(1).strip(_PROTAGONIST_TRIM)
+    sheet: dict[str, Any] = {
+        "status": "alive",
+        "stats": stats_mod.estimate_stats(" ".join((body, appearance)), role),
+        "notes": (
+            "Criado automaticamente a partir dos essenciais do cenário; "
+            "edite a ficha para ajustar."
+        ),
+    }
+    if role:
+        sheet["class"] = role
+    if body:
+        sheet["appearance"] = body
+    elif appearance:
+        sheet["appearance"] = appearance
+    if outfit:
+        sheet["clothing"] = outfit
+    return sheet
+
+
+def ensure_player_card(conn, adventure: dict) -> dict | None:
+    """Garante o card do protagonista em aventuras sem ficha de jogador.
+
+    Não sobrescreve ficha existente. Adota um card de personagem com o mesmo
+    nome (o assistant já remove o protagonista dos NPCs, então isso só evita
+    duplicata em dados antigos). Enfileira o retrato; sem ele o See falha com
+    `portrait_required` e a cena não sai com um rosto inventado.
+    """
+    adventure_id = str((adventure or {}).get("id") or "")
+    username = str((adventure or {}).get("owner") or "").strip()
+    if not adventure_id or not username:
+        return None
+    current = db.player_character(conn, adventure_id, username)
+    if current is not None:
+        return current
+    info = protagonist_from_plot((adventure or {}).get("plot_essentials") or "")
+    name = info.get("name") or ""
+    if not name or not (info.get("appearance") or info.get("role")):
+        return None
+    sheet = _player_sheet_from_protagonist(info)
+    entry = " — ".join(
+        part for part in (
+            " ".join(str(info.get("role") or "").split()),
+            " ".join(str(info.get("appearance") or "").split()),
+        ) if part
+    )
+    folded = _fold_name(name)
+    twin = next((
+        card for card in db.list_cards(conn, adventure_id)
+        if (card.get("type") or "") == "character"
+        and not (card.get("player_username") or "").strip()
+        and _fold_name(card.get("title")) == folded
+    ), None)
+    if twin is not None:
+        merged = npc_assets.parse_sheet(twin.get("sheet") or "")
+        for key, value in sheet.items():
+            merged.setdefault(key, value)
+        fields: dict[str, Any] = {
+            "player_username": username,
+            "use_for_character_creation": True,
+            "sheet": json.dumps(merged, ensure_ascii=False),
+        }
+        if not (twin.get("entry") or "").strip() and entry:
+            fields["entry"] = entry
+        card = db.update_card(conn, adventure_id, twin["id"], fields)
+    else:
+        card = db.upsert_player_character(
+            conn, adventure_id, username, title=name, entry=entry,
+            sheet=json.dumps(sheet, ensure_ascii=False),
+        )
+    if card is not None and not likeness.reference_image_id(card):
+        enqueue_portrait(conn, adventure_id, card["id"])
+    return card
+
 
 
 def enqueue_card_assets(conn, adventure_id: str, card_id: str) -> dict | None:

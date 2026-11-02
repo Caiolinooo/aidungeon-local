@@ -201,6 +201,43 @@ def _card_labels(card: dict) -> list[str]:
     return [label.strip() for label in labels if label and str(label).strip()]
 
 
+# Card de clima ("A Nóvoa", chuva, neblina) não é um cômodo. Sem esta
+# distinção, uma frase sobre chuva virava "Place: A Nóvoa" e o modelo pintava
+# um estúdio cinza em vez do apartamento onde a cena acontece.
+_ATMOSPHERIC_PLACE = re.compile(
+    r"(?i)\b(?:n[óo]voa|n[ée]voa|neblina|bruma|cerra[cç][aã]o|"
+    r"chuva|rain|fog|mist|haze|storm|tempestade|vento|wind|"
+    r"neve|snow|clima|weather|atmosphere)\b"
+)
+_PHYSICAL_PLACE = re.compile(
+    r"(?i)\b(?:apartamento|apartment|casa|house|home|quarto|room|sala|"
+    r"castelo|castle|pal[áa]cio|palace|mans[ãa]o|manor|taverna|tavern|"
+    r"estalagem|inn|hotel|hospital|escola|school|templo|temple|igreja|"
+    r"church|floresta|forest|caverna|cave|navio|ship|rua|street|"
+    r"cidade|city|vila|village|torre|tower|ref[úu]gio|refuge)\b"
+)
+
+
+def is_atmospheric_place(card: dict) -> bool:
+    """Lugar-clima/cenário sem cômodo físico. Título físico vence o clima."""
+    labels = " ".join(_card_labels(card))
+    if _PHYSICAL_PLACE.search(labels):
+        return False
+    return _ATMOSPHERIC_PLACE.search(labels) is not None
+
+
+def is_atmospheric_place_name(name: str, cards: list[dict]) -> bool:
+    folded = (name or "").casefold()
+    for card in cards:
+        if (card.get("type") or "") != "location":
+            continue
+        title = (card.get("title") or "").strip()
+        if title and title.casefold() == folded:
+            return is_atmospheric_place(card)
+    return _ATMOSPHERIC_PLACE.search(name or "") is not None \
+        and _PHYSICAL_PLACE.search(name or "") is None
+
+
 def _exact_label(cards: list[dict], phrase: str, type_: str | None) -> bool:
     folded = phrase.casefold()
     for card in cards:
@@ -340,35 +377,59 @@ def _recent_text(texts: list[str]) -> str:
 
 
 def _where_in(text: str, cards: list[dict]) -> tuple[int, str] | None:
-    found: list[tuple[int, str]] = []
-    best_at = -1
-    best_title = ""
+    physical: list[tuple[int, str]] = []
+    atmospheric: list[tuple[int, str]] = []
     for card in cards:
         if (card.get("type") or "") != "location":
             continue
+        best_at = -1
         for label in _card_labels(card):
             index = _last_index(text, label)
             if index > best_at:
                 best_at = index
-                best_title = (card.get("title") or label).strip()
-    if best_title:
-        found.append((best_at, best_title))
+        if best_at < 0:
+            continue
+        title = (card.get("title") or "").strip()
+        if not title:
+            continue
+        (atmospheric if is_atmospheric_place(card) else physical).append(
+            (best_at, title))
     for match in _WHERE_RE.finditer(text or ""):
         phrase = clean_phrase(match.group(1))
-        if len(phrase) >= 3:
-            found.append((match.start(), phrase))
-    if not found:
-        return None
-    return max(found)
+        if len(phrase) < 3 or _ATMOSPHERIC_PLACE.search(phrase):
+            continue
+        physical.append((match.start(), phrase))
+    if physical:
+        return max(physical)
+    if atmospheric:
+        return max(atmospheric)
+    return None
 
 
 def _current_where(accepted: list[str], cards: list[dict], plot_text: str) -> str:
-    for text in reversed(accepted):
+    physical: list[tuple[int, str]] = []
+    atmospheric: list[tuple[int, str]] = []
+    for text in accepted:
         found = _where_in(text, cards)
-        if found:
-            return found[1]
+        if not found:
+            continue
+        target = atmospheric if is_atmospheric_place_name(found[1], cards) else physical
+        target.append(found)
+    if physical:
+        return physical[-1][1]
+    if atmospheric:
+        return atmospheric[-1][1]
     found = _where_in(plot_text, cards)
     if found:
+        if is_atmospheric_place_name(found[1], cards):
+            physical_cards = [
+                card for card in cards
+                if (card.get("type") or "") == "location"
+                and not is_atmospheric_place(card)
+                and (card.get("title") or "").strip()
+            ]
+            if len(physical_cards) == 1:
+                return physical_cards[0]["title"].strip()
         return found[1]
     return "unestablished"
 

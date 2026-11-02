@@ -559,6 +559,10 @@ _OUTFIT_WORDS = (
     "choker", "necklace", "heel", "heels", "stocking", "corset", "colar",
     "garment", "garments", "attire", "sleeve", "sleeves", "sock", "socks",
     "scarf", "belt", "buttons", "hem", "vestes", "veste", "seda", "transluc",
+    "vestindo", "vestia", "usando", "usava", "trajando", "trajava",
+    "terno", "ternos", "gravata", "camisa", "calça", "calca", "sapato",
+    "sapatos", "blusa", "saia", "meia", "meias", "luvas", "manto",
+    "uniforme", "sobretudo", "jaqueta",
 )
 
 # Enquadramento de retrato. Na cena ele puxa um busto e apaga o gesto.
@@ -678,7 +682,8 @@ def _drop_clauses(text: str, words: tuple[str, ...], *, cut: re.Pattern[str] | N
 
 
 _OUTFIT_PHRASE = re.compile(
-    r"(?i)\b(?:wearing|dressed in|clad in|clothed in|covered (?:in|with))\b[^.;,]*"
+    r"(?i)\b(?:wearing|dressed in|clad in|clothed in|covered (?:in|with)|"
+    r"vestindo|vestia|usando|usava|trajando|trajava)\b[^.;,]*"
 )
 
 
@@ -1374,21 +1379,52 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
     return CLOTHED_LOCK
 
 
+_TITLE_STOP = {
+    "a", "o", "as", "os", "da", "do", "das", "dos", "de", "di", "du",
+    "the", "of", "and", "e", "em", "no", "na", "nos", "nas", "um", "uma",
+    "ao", "à", "la", "le", "les", "el", "los", "las",
+}
+
+
+def title_aliases(title: str) -> list[str]:
+    """Título completo + o primeiro nome significativo.
+
+    "A Donzela da Noite" também é chamada de "Donzela" na fala do jogador.
+    Sem esse alias, o pedido "donzela sem roupa" não encontrava o card e a
+    cena saía vestida.
+    """
+    clean = " ".join(str(title or "").split())
+    if not clean:
+        return []
+    names = [clean]
+    for word in clean.split():
+        token = word.strip(".,;:!?()[]{}'\"“”‘’")
+        if (len(token) >= 4 and token[0].isupper()
+                and token.casefold() not in _TITLE_STOP):
+            names.append(token)
+            break
+    return list(dict.fromkeys(names))
+
+
 def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
     """Estados locais por card: nudez afirmada e nudez negada/roupa."""
     titles = [" ".join(str(card.get("title") or "").split()) for card in cards]
-    first_counts: dict[str, int] = {}
-    for title in titles:
-        parts = title.split()
-        if parts:
-            first = parts[0].casefold()
-            first_counts[first] = first_counts.get(first, 0) + 1
+    short_aliases = [title_aliases(title)[1:] for title in titles]
+    short_counts: dict[str, int] = {}
+    for title, extras in zip(titles, short_aliases):
+        if len(title.split()) == 1 and title:
+            short_counts[title.casefold()] = short_counts.get(title.casefold(), 0) + 1
+        for alias in extras:
+            key = alias.casefold()
+            short_counts[key] = short_counts.get(key, 0) + 1
     aliases: list[list[str]] = []
-    for card, title in zip(cards, titles):
-        names = [title, *(card.get("aliases") or []), *(card.get("triggers") or [])]
-        parts = title.split()
-        if len(parts) > 1 and first_counts[parts[0].casefold()] == 1:
-            names.append(parts[0])
+    for card, title, extras in zip(cards, titles, short_aliases):
+        names = [
+            title,
+            *(card.get("aliases") or []),
+            *(card.get("triggers") or []),
+            *[alias for alias in extras if short_counts.get(alias.casefold()) == 1],
+        ]
         aliases.append(list(dict.fromkeys(
             str(name) for name in names if len(str(name)) >= 3
         )))
@@ -1398,10 +1434,17 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
         return set(), set()
     coordinated_names = "|".join(re.escape(name) for name in everyone)
     coordinated = rf"(?:\s*(?:,|and|e)\s*(?:{coordinated_names}))*"
-    nude = r"(?:naked|nudes?|nua?s?|nu|pelad[oa]s?|desnud[oa]s?)"
+    nude = (
+        r"(?:naked|nudes?|nua?s?|nu|pelad[oa]s?|desnud[oa]s?|topless|"
+        r"sem\s+roupas?|sem\s+nada|clothes\s+off|"
+        r"(?:naked|nude|bare)\s+body|corpo\s+(?:nu|nua)|"
+        r"tir(?:ar|a|ou|ando)\s+(?:a\s+|as\s+|sua\s+|suas\s+)?roupa|"
+        r"despi(?:r|u|ndo)|despid[oa]s?)"
+    )
     covered = (
         r"(?:clothed|dressed|vestid[oa]s?|cobert[oa]s?|wearing\s+clothes|"
-        r"com\s+roupa|de\s+roupa|keeps?\s+(?:(?:her|his|their)\s+)?clothes\s+on)"
+        r"com\s+roupa|de\s+roupa|fully\s+dressed|"
+        r"keeps?\s+(?:(?:her|his|their)\s+)?clothes\s+on)"
     )
     words = (
         "is", "are", "was", "were", "está", "estao", "estava", "estavam",
@@ -1427,36 +1470,51 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
         matches: list[tuple[int, bool]] = []
         for name in names:
             escaped = re.escape(name)
-            direct_nude = rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*{between}{nude}\b"
+            possessive = rf"{escaped}(?:['’]s)?"
+            direct_nude = rf"(?i)\b{possessive}\b\s*(?:,|;)?\s*{between}{nude}\b"
             trailing_nude = (
                 rf"(?i)\b(?P<between>(?:(?:not|never|no|nao|não|nunca|nem)\s+)?)"
                 rf"{nude}\s+{escaped}\b"
             )
             compound_nude = (
-                rf"(?i)\b{escaped}\b{coordinated}\s+"
+                rf"(?i)\b{possessive}\b{coordinated}\s+"
                 rf"(?:are|were|estão|estao|estavam|ficam)\s+{between}{nude}\b"
             )
-            direct_covered = rf"(?i)\b{escaped}\b\s*(?:,|;)?\s*{between}{covered}\b"
+            direct_covered = rf"(?i)\b{possessive}\b\s*(?:,|;)?\s*{between}{covered}\b"
             compound_covered = (
-                rf"(?i)\b{escaped}\b{coordinated}\s+"
+                rf"(?i)\b{possessive}\b{coordinated}\s+"
                 rf"(?:are|were|estão|estao|estavam|ficam)\s+{between}{covered}\b"
             )
             action_nude = (
-                rf"(?i)\b{escaped}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
+                rf"(?i)\b{possessive}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
                 rf"\b{state_verbs}\s+{after_state}){nude}\b"
             )
             action_covered = (
-                rf"(?i)\b{escaped}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
+                rf"(?i)\b{possessive}\b\s+(?P<between>[^.!?…;\n]{{0,160}}?"
                 rf"\b{state_verbs}\s+{after_state}){covered}\b"
+            )
+            body_nude = (
+                rf"(?i)\b{possessive}\b(?P<between>[^.!?…;\n]{{0,120}}?)"
+                rf"\b(?:naked|nude|bare)\s+body\b"
+            )
+            pronoun_nude = (
+                rf"(?i)\b{possessive}\b(?P<between>[^\n]{{0,180}}?)"
+                rf"\b(?:she|he|they|ela|ele)\b[^.!?…;\n]{{0,40}}?\b{nude}\b"
+            )
+            undress_before = (
+                rf"(?i)\b(?:tirar|tira|tirou|tirando|despir|despe|despindo)\s+"
+                rf"(?:a\s+|as\s+|sua\s+|suas\s+|da\s+|do\s+|das\s+|dos\s+)?roupa\s+"
+                rf"(?:d[aeo]s?\s+)?{escaped}\b"
             )
             for pattern, covered_term, guard_people in (
                 (direct_nude, False, False), (trailing_nude, False, False),
                 (compound_nude, False, False), (direct_covered, True, False),
                 (compound_covered, True, False), (action_nude, False, True),
-                (action_covered, True, True),
+                (action_covered, True, True), (body_nude, False, True),
+                (pronoun_nude, False, True), (undress_before, False, False),
             ):
                 for match in re.finditer(pattern, text or ""):
-                    local = match.group("between") or ""
+                    local = match.groupdict().get("between") or ""
                     if guard_people and any(re.search(
                         rf"(?<!\w){re.escape(other)}(?!\w)", local, re.IGNORECASE,
                     ) for other in other_names):

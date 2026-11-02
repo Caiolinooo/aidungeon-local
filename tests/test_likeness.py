@@ -107,6 +107,24 @@ def test_identity_face_pngs_removes_body_and_clothing_below_shoulders():
         assert image.getpixel((50, 83)) == (255, 0, 0)
 
 
+def test_identity_face_crop_follows_the_detected_face(monkeypatch):
+    """Com rosto detectado, ombros e fundo de estúdio ficam fora do recorte."""
+    source = Image.new("RGB", (200, 400), (0, 0, 255))
+    # Corpo/roupa só abaixo de y=160; o rosto detectado fica em cima.
+    source.paste(Image.new("RGB", (200, 140), (255, 0, 0)), (0, 0))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+    monkeypatch.setattr(
+        likeness, "_largest_face_box", lambda image: (80, 20, 40, 40))
+
+    cropped = likeness.identity_face_pngs([buffer.getvalue()])[0]
+
+    with Image.open(io.BytesIO(cropped)) as image:
+        # left=50, right=150, top=-4→0, bottom=71
+        assert image.size == (100, 71)
+        assert image.getpixel((50, 70)) == (255, 0, 0)
+
+
 def test_real_person_in_a_safe_scene_is_not_explicit():
     zendaya = {"type": "character", "title": "Zendaya", "sheet": json.dumps({
         "real_person": True, "real_name": "Zendaya",

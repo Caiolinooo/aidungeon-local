@@ -138,10 +138,12 @@ def _mention_names(card: dict) -> list[str]:
     A narração chama "Thalita" depois de apresentar "Thalita Massoto".
     Sem o nome curto, a carta — e a foto de referência — fica fora da cena.
     """
-    names = [card.get("title") or "", *(card.get("triggers") or [])]
     title = " ".join(str(card.get("title") or "").split())
-    if len(title.split()) > 1:
-        names.append(title.split()[0])
+    names = [
+        title,
+        *npc_assets.title_aliases(title),
+        *(card.get("triggers") or []),
+    ]
     return list(dict.fromkeys(name for name in names if name))
 
 
@@ -175,16 +177,29 @@ def _cast_moods(cast: list[dict], text: str) -> dict[str, str | None]:
 
 
 def _location(cards: list[dict], text: str) -> tuple[str, str]:
-    """(título, entry) do card de lugar mencionado por último. Sem card, usa a prosa."""
-    best: tuple[int, str, str] | None = None
+    """(título, entry) do card de lugar mencionado por último. Sem card, usa a prosa.
+
+    Card de clima ("A Nóvoa") perde para um lugar físico, mesmo que a chuva
+    apareça depois: o fundo pinta o apartamento, não a névoa.
+    """
+    physical: tuple[int, str, str] | None = None
+    atmospheric: tuple[int, str, str] | None = None
     for card in cards:
         if (card.get("type") or "") != "location":
             continue
-        names = [card.get("title") or "", *(card.get("triggers") or [])]
-        for name in names:
-            index = _last_mention(text, name)
-            if index >= 0 and (best is None or index >= best[0]):
-                best = (index, card.get("title") or name, card.get("entry") or "")
+        title = " ".join(str(card.get("title") or "").split())
+        names = [*npc_assets.title_aliases(title), *(card.get("triggers") or [])]
+        index = max((_last_mention(text, name) for name in names), default=-1)
+        if index < 0:
+            continue
+        found = (index, title or names[0], card.get("entry") or "")
+        target = atmospheric if world_facts.is_atmospheric_place(card) else physical
+        if target is None or index >= target[0]:
+            if world_facts.is_atmospheric_place(card):
+                atmospheric = found
+            else:
+                physical = found
+    best = physical or atmospheric
     if best:
         return best[1], best[2]
     return "the current scene", ""
@@ -201,7 +216,20 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
         if index >= 0:
             ranked.append((index, card))
     ranked.sort(key=lambda item: item[0])
-    return [card for _, card in ranked[-_CAST_LIMIT:]]
+    cast = [card for _, card in ranked[-_CAST_LIMIT:]]
+    # A narração em segunda pessoa ("you"/"você") não repete o nome do
+    # protagonista. Sem o card dele, o fundo pinta só o NPC e o jogador
+    # desaparece da cena.
+    if re.search(r"(?i)(?<!\w)(?:you|você|voce)(?!\w)", text or ""):
+        player = next((
+            card for card in cards
+            if (card.get("type") or "") == "character"
+            and card.get("use_for_character_creation")
+        ), None)
+        if player is not None and all(
+                player.get("id") != card.get("id") for card in cast):
+            cast = [player, *cast][:_CAST_LIMIT]
+    return cast
 
 
 def _reaction_clause(cast: list[dict]) -> str:
@@ -384,10 +412,10 @@ def cast_reference_plan(conn, adventure_id: str, cast: list[dict], *,
     Lista vazia é cena sem gente: não há referência para exigir. Em cena
     explícita usa uma âncora por pessoa, sem folhas de roupa ou composição.
     """
-    if explicit:
-        card_ids, image_ids = likeness.cast_reference_ids(cast)
-    else:
-        card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
+    # Explícito também usa mestre + ficha no ComfyUI. Só o busto não dava
+    # corpo nem ângulo; o recorte de rosto em `identity_face_pngs` remove a
+    # roupa e o estúdio dessas referências antes de enviar.
+    card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
     if any(not image_id for image_id in image_ids):
         raise likeness.portrait_required()
     blobs = (
@@ -488,6 +516,8 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
     a obediência que o NPC não deu.
     """
     adventure = db.get_adventure(conn, adventure_id) or {}
+    if adventure:
+        jobs.ensure_player_card(conn, adventure)
     actions = [
         dict(row) for row in conn.execute(
             "SELECT seq, type, text FROM actions WHERE adventure_id=? ORDER BY seq ASC",

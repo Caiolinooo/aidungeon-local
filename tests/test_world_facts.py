@@ -748,3 +748,119 @@ def test_chronicle_drops_a_room_the_attempt_invented(tmp_db):
         titles = [card["title"] for card in db.list_cards(conn, adv["id"])]
     assert "Bedroom" not in titles
     assert "Sword" in titles
+
+
+def test_nude_names_understands_sem_roupa_aliases_and_possessives():
+    from app import npc_assets
+
+    cards = [{"title": "Caio"}, {"title": "A Donzela da Noite"}]
+    assert npc_assets.title_aliases("A Donzela da Noite") == [
+        "A Donzela da Noite", "Donzela"]
+    assert npc_assets.nude_names(cards, "", "donzela sem roupa") == [
+        "A Donzela da Noite"]
+    assert npc_assets.nude_names(
+        cards, "Caio's naked body presses against the Donzela.", "",
+    ) == ["Caio"]
+    assert npc_assets.nude_names(
+        cards, "A Donzela diz que ela está nua.", "",
+    ) == ["A Donzela da Noite"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}], "Caio tira a roupa devagar.", "",
+    ) == ["Caio"]
+    assert npc_assets.nude_names(
+        [{"title": "Caio"}, {"title": "A Donzela da Noite"}],
+        "Caio fica de roupa. A Donzela também está vestida.", "",
+    ) == []
+
+
+def test_location_prefers_the_physical_room_over_the_weather(tmp_db):
+    from app import scene
+
+    adv = make_adventure()
+    cards = [
+        {"type": "location", "title": "O Refúgio de Sangue",
+         "triggers": ["apartamento", "casa", "refúgio"], "entry": "O apartamento."},
+        {"type": "location", "title": "A Nóvoa",
+         "triggers": ["nóvoa", "chuva"], "entry": "Chuva fina."},
+    ]
+    text = "A Nóvoa cai sobre O Refúgio de Sangue. Caio fecha a janela do apartamento."
+    assert world_facts.is_atmospheric_place(cards[0]) is False
+    assert world_facts.is_atmospheric_place(cards[1]) is True
+    assert scene._location(cards, text)[0] == "O Refúgio de Sangue"
+    found = world_facts.assess(adv, [
+        {"seq": 0, "type": "start", "text": text},
+    ], cards, [])
+    assert found.where == "O Refúgio de Sangue"
+
+
+def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monkeypatch):
+    """O pedido nu não pode perder a ação nem trocar o apartamento pela chuva."""
+    adv = make_adventure(
+        owner="tester",
+        plot_essentials=(
+            "[Name: Caio; Role: Vampiro Ancião; Appearance: Homem de aparência "
+            "imortal, pele pálida, cabelos escuros e olhos profundos, vestindo "
+            "um terno escuro.]"
+        ),
+    )
+    with db.session() as conn:
+        donzela = db.insert_card(
+            conn, adv["id"], type="character", title="A Donzela da Noite",
+            triggers=["gótica", "ela", "menina", "garota"],
+            entry="Uma mulher de vestido preto.",
+            portrait_prompt="pale gothic woman, long black hair, black dress",
+            sheet=json.dumps({
+                "appearance": "pale skin, long black hair, dark eyes",
+                "clothing": "black lace dress",
+            }),
+        )
+        db.insert_card(
+            conn, adv["id"], type="location", title="O Refúgio de Sangue",
+            triggers=["apartamento", "casa", "refúgio"], entry="Um apartamento escuro.",
+        )
+        db.insert_card(
+            conn, adv["id"], type="location", title="A Nóvoa",
+            triggers=["nóvoa", "chuva", "chuva fina"], entry="Chuva fina.",
+        )
+        player = jobs.ensure_player_card(conn, db.get_adventure(conn, adv["id"]))
+        assert player and player["title"] == "Caio"
+        assert player["player_username"] == "tester"
+        sheet = json.loads(player["sheet"])
+        assert "vampiro" in sheet["class"].casefold()
+        assert "pele pálida" in sheet["appearance"].casefold()
+        assert "terno escuro" in sheet["clothing"].casefold()
+    _face(adv["id"], donzela["id"], PNG_BYTES)
+    _face(adv["id"], player["id"], PNG_BYTES)
+    add_action(
+        adv["id"], 0, "start",
+        "Caio está no apartamento, no Refúgio de Sangue. A Nóvoa cai lá fora.")
+    add_action(
+        adv["id"], 1, "continue",
+        "A Donzela da Noite observa Caio, ainda vestida.")
+    _stub_painter(monkeypatch, tmp_path)
+    override_transport(client, make_v2_transport(
+        "The Donzela da Noite stands fully nude before Caio in the apartment."))
+    try:
+        resp = client.post(
+            f"/api/adventures/{adv['id']}/see",
+            json={"action_seq": 1, "extra_prompt": "donzela sem roupa"},
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    prompt = resp.json()["prompt"]
+    folded = prompt.casefold()
+    assert "player instruction, highest priority: donzela sem roupa" in folded
+    assert "donzela da noite" in folded
+    assert "caio" in folded
+    assert "place: o refúgio de sangue" in folded
+    assert "a nóvoa" not in folded
+    # A Donzela fica nua; o Caio continua vestido. O texto precisa separar os
+    # dois estados em vez de mandar "fully clothed" para a cena inteira.
+    assert "only for a donzela da noite" in folded
+    assert "everyone else stays fully clothed" in folded
+    assert "fully clothed, keep their current outfits: a donzela" not in folded
+    assert "wearing," not in folded
+    assert "vestindo" not in folded
+    assert "terno escuro" not in folded
+    assert "fully nude" in folded
