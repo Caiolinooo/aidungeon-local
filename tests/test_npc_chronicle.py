@@ -537,7 +537,8 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monke
     folded = head.lower()
     assert folded.index("black hair") < folded.index("kiss")
     assert folded.index("pale") < folded.index("kiss")
-    assert "straight" in folded
+    assert "black hair" in folded
+    assert "enigmatic eyes" in folded
     assert "selene" in folded
     assert "curly" not in folded
     assert "velvet" not in folded
@@ -546,7 +547,7 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monke
     assert "desliza" not in prompt.lower()
     assert "pele pálida" not in prompt.lower()
     assert "vestido" not in head.lower()
-    assert "athletic" in folded or "slim" in folded
+    assert "pale marble skin" in folded
     assert not any(isinstance(item, dict) and item.get("init_images") for item in capture)
     with db.session() as conn:
         saved = db.get_image(conn, resp.json()["id"])
@@ -581,13 +582,27 @@ def test_identity_bits_use_the_vampire_face_not_the_dress():
     }
     bits = " ".join(npc_assets.identity_bits(card)).lower()
     assert "pale" in bits and "marble" in bits
-    assert "long straight black hair" in bits
-    assert "slim athletic build" in bits
+    assert "long black hair" in bits
+    # Um único extra de corpo: repetir cabelo/olhos criava descrição concorrente.
+    assert "pale marble skin" in bits
     assert "dress" not in bits
     assert "bust" not in bits
     assert "choker" not in bits
     assert "pele" not in bits
     assert "cabelos" not in bits
+
+
+def test_current_outfit_text_skips_portuguese_sheet_for_english_portrait():
+    card = {
+        "sheet": json.dumps({"clothing": "um terno escuro"}),
+        "portrait_prompt": (
+            "Caio wears a sharply tailored black suit, captured in a bust "
+            "portrait against a neutral background."
+        ),
+    }
+    assert npc_assets.current_outfit_text(card) == "a sharply tailored black suit"
+    english = {"sheet": json.dumps({"clothing": "white lace dress"})}
+    assert npc_assets.current_outfit_text(english) == "white lace dress"
 
 
 def test_image_sentence_drops_the_rest_of_the_dump():

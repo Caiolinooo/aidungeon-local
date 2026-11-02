@@ -276,17 +276,16 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
         reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
         if isinstance(reference.get("turnaround"), dict):
             if explicit:
-                outfit_rule = (
-                    "Ignore outfits only for " + ", ".join(nude)
-                    + "; preserve the current outfits of everyone else."
-                    if nude else "Preserve everyone's current outfits."
-                )
+                # Sem "ignore outfits only for X": a roupa da referência some
+                # pelo estado positivo abaixo, e a âncora explícita já é só o
+                # rosto. O guardião só separa identidade de composição.
                 return (
                     "Use the reference images only for the named characters' identity, face, "
-                    "hair and distinctive facial details. " + outfit_rule +
-                    " Ignore grey studio backgrounds, multi-panel layouts, split screens, "
-                    "neutral poses and framing. Do not copy the reference composition; "
-                    "depict only the place and action below."
+                    "hair and distinctive facial details. The clothing state below is "
+                    "authoritative: follow it even when a reference image shows different "
+                    "clothing. Ignore grey studio backgrounds, multi-panel layouts, split "
+                    "screens, neutral poses and framing. Do not copy the reference "
+                    "composition; depict only the place and action below."
                 )
             return (
                 "Use the reference images only for the named characters' identity, face, "
@@ -349,17 +348,31 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     else:
         beat = ""
     if clause and explicit:
-        clothed = [card.get("title") for card in cast if card.get("title") not in nude]
-        nudity = "clothes off, fully nude, bare skin, completely unclothed, only for " + ", ".join(nude) + ", uncensored" if nude else "uncensored"
-        clothing = "fully clothed, keep their current outfits: " + ", ".join(clothed) if clothed else ""
+        from app.routes.images import (
+            _clothed_predicate, _nude_predicate, _stateful_action, scrub_clothing_states,
+        )
+        states: list[tuple[str, str]] = []
+        for card in cast:
+            name = (card.get("title") or "").strip()
+            if not name:
+                continue
+            if name in nude:
+                label = "" if npc_assets.creature_kind(card, name) else \
+                    npc_assets.sex_label(name, moment, card=card)
+                states.append((name, _nude_predicate(name, card, label)))
+            else:
+                states.append((name, _clothed_predicate(card)))
+        state_line = "; ".join(
+            f"{name} is {predicate}" for name, predicate in states)
+        if beat and states:
+            beat = _stateful_action(scrub_clothing_states(beat), states) or beat
         composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         full_body = "wide full-body composition, entire body visible, not a close-up portrait"
         single = f"{cast[0].get('title')} is the only person in the entire scene, no one else" if len(cast) == 1 else ""
         parts = [
             sex_line,
             clause,
-            nudity,
-            clothing,
+            state_line,
             single,
             full_body,
             beat,
@@ -412,10 +425,10 @@ def cast_reference_plan(conn, adventure_id: str, cast: list[dict], *,
     Lista vazia é cena sem gente: não há referência para exigir. Em cena
     explícita usa uma âncora por pessoa, sem folhas de roupa ou composição.
     """
-    # Explícito também usa mestre + ficha no ComfyUI. Só o busto não dava
-    # corpo nem ângulo; o recorte de rosto em `identity_face_pngs` remove a
-    # roupa e o estúdio dessas referências antes de enviar.
-    card_ids, image_ids = likeness.cast_reference_ids_for_provider(cast, provider)
+    # Explícito usa só a âncora de cada pessoa. Mestre e ficha são folhas de
+    # roupa: mesmo recortados, gastam slots e puxam o figurino de volta.
+    card_ids, image_ids = likeness.cast_reference_ids_for_provider(
+        cast, provider, explicit=explicit)
     if any(not image_id for image_id in image_ids):
         raise likeness.portrait_required()
     blobs = (

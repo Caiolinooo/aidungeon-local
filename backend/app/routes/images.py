@@ -262,21 +262,6 @@ def scrub_clothing_states(text: str) -> str:
     return " ".join(cleaned.split()).strip(" ,.;")
 
 
-def clothing_conflict(cards: list[dict], text: str, nude: list[str]) -> bool:
-    """A frase ainda afirma nudez/roupa contrária ao estado autoritativo?"""
-    if _CLOTHING_STATE.search(text or ""):
-        return True
-    nude_titles, covered_titles = npc_assets._nude_states(cards, text or "")
-    nude_keys = {name.casefold() for name in nude if name}
-    for title in nude_titles:
-        if title.casefold() not in nude_keys:
-            return True
-    for title in covered_titles:
-        if title.casefold() in nude_keys:
-            return True
-    return False
-
-
 def clothing_safe_fallback(names: list[str], place: str) -> str:
     """Última linha de defesa: ação neutra, sem roupa nem nudez."""
     clean = [name for name in names if name]
@@ -286,6 +271,58 @@ def clothing_safe_fallback(names: list[str], place: str) -> str:
     if len(clean) >= 2:
         return f"{clean[0]} and {clean[1]} are together in {where}."
     return f"The scene is in {where}."
+
+
+def _nude_predicate(name: str, card: dict | None, label: str) -> str:
+    """Estado nu em palavras positivas que o renderizador obedece.
+
+    "Sem roupa" e "no pasties" fazem o oposto: o CLIP lê o substantivo. O
+    corpo precisa ser afirmado, não negado.
+    """
+    if npc_assets.creature_kind(card, name):
+        return "completely naked, fully nude, bare body exposed"
+    if label == "adult woman":
+        return ("completely naked, bare breasts fully exposed with visible "
+                "nipples, natural female anatomy, her whole body bare")
+    return "completely naked, fully nude, bare body exposed"
+
+
+def _clothed_predicate(card: dict | None) -> str:
+    outfit = npc_assets.current_outfit_text(card)
+    if outfit:
+        return f"fully clothed in {outfit}"
+    return "fully clothed in their current outfit"
+
+
+def _stateful_action(sentence: str, states: list[tuple[str, str]]) -> str:
+    """Mete o estado de roupa dentro da frase de ação.
+
+    A frase do LLM é o sinal mais forte do renderizador; um bloco separado
+    no começo não vence o "Caio stands nude" que ele inventa. Inserir o
+    estado logo depois do nome mantém a ação e trava a roupa.
+    """
+    cleaned = " ".join((sentence or "").split()).strip(" ,.;")
+    if not cleaned:
+        return ""
+    for name, predicate in states:
+        if not name or not predicate:
+            continue
+        pattern = re.compile(rf"(?<![\w']){re.escape(name)}(?![\w'])")
+        match = pattern.search(cleaned)
+        if match:
+            before = cleaned[:match.end()]
+            after = cleaned[match.end():]
+            if after.lstrip().startswith(","):
+                cleaned = before + f" {predicate}," + after.lstrip()[1:]
+            else:
+                cleaned = before + f", {predicate}," + after
+        else:
+            cleaned = f"{name}, {predicate}, {cleaned}"
+    cleaned = re.sub(r"(?:\s*,\s*){2,}", ", ", cleaned)
+    cleaned = re.sub(r"\s+([,.;])", r"\1", cleaned)
+    cleaned = re.sub(r",\s*(?=(?:while|and)\b)", " ", cleaned)
+    cleaned = re.sub(r"\b(while|and)\s*,", r"\1 ", cleaned)
+    return " ".join(cleaned.split()).strip(" ,.;")
 
 
 def clip_words(text: str, limit: int) -> str:
@@ -620,6 +657,17 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         if (card.get("title") or "").casefold() not in nude_keys
         and not npc_assets.creature_kind(card, card.get("title") or "")
     ]
+    predicate_by_name: dict[str, str] = {}
+    for card in locked:
+        name = card.get("title") or ""
+        if not name:
+            continue
+        if name.casefold() in nude_keys:
+            label = "" if npc_assets.creature_kind(card, name) else \
+                npc_assets.sex_label(name, story_blob, moment, card=card)
+            predicate_by_name[name] = _nude_predicate(name, card, label)
+        else:
+            predicate_by_name[name] = _clothed_predicate(card)
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
     # Criatura não vira "adult woman": isso pinta um humano nu.
     sex_bits = []
@@ -683,11 +731,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     clothing_states = ""
     if explicit:
         states = []
-        if nude:
-            states.append("fully nude, no clothes: " + ", ".join(nude))
-        if clothed:
-            states.append("fully clothed in their current outfit, not nude: "
-                          + ", ".join(clothed))
+        for name in nude:
+            predicate = predicate_by_name.get(name)
+            if predicate:
+                states.append(f"{name} is {predicate}")
+        for name in clothed:
+            predicate = predicate_by_name.get(name)
+            if predicate:
+                states.append(f"{name} is {predicate}")
         if states:
             clothing_states = (
                 "Authoritative clothing states (obey exactly; never contradict them): "
@@ -729,12 +780,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         sentence = world_facts.REFUSAL_IMAGE
     elif explicit:
         # O builder pode inverter os estados ("Caio stands nude" com o Caio
-        # vestido). A frase fica só com a ação; a roupa vem do bloco
-        # autoritativo acima.
+        # vestido). A frase fica só com a ação e recebe o estado correto
+        # dentro dela: o renderizador obedece a ação, não um bloco separado.
         cleaned = scrub_clothing_states(sentence)
-        if clothing_conflict(locked, cleaned, nude):
-            cleaned = ""
-        sentence = cleaned or clothing_safe_fallback(names, location)
+        if not cleaned:
+            cleaned = clothing_safe_fallback(names, location)
+        states = [
+            (name, predicate_by_name[name])
+            for name in names if name in predicate_by_name
+        ]
+        sentence = _stateful_action(cleaned, states) or cleaned
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
@@ -745,23 +800,16 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if explicit:
         if len(names) == 1:
             lead_bits.append(f"{names[0]} is the only person in the entire scene, no one else")
+        for name in nude:
+            predicate = predicate_by_name.get(name)
+            if predicate:
+                lead_bits.append(f"{name} is {predicate}")
+        for name in clothed:
+            predicate = predicate_by_name.get(name)
+            if predicate:
+                lead_bits.append(f"{name} is {predicate}")
+        lead_bits.append("uncensored")
         lead_bits.append("wide full-body composition, entire body visible, not a close-up portrait")
-        if nude:
-            lead_bits.append(
-                "clothes off, fully nude, naked, bare skin, completely unclothed, only for "
-                + ", ".join(nude) + ", uncensored"
-            )
-        else:
-            lead_bits.append("uncensored")
-        if clothed:
-            if nude:
-                # "fully clothed" solto ao lado de "fully nude" veste os dois.
-                lead_bits.append(
-                    "everyone else stays fully clothed in their current outfits: "
-                    + ", ".join(clothed)
-                )
-            else:
-                lead_bits.append("fully clothed, keep their current outfits: " + ", ".join(clothed))
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
     # normal: o rosto lidera o primeiro chunk — "kisses on the sofa" na
@@ -850,7 +898,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # Cena explícita usa o mestre de corpo inteiro + ficha, não só o busto:
     # o rosto continua travado, mas a pessoa tem corpo e ângulos coerentes.
     cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
-        cast_locked, str(img_cfg.get("provider") or "sdwebui"))
+        cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=explicit)
     return (prompt, negative, caption, frame, cast_card_ids,
             reference_image_ids, len(names), explicit)
 

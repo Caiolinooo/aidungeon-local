@@ -388,15 +388,18 @@ def cast_reference_ids(cast: list[dict]) -> tuple[list[str], list[str]]:
     return card_ids, image_ids
 
 
-def cast_reference_ids_for_provider(cast: list[dict], provider: str) -> tuple[list[str], list[str]]:
+def cast_reference_ids_for_provider(
+    cast: list[dict], provider: str, *, explicit: bool = False,
+) -> tuple[list[str], list[str]]:
     """ComfyUI: mestre+ficha; legado: âncora+vistas, sem repetir a frontal.
 
-    Um personagem usa mestre+ficha, sem latents redundantes. Dois dividem os
-    quatro slots entre mestre e ficha. Com três ou quatro, cada um mantém seu
-    mestre/âncora e nenhum recebe condicionamento extra em detrimento dos outros.
+    Cena explícita usa só a âncora de cada pessoa. O mestre e a ficha são
+    folhas de roupa: mesmo recortados, dois latents do mesmo rosto gastam
+    slots e ainda puxam o figurino. A âncora é o retrato frontal, com o
+    rosto maior e mais nítido para o recorte.
     """
     card_ids, anchor_ids = cast_reference_ids(cast)
-    if provider != "comfyui":
+    if explicit or provider != "comfyui":
         return card_ids, anchor_ids
     characters = [card for card in cast if card.get("type") == "character"][:CAST_REFERENCE_LIMIT]
     records: list[dict] = []
@@ -496,15 +499,33 @@ def load_reference_images(conn, adventure_id: str, image_ids: list[str]) -> list
     return blobs
 
 
+_FACE_CASCADE_FILE = "haarcascade_frontalface_default.xml"
+_FACE_CASCADE_PATH = Path(__file__).with_name("assets") / _FACE_CASCADE_FILE
+
+
 @lru_cache(maxsize=1)
 def _face_cascade():
-    """Haar cascade do OpenCV. Ausente ou quebrado: cai no recorte antigo."""
+    """Haar cascade local; o cv2 5.x não empacota mais o XML de dados."""
     try:
         import cv2
 
-        cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        return None if cascade.empty() else cascade
+        candidates = [_FACE_CASCADE_PATH]
+        try:
+            candidates.append(Path(cv2.data.haarcascades) / _FACE_CASCADE_FILE)
+        except Exception:
+            pass
+        for path in candidates:
+            if not path.is_file():
+                continue
+            cascade = cv2.CascadeClassifier(str(path))
+            if not cascade.empty():
+                log.info("likeness: face cascade %s", path)
+                return cascade
+        log.warning(
+            "likeness: %s ausente; identidade explícita usará recorte central",
+            _FACE_CASCADE_PATH,
+        )
+        return None
     except Exception:  # pragma: no cover - ambiente sem OpenCV
         return None
 
@@ -533,10 +554,12 @@ def _largest_face_box(image) -> tuple[int, int, int, int] | None:
 def _face_only_crop(image, box: tuple[int, int, int, int]):
     """Rosto + cabelo + pescoço. Sem ombros, roupa, corpo ou fundo de estúdio."""
     x, y, w, h = box
-    left = round(x - w * 0.75)
-    right = round(x + w + w * 0.75)
-    top = round(y - h * 0.60)
-    bottom = round(y + h + h * 0.28)
+    # Ombros e gola ficam fora: 0,45 da largura do rosto cobre o cabelo sem
+    # puxar o figurino, e o corte termina no queixo/pescoço.
+    left = round(x - w * 0.45)
+    right = round(x + w + w * 0.45)
+    top = round(y - h * 0.55)
+    bottom = round(y + h)
     left = max(0, min(left, image.width - 1))
     top = max(0, min(top, image.height - 1))
     right = max(left + 1, min(right, image.width))
@@ -544,12 +567,27 @@ def _face_only_crop(image, box: tuple[int, int, int, int]):
     return image.crop((left, top, right, bottom))
 
 
+def _fallback_face_crop(image):
+    """Sem detector: recorte central curto, nunca a folha de corpo inteiro.
+
+    Imagem panorâmica é folha de vistas (frente/perfil/costas). Recortar os
+    42% de cima ainda levava ternos e vestidos inteiros para a cena nua; nesse
+    caso a referência é descartada. Retrato ganha um recorte de rosto curto.
+    """
+    if image.width >= image.height * 1.6:
+        return None
+    height = max(1, round(image.height * 0.32))
+    width = max(1, round(image.width * 0.64))
+    left = max(0, (image.width - width) // 2)
+    return image.crop((left, 0, left + width, height))
+
+
 def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
     """Recorta rosto/cabelo; ombros, roupa e pose da referência ficam fora.
 
-    O recorte fixo dos 42% superiores ainda levava a blusa branca e o fundo
-    cinza do retrato para a cena explícita. Com o OpenCV, o recorte segue o
-    rosto detectado; sem detecção, o enquadramento antigo é o fallback.
+    O recorte fixo dos 42% superiores levava blusa e terno para a cena nua.
+    O detector local segue o rosto; sem detecção, retrato tem recorte curto e
+    folha panorâmica é descartada, em vez de vestir a cena inteira.
     """
     from PIL import Image
 
@@ -558,10 +596,9 @@ def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
         with Image.open(io.BytesIO(raw)) as source:
             image = source.convert("RGB")
         box = _largest_face_box(image)
-        face = (
-            _face_only_crop(image, box) if box
-            else image.crop((0, 0, image.width, max(1, round(image.height * 0.42))))
-        )
+        face = _face_only_crop(image, box) if box else _fallback_face_crop(image)
+        if face is None:
+            continue
         output = io.BytesIO()
         face.save(output, format="PNG")
         found.append(output.getvalue())

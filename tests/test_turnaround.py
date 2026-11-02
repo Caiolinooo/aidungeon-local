@@ -343,6 +343,11 @@ def test_complete_references_prioritize_master_sheet_and_distinct_angles(tmp_db,
         assert likeness.cast_reference_ids_for_provider([first, second], "sdwebui")[1] == [
             first_anchor["id"], second_anchor["id"],
         ]
+        # Cena explícita ignora mestre/ficha (folhas de roupa) e usa só a âncora.
+        assert likeness.cast_reference_ids_for_provider(
+            [first, second], "comfyui", explicit=True)[1] == [
+            first_anchor["id"], second_anchor["id"],
+        ]
         prompt, include_people = scene._prompt(
             "Rainy alley", "wet stone and neon signs", "photorealistic", "rain",
             [{**first, "portrait_prompt": "short red hair, green eyes, leather coat"}],
@@ -356,7 +361,7 @@ def test_complete_references_prioritize_master_sheet_and_distinct_angles(tmp_db,
             [{**first, "portrait_prompt": "short red hair, green eyes, leather coat"}],
             "First is naked beside the exit.",
         )
-        assert "Ignore outfits" in explicit_prompt
+        assert "the clothing state below is authoritative" in explicit_prompt.lower()
         assert "body, outfit" not in explicit_prompt
 
 

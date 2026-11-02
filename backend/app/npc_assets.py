@@ -627,9 +627,13 @@ _PT_LOOK_PHRASES = (
 
 _PT_WORD = re.compile(
     r"(?<!\w)(?:pele|cabelo|cabelos|olhos|olho|labios|boca|vestido|estrutura|"
-    r"atletica|palida|pretos|preto|lisos|liso|cachead\w*|ruivos|ruivo|loiros|"
-    r"loiro|morena|moreno|sobrancelha|nariz|postura|magro|agil|vestes|veste|"
-    r"transluc\w*|ambar|flutuando|armadura|elegante)(?!\w)"
+    r"atletica|palida|pretos|preto|preta|lisos|liso|cachead\w*|ruivos|ruivo|"
+    r"loiros|loiro|morena|moreno|sobrancelha|nariz|postura|magro|agil|vestes|"
+    r"veste|transluc\w*|ambar|flutuando|armadura|elegante|terno|ternos|gravata|"
+    r"camisa|calca|saias?|blusas?|sapatos?|manto|jaqueta|sobretudo|uniforme|"
+    r"vestindo|vestia|usando|usava|trajando|trajava|seda|couro|algodao|brancos?|"
+    r"brancas?|vermelhos?|vermelhas?|azuis?|verdes?|cinza|escuros?|claras?|"
+    r"claros?)(?!\w)"
 )
 
 
@@ -682,7 +686,7 @@ def _drop_clauses(text: str, words: tuple[str, ...], *, cut: re.Pattern[str] | N
 
 
 _OUTFIT_PHRASE = re.compile(
-    r"(?i)\b(?:wearing|dressed in|clad in|clothed in|covered (?:in|with)|"
+    r"(?i)\b(?:wearing|wears|wear|wore|dressed in|clad in|clothed in|covered (?:in|with)|"
     r"vestindo|vestia|usando|usava|trajando|trajava)\b[^.;,]*"
 )
 
@@ -695,6 +699,43 @@ def without_outfit(text: str) -> str:
     """
     trimmed = _OUTFIT_PHRASE.sub("", text or "")
     return _drop_clauses(trimmed, tuple(word for word in _OUTFIT_WORDS if word != "wearing"))
+
+
+def current_outfit_text(card: dict | None) -> str:
+    """Roupa atual em inglês curto, do estado vivo ou do retrato.
+
+    A ficha em português não serve ao renderizador; nesse caso o retrato
+    (que já tem a roupa em inglês) é a fonte. Sem roupa conhecida, vazio.
+    """
+    if not card:
+        return ""
+    sheet = parse_sheet(card.get("sheet") or "")
+    for key in ("current_outfit", "clothing"):
+        value = sheet.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        text = english_appearance(value)
+        if _looks_portuguese(text):
+            text = ""
+        text = " ".join(text.split()).strip(" ,.;")
+        text = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+        text = _clip(text, 90)
+        if text:
+            return text[:1].lower() + text[1:]
+    prompt = " ".join(str(card.get("portrait_prompt") or "").split())
+    match = _OUTFIT_PHRASE.search(prompt)
+    if not match:
+        return ""
+    phrase = re.sub(
+        r"(?i)^(?:wearing|wears|wear|wore|dressed\s+in|clad\s+in|clothed\s+in|"
+        r"vestindo|vestia|usando|usava|trajando|trajava)\s+",
+        "",
+        match.group(0),
+    )
+    phrase = " ".join(phrase.split()).strip(" ,.;")
+    if _looks_portuguese(phrase):
+        return ""
+    return _clip(phrase, 90)
 
 
 _POSE_WORDS = (
@@ -722,6 +763,15 @@ def without_pose(text: str) -> str:
             "",
             cleaned,
         )
+        # Pronome que sobra depois de tirar a pose ("..., She.").
+        cleaned = re.sub(
+            r"(?i)(?:^|[,;])\s*(?:she|he|they|it)\s*(?=$|[,;.])", "", cleaned
+        )
+        cleaned = re.sub(
+            r"(?i),\s*(she|he|they|it)\b",
+            lambda match: ", " + match.group(1).lower(),
+            cleaned,
+        )
         cleaned = " ".join(cleaned.split()).strip(" ,.;")
         if cleaned:
             parts.append(cleaned)
@@ -740,6 +790,12 @@ _BACKGROUND_PHRASE = re.compile(
 )
 
 
+_LIGHTING_PHRASE = re.compile(
+    r"(?i)\b(?:soft|studio|natural|dramatic|cinematic|warm|cool|dim|bright|moody)\s+"
+    r"(?:studio\s+)?light(?:ing)?\b[^.;,]*"
+)
+
+
 def without_framing(text: str) -> str:
     """Tira 'bust portrait' e o fundo neutro. O rosto depois de 'portrait of' fica.
 
@@ -750,6 +806,7 @@ def without_framing(text: str) -> str:
     for part in re.split(r"[,;]", text or ""):
         part = _PORTRAIT_OF.sub("", part.strip())
         part = _BACKGROUND_PHRASE.sub("", part)
+        part = _LIGHTING_PHRASE.sub("", part)
         part = re.split(
             r"(?i)\b(?:captured|bust|headshot|close-up|closeup)\b",
             part,
@@ -759,6 +816,8 @@ def without_framing(text: str) -> str:
         if any(re.search(rf"(?<!\w){re.escape(word)}", folded) for word in _FRAMING_WORDS):
             continue
         bit = _trim_part(part)
+        if bit.casefold() in {"she", "he", "they", "it", "her", "his", "their"}:
+            continue
         if bit:
             kept.append(bit)
     return ", ".join(kept)
@@ -850,13 +909,36 @@ def _covered(part: str, blob: str) -> bool:
     )
 
 
+_BODY_BUILD = (
+    "build", "body", "skin", "complexion", "shoulders", "collarbones",
+    "collarbone", "waist", "hips", "athletic", "slender", "slim",
+    "muscular", "curvy", "posture", "torso", "frame", "physique",
+)
+
+
+def _clause_with(part: str, words: tuple[str, ...]) -> str:
+    """Primeira oração que fala de corpo/porte, sem arrastar rosto e roupa."""
+    for clause in re.split(r"[,;]", part or ""):
+        folded = clause.casefold()
+        if any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", folded)
+               for word in words):
+            bit = _trim_part(clause)
+            if bit:
+                return bit
+    return ""
+
+
+def _is_body_part(part: str) -> bool:
+    return bool(_clause_with(part, _BODY_BUILD))
+
+
 def identity_bits(card: dict) -> list[str]:
     """Rosto, cabelo, pele e porte. Sem a roupa, em palavras que o CLIP lê.
 
     A cor de cabelo do retrato aceito vence a ficha. A ficha em português
-    entra traduzida e só acrescenta o que o retrato não contradiz (liso,
-    mármore, porte). Sem isso o See nu repetia a ficha crua no fim do bloco
-    e o modelo pintava outra mulher.
+    entra traduzida e só acrescenta o que o retrato não contradiz (porte, tom
+    de pele). Sem isso o See nu repetia a ficha crua no fim do bloco e o
+    modelo pintava outra mulher.
     """
     portrait = _portrait_face(card)
     portrait_colors = _hair_colors(portrait)
@@ -867,11 +949,18 @@ def identity_bits(card: dict) -> list[str]:
             continue
         agreed.append(part)
     if portrait:
-        # O retrato aceito é a âncora do rosto. A ficha só acrescenta o que
-        # ele não cobre (porte, tom de pele), nunca uma segunda descrição
-        # concorrente que o CLIP possa escolher.
-        extras = [part for part in agreed if not _covered(part, portrait)]
-        return [bit for bit in (portrait, *extras) if bit]
+        # O retrato aceito é a âncora do rosto. A ficha só acrescenta o
+        # porte/tom de pele que ele não cobre; repetir cabelo e olhos cria
+        # uma segunda descrição concorrente que o CLIP pode escolher.
+        extra = ""
+        for part in agreed:
+            if _covered(part, portrait):
+                continue
+            clause = _clause_with(part, _BODY_BUILD)
+            if clause and not _covered(clause, portrait):
+                extra = clause
+                break
+        return [bit for bit in (portrait, extra) if bit]
     return agreed
 
 

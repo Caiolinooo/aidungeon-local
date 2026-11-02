@@ -191,10 +191,11 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"]
     assert prompt.startswith("Player instruction, highest priority: Elara completely naked")
-    assert "fully nude" in prompt
-    assert "bare skin" in prompt
-    assert "completely unclothed" in prompt
-    assert prompt.index("fully nude") < prompt.index("same continuous scene")
+    assert "completely naked" in prompt
+    assert "bare breasts fully exposed with visible nipples" in prompt
+    assert "natural female anatomy" in prompt
+    assert prompt.index("completely naked", len("Player instruction")) < \
+        prompt.index("same continuous scene")
     assert "no stockings" not in prompt
     head = prompt.split("BREAK", 1)[0]
     assert "elara is an adult woman" in head.lower()
@@ -309,7 +310,9 @@ def test_see_does_not_borrow_nudity_from_unresolved_player(client, tmp_path, mon
     assert response.status_code == 200, response.text
     prompt = response.json()["prompt"]
     assert "fully nude only for" not in prompt
-    assert "fully clothed, keep their current outfits: Elara" in prompt
+    assert "elara is completely naked" not in prompt.casefold()
+    assert "caio is completely naked" not in prompt.casefold()
+    assert "elara is fully clothed" in prompt.casefold()
 
 
 def test_previous_nudity_does_not_reactivate_explicit_outside_minor_guard(
@@ -710,7 +713,7 @@ def test_see_keeps_nudity_the_narrator_already_established(client, tmp_path, mon
     assert resp.status_code == 200, resp.text
     prompt = resp.json()["prompt"].lower()
     assert "naked" in prompt
-    assert "clothes off" in prompt
+    assert "princess alusair is completely naked" in prompt
     assert "plate armor" not in prompt
     sent = json.dumps(capture)
     assert "Do not censor adult nudity" in sent
@@ -882,20 +885,23 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
     assert "caio" in folded
     assert "place: o refúgio de sangue" in folded
     assert "a nóvoa" not in folded
-    # A Donzela fica nua; o Caio continua vestido. O texto precisa separar os
-    # dois estados em vez de mandar "fully clothed" para a cena inteira.
-    assert "only for a donzela da noite" in folded
-    assert "everyone else stays fully clothed" in folded
-    assert "fully clothed, keep their current outfits: a donzela" not in folded
+    # A Donzela fica nua; o Caio continua vestido. Cada pessoa recebe seu
+    # estado logo depois do nome, inclusive dentro da frase de ação.
+    assert "a donzela da noite is completely naked" in folded
+    assert "bare breasts fully exposed with visible nipples" in folded
+    assert "caio is fully clothed in" in folded
+    assert "only for a donzela da noite" not in folded
+    assert "everyone else stays fully clothed" not in folded
     assert "wearing," not in folded
     assert "vestindo" not in folded
     assert "terno escuro" not in folded
-    assert "fully nude" in folded
     # A prosa dizia "Caio está nu" e o builder repetia "Caio stands nude".
     # O pedido manda no estado: só a Donzela fica nua e a frase de ação não
     # pode reverter isso.
     assert "caio stands nude" not in folded
     assert "caio is naked" not in folded
     assert "his pale body exposed" not in folded
-    assert "everyone else stays fully clothed in their current outfits: caio" in folded
-    assert "nude" not in resp.json()["action"]["text"].casefold()
+    action = resp.json()["action"]["text"].casefold()
+    assert "a donzela da noite, completely naked" in action
+    assert "caio, fully clothed" in action
+    assert "caio stands nude" not in action

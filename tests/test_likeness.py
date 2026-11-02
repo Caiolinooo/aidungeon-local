@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+import pytest
 from PIL import Image
 
 from app import db, events, image_client, jobs, likeness, npc_assets
@@ -102,9 +103,30 @@ def test_identity_face_pngs_removes_body_and_clothing_below_shoulders():
     cropped = likeness.identity_face_pngs([buffer.getvalue()])[0]
 
     with Image.open(io.BytesIO(cropped)) as image:
-        assert image.size == (100, 84)
-        assert image.getpixel((50, 50)) == (255, 0, 0)
-        assert image.getpixel((50, 83)) == (255, 0, 0)
+        # Sem detector: recorte central curto (64% x 32%), não os 42% antigos.
+        assert image.size == (64, 64)
+        assert image.getpixel((32, 32)) == (255, 0, 0)
+        assert image.getpixel((32, 63)) == (255, 0, 0)
+
+
+def test_identity_face_pngs_drops_a_panoramic_turnaround_without_a_face():
+    """Folha de vistas sem detector não vira referência vestida."""
+    source = Image.new("RGB", (400, 200), (0, 0, 255))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+
+    assert likeness.identity_face_pngs([buffer.getvalue()]) == []
+
+
+def test_the_bundled_face_cascade_works_without_opencv_data():
+    cv2 = pytest.importorskip("cv2")
+    cascade = likeness._face_cascade()
+    assert cascade is not None, "o XML local precisa existir no pacote"
+    fallback = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+    # O cv2 5.x não traz mais o arquivo; o pacote precisa do próprio.
+    assert likeness._FACE_CASCADE_PATH.is_file()
+    if not fallback.is_file():
+        assert Path(likeness._FACE_CASCADE_PATH).stat().st_size > 100_000
 
 
 def test_identity_face_crop_follows_the_detected_face(monkeypatch):
@@ -120,9 +142,10 @@ def test_identity_face_crop_follows_the_detected_face(monkeypatch):
     cropped = likeness.identity_face_pngs([buffer.getvalue()])[0]
 
     with Image.open(io.BytesIO(cropped)) as image:
-        # left=50, right=150, top=-4→0, bottom=71
-        assert image.size == (100, 71)
-        assert image.getpixel((50, 70)) == (255, 0, 0)
+        # Rosto x=80 w=40: sides 0,45w; topo 0,55h; corte no queixo.
+        # left=62, right=138, top=-2→0, bottom=60
+        assert image.size == (76, 60)
+        assert image.getpixel((50, 59)) == (255, 0, 0)
 
 
 def test_real_person_in_a_safe_scene_is_not_explicit():
@@ -380,7 +403,8 @@ def test_see_keeps_the_real_person_in_an_explicit_scene(client, tmp_path, monkey
     assert "clara" in folded
     assert "zendaya" in folded
     assert "nude" in folded
-    assert "clothes off" in folded
+    assert "zendaya is completely naked" in folded
+    assert "clara is completely naked" in folded
 
 
 def test_see_of_a_real_person_opens_with_the_face_and_stays_clothed(client, tmp_path, monkeypatch):

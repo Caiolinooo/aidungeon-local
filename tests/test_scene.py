@@ -258,7 +258,7 @@ def test_explicit_backdrop_locks_the_vampire_face(client, tmp_path, monkeypatch)
     assert job["payload"]["explicit"] is True
     assert head.index("black hair") < head.index("naked")
     assert head.index("pale") < head.index("naked")
-    assert "straight" in head
+    assert "dark eyes" in head
     assert "velvet" not in head
     assert "bust portrait" not in head
     assert "pele pálida" not in head
@@ -432,6 +432,29 @@ def test_the_see_and_the_backdrop_paint_the_same_scene(client, tmp_path, monkeyp
         assert "clothes off" not in folded
 
 
+def test_stateful_action_injects_each_state_right_after_the_name():
+    from app.routes.images import _stateful_action
+
+    sentence = "Caio stands in the apartment, while A Donzela da Noite gently touches his chest."
+    states = [
+        ("A Donzela da Noite",
+         "completely naked, bare breasts fully exposed with visible nipples, "
+         "natural female anatomy"),
+        ("Caio", "fully clothed in a sharply tailored black suit"),
+    ]
+    action = _stateful_action(sentence, states)
+    assert (
+        "Caio, fully clothed in a sharply tailored black suit, stands in the apartment"
+        in action
+    )
+    assert (
+        "A Donzela da Noite, completely naked, bare breasts fully exposed with "
+        "visible nipples, natural female anatomy, gently touches" in action
+    )
+    assert ", while" not in action
+    assert "  " not in action
+
+
 def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
     adv = make_adventure()
@@ -446,7 +469,7 @@ def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path,
     assert job["payload"]["explicit"] is True
     for prompt in (backdrop, seen):
         folded = prompt.lower()
-        assert "clothes off" in folded
+        assert "completely naked" in folded
         assert "nude" in folded
         assert "translucent silk and crystal garments" not in folded
 
@@ -913,6 +936,8 @@ def test_long_identity_prompt_preserves_action_location_and_per_person_clothing(
     assert len(prompt) <= 1400
     assert "dances on the central tavern table" in prompt
     assert "The Ancient Tavern" in prompt
-    assert "Ignore outfits only for Ada" in prompt
-    assert "keep their current outfits: Elara, Lexi, Caio" in prompt
+    assert "use the reference images only for the named characters" in prompt.lower()
+    assert "ada" in prompt.lower() and "is completely naked" in prompt.lower()
+    for name in ("Elara", "Lexi", "Caio"):
+        assert f"{name} is fully clothed" in prompt
 
