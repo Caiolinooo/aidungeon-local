@@ -889,6 +889,7 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
     # estado logo depois do nome, inclusive dentro da frase de ação.
     assert "a donzela da noite is completely naked" in folded
     assert "bare breasts fully exposed with visible nipples" in folded
+    assert "bare hips" in folded and "bare legs" in folded
     assert "caio is fully clothed in" in folded
     assert "only for a donzela da noite" not in folded
     assert "everyone else stays fully clothed" not in folded

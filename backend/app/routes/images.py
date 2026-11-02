@@ -282,8 +282,12 @@ def _nude_predicate(name: str, card: dict | None, label: str) -> str:
     if npc_assets.creature_kind(card, name):
         return "completely naked, fully nude, bare body exposed"
     if label == "adult woman":
+        # "Bare legs/hips" vence o short/pants que o Flux2 mantém quando só
+        # ouve "naked"; "bare feet" e "buttocks" reintroduziam sutiã e calcinha.
         return ("completely naked, bare breasts fully exposed with visible "
-                "nipples, natural female anatomy, her whole body bare")
+                "nipples, natural female anatomy, bare stomach, bare hips, "
+                "bare thighs, bare legs, her whole body completely bare from "
+                "head to toe")
     return "completely naked, fully nude, bare body exposed"
 
 
