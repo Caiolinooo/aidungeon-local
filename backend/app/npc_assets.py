@@ -1451,6 +1451,14 @@ NUDITY_BAN = (
     "nude, naked, topless, bottomless, nudity, nipples, genitals, "
     "undressed, nsfw, bare breasts, exposed chest"
 )
+# Cena explícita: a roupa do elenco vestido não pode vazar para quem está nu.
+# O Flux2 mantém calça e cueca quando o negativo não as nomeia, mesmo com
+# "completely naked" no positivo. Esta lista é o que derrubou o thong nos
+# testes reais com CFG 2.0.
+EXPLICIT_CLOTHING_NEGATIVE = (
+    "underwear, bra, panties, thong, bikini, lingerie, clothes, clothing, "
+    "pants, shorts, skirt, dress"
+)
 
 
 def negative_without_nudity_ban(text: str) -> str:

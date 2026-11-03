@@ -486,10 +486,10 @@ def test_see_does_not_paint_an_undress_she_did_not_accept(client, tmp_path, monk
 
 
 def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monkeypatch):
-    """O card da vampira pálida de cabelo preto liso vem antes do beijo.
+    """O estado nu do card lidera; a frase hostil não abre o prompt.
 
-    A frase hostil descreve outra mulher. Ela não pode liderar o prompt,
-    nem mandar a pele pálida para o negative.
+    O rosto vem da âncora visual (ReferenceLatent) e "curly" vai para o
+    negative. A pele pálida do card não pode ser negativada.
     """
     adv = make_adventure(plot_essentials="[Name: Caio]")
     with db.session() as conn:
@@ -535,10 +535,9 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monke
     prompt = resp.json()["prompt"]
     head, tail = prompt.split("BREAK", 1)
     folded = head.lower()
-    assert folded.index("black hair") < folded.index("kiss")
-    assert folded.index("pale") < folded.index("kiss")
-    assert "black hair" in folded
-    assert "enigmatic eyes" in folded
+    # O estado nu do card lidera; a frase hostil do builder não abre o prompt.
+    assert "selene is completely naked" in folded
+    assert folded.index("selene is completely naked") < folded.index("kiss")
     assert "selene" in folded
     assert "curly" not in folded
     assert "velvet" not in folded
@@ -547,7 +546,6 @@ def test_see_locks_the_pale_vampire_before_the_nude_beat(client, tmp_path, monke
     assert "desliza" not in prompt.lower()
     assert "pele pálida" not in prompt.lower()
     assert "vestido" not in head.lower()
-    assert "pale marble skin" in folded
     assert not any(isinstance(item, dict) and item.get("init_images") for item in capture)
     with db.session() as conn:
         saved = db.get_image(conn, resp.json()["id"])

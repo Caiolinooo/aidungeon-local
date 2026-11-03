@@ -361,7 +361,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
                     npc_assets.sex_label(name, moment, card=card)
                 states.append((name, _nude_predicate(name, card, label)))
             else:
-                states.append((name, _clothed_predicate(card)))
+                states.append((name, _clothed_predicate(card, name)))
         state_line = "; ".join(
             f"{name} is {predicate}" for name, predicate in states)
         if beat and states:

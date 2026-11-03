@@ -455,6 +455,58 @@ def test_stateful_action_injects_each_state_right_after_the_name():
     assert "  " not in action
 
 
+def test_short_outfit_keeps_color_and_garment_only():
+    from app.routes.images import _clothed_predicate, _short_outfit
+
+    assert _short_outfit(
+        "a sharply tailored black or dark grey suit") == "black suit"
+    assert _short_outfit(
+        "white ribbed off-the-shoulder top with a keyhole cutout") == "white top"
+    card = {
+        "title": "Caio",
+        "sheet": json.dumps({
+            "appearance": "Homem de aparência imortal, pele pálida.",
+            "clothing": "a sharply tailored black or dark grey suit",
+        }),
+    }
+    assert _clothed_predicate(card, "Caio") == (
+        "fully clothed in his black suit")
+    woman = {
+        "title": "A Donzela",
+        "sheet": json.dumps({
+            "appearance": "Uma mulher de pele clara.",
+            "clothing": "a black lace dress",
+        }),
+    }
+    assert _clothed_predicate(woman, "A Donzela") == (
+        "fully clothed in her black dress")
+
+
+def test_stateful_action_tolerates_the_article_and_appends_missing_people():
+    from app.routes.images import _stateful_action
+
+    states = [
+        ("A Donzela da Noite", "completely naked"),
+        ("Caio", "fully clothed in his black suit"),
+    ]
+    sentence = "The Donzela da Noite dances by the window."
+    action = _stateful_action(sentence, states)
+    assert (
+        "The Donzela da Noite, completely naked, dances by the window"
+        in action
+    )
+    # Quem não aparece na frase não vira sujeito: entra no fim, sem inverter
+    # a oração principal.
+    assert action.endswith("Caio is fully clothed in his black suit")
+    assert action.startswith("The Donzela da Noite")
+
+    only_sentence = "She dances by the window."
+    only = _stateful_action(only_sentence, states)
+    assert only.startswith("She dances by the window")
+    assert "A Donzela da Noite is completely naked" in only
+    assert only.index("She dances") < only.index("A Donzela da Noite")
+
+
 def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
     adv = make_adventure()

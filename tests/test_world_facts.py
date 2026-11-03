@@ -194,11 +194,13 @@ def test_see_calls_elara_a_woman_before_the_act(client, tmp_path, monkeypatch):
     assert "completely naked" in prompt
     assert "bare breasts fully exposed with visible nipples" in prompt
     assert "natural female anatomy" in prompt
+    # O estado nu lidera o bloco e é repetido depois da ação, antes do BREAK.
+    assert prompt.lower().count("elara is completely naked") >= 2
     assert prompt.index("completely naked", len("Player instruction")) < \
-        prompt.index("same continuous scene")
+        prompt.index("BREAK")
     assert "no stockings" not in prompt
     head = prompt.split("BREAK", 1)[0]
-    assert "elara is an adult woman" in head.lower()
+    assert "elara (adult woman)" in head.lower()
     with db.session() as conn:
         negative = db.get_image(conn, resp.json()["id"])["negative_prompt"].lower()
     assert "masculine body" not in negative
@@ -281,9 +283,22 @@ def test_explicit_see_sync_and_async_send_sanitized_negative(client, tmp_path):
             assert "text" in negative
             assert "watermark" in negative
         else:
-            zero = next(node for node in graph.values()
-                        if node["class_type"] == "ConditioningZeroOut")
-            assert zero["inputs"]["conditioning"] == ["4", 0]
+            # Flux2 explícito: CFG 2.0 e negativo real (texto), não zero-out.
+            guider = next(node for node in graph.values()
+                          if node["class_type"] == "CFGGuider")
+            assert guider["inputs"]["cfg"] == 2.0
+            negative_ref = guider["inputs"]["negative"]
+            while graph[negative_ref[0]]["class_type"] == "ReferenceLatent":
+                negative_ref = graph[negative_ref[0]]["inputs"]["conditioning"]
+            negative_node = graph[negative_ref[0]]
+            assert negative_node["class_type"] == "CLIPTextEncode"
+            negative = negative_node["inputs"]["text"].lower()
+            assert "nude" not in negative
+            assert "naked" not in negative
+            assert "text" in negative
+            assert "watermark" in negative
+            assert "underwear" in negative
+            assert "pants" in negative
     assert _reference_image_nodes(capture["graphs"][-1])
 
 
@@ -433,7 +448,7 @@ def test_dead_minor_cannot_reenter_after_frame_decision(client, tmp_path, monkey
         client.app.dependency_overrides.clear()
     assert response.status_code == 200, response.text
     prompt = response.json()["prompt"]
-    assert "Exactly 1 people" in prompt
+    assert "Exactly 1 person" in prompt
     assert "Minor" not in prompt
 
 
@@ -889,7 +904,8 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
     # estado logo depois do nome, inclusive dentro da frase de ação.
     assert "a donzela da noite is completely naked" in folded
     assert "bare breasts fully exposed with visible nipples" in folded
-    assert "bare hips" in folded and "bare legs" in folded
+    assert "her whole body bare" in folded
+    assert folded.count("a donzela da noite is completely naked") >= 2
     assert "caio is fully clothed in" in folded
     assert "only for a donzela da noite" not in folded
     assert "everyone else stays fully clothed" not in folded
@@ -903,6 +919,8 @@ def test_explicit_see_keeps_the_action_and_the_real_place(client, tmp_path, monk
     assert "caio is naked" not in folded
     assert "his pale body exposed" not in folded
     action = resp.json()["action"]["text"].casefold()
-    assert "a donzela da noite, completely naked" in action
+    # O builder escreve "the Donzela da Noite"; o artigo do card é opcional.
+    assert "donzela da noite, completely naked" in action
     assert "caio, fully clothed" in action
     assert "caio stands nude" not in action
+    assert "black lace dress" not in action

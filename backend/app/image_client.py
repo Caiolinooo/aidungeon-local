@@ -450,6 +450,22 @@ def _comfy_image_engine(cfg: dict) -> str:
     return engine
 
 
+def with_flux2_cfg(cfg: dict, value: float | None) -> dict:
+    """Cópia do cfg com `comfyui_flux2.cfg` trocado para esta geração.
+
+    Cena explícita precisa de CFG > 1 para o negativo valer. O valor não é
+    persistido: o próximo See vestido volta ao cfg configurado.
+    """
+    if value is None:
+        return cfg
+    out = dict(cfg)
+    raw = out.get("comfyui_flux2")
+    flux = dict(raw) if isinstance(raw, dict) else {}
+    flux["cfg"] = float(value)
+    out["comfyui_flux2"] = flux
+    return out
+
+
 def flux2_settings(cfg: dict) -> dict:
     """Bloco `image.providers.comfyui.flux2`. Não lê o UNET do FineView."""
     raw = cfg.get("comfyui_flux2")
@@ -553,6 +569,16 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
                   if seed_value is None or int(seed_value) < 0 else int(seed_value))
     positive: list = ["4", 0]
     negative: list = ["5", 0]
+    # CFG 1.0 ignora o negativo de qualquer forma; zero-out é o caminho leve.
+    # Acima de 1.0 o negativo é condicionamento real e precisa de texto:
+    # sem isso a roupa que o positivo manda tirar volta pelo caminho negativo.
+    negative_prompt = str(cfg.get("negative_prompt") or "").strip()
+    if float(flux["cfg"]) > 1.0 and negative_prompt:
+        negative_node = {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": negative_prompt}}
+    else:
+        negative_node = {"class_type": "ConditioningZeroOut", "inputs": {
+            "conditioning": ["4", 0]}}
     graph: dict = {
         "1": {"class_type": "UNETLoader", "inputs": {
             "unet_name": flux["unet"],
@@ -565,8 +591,7 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
             "vae_name": flux["vae"]}},
         "4": {"class_type": "CLIPTextEncode", "inputs": {
             "clip": ["2", 0], "text": prompt}},
-        "5": {"class_type": "ConditioningZeroOut", "inputs": {
-            "conditioning": ["4", 0]}},
+        "5": negative_node,
         "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {
             "width": width, "height": height, "batch_size": 1}},
         "7": {"class_type": "Flux2Scheduler", "inputs": {

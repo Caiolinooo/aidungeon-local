@@ -319,6 +319,28 @@ def test_flux2_klein_graph_uses_official_canvas_and_scheduler(tmp_path):
     assert sampler["sampler"] == ["8", 0]
 
 
+def test_flux2_klein_uses_real_negative_when_cfg_is_above_one(tmp_path):
+    capture: dict = {}
+    cfg = image_client.with_flux2_cfg(_klein(tmp_path), 2.0)
+    cfg["negative_prompt"] = "underwear, pants, text"
+    image_client.generate_image(
+        cfg, "a woman, completely naked", adventure_id="adv-1",
+        image_id="klein-neg", width=832, height=1216,
+        transport=_transport(capture))
+
+    graph = capture["graph"]
+    assert "ConditioningZeroOut" not in _nodes(graph)
+    guider = _nodes(graph)["CFGGuider"]["inputs"]
+    assert guider["cfg"] == 2.0
+    assert guider["negative"] == ["5", 0]
+    negative = graph["5"]
+    assert negative["class_type"] == "CLIPTextEncode"
+    assert negative["inputs"]["text"] == "underwear, pants, text"
+    assert negative["inputs"]["clip"] == ["2", 0]
+    # O positivo continua sendo a cena; o negativo não a contamina.
+    assert graph["4"]["inputs"]["text"] == "a woman, completely naked"
+
+
 def test_flux2_klein_chains_references_on_both_conditionings(tmp_path):
     capture: dict = {}
     image_client.generate_image(

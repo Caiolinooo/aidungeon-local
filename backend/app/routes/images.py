@@ -48,7 +48,9 @@ If a player instruction for the picture is given, obey it.
 No dialogue, no quotes, no style words. Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
-Write a single English sentence describing the action happening right now: who does what to whom, in the place.
+Write exactly one English sentence, under 35 words, describing the action happening right now: who does what to whom, in the place.
+The person who is nude is the subject of the main clause and comes first. Put every clothed person in a "while <name>, ..." clause after the main clause.
+Use pronouns (his, her, hers) for second mentions. Never write a possessive full name such as "Caio's body" or "A Donzela's body": that puts the clothed person before the verb and the renderer paints his trousers on the nude woman.
 Use plain words. The renderer applies the authoritative clothing states separately, so do not describe clothing, nudity, undress or bare skin in the sentence. Never write "wearing", "dressed in", "nude", "naked", "undressed", "bare chest" or any garment.
 Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
@@ -282,20 +284,71 @@ def _nude_predicate(name: str, card: dict | None, label: str) -> str:
     if npc_assets.creature_kind(card, name):
         return "completely naked, fully nude, bare body exposed"
     if label == "adult woman":
-        # "Bare legs/hips" vence o short/pants que o Flux2 mantém quando só
-        # ouve "naked"; "bare feet" e "buttocks" reintroduziam sutiã e calcinha.
+        # Predicado curto venceu o predicado longo em 3/3 seeds no Flux2 com
+        # CFG 2.0. Listar quadril/coxa/perna reintroduzia calça e sutiã.
         return ("completely naked, bare breasts fully exposed with visible "
-                "nipples, natural female anatomy, bare stomach, bare hips, "
-                "bare thighs, bare legs, her whole body completely bare from "
-                "head to toe")
+                "nipples, natural female anatomy, her whole body bare, "
+                "natural skin")
     return "completely naked, fully nude, bare body exposed"
 
 
-def _clothed_predicate(card: dict | None) -> str:
-    outfit = npc_assets.current_outfit_text(card)
+_OUTFIT_GARMENT = re.compile(
+    r"(?i)\b(suit|dress|gown|robe|armor|armour|uniform|shirt|blouse|skirt|"
+    r"trousers|pants|coat|jacket|cloak|cape|tunic|vest|top)\b")
+_OUTFIT_COLOR = re.compile(
+    r"(?i)\b(black|white|red|blue|green|grey|gray|silver|gold|brown|purple|"
+    r"pink|dark)\b")
+
+
+def _short_outfit(text: str) -> str:
+    """Roupa em duas ou três palavras para não vazar no corpo nu.
+
+    "a sharply tailored black or dark grey suit" vira "black suit". O Flux2
+    copia o terno inteiro para a mulher nua quando a frase do homem é longa;
+    a cor + a peça bastam para vestir quem está vestido.
+    """
+    flat = " ".join((text or "").split()).strip(" ,.;")
+    flat = re.sub(r"(?i)^(?:a|an|the)\s+", "", flat)
+    garment = _OUTFIT_GARMENT.search(flat)
+    color = _OUTFIT_COLOR.search(flat)
+    if garment:
+        piece = garment.group(1).casefold()
+        return f"{color.group(1).casefold()} {piece}" if color else piece
+    words = flat.split()
+    return " ".join(words[:4]).casefold()
+
+
+def _pronoun_for(name: str, card: dict | None) -> str:
+    label = npc_assets.sex_label(name, "", "", card=card)
+    if label == "adult man":
+        return "his"
+    if label == "adult woman":
+        return "her"
+    return "their"
+
+
+def _clothed_predicate(card: dict | None, name: str = "") -> str:
+    outfit = _short_outfit(npc_assets.current_outfit_text(card))
+    pronoun = _pronoun_for(name, card)
     if outfit:
-        return f"fully clothed in {outfit}"
-    return "fully clothed in their current outfit"
+        return f"fully clothed in {pronoun} {outfit}"
+    return f"fully clothed in {pronoun} current outfit"
+
+
+def _name_pattern(name: str) -> re.Pattern[str]:
+    """Nome com artigo opcional: "A Donzela" também casa "the Donzela".
+
+    O LLM escreve "the Donzela da Noite" mesmo quando o card se chama
+    "A Donzela da Noite". Sem isso o estado era empurrado para o começo e
+    virava o sujeito da frase, que é o que pintava a calça do Caio nela.
+    """
+    bare = re.sub(r"(?i)^(?:a|an|the)\s+", "", name).strip()
+    variants = [name] if name else []
+    if bare and bare.casefold() != name.casefold():
+        variants.append(bare)
+    body = "|".join(re.escape(variant) for variant in variants)
+    return re.compile(
+        rf"(?<![\w'])(?:(?:the|a|an)\s+)?(?:{body})(?![\w'])")
 
 
 def _stateful_action(sentence: str, states: list[tuple[str, str]]) -> str:
@@ -304,15 +357,19 @@ def _stateful_action(sentence: str, states: list[tuple[str, str]]) -> str:
     A frase do LLM é o sinal mais forte do renderizador; um bloco separado
     no começo não vence o "Caio stands nude" que ele inventa. Inserir o
     estado logo depois do nome mantém a ação e trava a roupa.
+
+    Nome ausente não é preposto: virar o sujeito da frase é justamente o que
+    fazia a calça do homem vestido aparecer na mulher nua. Ele entra como
+    frase curta no fim.
     """
     cleaned = " ".join((sentence or "").split()).strip(" ,.;")
     if not cleaned:
         return ""
+    missing: list[tuple[str, str]] = []
     for name, predicate in states:
         if not name or not predicate:
             continue
-        pattern = re.compile(rf"(?<![\w']){re.escape(name)}(?![\w'])")
-        match = pattern.search(cleaned)
+        match = _name_pattern(name).search(cleaned)
         if match:
             before = cleaned[:match.end()]
             after = cleaned[match.end():]
@@ -321,12 +378,16 @@ def _stateful_action(sentence: str, states: list[tuple[str, str]]) -> str:
             else:
                 cleaned = before + f", {predicate}," + after
         else:
-            cleaned = f"{name}, {predicate}, {cleaned}"
+            missing.append((name, predicate))
     cleaned = re.sub(r"(?:\s*,\s*){2,}", ", ", cleaned)
     cleaned = re.sub(r"\s+([,.;])", r"\1", cleaned)
     cleaned = re.sub(r",\s*(?=(?:while|and)\b)", " ", cleaned)
     cleaned = re.sub(r"\b(while|and)\s*,", r"\1 ", cleaned)
-    return " ".join(cleaned.split()).strip(" ,.;")
+    cleaned = " ".join(cleaned.split()).strip(" ,.;")
+    if missing:
+        tail = ". ".join(f"{name} is {predicate}" for name, predicate in missing)
+        cleaned = f"{cleaned}. {tail}" if cleaned else tail
+    return cleaned
 
 
 def clip_words(text: str, limit: int) -> str:
@@ -671,7 +732,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                 npc_assets.sex_label(name, story_blob, moment, card=card)
             predicate_by_name[name] = _nude_predicate(name, card, label)
         else:
-            predicate_by_name[name] = _clothed_predicate(card)
+            predicate_by_name[name] = _clothed_predicate(card, name)
     # Trava de sexo na frente do prompt: mulher fica mulher, homem fica homem.
     # Criatura não vira "adult woman": isso pinta um humano nu.
     sex_bits = []
@@ -748,6 +809,19 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                 "Authoritative clothing states (obey exactly; never contradict them): "
                 + "; ".join(states) + ".\n"
             )
+    nude_instruction = ""
+    if explicit and nude:
+        first = nude[0]
+        nude_instruction = (
+            f"The nude person is {first}. Start the action sentence with "
+            f"{first}. "
+        )
+        if clothed:
+            nude_instruction += (
+                f"Put {', '.join(clothed)} in a \"while ...\" clause after "
+                "the main clause, never as the subject of the first clause. "
+            )
+        nude_instruction += "\n"
     # Com diretiva (recusa/bloqueio), o builder recebe a versão canônica —
     # a tentativa crua do jogador não chega nem ao LLM de prompt.
     painted_source = moment if assessment.image_directive else \
@@ -758,6 +832,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         + (canon + "\n\n" if canon else "")
         + f"People who may appear, and no one else: {who}.\n"
         + clothing_states
+        + nude_instruction
         + place
         + "Moment to paint:\n"
         + painted
@@ -801,24 +876,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(atmosphere.replace("+", " "))
     order_lock = _explicit_order_lock(order) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
-    if explicit:
-        if len(names) == 1:
-            lead_bits.append(f"{names[0]} is the only person in the entire scene, no one else")
-        for name in nude:
-            predicate = predicate_by_name.get(name)
-            if predicate:
-                lead_bits.append(f"{name} is {predicate}")
-        for name in clothed:
-            predicate = predicate_by_name.get(name)
-            if predicate:
-                lead_bits.append(f"{name} is {predicate}")
-        lead_bits.append("uncensored")
-        lead_bits.append("wide full-body composition, entire body visible, not a close-up portrait")
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
     # normal: o rosto lidera o primeiro chunk — "kisses on the sofa" na
     # frente pintava um casal genérico.
-    if sex_bits:
+    if sex_bits and not explicit:
         lead_bits.append(". ".join(sex_bits))
     creature = any(
         npc_assets.creature_kind(resolved.get(name) or _card_named(cards, name), name)
@@ -862,12 +924,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             lead_bits.append(
                 "distinct different people, not the same person, no duplicate faces: " + assignments
             )
-    if _is_interaction(moment, names):
-        if explicit:
-            lead_bits.append("wide shot of that action, full bodies, not a close-up portrait")
-        else:
-            lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
-    lead = ", ".join(lead_bits)
+    if _is_interaction(moment, names) and not explicit:
+        lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
     suffix = re.sub(r"(?i)\b(?:nude|naked)\b", "", img_cfg["style_suffix"] or "")
     suffix = " ".join(suffix.replace(", ,", ",").split()).strip(" ,")
     if creature and not explicit and "natural skin texture" in suffix:
@@ -875,19 +933,70 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             "natural skin texture",
             "scales, hide or fur, not human skin",
         )
-    tail = ", ".join(part for part in (
-        (entry or "")[:160] if location and location != "the current scene" else "",
-        adv.get("image_style") or "",
-        suffix,
-    ) if part)
-    if lead and tail:
-        prompt = f"{lead} BREAK {tail}"
+    if explicit:
+        # Blocos de frase, não uma cadeia de vírgulas. O Flux2 obedece o
+        # começo de cada frase; o estado nu lidera e a ação vem logo depois.
+        # Repetir o estado depois da ação foi o que derrubou o thong.
+        blocks: list[str] = []
+        if order_lock:
+            blocks.append(order_lock.rstrip(".") + ".")
+        states = [
+            (name, predicate_by_name[name])
+            for name in nude if name in predicate_by_name
+        ] + [
+            (name, predicate_by_name[name])
+            for name in clothed if name in predicate_by_name
+        ]
+        for name, predicate in states:
+            blocks.append(f"{name} is {predicate}.")
+        if len(names) == 1:
+            blocks.append(
+                f"{names[0]} is the only person in the entire scene, no one else.")
+        blocks.append(
+            "Wide full-body composition, entire body visible, not a close-up portrait.")
+        if sentence:
+            blocks.append(sentence.rstrip(".") + ".")
+        if order and not order_lock:
+            blocks.append(order.rstrip(".") + ".")
+        for name, predicate in states:
+            blocks.append(f"{name} is {predicate}.")
+        if location and location != "the current scene":
+            place_line = f"Place: {location}"
+            if entry:
+                place_line += f", {clip_words(entry, 220).rstrip('.')}"
+            blocks.append(place_line + ".")
+        if names:
+            if len(who_bits) == 2:
+                people = " and ".join(who_bits)
+            else:
+                people = ", ".join(who_bits)
+            noun = "person" if len(names) == 1 else "people"
+            blocks.append(
+                f"Exactly {len(names)} {noun}: {people}, no one else, "
+                "no other people in the background.")
+        blocks.append("Wide shot, full bodies, not a close-up portrait.")
+        lead = " ".join(block for block in blocks if block)
+        explicit_suffix = img_cfg["style_suffix"] or ""
+        if not nude:
+            explicit_suffix = re.sub(
+                r"(?i)\b(?:nude|naked)\b", "", explicit_suffix)
+            explicit_suffix = " ".join(
+                explicit_suffix.replace(", ,", ",").split()).strip(" ,")
+        tail = ", ".join(part for part in (
+            adv.get("image_style") or "", explicit_suffix) if part)
+        prompt = f"{lead} BREAK {tail}" if lead and tail else lead or tail
     else:
-        prompt = lead or tail
+        lead = ", ".join(lead_bits)
+        tail = ", ".join(part for part in (
+            (entry or "")[:160] if location and location != "the current scene" else "",
+            adv.get("image_style") or "",
+            suffix,
+        ) if part)
+        prompt = f"{lead} BREAK {tail}" if lead and tail else lead or tail
     negative = _dedupe_negative(neg_summary, assessment.image_negative)
-    if explicit and nude and not clothed:
+    if explicit and nude:
         negative = _dedupe_negative(
-            negative, "underwear, bra, panties, pants, dress, skirt, clothes")
+            negative, npc_assets.EXPLICIT_CLOTHING_NEGATIVE)
     if not explicit:
         negative = _dedupe_negative(negative, neg_moment, npc_assets.NUDITY_BAN)
     if clause:
@@ -948,6 +1057,11 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
+    # Cena explícita no Flux2: CFG 2.0 para o negativo de roupa valer.
+    # O valor não é persistido, e entra no cache_key abaixo.
+    flux2_cfg = 2.0 if explicit else None
+    if flux2_cfg is not None:
+        img_cfg = image_client.with_flux2_cfg(img_cfg, flux2_cfg)
     try:
         with db.session() as conn:
             references = (
@@ -984,6 +1098,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         "reference_provider": str(img_cfg.get("provider") or "sdwebui"),
         "expected_people": expected_people,
         "explicit": explicit,
+        "flux2_cfg": flux2_cfg,
         "cache_key": image_client.request_key(
             {**img_cfg, "negative_prompt": base_negative}, prompt, negative_extra=negative_extra, variation=variation,
             reference_images=references or None),
@@ -1048,8 +1163,11 @@ def post_see(adventure_id: str, body: SeeRequest,
             raise likeness.portrait_required()
         if plan.get("explicit"):
             references = likeness.identity_face_pngs(references)
-        result = image_client.generate_image(
+        cfg_for_plan = image_client.with_flux2_cfg(
             {**img_cfg, "negative_prompt": plan["base_negative"]},
+            plan.get("flux2_cfg"))
+        result = image_client.generate_image(
+            cfg_for_plan,
             plan["prompt"], adventure_id=adventure_id, image_id=image_id,
             transport=transport, negative_extra=plan["negative_extra"],
             reference_images=references or None,

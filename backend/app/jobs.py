@@ -112,10 +112,12 @@ _CAST_NEGATIVE = (
     + npc_assets.IDENTITY_NEGATIVE
     + ", " + _NUDITY_BAN
 )
-# Cena nua: a roupa do card não é negativa. "costume change" vestia de novo.
+# Cena nua: "costume change" vestia de novo, mas a roupa em si continua
+# negativa. Sem ela o Flux2 mantém calça e thong mesmo com "completely naked".
 _CAST_NEGATIVE_EXPLICIT = (
     "extra person, crowd, duplicate face, wrong hair, "
     + npc_assets.IDENTITY_NEGATIVE
+    + ", " + npc_assets.EXPLICIT_CLOTHING_NEGATIVE
 )
 
 
@@ -1143,6 +1145,11 @@ _BACKDROP_WIDTH = 1344
 _BACKDROP_HEIGHT = 768
 
 
+def _backdrop_cfg(img_cfg: dict, *, explicit: bool) -> dict:
+    """CFG 2.0 na cena nua: com CFG 1.0 o negativo de roupa é ignorado."""
+    return image_client.with_flux2_cfg(img_cfg, 2.0 if explicit else None)
+
+
 def backdrop_negative(img_cfg: dict, *, include_people: bool, explicit: bool) -> str:
     base = npc_assets.negative_without_nudity_ban(img_cfg["negative_prompt"]) if explicit else img_cfg["negative_prompt"]
     if explicit:
@@ -1157,6 +1164,7 @@ def backdrop_negative(img_cfg: dict, *, include_people: bool, explicit: bool) ->
 def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
                        explicit: bool,
                        reference_images: list[bytes] | None = None) -> str:
+    img_cfg = _backdrop_cfg(img_cfg, explicit=explicit)
     ban = ""
     if explicit:
         ban = _CAST_NEGATIVE_EXPLICIT
@@ -1188,6 +1196,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled",
                         "Image generation is disabled in settings")
+    img_cfg = _backdrop_cfg(img_cfg, explicit=bool(payload.get("explicit")))
     ban = ""
     if payload.get("explicit"):
         ban = _CAST_NEGATIVE_EXPLICIT
@@ -1608,6 +1617,8 @@ def _execute_see(job: dict, transport: Any) -> dict:
             img_cfg["negative_prompt"])
     negative_prompt = ", ".join(
         part for part in (img_cfg["negative_prompt"], negative_extra) if part)
+    # Cena explícita no Flux2: CFG 2.0 para o negativo de roupa valer.
+    img_cfg = image_client.with_flux2_cfg(img_cfg, payload.get("flux2_cfg"))
     references = (
         _reference_blobs(
             job, people=False,
