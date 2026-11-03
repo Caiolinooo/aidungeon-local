@@ -41,6 +41,7 @@ import {
   Undo2,
   Play as PlayIcon,
   Square,
+  LoaderCircle,
   Image as ImageIcon,
   BookOpen,
   PanelRight,
@@ -1607,7 +1608,9 @@ export default function Play() {
                   title={canSee ? 'Gerar uma imagem da cena atual' : 'Disponível depois que a IA escreve uma resposta'}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary transition hover:bg-elevated hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:w-10"
                 >
-                  <ImageIcon className="w-4 h-4 text-accent-pri" />
+                  {seeing
+                    ? <LoaderCircle className="w-4 h-4 animate-spin text-accent-pri" />
+                    : <ImageIcon className="w-4 h-4 text-accent-pri" />}
                 </button>
 
                 <div className="hidden items-center gap-1 sm:flex">

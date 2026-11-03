@@ -86,6 +86,12 @@ PRIORITY_PORTRAIT_CLIP = 7
 CUDA_OOM_BACKOFF_S = 300
 CUDA_OOM_RETRY_CAP = 3
 
+# O See assíncrono segura o job em `preparing` enquanto os retratos do elenco
+# são gerados. Sem isso, clicar em See logo depois de uma mudança de roupa
+# falhava com `portrait_required` por poucos segundos.
+SEE_PORTRAIT_WAIT_S = float(os.environ.get("AIDUNGEON_SEE_PORTRAIT_WAIT", "90"))
+SEE_PORTRAIT_POLL_S = 0.5
+
 _wakeup = threading.Event()
 _prepare_lock = threading.Lock()
 _prepare_inflight: set[str] = set()
@@ -615,16 +621,57 @@ def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dic
     return job
 
 
+def _has_active_portrait(adventure_id: str) -> bool:
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE adventure_id=? AND type='character_portrait'"
+            " AND status IN ('preparing','pending','running') LIMIT 1",
+            (adventure_id,),
+        ).fetchone()
+    return row is not None
+
+
+def _wait_for_portraits(adventure_id: str, deadline: float) -> tuple[bool, bool]:
+    """Espera os retratos ativos do elenco. Devolve (viu_job_ativo, pode_tentar).
+
+    `pode_tentar` é False quando o prazo acabou; nesse caso o See falha com a
+    mensagem original em vez de ficar preparando para sempre.
+    """
+    seen_active = False
+    while True:
+        if not _has_active_portrait(adventure_id):
+            return seen_active, time.monotonic() < deadline
+        seen_active = True
+        if time.monotonic() >= deadline:
+            return seen_active, False
+        time.sleep(SEE_PORTRAIT_POLL_S)
+
+
 def _prepare_see(job: dict, plan: Callable[[], dict]) -> None:
-    try:
-        ready = {**job["payload"], **plan()}
-    except (GameError, LlmError) as exc:
-        _fail_see(job, exc.code, exc.message)
-        return
-    except Exception:
-        log.exception("see %s: prompt falhou", job["id"])
-        _fail_see(job, "generation_failed", "could not build the image prompt")
-        return
+    deadline = time.monotonic() + SEE_PORTRAIT_WAIT_S
+    retried_without_job = False
+    while True:
+        try:
+            ready = {**job["payload"], **plan()}
+            break
+        except (GameError, LlmError) as exc:
+            waitable = (
+                isinstance(exc, GameError)
+                and exc.code == "portrait_required"
+                and time.monotonic() < deadline
+            )
+            if waitable:
+                # `_require_cast` já enfileirou os retratos que faltam.
+                seen_active, can_retry = _wait_for_portraits(job["adventure_id"], deadline)
+                if can_retry and (seen_active or not retried_without_job):
+                    retried_without_job = not seen_active
+                    continue
+            _fail_see(job, exc.code, exc.message)
+            return
+        except Exception:
+            log.exception("see %s: prompt falhou", job["id"])
+            _fail_see(job, "generation_failed", "could not build the image prompt")
+            return
     with db.session() as conn:
         promoted = db.promote_job(conn, job["id"], ready)
     if promoted is None:

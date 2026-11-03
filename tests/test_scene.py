@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import httpx
 
-from app import db, image_client, jobs, scene
+from app import db, image_client, jobs, likeness, scene
 from conftest import add_action, make_adventure
 from test_v2 import PNG_BYTES, override_transport
 from test_v3 import use_tmp_storage
@@ -697,7 +699,8 @@ def test_missing_portrait_does_not_paint_a_partial_scene(client, tmp_path):
         )
 
 
-def test_async_see_fails_portrait_required_after_queueing(client):
+def test_async_see_fails_portrait_required_after_queueing(client, monkeypatch):
+    monkeypatch.setattr(jobs, "SEE_PORTRAIT_WAIT_S", 0.0)
     adv = make_adventure()
     with db.session() as conn:
         card = db.insert_card(
@@ -705,7 +708,6 @@ def test_async_see_fails_portrait_required_after_queueing(client):
             entry="Ranger.", portrait_prompt="short black hair",
         )
     add_action(adv["id"], 0, "continue", "Nia waits.")
-    import threading
     resp = client.post(
         f"/api/adventures/{adv['id']}/see",
         json={"action_seq": 0},
@@ -722,6 +724,46 @@ def test_async_see_fails_portrait_required_after_queueing(client):
     assert see_job["status"] == "error"
     assert see_job["result"]["code"] == "portrait_required"
     assert [job["ref_id"] for job in portraits] == [card["id"]]
+
+
+def test_async_see_waits_for_portrait_job_then_runs(client, monkeypatch):
+    monkeypatch.setattr(jobs, "SEE_PORTRAIT_WAIT_S", 5.0)
+    monkeypatch.setattr(jobs, "SEE_PORTRAIT_POLL_S", 0.05)
+    adv = make_adventure()
+    with db.session() as conn:
+        portrait = db.insert_job(
+            conn, adventure_id=adv["id"], type="character_portrait",
+            status="pending", payload={},
+        )
+
+    calls = {"n": 0}
+
+    def plan() -> dict:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise likeness.portrait_required()
+        return {
+            "prompt": "Nia waits.", "negative_extra": "", "negative_prompt": "",
+            "caption": "Nia waits.", "cast_card_ids": [], "reference_image_ids": [],
+            "reference_hashes": [], "expected_people": 0, "explicit": False,
+        }
+
+    def finish_portrait() -> None:
+        time.sleep(0.2)
+        with db.session() as conn:
+            db.finish_job(conn, portrait["id"], "done")
+
+    threading.Thread(target=finish_portrait, daemon=True).start()
+    job = jobs.start_see(
+        adv["id"], {"action_seq": 0, "extra_prompt": "", "variation": 0}, plan)
+    for thread in threading.enumerate():
+        if thread.name == "see-prompt":
+            thread.join(5)
+    with db.session() as conn:
+        ready = db.get_job(conn, job["id"])
+    assert ready["status"] == "pending"
+    assert ready["payload"]["prompt"] == "Nia waits."
+    assert calls["n"] == 2
 
 
 def test_cast_anchors_keep_order_for_see_and_backdrop(client, tmp_path):
