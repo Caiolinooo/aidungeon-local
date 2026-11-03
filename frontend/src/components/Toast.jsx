@@ -25,7 +25,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50 flex flex-col gap-2 sm:inset-x-auto sm:right-4 sm:w-80">
+      <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-50 flex flex-col gap-2 sm:inset-x-auto sm:bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:right-4 sm:top-auto sm:w-80">
         {toasts.map((t) => (
           <div
             key={t.id}

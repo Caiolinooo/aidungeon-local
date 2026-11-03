@@ -62,7 +62,7 @@
   --border-focus-rgb: var(--accent-500);
   --text-primary-rgb: var(--n-100);
   --text-secondary-rgb: var(--n-400);
-  --text-muted-rgb: var(--n-500);
+  --text-muted-rgb: var(--n-400);
   --accent-primary-rgb: var(--accent-500);
   --accent-hover-rgb: var(--accent-400);
   --accent-gold-rgb: var(--warn-500);
@@ -128,7 +128,7 @@
   --border-focus-rgb: var(--accent-700);
   --text-primary-rgb: var(--n-100);
   --text-secondary-rgb: var(--n-400);
-  --text-muted-rgb: var(--n-500);
+  --text-muted-rgb: var(--n-400);
   --accent-primary-rgb: var(--accent-700);
   --accent-hover-rgb: var(--accent-600);
   --accent-gold-rgb: var(--warn-500);
@@ -194,7 +194,7 @@
   --border-focus-rgb: var(--accent-500);
   --text-primary-rgb: var(--n-100);
   --text-secondary-rgb: var(--n-400);
-  --text-muted-rgb: var(--n-500);
+  --text-muted-rgb: var(--n-400);
   --accent-primary-rgb: var(--accent-500);
   --accent-hover-rgb: var(--accent-400);
   --accent-gold-rgb: var(--warn-500);
@@ -380,6 +380,14 @@ a,
   .portrait-motion-pull,
   .portrait-speaking {
     animation: none;
+  }
+  .animate-pulse,
+  .animate-fade-in,
+  .animate-slide-in-top {
+    animation: none !important;
+  }
+  html {
+    scroll-behavior: auto;
   }
 }
 

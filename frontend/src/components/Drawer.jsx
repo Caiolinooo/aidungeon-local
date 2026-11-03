@@ -1,4 +1,5 @@
 import { Suspense, lazy, useState } from 'react'
+import { useDialog } from '../hooks/useDialog.js'
 import CardsTab from './drawer/CardsTab.jsx'
 import NpcsTab from './drawer/NpcsTab.jsx'
 import MemoryTab from './drawer/MemoryTab.jsx'
@@ -54,8 +55,8 @@ export function InspectorPane({
       }`}
     >
       {/* Inspector Header with Tab Navigation */}
-      <div className="flex items-start justify-between gap-1.5 border-b border-subtle px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] bg-surface/90">
-        <div className="grid min-w-0 flex-1 grid-cols-3 gap-1">
+      <div className="flex items-center justify-between gap-1.5 border-b border-subtle bg-surface px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
           {INSPECTOR_TABS.map((t) => {
             const Icon = t.icon
             const active = tab === t.id
@@ -63,14 +64,14 @@ export function InspectorPane({
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border px-1 py-1.5 text-[10px] font-medium leading-tight transition ${
+                className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition ${
                   active
                     ? 'border-accent-pri bg-accent-pri/15 text-accent-pri'
                     : 'border-subtle bg-elevated/40 text-secondary hover:bg-elevated hover:text-primary'
                 }`}
               >
-                <Icon className="h-4 w-4" />
-                <span className="max-w-full truncate">{t.label}</span>
+                <Icon className="h-4 w-4 shrink-0" />
+                <span>{t.label}</span>
               </button>
             )
           })}
@@ -79,7 +80,7 @@ export function InspectorPane({
         {onClose && (
           <button
             onClick={onClose}
-            className="shrink-0 rounded-xl p-2 text-secondary hover:bg-elevated hover:text-primary transition"
+            className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl text-secondary hover:bg-elevated hover:text-primary transition"
             aria-label="Fechar painel"
           >
             <X className="w-4 h-4" />
@@ -98,7 +99,7 @@ export function InspectorPane({
               controlsComponent
             ) : (
               <p className="text-xs text-muted text-center py-8">
-                No dynamic game controls generated for this adventure yet.
+                Nenhum controle dinâmico gerado para esta aventura ainda.
               </p>
             )}
           </div>
@@ -133,12 +134,17 @@ export default function Drawer({
   const [internalTab, setInternalTab] = useState('cards')
   const activeTab = tab || internalTab
   const handleTabChange = setTab || setInternalTab
+  const dialogRef = useDialog(Boolean(open), onClose)
 
   if (!open) return null
 
   return (
     <div
-      className="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-sm animate-fade-in"
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      tabIndex={-1}
+      className="fixed inset-0 z-40 flex justify-end bg-black/75 backdrop-blur-sm animate-fade-in"
       onPointerDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <InspectorPane

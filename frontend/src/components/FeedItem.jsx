@@ -586,11 +586,11 @@ function SeeImageCard({ action, adventureId = '' }) {
               src={frameUrl}
               {...videoProps}
               onError={playingClip ? sceneClip.failPlayback : undefined}
-              className="h-auto max-h-[75vh] w-full rounded-lg bg-black object-contain"
+              className="h-auto max-h-[min(75dvh,var(--app-height,100dvh))] w-full rounded-lg bg-black object-contain"
             />
           ) : (
             <div className="relative">
-              <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="h-auto max-h-[75vh] w-full rounded-lg bg-black object-contain" />
+              <img src={objUrl} alt={displayCaption || 'Ilustração da cena'} className="h-auto max-h-[min(75dvh,var(--app-height,100dvh))] w-full rounded-lg bg-black object-contain" />
               <button
                 type="button"
                 onClick={() => setConcealed(true)}

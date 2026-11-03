@@ -200,6 +200,36 @@ def test_payload_carries_sampler_stop_and_thinking_flag(adventure):
     )
 
 
+class _SetupBoom(BaseException):
+    """Estoura antes do gerador. Exception não basta: o lock tem que sair mesmo assim."""
+
+
+def test_continue_releases_lock_when_setup_raises(adventure, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise _SetupBoom("capture failed")
+
+    monkeypatch.setattr(game_engine.canon, "capture", boom)
+    with pytest.raises(_SetupBoom, match="capture failed"):
+        game_engine.handle_continue(adventure["id"], transport=make_llm_transport())
+    assert game_engine.acquire_generation_lock(adventure["id"])
+    game_engine.release_generation_lock(adventure["id"])
+
+
+def test_retry_releases_lock_when_setup_raises(adventure, monkeypatch):
+    _collect(game_engine.handle_action(
+        adventure["id"], "do", "knock",
+        transport=make_llm_transport(tokens=("Original.",))))
+
+    def boom(*_args, **_kwargs):
+        raise _SetupBoom("restore failed")
+
+    monkeypatch.setattr(game_engine, "_restore_body_from_action", boom)
+    with pytest.raises(_SetupBoom, match="restore failed"):
+        game_engine.handle_retry(adventure["id"], transport=make_llm_transport())
+    assert game_engine.acquire_generation_lock(adventure["id"])
+    game_engine.release_generation_lock(adventure["id"])
+
+
 def test_generation_concurrent_conflict(adventure):
     # gerador não consumido → lock seguro → segunda geração = 409
     gen = game_engine.handle_action(adventure["id"], "do", "hold",

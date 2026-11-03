@@ -32,7 +32,7 @@ from app.routes import (actions, adventure_scripts, adventures, assistant, cards
                         consistency as consistency_routes,
                         generation, health, images, import_export, jobs as jobs_routes,
                         memory, scenarios, scene as scene_routes, settings, ui_profile,
-                        voice)
+                        voice, runtimes)
 from app.routes import auth as auth_routes
 from app.routes import events as events_routes
 from app.routes import likeness as likeness_routes
@@ -168,6 +168,8 @@ app.include_router(memory.router, prefix="/api/adventures", tags=["memory"],
 app.include_router(import_export.router, prefix="/api", tags=["import-export"],
                    dependencies=_protected)
 app.include_router(settings.router, prefix="/api", tags=["settings"],
+                   dependencies=_protected)
+app.include_router(runtimes.router, prefix="/api", tags=["settings"],
                    dependencies=_protected)
 app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)

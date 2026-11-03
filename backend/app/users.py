@@ -1,33 +1,100 @@
-"""Usuários do app. O Caio é o admin e não pode ser apagado.
+"""Usuários do app. O Caio é admin legado e não pode ser apagado.
 
-A senha fica como sha256 hex, o mesmo formato de AUTH_PASSWORD_HASH. O
-login consulta esta tabela; a conta do ambiente é criada aqui na primeira
-subida, com a senha que já estava no .env.
+Senhas novas ficam como `scrypt$<salt_hex>$<hash_hex>`. O login ainda aceita
+o sha256 hex legado (AUTH_PASSWORD_HASH antigo) e regrava em scrypt. A conta
+do ambiente é criada aqui na primeira subida, com o hash que já estava no .env.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 
 from app import db
 
 ADMIN_USERNAME = "Caio"
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,31}$")
+_LEGACY_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MIN_PASSWORD = 8
+_SCRYPT_N = 2**14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_SALT_BYTES = 16
 
 
 def password_hash(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """scrypt$salt$hash. n=2**14, r=8, p=1, sal de 16 bytes."""
+    salt = os.urandom(_SCRYPT_SALT_BYTES)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+    )
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def is_legacy_password_hash(hashed: str) -> bool:
+    return _LEGACY_SHA256.fullmatch((hashed or "").strip().lower()) is not None
 
 
 def password_matches(password: str, hashed: str) -> bool:
-    return hmac.compare_digest(password_hash(password), (hashed or "").strip().lower())
+    stored = (hashed or "").strip()
+    lowered = stored.lower()
+    if lowered.startswith("scrypt$"):
+        parts = lowered.split("$")
+        if len(parts) != 3:
+            return False
+        try:
+            salt = bytes.fromhex(parts[1])
+            expected = bytes.fromhex(parts[2])
+        except ValueError:
+            return False
+        if not salt or not expected:
+            return False
+        try:
+            digest = hashlib.scrypt(
+                password.encode("utf-8"),
+                salt=salt,
+                n=_SCRYPT_N,
+                r=_SCRYPT_R,
+                p=_SCRYPT_P,
+                dklen=len(expected),
+            )
+        except (ValueError, OSError):
+            return False
+        if len(digest) != len(expected):
+            return False
+        return hmac.compare_digest(digest, expected)
+    if not is_legacy_password_hash(stored):
+        return False
+    actual = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(actual, lowered)
+
+
+def upgrade_password_hash(conn, username: str, password: str) -> None:
+    """Regrava a senha que acabou de autenticar. Não reaplica o mínimo de tamanho."""
+    conn.execute(
+        "UPDATE users SET password_hash=? WHERE username=?",
+        (password_hash(password), username),
+    )
 
 
 def is_admin(username: str) -> bool:
-    return username == ADMIN_USERNAME
+    """Admin legado (Caio) ou papel `admin` na tabela. Caio não precisa de linha."""
+    if username == ADMIN_USERNAME:
+        return True
+    if not username:
+        return False
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT role FROM users WHERE username=?",
+            (username,),
+        ).fetchone()
+    return row is not None and row["role"] == "admin"
 
 
 def validate_username(username: str) -> str:
@@ -80,17 +147,30 @@ def list_users(conn) -> list[dict]:
 
 
 def ensure_seed(conn, cfg: dict) -> None:
-    """Cria a conta do ambiente se ela ainda não existe. Não troca senha."""
+    """Cria a conta do ambiente se ela ainda não existe. Não troca senha.
+
+    Essa conta é admin, mesmo quando AUTH_USER não é o Caio. Linha antiga com
+    outro papel é corrigida. O valor gravado é AUTH_PASSWORD_HASH já pronto
+    (sha256 legado ou scrypt): a senha em claro não passa por aqui, então não
+    dá para chamar password_hash(). O login regrava o formato legado.
+    """
     name = cfg["user"]
     if get_user(conn, name) is None:
         conn.execute(
             "INSERT INTO users(username, password_hash, role, created_at)"
             " VALUES(?,?,?,?)",
-            (name, cfg["password_hash"],
-             "admin" if name == ADMIN_USERNAME else "user", db.utcnow()),
+            (name, cfg["password_hash"], "admin", db.utcnow()),
         )
-    if get_user(conn, ADMIN_USERNAME):
-        conn.execute("UPDATE users SET role='admin' WHERE username=?", (ADMIN_USERNAME,))
+    else:
+        conn.execute(
+            "UPDATE users SET role='admin' WHERE username=? AND COALESCE(role, '')!='admin'",
+            (name,),
+        )
+    if name != ADMIN_USERNAME:
+        conn.execute(
+            "UPDATE users SET role='admin' WHERE username=? AND COALESCE(role, '')!='admin'",
+            (ADMIN_USERNAME,),
+        )
 
 
 def create_user(conn, username: str, password: str) -> dict:

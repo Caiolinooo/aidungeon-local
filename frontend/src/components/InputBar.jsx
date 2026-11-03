@@ -245,7 +245,7 @@ export default function InputBar({
                 onClick={() => onSend(action.type, action.text)}
                 disabled={inputLocked}
                 title={action.text}
-                className="min-h-8 max-w-[18rem] shrink-0 truncate rounded-full border border-accent-pri/35 bg-accent-pri/10 px-3 py-1 text-left text-xs text-accent-pri hover:bg-accent-pri/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
+                className="min-h-11 max-w-[18rem] shrink-0 truncate rounded-full border border-accent-pri/35 bg-accent-pri/10 px-3 py-1 text-left text-xs text-accent-pri hover:bg-accent-pri/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
               >
                 {action.label}
               </button>

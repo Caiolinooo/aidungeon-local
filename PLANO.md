@@ -58,8 +58,8 @@ O AI Dungeon não manda a história inteira ao modelo. Ele monta um "sanduíche"
 - [x] Story Summary rolante
 - [x] Biblioteca de scenarios + busca por tag
 - [x] Export/Import de aventura (mesmo formato do backup original — round-trip)
-- [ ] "See" (imagens) — fase opcional (hardware fraco, ver §3)
-- [ ] Multiplayer / TTS / app mobile — fora do escopo v1 (roadmap §10)
+- [x] "See" e cena automática + clipes (ComfyUI: FLUX.2 Klein 4B FP8 / FineView Qwen + LTXV 2B / Wan 2.2 TI2V)
+- [x] Multiplayer por aventura, TTS/STT + clonagem de voz (OmniVoice) e UI responsiva mobile/desktop
 
 ---
 
@@ -646,3 +646,22 @@ Metas são alvos de aceite, não resultados atuais:
 - Pessoa real continua SFW; menor nunca entra em conteúdo sexual; regras de imagem
   e consentimento permanecem invariantes em qualquer fase.
 - Backups antes de migrations; nenhum rollout sem smoke, rollback e dados de teste isolados.
+
+---
+
+## 13. ESTADO ATUAL E ARQUITETURA HÍBRIDA (2026-10-30)
+
+### 13.1 O que foi consolidado
+
+- **Narrador e cache híbrido:** `llama-server` build `b10283` com fix do checkpoint recorrente em modelos híbridos (Qwen3.6-35B-A3B IQ2_M, `-np 5 --kv-unified -cram 0 -c 262144 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024`). Prefill quente reutiliza ~66 mil tokens de prefixo (~6,2 s de espera narrativa; ~22,6 s TTFT total com `npc_gate`). Qualidade máxima preservada por decisão explícita (sem pular o adjudicador nem reduzir o narrador).
+- **Papéis de turno isolados e concorrentes:** `sim_intent` (slot 3), `turn_gate` (slot 3) e `turn_check` (slot 4) separados de `meta`; `say` usa somente bloqueadores determinísticos sem chamada LLM de check; `check` e `gate` executam em paralelo antes da narrativa; fases reais (`turn_phase`) transmitidas no SSE e exibidas no topo do feed.
+- **Imagens, clipes e fila recuperável:** snap múltiplo de 16 exclusivo do FLUX.2 Klein (`_flux2_canvas`, chave de cache unificada), ComfyUI com `--vram-headroom 2` mantendo piso ≥ 900 MiB livres em todas as amostras, clipes automáticos em menor prioridade e preemptados por imagens, heartbeat a cada 5 s considerado pelo reaper independente, preparação de retrato serializada e pausada durante narrativa.
+- **Runtimes portáteis (`local` / `hybrid` / `colab`):** SQLite (`data/aidungeon.db`) e arquivos finais (`data/images`) permanecem sempre no projeto. O plano de computação roteia `llm.base_url` e `image.comfyui_base_url` por placement, aplica engine/pesos e preset completo de vídeo (LTXV ↔ Wan) sem alterar sampling nem resolução de imagem, gera notebook Colab parametrizado (`GET /api/runtime/notebook`, admin) com downloads verificados por SHA-256, checagem de VRAM/RAM sem downgrade silencioso, rede privada Tailscale e auto-registro autenticado (`POST /api/runtime/register`).
+- **Segurança e robustez:** senhas novas em `scrypt` com sal (upgrade transparente de hashes SHA-256 legados no login), throttle de login por IP, papel `admin` persistido na conta semeada por `AUTH_USER` (sem depender do nome fixo), e liberação garantida do lock de geração em `/action`, `/continue` e `/retry`.
+- **UI/UX mobile e desktop:** code-splitting por rota (`React.lazy`), contraste AA nos textos secundários/muted, `useDialog` unificado (Escape, focus trap, restauração de foco, `aria-modal`), alvos de toque ≥ 44 px, popovers em portal fora de `overflow-hidden`, `visualViewport` no iOS com retração do backdrop quando o teclado abre, toasts fora da barra de envio em telas pequenas e respeito integral a `prefers-reduced-motion`.
+
+### 13.2 Próximos passos recomendados (sem quebrar invariantes)
+
+1. **DTO de leitura de configuração para não-admin:** separar um endpoint enxuto para o `ConfigTab` do jogador convidado e restringir `GET /api/settings/*` completos (URLs internas e scripts globais) a `require_admin`.
+2. **URL/SHA publicados do narrador 35B e commit pinado do ComfyUI:** preencher no catálogo privado do operador para que o notebook Colab suba o 35B sem edição manual da célula `VARIABLES`.
+3. **Execução das fases F1–F5 da §12:** outbox transacional por `state_revision`, relógio único autônomo sem LLM por tick e grafo executável de locais/quests.

@@ -54,7 +54,50 @@ OVERRIDE_KEYS = (
     # embeddings (v0.8.0 / M2)
     "embeddings.enabled", "embeddings.base_url", "embeddings.model",
     "embeddings.timeout_seconds",
+    # runtime portátil (local / hybrid / colab). Segredos não entram aqui.
+    "runtime.mode", "runtime.placements.llm", "runtime.placements.comfyui",
+    "runtime.models.llm", "runtime.models.image", "runtime.models.video",
+    "runtime.endpoints.local_llm", "runtime.endpoints.local_comfyui",
+    "runtime.endpoints.colab_llm", "runtime.endpoints.colab_comfyui",
+    "runtime.project_url",
+    "runtime.registration.endpoints", "runtime.registration.hardware",
+    "runtime.registration.last_seen", "runtime.registration.models",
+    # identidade de imagem/vídeo aplicada pelo runtime; sampling fica de fora
+    "image.comfyui_engine", "image.comfyui_unet", "image.comfyui_clip",
+    "image.comfyui_clip_type", "image.comfyui_clip_device", "image.comfyui_vae",
+    "image.comfyui_flux2", "image.comfyui_video",
 )
+
+_RUNTIME_MODES = ("local", "hybrid", "colab")
+_RUNTIME_PLACEMENTS = ("local", "colab")
+_RUNTIME_MODEL_KINDS = ("llm", "image", "video")
+_RUNTIME_ENDPOINT_KEYS = (
+    "local_llm", "local_comfyui", "colab_llm", "colab_comfyui",
+)
+_FLUX2_IDENTITY = (
+    "unet", "clip", "vae", "clip_type", "clip_device", "weight_dtype",
+    "max_references", "upscale_method",
+)
+_QWEN_IDENTITY = ("unet", "clip", "vae", "clip_type", "clip_device")
+_VIDEO_FIELDS = (
+    "engine", "checkpoint", "unet", "clip", "vae",
+    "clip_type", "clip_device", "weight_dtype",
+    "frames", "fps", "steps", "cfg", "shift", "timeout_seconds",
+    "width", "height", "vertical_width", "vertical_height",
+)
+_QWEN_OVERRIDE_KEYS = {
+    "unet": "image.comfyui_unet",
+    "clip": "image.comfyui_clip",
+    "vae": "image.comfyui_vae",
+    "clip_type": "image.comfyui_clip_type",
+    "clip_device": "image.comfyui_clip_device",
+}
+_SECRET_KEYS = frozenset({
+    "api_key", "apikey", "openai_api_key", "token", "access_token",
+    "refresh_token", "id_token", "authorization", "password", "secret",
+    "auth_key", "auth_token", "aidungeon_token", "tailscale_auth_key",
+    "password_hash",
+})
 
 _file_cache: dict | None = None
 
@@ -364,12 +407,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "img2img_path": sdwebui.get("img2img_path", "/sdapi/v1/img2img"),
         "sd_model_checkpoint": ov(
             "image.sd_model_checkpoint", sdwebui.get("sd_model_checkpoint", "")),
-        # ComfyUI: nomes de arquivo/sampler vêm só do settings.json (internos).
-        "comfyui_unet": comfyui.get("unet", ""),
-        "comfyui_clip": comfyui.get("clip", ""),
-        "comfyui_clip_type": comfyui.get("clip_type", "qwen_image"),
-        "comfyui_clip_device": comfyui.get("clip_device", "default"),
-        "comfyui_vae": comfyui.get("vae", ""),
+        # Sampler do arquivo. Pesos/engine aceitam override interno do runtime.
         "comfyui_sampler": comfyui.get("sampler", "euler"),
         "comfyui_cfg": float(comfyui.get("cfg", 1.0)),
         "comfyui_sigmas": comfyui_sigmas,
@@ -377,12 +415,28 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "comfyui_poll_interval_s": float(comfyui.get("poll_interval_s", 0.25)),
         # Still opt-in. engine omisso é qwen e não entra no request_key.
         # flux2 não participa da validação len(sigmas) == steps + 1.
-        "comfyui_engine": (
-            str(comfyui.get("engine") or "qwen").strip().lower() or "qwen"),
-        "comfyui_flux2": dict(comfyui.get("flux2") or {}),
+        # Overrides de runtime só trocam a identidade (engine e pesos).
+        "comfyui_unet": ov("image.comfyui_unet", comfyui.get("unet", "")),
+        "comfyui_clip": ov("image.comfyui_clip", comfyui.get("clip", "")),
+        "comfyui_clip_type": ov("image.comfyui_clip_type",
+                                comfyui.get("clip_type", "qwen_image")),
+        "comfyui_clip_device": ov("image.comfyui_clip_device",
+                                  comfyui.get("clip_device", "default")),
+        "comfyui_vae": ov("image.comfyui_vae", comfyui.get("vae", "")),
+        "comfyui_engine": _effective_engine(
+            ov("image.comfyui_engine", None), comfyui.get("engine")),
+        "comfyui_flux2": _merge_identity(
+            dict(comfyui.get("flux2") or {}),
+            _get_override(conn, "image.comfyui_flux2"),
+            _FLUX2_IDENTITY),
         # Clipe: LTXV no arquivo; Wan é video.engine=wan. Não entra no
         # ImageSettings público e não substitui provider/unet da imagem.
-        "comfyui_video": dict(comfyui.get("video") or {}),
+        # O override aplica o preset completo do engine de vídeo (ex.: Wan
+        # 20 steps / CFG 5 / 1280×704); auto_scene/auto_portraits ficam no arquivo.
+        "comfyui_video": _merge_identity(
+            dict(comfyui.get("video") or {}),
+            _get_override(conn, "image.comfyui_video"),
+            _VIDEO_FIELDS),
         "prompt_builder": dict(prompt_builder),
     }
 
@@ -506,7 +560,7 @@ def effective_embeddings_settings(conn: sqlite3.Connection | None = None) -> dic
 
     return {
         "enabled": bool(ov("embeddings.enabled", emb.get("enabled", True))),
-        "base_url": str(ov("embeddings.base_url", emb.get("base_url", "http://127.0.0.1:8081/v1"))),
+        "base_url": str(ov("embeddings.base_url", emb.get("base_url", "http://127.0.0.1:8091/v1"))),
         "model": str(ov("embeddings.model", emb.get("model", "Qwen3-Embedding-0.6B"))),
         "timeout_seconds": int(ov("embeddings.timeout_seconds", emb.get("timeout_seconds", 30))),
     }
@@ -525,6 +579,430 @@ def apply_embeddings_update(conn: sqlite3.Connection, update: dict) -> set[str]:
             _set_override(conn, key, update[field])
             changed.add(field)
     return changed
+
+
+def _effective_engine(override: Any, file_value: Any) -> str:
+    """Engine do arquivo, trocado só quando o runtime gravou um override."""
+    raw = file_value if override is None else override
+    return str(raw or "qwen").strip().lower() or "qwen"
+
+
+def _merge_identity(base: dict, overlay: Any, allowed: tuple[str, ...]) -> dict:
+    """Completa o bloco do arquivo com a identidade gravada.
+
+    steps, cfg, sampler, width, height, frames e fps ficam no `base`.
+    """
+    merged = dict(base)
+    if not isinstance(overlay, dict):
+        return merged
+    for key in allowed:
+        if key not in overlay or overlay[key] is None:
+            continue
+        merged[key] = overlay[key]
+    return merged
+
+
+def _identity_from(source: Any, allowed: tuple[str, ...]) -> dict:
+    if not isinstance(source, dict):
+        return {}
+    picked: dict = {}
+    for key in allowed:
+        if key not in source or source[key] is None:
+            continue
+        value = source[key]
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+            if key == "engine":
+                value = value.lower()
+        picked[key] = value
+    return picked
+
+
+def _first_dict(entry: dict, keys: tuple[str, ...]) -> dict:
+    """Pesos do catálogo: bloco nomeado ou o próprio registro."""
+    for key in keys:
+        nested = entry.get(key)
+        if isinstance(nested, dict):
+            return nested
+    return entry
+
+
+def _provisioning():
+    from app import runtime_provisioning
+    return runtime_provisioning
+
+
+def _invalidate_llm_discovery() -> None:
+    from app import llm_client
+    llm_client.invalidate_discovery_cache()
+
+
+def _runtime_file() -> dict:
+    raw = load_file_settings().get("runtime")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _runtime_defaults() -> dict:
+    file_rt = _runtime_file()
+    placements = file_rt.get("placements") if isinstance(file_rt.get("placements"), dict) else {}
+    models = file_rt.get("models") if isinstance(file_rt.get("models"), dict) else {}
+    endpoints = file_rt.get("endpoints") if isinstance(file_rt.get("endpoints"), dict) else {}
+    mode = file_rt.get("mode") if file_rt.get("mode") in _RUNTIME_MODES else "local"
+
+    def place(name: str) -> str:
+        value = placements.get(name)
+        return value if value in _RUNTIME_PLACEMENTS else "local"
+
+    return {
+        "mode": mode,
+        "placements": {"llm": place("llm"), "comfyui": place("comfyui")},
+        "models": {kind: str(models.get(kind) or "") for kind in _RUNTIME_MODEL_KINDS},
+        "endpoints": {key: str(endpoints.get(key) or "") for key in _RUNTIME_ENDPOINT_KEYS},
+        "project_url": str(file_rt.get("project_url") or ""),
+    }
+
+
+def _active_placements(config: dict) -> dict[str, str]:
+    """local e colab mandam nos dois serviços. hybrid usa a escolha de cada um."""
+    mode = config.get("mode")
+    placements = config.get("placements") if isinstance(config.get("placements"), dict) else {}
+    if mode == "local":
+        return {"llm": "local", "comfyui": "local"}
+    if mode == "colab":
+        return {"llm": "colab", "comfyui": "colab"}
+    llm = placements.get("llm")
+    comfy = placements.get("comfyui")
+    if (llm not in _RUNTIME_PLACEMENTS or comfy not in _RUNTIME_PLACEMENTS
+            or llm == comfy):
+        raise GameError.bad_request(
+            "validation_error",
+            "hybrid requires one local placement and one colab placement")
+    return {"llm": llm, "comfyui": comfy}
+
+
+def _public_runtime(raw: dict, fallback: dict) -> dict:
+    """Só o contrato público. Descarta nota, hash, URL de download e segredo."""
+    mode = raw.get("mode", fallback["mode"])
+    if mode not in _RUNTIME_MODES:
+        raise GameError.bad_request("validation_error", "mode must be local, hybrid, or colab")
+    raw_placements = raw.get("placements") if isinstance(raw.get("placements"), dict) else {}
+    raw_models = raw.get("models") if isinstance(raw.get("models"), dict) else {}
+    raw_endpoints = raw.get("endpoints") if isinstance(raw.get("endpoints"), dict) else {}
+    placements = {
+        "llm": raw_placements.get("llm", fallback["placements"]["llm"]),
+        "comfyui": raw_placements.get("comfyui", fallback["placements"]["comfyui"]),
+    }
+    models = {
+        kind: str(raw_models.get(kind) or fallback["models"][kind] or "")
+        for kind in _RUNTIME_MODEL_KINDS
+    }
+    endpoints = {}
+    for key in _RUNTIME_ENDPOINT_KEYS:
+        value = raw_endpoints.get(key, fallback["endpoints"][key])
+        endpoints[key] = "" if value is None else str(value).strip()
+    project_url = raw.get("project_url", fallback["project_url"])
+    config = {
+        "mode": mode,
+        "placements": placements,
+        "models": models,
+        "endpoints": endpoints,
+        "project_url": "" if project_url is None else str(project_url).strip(),
+    }
+    config["placements"] = _active_placements(config)
+    return config
+
+
+def effective_runtime_settings(conn: sqlite3.Connection) -> dict:
+    """Runtime efetivo: `config/settings.json` + overrides `runtime.*`."""
+    base = _runtime_defaults()
+
+    def leaf(key: str, default: Any) -> Any:
+        value = _get_override(conn, key)
+        return default if value is None else value
+
+    config = {
+        "mode": leaf("runtime.mode", base["mode"]),
+        "placements": {
+            "llm": leaf("runtime.placements.llm", base["placements"]["llm"]),
+            "comfyui": leaf("runtime.placements.comfyui", base["placements"]["comfyui"]),
+        },
+        "models": {
+            kind: str(leaf(f"runtime.models.{kind}", base["models"][kind]) or "")
+            for kind in _RUNTIME_MODEL_KINDS
+        },
+        "endpoints": {
+            key: "" if (value := leaf(f"runtime.endpoints.{key}", base["endpoints"][key])) is None
+            else str(value)
+            for key in _RUNTIME_ENDPOINT_KEYS
+        },
+        "project_url": str(leaf("runtime.project_url", base["project_url"]) or ""),
+    }
+    if config["mode"] not in _RUNTIME_MODES:
+        config["mode"] = base["mode"]
+    for name in ("llm", "comfyui"):
+        if config["placements"][name] not in _RUNTIME_PLACEMENTS:
+            config["placements"][name] = base["placements"][name]
+    return config
+
+
+def runtime_registration(conn: sqlite3.Connection) -> dict:
+    """Estado da última inscrição do Colab. Ausente vira null, sem segredo."""
+    endpoints = _get_override(conn, "runtime.registration.endpoints")
+    hardware = _get_override(conn, "runtime.registration.hardware")
+    last_seen = _get_override(conn, "runtime.registration.last_seen")
+    models = _get_override(conn, "runtime.registration.models")
+    return {
+        "endpoints": endpoints if isinstance(endpoints, dict) else None,
+        "hardware": hardware if isinstance(hardware, dict) else None,
+        "last_seen": last_seen if isinstance(last_seen, str) and last_seen else None,
+        "models": models if isinstance(models, dict) else None,
+    }
+
+
+def _persist_runtime(conn: sqlite3.Connection, config: dict) -> None:
+    _set_override(conn, "runtime.mode", config["mode"])
+    _set_override(conn, "runtime.placements.llm", config["placements"]["llm"])
+    _set_override(conn, "runtime.placements.comfyui", config["placements"]["comfyui"])
+    for kind in _RUNTIME_MODEL_KINDS:
+        _set_override(conn, f"runtime.models.{kind}", config["models"][kind])
+    for key in _RUNTIME_ENDPOINT_KEYS:
+        _set_override(conn, f"runtime.endpoints.{key}", config["endpoints"][key])
+    _set_override(conn, "runtime.project_url", config["project_url"])
+
+
+def _endpoint_value(endpoints: dict, key: str) -> str:
+    value = endpoints.get(key, "")
+    return "" if value is None else str(value).strip()
+
+
+def _apply_routing(conn: sqlite3.Connection, config: dict) -> None:
+    """A URL escolhida entra no llm e no Comfy mesmo quando vem vazia.
+
+    Vazio não cai de volta no outro lado: o health do serviço selecionado fecha.
+    """
+    placements = _active_placements(config)
+    endpoints = config["endpoints"]
+    llm_key = "local_llm" if placements["llm"] == "local" else "colab_llm"
+    comfy_key = "local_comfyui" if placements["comfyui"] == "local" else "colab_comfyui"
+    _set_override(conn, "llm.base_url", _endpoint_value(endpoints, llm_key))
+    _set_override(conn, "image.comfyui_base_url", _endpoint_value(endpoints, comfy_key))
+
+
+def _catalog_models(catalog: dict, kind: str) -> dict:
+    models = catalog.get("models") if isinstance(catalog, dict) else None
+    bucket = models.get(kind) if isinstance(models, dict) else None
+    return bucket if isinstance(bucket, dict) else {}
+
+
+def _require_catalog_entry(catalog: dict, kind: str, model_id: str) -> dict:
+    entry = _catalog_models(catalog, kind).get(model_id)
+    if not isinstance(entry, dict):
+        raise GameError.bad_request(
+            "validation_error", f"unknown {kind} model: {model_id}")
+    return entry
+
+
+def _apply_selected_models(conn: sqlite3.Connection, config: dict, catalog: dict) -> None:
+    """Aponta alias, engine e pesos; para vídeo aplica também o preset do engine."""
+    llm_entry = _require_catalog_entry(catalog, "llm", config["models"]["llm"])
+    image_entry = _require_catalog_entry(catalog, "image", config["models"]["image"])
+    video_entry = _require_catalog_entry(catalog, "video", config["models"]["video"])
+    placements = _active_placements(config)
+    if placements["llm"] == "local" and str(llm_entry.get("role") or "") == "fallback":
+        raise GameError.bad_request(
+            "validation_error",
+            "fallback llm model requires colab placement or dedicated endpoint")
+    alias = str(llm_entry.get("model_alias") or "").strip()
+    if not alias:
+        raise GameError.bad_request(
+            "validation_error", "catalog llm entry is missing model_alias")
+    _set_override(conn, "llm.model_alias", alias)
+
+    engine = str(image_entry.get("engine") or "").strip().lower()
+    if not engine:
+        raise GameError.bad_request(
+            "validation_error", "catalog image entry is missing engine")
+    _set_override(conn, "image.comfyui_engine", engine)
+    image_src = _first_dict(image_entry, ("flux2", "quality"))
+    if engine == "qwen":
+        db.delete_setting(conn, "image.comfyui_flux2")
+        identity = _identity_from(image_src, _QWEN_IDENTITY)
+        for field, key in _QWEN_OVERRIDE_KEYS.items():
+            if field in identity:
+                _set_override(conn, key, identity[field])
+            else:
+                db.delete_setting(conn, key)
+    else:
+        for key in _QWEN_OVERRIDE_KEYS.values():
+            db.delete_setting(conn, key)
+        overlay = _identity_from(image_src, _FLUX2_IDENTITY)
+        if overlay:
+            _set_override(conn, "image.comfyui_flux2", overlay)
+        else:
+            db.delete_setting(conn, "image.comfyui_flux2")
+
+    video_src = _first_dict(video_entry, ("video", "config"))
+    video_overlay = _identity_from(video_src, _VIDEO_FIELDS)
+    video_engine = str(
+        video_entry.get("engine") or video_overlay.get("engine") or "").strip().lower()
+    if not video_engine:
+        raise GameError.bad_request(
+            "validation_error", "catalog video entry is missing engine")
+    video_overlay["engine"] = video_engine
+    _set_override(conn, "image.comfyui_video", video_overlay)
+
+
+def _merge_runtime_update(current: dict, update: dict) -> dict:
+    merged = {
+        "mode": current["mode"],
+        "placements": dict(current["placements"]),
+        "models": dict(current["models"]),
+        "endpoints": dict(current["endpoints"]),
+        "project_url": current["project_url"],
+    }
+    if update.get("mode"):
+        merged["mode"] = update["mode"]
+    for section in ("placements", "models", "endpoints"):
+        patch = update.get(section)
+        if not isinstance(patch, dict):
+            continue
+        for key, value in patch.items():
+            if value is None or key not in merged[section]:
+                continue
+            merged[section][key] = value
+    if "project_url" in update and update["project_url"] is not None:
+        merged["project_url"] = update["project_url"]
+    merged["placements"] = _active_placements(merged)
+    return merged
+
+
+def apply_runtime_update(conn: sqlite3.Connection, update: dict) -> dict:
+    """Valida, grava `runtime.*` e torna endpoint e modelo efetivos na hora.
+
+    Endpoint Colab em branco pode ficar salvo com o modo local (rascunho).
+    Quando o modo ou o placement escolhe Colab, a URL efetiva é essa string,
+    inclusive vazia — não permanece a URL local.
+    """
+    current = effective_runtime_settings(conn)
+    merged = _merge_runtime_update(current, update or {})
+    prov = _provisioning()
+    catalog = strip_secrets(prov.load_catalog())
+    try:
+        normalized = prov.validate_runtime(merged, catalog, require_colab=False)
+    except ValueError as exc:
+        raise GameError.bad_request("validation_error", str(exc)) from exc
+    if not isinstance(normalized, dict):
+        raise GameError.bad_request("validation_error", "runtime config was rejected")
+    config = _public_runtime(normalized, merged)
+    _persist_runtime(conn, config)
+    _apply_routing(conn, config)
+    _apply_selected_models(conn, config, catalog)
+    _invalidate_llm_discovery()
+    return effective_runtime_settings(conn)
+
+
+def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
+    """Confere os modelos, grava o Colab e aplica a URL só no placement Colab."""
+    current = effective_runtime_settings(conn)
+    reported = report.get("models") if isinstance(report.get("models"), dict) else {}
+    selected = current["models"]
+    if any(str(reported.get(kind) or "") != str(selected.get(kind) or "")
+           for kind in _RUNTIME_MODEL_KINDS):
+        raise GameError.conflict(
+            "model_mismatch",
+            "reported models do not match the selected runtime models")
+    incoming = report.get("endpoints") if isinstance(report.get("endpoints"), dict) else {}
+    colab_llm = "" if incoming.get("llm") is None else str(incoming.get("llm")).strip()
+    colab_comfy = "" if incoming.get("comfyui") is None else str(incoming.get("comfyui")).strip()
+    hardware = scrub_public(report.get("hardware") if isinstance(report.get("hardware"), dict) else {}, conn)
+    if not isinstance(hardware, dict):
+        hardware = {}
+    saved_models = {kind: selected[kind] for kind in _RUNTIME_MODEL_KINDS}
+    placements = _active_placements(current)
+    if placements["llm"] == "colab" and not colab_llm:
+        raise GameError.bad_request(
+            "validation_error", "colab llm endpoint is required when llm placement is colab")
+    if placements["comfyui"] == "colab" and not colab_comfy:
+        raise GameError.bad_request(
+            "validation_error", "colab comfyui endpoint is required when comfyui placement is colab")
+    _set_override(conn, "runtime.registration.endpoints",
+                  {"llm": colab_llm, "comfyui": colab_comfy})
+    _set_override(conn, "runtime.registration.hardware", hardware)
+    _set_override(conn, "runtime.registration.last_seen", db.utcnow())
+    _set_override(conn, "runtime.registration.models", saved_models)
+    if colab_llm:
+        _set_override(conn, "runtime.endpoints.colab_llm", colab_llm)
+    if colab_comfy:
+        _set_override(conn, "runtime.endpoints.colab_comfyui", colab_comfy)
+    if placements["llm"] == "colab":
+        _set_override(conn, "llm.base_url", colab_llm)
+    if placements["comfyui"] == "colab":
+        _set_override(conn, "image.comfyui_base_url", colab_comfy)
+    _invalidate_llm_discovery()
+    return effective_runtime_settings(conn)
+
+
+def strip_secrets(value: Any) -> Any:
+    """Tira chaves de credencial. Não mexe em nome de modelo nem em URL."""
+    if isinstance(value, dict):
+        return {
+            str(key): strip_secrets(item)
+            for key, item in value.items()
+            if str(key).strip().lower() not in _SECRET_KEYS
+        }
+    if isinstance(value, list):
+        return [strip_secrets(item) for item in value]
+    return value
+
+
+def secret_values(conn: sqlite3.Connection) -> set[str]:
+    """Segredos já configurados. Não entra valor curto, para não apagar texto comum."""
+    found: set[str] = set()
+    llm_key = effective_llm_settings(conn).get("api_key")
+    image_key = effective_image_settings(conn).get("openai_api_key")
+    voice_key = effective_voice_settings(conn).get("api_key")
+    for value in (llm_key, image_key, voice_key):
+        if isinstance(value, str) and len(value) >= 8:
+            found.add(value)
+    for name in ("AUTH_SECRET", "LLM_API_KEY", "IMAGE_API_KEY", "VOICE_API_KEY",
+                 "AUTH_PASSWORD_HASH"):
+        env_value = os.environ.get(name)
+        if isinstance(env_value, str) and len(env_value) >= 8:
+            found.add(env_value)
+    return found
+
+
+def scrub_public(value: Any, conn: sqlite3.Connection | None = None) -> Any:
+    """Resposta e notebook saem sem chave de credencial e sem o valor dela."""
+    cleaned = strip_secrets(value)
+    secrets = secret_values(conn) if conn is not None else set()
+    return _redact_values(cleaned, secrets)
+
+
+def scrub_bytes(payload: bytes, conn: sqlite3.Connection) -> bytes:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return payload
+    for secret in secret_values(conn):
+        text = text.replace(secret, "…")
+    return text.encode("utf-8")
+
+
+def _redact_values(value: Any, secrets: set[str]) -> Any:
+    if isinstance(value, str):
+        redacted = value
+        for secret in secrets:
+            if secret and secret in redacted:
+                redacted = redacted.replace(secret, "…")
+        return redacted
+    if isinstance(value, dict):
+        return {key: _redact_values(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_values(item, secrets) for item in value]
+    return value
 
 
 # ---------------------------------------------------- config p/ game engine

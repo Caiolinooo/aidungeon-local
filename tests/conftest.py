@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
-from app import choices_service, db, events, image_client, llm_client, llm_scheduler  # noqa: E402
+from app import choices_service, db, events, image_client, llm_client, llm_scheduler, users  # noqa: E402
 
 # Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
 # `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
@@ -108,12 +108,23 @@ def admin_token() -> str:
 
 @pytest.fixture()
 def client(tmp_db, auth_token):
-    """TestClient autenticado (Authorization: Bearer em todas as chamadas)."""
+    """TestClient autenticado (Authorization: Bearer em todas as chamadas).
+
+    ensure_seed promove AUTH_USER a admin. Esta suíte usa essa conta como
+    jogador comum, então o papel volta a user depois do startup. O teste do
+    seed chama ensure_seed de novo e confere o papel admin.
+    """
     from fastapi.testclient import TestClient
 
     from app.main import app
     app.dependency_overrides.clear()
     with TestClient(app) as c:
+        if TEST_AUTH_USER != users.ADMIN_USERNAME:
+            with db.session() as conn:
+                conn.execute(
+                    "UPDATE users SET role='user' WHERE username=?",
+                    (TEST_AUTH_USER,),
+                )
         c.headers["Authorization"] = f"Bearer {auth_token}"
         yield c
     app.dependency_overrides.clear()

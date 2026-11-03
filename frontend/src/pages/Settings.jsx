@@ -8,6 +8,15 @@ import VoiceCloneModal from '../components/VoiceCloneModal.jsx'
 import { HealthCheck, SettingField } from '../components/settings/Controls.jsx'
 import ImageAdvancedControls from '../components/settings/ImageAdvancedControls.jsx'
 import LlmSamplingControls, { LLM_DEFAULTS } from '../components/settings/LlmSamplingControls.jsx'
+import RuntimeSettings, {
+  configFromRuntimeResponse,
+  extractCatalog,
+  extractHardware,
+  extractRegistration,
+  isAllLocalRuntime,
+  normalizeRuntimeConfig,
+  runtimePayload,
+} from '../components/settings/RuntimeSettings.jsx'
 import {
   ArrowLeft,
   Cpu,
@@ -19,6 +28,7 @@ import {
   Play,
   Sliders,
   BookOpen,
+  Server,
 } from 'lucide-react'
 
 const TABS = [
@@ -26,6 +36,7 @@ const TABS = [
   { id: 'image', label: 'Geração de imagem', icon: ImageIcon },
   { id: 'voice', label: 'Voz e fala', icon: Volume2 },
   { id: 'memory', label: 'Memória e scripts', icon: Brain },
+  { id: 'runtime', label: 'Runtime e Colab', icon: Server },
 ]
 
 export default function Settings() {
@@ -106,6 +117,14 @@ export default function Settings() {
     context_modifier: '',
     output_modifier: '',
   })
+  const [runtimeForm, setRuntimeForm] = useState(() => normalizeRuntimeConfig(null))
+  const [runtimeSaved, setRuntimeSaved] = useState(() => normalizeRuntimeConfig(null))
+  const [runtimeCatalog, setRuntimeCatalog] = useState({ llm: {}, image: {}, video: {} })
+  const [runtimeHardware, setRuntimeHardware] = useState(null)
+  const [runtimeRegistration, setRuntimeRegistration] = useState(null)
+  const [runtimeLoaded, setRuntimeLoaded] = useState(false)
+  const [runtimeLoadError, setRuntimeLoadError] = useState('')
+  const [downloadingNotebook, setDownloadingNotebook] = useState(false)
   const contextSizeMax = llmForm.context_size_max ?? 106496
   const contextPresets = [
     { label: '32k', val: 32768 },
@@ -127,18 +146,25 @@ export default function Settings() {
   }
 
   useEffect(() => {
+    let cancelled = false
     async function loadAllSettings() {
       setLoading(true)
+      api.healthLlm().then((health) => {
+        if (!cancelled && health) setLlmHealth(health)
+      }).catch(() => {})
       try {
-        const [llm, img, vce, voiceList, emb, scr, health] = await Promise.all([
+        const [llm, img, vce, emb, scr, runtime] = await Promise.all([
           api.getLlmSettings().catch(() => ({})),
           api.getImageSettings().catch(() => ({})),
           api.getVoiceSettings().catch(() => ({})),
-          api.voice.list().catch(() => ({})),
           api.getEmbeddingsSettings().catch(() => ({})),
           api.getScriptingSettings().catch(() => ({})),
-          api.healthLlm().catch(() => null),
+          api.getRuntimeSettings().then(
+            (data) => ({ ok: true, data }),
+            (error) => ({ ok: false, error }),
+          ),
         ])
+        if (cancelled) return
 
         if (llm && Object.keys(llm).length) {
           setLlmForm((prev) => ({
@@ -152,26 +178,50 @@ export default function Settings() {
           setImageForm((prev) => ({ ...prev, ...img, openai_api_key: '' }))
         }
         if (vce && Object.keys(vce).length) {
-          const cloned = voiceList.cloned || []
-          setVoiceSettings({ ...vce, cloned })
+          setVoiceSettings({ ...vce, cloned: [] })
           setVoiceForm((prev) => ({
             ...prev,
             ...vce,
-            voices: voiceList.voices || vce.voices || prev.voices,
-            cloned,
+            voices: vce.voices || prev.voices,
+            cloned: [],
             api_key: '',
           }))
+          api.voice.list().then((voiceList) => {
+            if (cancelled || !voiceList) return
+            const cloned = voiceList.cloned || []
+            setVoiceSettings((prev) => ({ ...(prev || vce), cloned }))
+            setVoiceForm((prev) => ({
+              ...prev,
+              voices: voiceList.voices || prev.voices,
+              cloned,
+            }))
+          }).catch(() => {})
         }
         if (emb && Object.keys(emb).length) setEmbeddingsForm((prev) => ({ ...prev, ...emb }))
         if (scr && Object.keys(scr).length) setScriptingForm((prev) => ({ ...prev, ...scr }))
-        if (health) setLlmHealth(health)
+        if (runtime?.ok) {
+          const form = normalizeRuntimeConfig(runtime.data)
+          setRuntimeForm(form)
+          setRuntimeSaved(normalizeRuntimeConfig(form))
+          setRuntimeCatalog(extractCatalog(runtime.data))
+          setRuntimeHardware(extractHardware(runtime.data))
+          setRuntimeRegistration(extractRegistration(runtime.data))
+          setRuntimeLoadError('')
+          setRuntimeLoaded(true)
+        } else {
+          setRuntimeLoaded(false)
+          const message = runtime?.error?.message || 'erro desconhecido'
+          setRuntimeLoadError(message)
+          toast('Falha ao carregar o runtime: ' + message)
+        }
       } catch (e) {
         toast('Falha ao carregar algumas configurações: ' + e.message)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     loadAllSettings()
+    return () => { cancelled = true }
   }, [toast])
 
   // Save current active tab settings
@@ -259,6 +309,36 @@ export default function Settings() {
           api.putScriptingSettings(scriptingForm),
         ])
         toast('Configurações de memória salvas.', 'ok')
+      } else if (activeTab === 'runtime') {
+        if (!runtimeLoaded) {
+          toast('Configuração de runtime não carregada; nada foi salvo.')
+        } else {
+          const sent = runtimePayload(runtimeForm)
+          const modelsChanged = JSON.stringify(sent.models) !== JSON.stringify(runtimePayload(runtimeSaved).models)
+          const updated = await api.putRuntimeSettings(sent)
+          const form = configFromRuntimeResponse(sent, updated)
+          setRuntimeForm(form)
+          setRuntimeSaved(normalizeRuntimeConfig(form))
+          if (updated && typeof updated === 'object') {
+            if ('catalog' in updated) setRuntimeCatalog(extractCatalog(updated))
+            if ('hardware' in updated || 'local_hardware' in updated) {
+              setRuntimeHardware(extractHardware(updated))
+            }
+            if (
+              'registration' in updated
+              || 'last_registration' in updated
+              || 'colab_registration' in updated
+            ) {
+              setRuntimeRegistration(extractRegistration(updated))
+            }
+          }
+          toast(
+            modelsChanged
+              ? 'Configurações de runtime salvas. Reinicie ou reconecte o runtime para aplicar os modelos.'
+              : 'Configurações de runtime salvas.',
+            'ok',
+          )
+        }
       }
     } catch (e) {
       toast('Falha ao salvar: ' + e.message)
@@ -302,6 +382,37 @@ export default function Settings() {
     }
   }
 
+  const runtimeDirty = JSON.stringify(runtimeForm) !== JSON.stringify(runtimeSaved)
+
+  const handleDownloadNotebook = async () => {
+    if (!runtimeLoaded || isAllLocalRuntime(runtimeForm)) return
+    if (runtimeDirty) {
+      toast('Salve a configuração antes de gerar o notebook.')
+      return
+    }
+    setDownloadingNotebook(true)
+    try {
+      const blob = await api.downloadRuntimeNotebook()
+      if (!blob || blob.size === 0) {
+        toast('O notebook veio vazio.')
+        return
+      }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'aidungeon-runtime.ipynb'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      toast('Notebook gerado a partir da configuração salva.', 'ok')
+    } catch (e) {
+      toast('Falha ao gerar o notebook: ' + e.message)
+    } finally {
+      setDownloadingNotebook(false)
+    }
+  }
+
   const inputCls =
     'w-full rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-primary outline-none focus:border-accent-pri transition'
   const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wider text-muted'
@@ -338,7 +449,7 @@ export default function Settings() {
 
           <button
             onClick={handleSave}
-            disabled={saving || loading}
+            disabled={saving || loading || (activeTab === 'runtime' && !runtimeLoaded)}
             className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
@@ -350,7 +461,7 @@ export default function Settings() {
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
         {/* Sidebar Tabs */}
-        <nav className="w-full md:w-64 border-b md:border-b-0 md:border-r border-subtle bg-surface/50 p-2 sm:p-3 flex md:flex-col gap-1 overflow-x-auto md:overflow-x-visible shrink-0">
+        <nav className="flex w-full shrink-0 snap-x snap-mandatory scroll-px-2 gap-1 overflow-x-auto border-b border-subtle bg-surface/50 p-2 sm:p-3 md:w-64 md:flex-col md:overflow-x-visible md:border-b-0 md:border-r">
           {TABS.map((tab) => {
             const Icon = tab.icon
             const active = activeTab === tab.id
@@ -358,7 +469,7 @@ export default function Settings() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-xs font-medium transition text-left whitespace-nowrap shrink-0 ${
+                className={`flex min-h-11 shrink-0 snap-start items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-left text-xs font-medium transition ${
                   active
                     ? 'bg-accent-pri text-canvas font-semibold shadow-sm'
                     : 'text-secondary hover:text-primary hover:bg-elevated/60'
@@ -1046,6 +1157,23 @@ export default function Settings() {
                     </div>
                   </div>
                 </div>
+              )}
+
+              {activeTab === 'runtime' && (
+                <RuntimeSettings
+                  form={runtimeForm}
+                  catalog={runtimeCatalog}
+                  hardware={runtimeHardware}
+                  registration={runtimeRegistration}
+                  loaded={runtimeLoaded}
+                  loadError={runtimeLoadError}
+                  dirty={runtimeDirty}
+                  downloading={downloadingNotebook}
+                  onChange={setRuntimeForm}
+                  onDownload={handleDownloadNotebook}
+                  inputCls={inputCls}
+                  labelCls={labelCls}
+                />
               )}
             </>
           )}

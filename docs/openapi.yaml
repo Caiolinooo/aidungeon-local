@@ -12,7 +12,9 @@ info:
         respondem `text/event-stream` (SSE);
       - `/api/tts` (`audio/mpeg`) e `/api/tts/stream` (`audio/wav`);
       - `/api/adventures/{id}/export` e `GET /api/adventures/export`, que
-        respondem `application/zip`.
+        respondem `application/zip`;
+      - `GET /api/runtime/notebook`, que responde `application/x-ipynb+json`
+        como anexo.
     - Booleans do banco (INTEGER 0/1) são expostos como `true/false`.
     - Campos `tags` e `triggers` são TEXT JSON no banco, expostos como arrays.
     - Timestamps em ISO-8601 UTC.
@@ -37,7 +39,7 @@ tags:
   - name: memory
   - name: import-export
   - name: settings
-    description: Área de configuração do servidor LLM (endpoint, chave, modelo, tokens).
+    description: Área de configuração do servidor LLM (endpoint, chave, modelo, tokens) e do runtime local/hybrid/Colab.
   - name: assistant
     description: Assistente de criação de cenários (geração estruturada via LLM).
   - name: images
@@ -1986,6 +1988,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/settings/runtime:
+    get:
+      tags: [settings]
+      summary: Ler runtime local, híbrido ou Colab
+      operationId: getRuntimeSettings
+      description: |
+        Config efetiva (`runtime` de `config/settings.json` + overrides
+        `runtime.*`), catálogo de modelos, hardware local e estado da última
+        inscrição. Não devolve chave de API, token nem segredo.
+      responses:
+        '200':
+          description: Runtime, catálogo, hardware e inscrição.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSettingsView'
+    put:
+      tags: [settings]
+      summary: Atualizar o runtime e aplicar o endpoint escolhido
+      operationId: putRuntimeSettings
+      description: |
+        Só o admin. Campo omitido permanece. `mode=local` usa os dois
+        serviços locais; `mode=colab` usa os dois no Colab; `hybrid` exige
+        um de cada. A URL do placement escolhido é gravada em `llm.base_url`
+        e `image.comfyui_base_url` na hora, mesmo vazia — o health fecha em
+        vez de continuar no outro lado. Endpoint Colab em branco pode ser
+        salvo como rascunho enquanto o placement segue local. O modelo
+        selecionado ajusta `model_alias`, o engine de imagem e a identidade do
+        vídeo. Sampling e resolução não mudam. A descoberta de modelo do LLM
+        é invalidada.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuntimeSettingsUpdate'
+      responses:
+        '200':
+          description: Runtime aplicado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSettingsView'
+        '400':
+          description: Modo, placement ou id de modelo inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Somente admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/runtime/notebook:
+    get:
+      tags: [settings]
+      summary: Baixar o notebook Colab do runtime selecionado
+      operationId: getRuntimeNotebook
+      description: |
+        Só o admin. Notebook parametrizado do runtime efetivo (exige modo
+        `hybrid` ou `colab`). Sem chave, token ou conteúdo de aventura.
+      responses:
+        '200':
+          description: Anexo ipynb.
+          content:
+            application/x-ipynb+json:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: attachment; filename="aidungeon-runtime.ipynb"
+        '400':
+          description: Runtime em modo tudo-local ou rejeitado pelo catálogo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Bearer ausente ou inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Somente admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/runtime/register:
+    post:
+      tags: [settings]
+      summary: Inscrever os endpoints de um runtime Colab
+      operationId: registerRuntime
+      description: |
+        Só o admin. Os ids reportados têm de ser exatamente os modelos
+        selecionados. Grava endpoints, hardware e `last_seen`. A URL Colab
+        entra na hora em `llm.base_url` / `image.comfyui_base_url` somente
+        para o placement que está em Colab. Hardware não persiste segredo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuntimeRegistration'
+      responses:
+        '200':
+          description: Inscrição gravada e, se couber, URL aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSettingsView'
+        '403':
+          description: Somente admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Modelos reportados diferentes dos selecionados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   # ------------------------------------------------------------------ assistant
   /api/assistant/generate:
@@ -5460,6 +5597,160 @@ components:
           minimum: 1.0
           maximum: 2.0
           description: Persistido como override sampler.repetition_penalty.
+
+    RuntimeSettings:
+      type: object
+      required: [mode, placements, models, endpoints, project_url]
+      properties:
+        mode:
+          type: string
+          enum: [local, hybrid, colab]
+        placements:
+          type: object
+          required: [llm, comfyui]
+          properties:
+            llm:
+              type: string
+              enum: [local, colab]
+            comfyui:
+              type: string
+              enum: [local, colab]
+        models:
+          type: object
+          required: [llm, image, video]
+          properties:
+            llm:
+              type: string
+            image:
+              type: string
+            video:
+              type: string
+        endpoints:
+          type: object
+          required: [local_llm, local_comfyui, colab_llm, colab_comfyui]
+          properties:
+            local_llm:
+              type: string
+            local_comfyui:
+              type: string
+            colab_llm:
+              type: string
+              description: Vazio é rascunho. Com placement colab, vira a URL efetiva.
+            colab_comfyui:
+              type: string
+        project_url:
+          type: string
+
+    RuntimeSettingsUpdate:
+      type: object
+      description: Todos os campos opcionais; omitidos permanecem.
+      properties:
+        mode:
+          type: string
+          enum: [local, hybrid, colab]
+        placements:
+          type: object
+          properties:
+            llm:
+              type: string
+              enum: [local, colab]
+            comfyui:
+              type: string
+              enum: [local, colab]
+        models:
+          type: object
+          properties:
+            llm:
+              type: string
+            image:
+              type: string
+            video:
+              type: string
+        endpoints:
+          type: object
+          properties:
+            local_llm:
+              type: string
+            local_comfyui:
+              type: string
+            colab_llm:
+              type: string
+            colab_comfyui:
+              type: string
+        project_url:
+          type: string
+
+    RuntimeRegistrationState:
+      type: object
+      properties:
+        endpoints:
+          type: object
+          nullable: true
+          properties:
+            llm:
+              type: string
+            comfyui:
+              type: string
+        hardware:
+          type: object
+          nullable: true
+          additionalProperties: true
+        last_seen:
+          type: string
+          nullable: true
+          description: ISO-8601 UTC da última inscrição aceita.
+        models:
+          type: object
+          nullable: true
+          properties:
+            llm:
+              type: string
+            image:
+              type: string
+            video:
+              type: string
+
+    RuntimeSettingsView:
+      type: object
+      required: [runtime, catalog, local_hardware, registration]
+      properties:
+        runtime:
+          $ref: '#/components/schemas/RuntimeSettings'
+        catalog:
+          type: object
+          additionalProperties: true
+          description: Catálogo público. Sem segredo.
+        local_hardware:
+          type: object
+          additionalProperties: true
+        registration:
+          $ref: '#/components/schemas/RuntimeRegistrationState'
+
+    RuntimeRegistration:
+      type: object
+      required: [endpoints, models]
+      properties:
+        endpoints:
+          type: object
+          required: [llm, comfyui]
+          properties:
+            llm:
+              type: string
+            comfyui:
+              type: string
+        models:
+          type: object
+          required: [llm, image, video]
+          properties:
+            llm:
+              type: string
+            image:
+              type: string
+            video:
+              type: string
+        hardware:
+          type: object
+          additionalProperties: true
 
     ProviderHealth:
       type: object

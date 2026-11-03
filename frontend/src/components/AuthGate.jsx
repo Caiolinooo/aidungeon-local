@@ -48,7 +48,7 @@ export default function AuthGate({ children }) {
   if (!checked) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-        Checking session…
+        Verificando sessão…
       </div>
     )
   }

@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useId } from 'react';
+import { useDialog } from '../hooks/useDialog.js';
 import { useTheme } from '../themeContext.jsx';
 import { X, Type, Sun, Moon, Sparkles, BookOpen, AlignLeft, Check } from 'lucide-react';
 
 export default function ReaderPreferencesModal({ isOpen, onClose }) {
   const { theme, setTheme, readerPrefs, setReaderPrefs } = useTheme();
+  const titleId = useId();
+  const dialogRef = useDialog(Boolean(isOpen), onClose);
 
   if (!isOpen) return null;
 
@@ -13,6 +16,11 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="w-full max-w-md rounded-2xl border border-subtle bg-surface p-6 shadow-2xl relative text-primary transition-colors"
         onClick={(e) => e.stopPropagation()}
       >
@@ -20,12 +28,12 @@ export default function ReaderPreferencesModal({ isOpen, onClose }) {
         <div className="flex items-center justify-between pb-4 border-b border-subtle">
           <div className="flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-accent-pri" />
-            <h2 className="text-lg font-semibold tracking-wide">Preferências de leitura</h2>
+            <h2 id={titleId} className="text-lg font-semibold tracking-wide">Preferências de leitura</h2>
           </div>
           <button
             onClick={onClose}
             aria-label="Fechar preferências"
-            className="rounded-lg p-1.5 text-secondary hover:text-primary hover:bg-elevated transition"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <X className="w-5 h-5" />
           </button>

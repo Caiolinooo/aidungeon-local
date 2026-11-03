@@ -1263,14 +1263,19 @@ def handle_continue(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
-    _preempt_automatic_clips(adventure_id, transport)
-    cancel_post_turn(adventure_id)
-    generation_id = db.new_id()
-    with appending(adventure_id) as conn:
-        canon.capture(conn, adventure_id, generation_id)
-    return _stream_generation(adventure_id, player_action=None,
-                              retry_of=None, retry_count=0, transport=transport,
-                              cancel=cancel, generation_id=generation_id)
+    # O finally do gerador não roda se o preparo estourar antes do return.
+    try:
+        _preempt_automatic_clips(adventure_id, transport)
+        cancel_post_turn(adventure_id)
+        generation_id = db.new_id()
+        with appending(adventure_id) as conn:
+            canon.capture(conn, adventure_id, generation_id)
+        return _stream_generation(adventure_id, player_action=None,
+                                  retry_of=None, retry_count=0, transport=transport,
+                                  cancel=cancel, generation_id=generation_id)
+    except BaseException:
+        release_generation_lock(adventure_id)
+        raise
 
 
 def handle_retry(adventure_id: str, transport: Any = None, *,
@@ -1287,22 +1292,27 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
-    _preempt_automatic_clips(adventure_id, transport)
-    cancel_post_turn(adventure_id)
+    # O finally do gerador não roda se o preparo estourar antes do return.
+    try:
+        _preempt_automatic_clips(adventure_id, transport)
+        cancel_post_turn(adventure_id)
 
-    with appending(adventure_id) as conn:
-        _restore_body_from_action(conn, adventure_id, old)
-    key = (adventure_id, int(old["seq"]))
-    if retry_count is None:
-        _retry_counts[key] = _retry_counts.get(key, 0) + 1
-        effective_count = _retry_counts[key]
-    else:
-        effective_count = retry_count
+        with appending(adventure_id) as conn:
+            _restore_body_from_action(conn, adventure_id, old)
+        key = (adventure_id, int(old["seq"]))
+        if retry_count is None:
+            _retry_counts[key] = _retry_counts.get(key, 0) + 1
+            effective_count = _retry_counts[key]
+        else:
+            effective_count = retry_count
 
-    return _stream_generation(adventure_id, player_action=None,
-                              retry_of=old, retry_count=effective_count,
-                              transport=transport, cancel=cancel,
-                              generation_id=db.new_id())
+        return _stream_generation(adventure_id, player_action=None,
+                                  retry_of=old, retry_count=effective_count,
+                                  transport=transport, cancel=cancel,
+                                  generation_id=db.new_id())
+    except BaseException:
+        release_generation_lock(adventure_id)
+        raise
 
 
 def _discard_pending_canon(adventure_id: str, generation_id: str) -> None:

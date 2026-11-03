@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Activity, ChevronDown, X } from 'lucide-react'
 import { api } from '../api.js'
 import { jobTypeLabel } from '../sceneClip.js'
@@ -92,6 +93,21 @@ function eventText(event) {
   return data.message || data.text || TYPE_LABELS[type] || type
 }
 
+function popoverStyle(trigger) {
+  const rect = trigger.getBoundingClientRect()
+  const mobile = window.matchMedia('(max-width: 767px)').matches
+  if (mobile) {
+    const header = trigger.closest('header')
+    const bottom = header ? header.getBoundingClientRect().bottom : rect.bottom
+    return { top: Math.round(bottom + 8) }
+  }
+  const top = Math.round(rect.bottom + 8)
+  const right = Math.max(12, Math.round(window.innerWidth - rect.right))
+  const width = Math.min(400, window.innerWidth - 24)
+  if (window.innerWidth - right - width < 12) return { top, left: 12 }
+  return { top, right }
+}
+
 function eventTime(event) {
   const data = event.data || event.payload || {}
   const day = data.day ?? event.sim_day ?? data.sim_day
@@ -110,7 +126,9 @@ export default function LiveFeed({ adventureId }) {
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const listRef = useRef(null)
+  const triggerRef = useRef(null)
   const nearBottomRef = useRef(true)
+  const [anchor, setAnchor] = useState(null)
 
   const merge = useCallback((incoming) => {
     if (!incoming) return
@@ -171,30 +189,66 @@ export default function LiveFeed({ adventureId }) {
     if (element && nearBottomRef.current) element.scrollTop = element.scrollHeight
   }, [events, filter, open])
 
+  useEffect(() => {
+    if (!open) return undefined
+    const place = () => {
+      if (triggerRef.current) setAnchor(popoverStyle(triggerRef.current))
+    }
+    place()
+    const onKey = (event) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('resize', place)
+    window.visualViewport?.addEventListener('resize', place)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.visualViewport?.removeEventListener('resize', place)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const toggle = () => {
+    if (triggerRef.current) setAnchor(popoverStyle(triggerRef.current))
+    setOpen((current) => !current)
+  }
+
   const visible = filter === 'all' ? events : events.filter((event) => categoryOf(event.type) === filter)
   const activeCount = events.length
 
   return (
     <div className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggle}
         aria-label="Atividade do mundo"
         aria-expanded={open}
         title="Livefeed de vida, narrativa e mídia"
-        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:bg-elevated hover:text-primary transition"
+        className="relative flex min-h-11 min-w-11 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:bg-elevated hover:text-primary transition"
       >
         <Activity className="h-4 w-4 text-accent-pri" />
         {activeCount > 0 && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent-pri px-1 text-center text-[9px] font-bold leading-4 text-canvas">{Math.min(activeCount, 99)}</span>}
       </button>
-      {open && (
-        <section aria-label="Atividade do mundo" className="absolute right-0 top-12 z-50 flex max-h-[70vh] w-[min(25rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-subtle bg-surface shadow-2xl">
+      {open && anchor && createPortal(
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 cursor-default"
+            aria-label="Fechar atividade"
+            onClick={() => setOpen(false)}
+          />
+        <section
+          aria-label="Atividade do mundo"
+          style={anchor}
+          className="fixed z-10 flex min-h-0 max-h-[min(70dvh,var(--app-height,100dvh))] max-w-[min(25rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-subtle bg-surface shadow-2xl max-md:inset-x-3 md:w-[min(25rem,calc(100vw-1.5rem))]"
+        >
           <header className="flex shrink-0 items-center justify-between border-b border-subtle px-3 py-2.5">
             <div>
               <h2 className="text-sm font-semibold text-primary">Atividade do mundo</h2>
               <p className="text-[11px] text-muted">Eventos duráveis e atualizações ao vivo</p>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="Fechar atividade" className="rounded-lg p-2 text-secondary hover:bg-elevated hover:text-primary">
+            <button type="button" onClick={() => setOpen(false)} aria-label="Fechar atividade" className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-secondary hover:bg-elevated hover:text-primary">
               <X className="h-4 w-4" />
             </button>
           </header>
@@ -229,10 +283,12 @@ export default function LiveFeed({ adventureId }) {
               </ol>
             )}
           </div>
-          <button type="button" onClick={load} disabled={loading} className="flex min-h-9 shrink-0 items-center justify-center gap-1 border-t border-subtle text-xs text-secondary hover:bg-elevated disabled:opacity-40">
+          <button type="button" onClick={load} disabled={loading} className="flex min-h-11 shrink-0 items-center justify-center gap-1 border-t border-subtle text-xs text-secondary hover:bg-elevated disabled:opacity-40">
             <ChevronDown className={`h-3.5 w-3.5 ${loading ? 'animate-bounce' : ''}`} /> Atualizar histórico
           </button>
         </section>
+        </div>,
+        document.body,
       )}
     </div>
   )

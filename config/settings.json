@@ -81,7 +81,10 @@
       "image_prompt": 20,
       "assistant": 180,
       "meta": 45,
-      "assets": 120
+      "assets": 120,
+      "sim_intent": 20,
+      "turn_check": 12,
+      "turn_gate": 12
     },
     "aux_cache_prompt": false,
     "aux_cap": 3,
@@ -254,6 +257,26 @@
     "tick_every_turns": 5,
     "memories_per_card": 20,
     "reflection_after": 6
+  },
+  "runtime": {
+    "mode": "local",
+    "placements": {
+      "llm": "local",
+      "comfyui": "local"
+    },
+    "models": {
+      "llm": "qwen3.6-35b-a3b",
+      "image": "flux2_klein",
+      "video": "ltxv"
+    },
+    "endpoints": {
+      "local_llm": "http://vm.groupabz.com:1234/v1",
+      "local_comfyui": "http://127.0.0.1:8188",
+      "colab_llm": "",
+      "colab_comfyui": ""
+    },
+    "project_url": "",
+    "note": "Seleção local/hybrid/colab. Imagem e vídeo compartilham o placement do ComfyUI. Colab em branco pode ficar salvo como rascunho; quando o placement escolhido é colab, a URL efetiva é essa string, mesmo vazia. Não guarda segredo nem sampling."
   },
   "ui_profile": {
     "enabled": true,

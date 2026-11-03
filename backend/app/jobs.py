@@ -43,8 +43,8 @@ Tipos:
 Aventura apagada no meio do render: o PNG é descartado e o job termina
 cancelado. O worker é desligável por env (AIDUNGEON_JOBS_WORKER=0) para
 testes determinísticos — a suíte chama `process_pending()` diretamente.
-Um reaper independente, a cada 5 s, fecha `running` cujo `started_at`
-passou do prazo. O heartbeat só informa a UI; não empurra esse prazo.
+Um reaper independente, a cada 5 s, fecha `running` cujo prazo venceu.
+O prazo conta do mais recente entre `started_at` e `payload.heartbeat_at`.
 """
 
 from __future__ import annotations
@@ -1810,7 +1810,7 @@ def _timeout_seconds(value: Any, default: float) -> float:
 
 
 def _deadline_seconds(job_type: str, img_cfg: dict, llm_cfg: dict) -> float | None:
-    """Segundos desde started_at. Heartbeat não entra na conta."""
+    """Duração do prazo. A âncora é o mais recente entre started_at e heartbeat."""
     if job_type in _IMAGE_JOB_TYPES:
         timeout = _timeout_seconds(img_cfg.get("timeout_seconds"), 300.0)
         return max(360.0, timeout + 60.0)
@@ -1824,6 +1824,17 @@ def _deadline_seconds(job_type: str, img_cfg: dict, llm_cfg: dict) -> float | No
     if job_type == "npc_day_tick":
         return 900.0
     return None
+
+
+def _job_heartbeat(job: dict) -> datetime | None:
+    """`payload.heartbeat_at` de um running; o campo de topo é o mesmo valor."""
+    payload = job.get("payload")
+    raw = payload.get("heartbeat_at") if isinstance(payload, dict) else None
+    if not isinstance(raw, str) or not raw:
+        raw = job.get("heartbeat_at")
+    if not isinstance(raw, str):
+        return None
+    return _utc_stamp(raw)
 
 
 def _aware_utc(moment: datetime) -> datetime:
@@ -1854,7 +1865,9 @@ def reap_stalled_jobs(transport: Any = None, now: datetime | None = None) -> int
             started = _utc_stamp(job.get("started_at"))
             if started is None:
                 continue
-            if (moment - started).total_seconds() >= limit:
+            heartbeat = _job_heartbeat(job)
+            anchor = heartbeat if heartbeat is not None and heartbeat > started else started
+            if (moment - anchor).total_seconds() >= limit:
                 stalled.append(job)
     reaped = 0
     error = "job exceeded its deadline"

@@ -60,8 +60,8 @@ def _running(adventure_id: str, type_: str, ref_id: str, started: datetime,
 
 def test_reaper_times_out_from_started_at_without_draining_the_queue(
         tmp_db, monkeypatch):
-    """process_pending não colhe. Heartbeat fresco não estende o prazo.
-    Publicação tardia não cobre o erro."""
+    """process_pending não colhe. Heartbeat que não é mais novo que started_at
+    não segura o job. Publicação tardia não cobre o erro."""
     assert jobs._REAPER_INTERVAL_S == 5.0
     now = datetime(2026, 10, 29, tzinfo=timezone.utc)
     interrupted = []
@@ -82,7 +82,7 @@ def test_reaper_times_out_from_started_at_without_draining_the_queue(
         adventure["id"], "scene_backdrop", "room", now - timedelta(seconds=359),
         {"prompt": "hall"})
     with db.session() as conn:
-        assert db.touch_job(conn, image["id"], _stamp(now))
+        assert db.touch_job(conn, image["id"], _stamp(now - timedelta(seconds=360)))
     assert jobs.process_pending(None) == 0
     with db.session() as conn:
         for job in (image, tick, assets, clip, young):
@@ -124,6 +124,31 @@ def test_reaper_times_out_from_started_at_without_draining_the_queue(
     assert ran == [image["id"]]
     with db.session() as conn:
         stored = db.get_job(conn, image["id"])
+    assert stored["status"] == "error"
+    assert stored["result"] == {"code": "job_timeout"}
+    assert stored["error"] == "job exceeded its deadline"
+
+
+def test_reaper_uses_the_latest_of_started_at_and_heartbeat(tmp_db, monkeypatch):
+    """Heartbeat fresco segura o job; heartbeat vencido não. Âncora é o mais recente."""
+    now = datetime(2026, 10, 29, tzinfo=timezone.utc)
+    monkeypatch.setattr(jobs, "interrupt_image", lambda job, transport=None: True)
+    adventure = make_adventure()
+    fresh = _running(
+        adventure["id"], "see_image", "fresh", now - timedelta(seconds=1000))
+    stale = _running(
+        adventure["id"], "see_image", "stale", now - timedelta(seconds=1000))
+    recent = _running(
+        adventure["id"], "see_image", "recent", now - timedelta(seconds=10))
+    with db.session() as conn:
+        assert db.touch_job(conn, fresh["id"], _stamp(now - timedelta(seconds=10)))
+        assert db.touch_job(conn, stale["id"], _stamp(now - timedelta(seconds=360)))
+        assert db.touch_job(conn, recent["id"], _stamp(now - timedelta(seconds=1000)))
+    assert jobs.reap_stalled_jobs(None, now=now) == 1
+    with db.session() as conn:
+        assert db.get_job(conn, fresh["id"])["status"] == "running"
+        assert db.get_job(conn, recent["id"])["status"] == "running"
+        stored = db.get_job(conn, stale["id"])
     assert stored["status"] == "error"
     assert stored["result"] == {"code": "job_timeout"}
     assert stored["error"] == "job exceeded its deadline"

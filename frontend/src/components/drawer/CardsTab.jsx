@@ -36,6 +36,15 @@ function draftLanguage() {
 }
 const TYPE_HINTS = ['all', 'character', 'location', 'item', 'faction', 'concept', 'other']
 const CARD_TYPES = ['character', 'location', 'item', 'faction', 'concept', 'other']
+const TYPE_LABELS = {
+  all: 'Todas',
+  character: 'Personagem',
+  location: 'Local',
+  item: 'Item',
+  faction: 'Facção',
+  concept: 'Conceito',
+  other: 'Outro',
+}
 const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
 const STATUS_STYLE = {
   dead: 'bg-red-950/80 text-red-300 border border-red-800',
@@ -421,19 +430,19 @@ export default function CardsTab({ adventure }) {
           <button
             key={t}
             onClick={() => setTypeFilter(t)}
-            className={`rounded-lg px-2.5 py-1 text-[11px] font-medium capitalize transition ${
+            className={`min-h-9 rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
               typeFilter === t
                 ? 'bg-accent-pri text-canvas shadow-sm'
                 : 'border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated'
             }`}
           >
-            {t}
+            {TYPE_LABELS[t] || t}
           </button>
         ))}
 
         <button
           onClick={() => setPinnedOnly(!pinnedOnly)}
-          className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
+          className={`flex min-h-9 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
             pinnedOnly
               ? 'bg-amber-600 text-white shadow-sm'
               : 'border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated'
@@ -490,7 +499,7 @@ export default function CardsTab({ adventure }) {
                 >
                   {CARD_TYPES.map((t) => (
                     <option key={t} value={t} className="bg-surface text-primary">
-                      {t}
+                      {TYPE_LABELS[t] || t}
                     </option>
                   ))}
                 </select>
@@ -499,7 +508,7 @@ export default function CardsTab({ adventure }) {
                   disabled={bulkLoading}
                   className="border-l border-subtle px-2 py-1 text-xs font-medium text-accent-pri hover:bg-elevated transition disabled:opacity-50"
                 >
-                  Set Type
+                  Definir tipo
                 </button>
               </div>
 
@@ -524,7 +533,7 @@ export default function CardsTab({ adventure }) {
             <p>Nenhuma ficha corresponde à busca ou aos filtros.</p>
           ) : (
             <p>
-              No fichas yet. Characters, locations, and lore encountered in your adventure will be saved here.
+              Nenhuma ficha ainda. Personagens, locais e elementos de lore encontrados na aventura aparecem aqui.
             </p>
           )}
         </div>

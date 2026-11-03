@@ -239,7 +239,7 @@ export default function VoiceCloneModal({ open, onClose, assign }) {
       onClick={() => { if (!busy) close(null) }}
     >
       <div
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-subtle bg-surface p-4 text-secondary"
+        className="max-h-[min(90dvh,var(--app-height,100dvh))] w-full max-w-lg overflow-y-auto rounded-xl border border-subtle bg-surface p-4 text-secondary"
         onClick={(event) => event.stopPropagation()}
       >
         <h2 className="text-base font-semibold">Clonar voz</h2>

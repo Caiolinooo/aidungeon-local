@@ -33,6 +33,7 @@ import MiniHud from '../components/MiniHud.jsx'
 import WorldMap from '../components/WorldMap.jsx'
 import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import { useTheme } from '../themeContext.jsx'
+import { useDialog } from '../hooks/useDialog'
 import { bySeq, playerDisplayText } from '../utils.js'
 import { loosenProse } from '../prose.js'
 import {
@@ -370,6 +371,8 @@ export default function Play() {
   const [simVersion, setSimVersion] = useState(0)
   const [pendingCheck, setPendingCheck] = useState(null)
   const [mapOpen, setMapOpen] = useState(false)
+  const closeMap = useCallback(() => setMapOpen(false), [])
+  const mapDialogRef = useDialog(mapOpen, closeMap)
 
   const abortRef = useRef(null)
   const seenIdsRef = useRef(new Set())
@@ -1011,7 +1014,8 @@ export default function Play() {
       const anchor = document.getElementById(`action-${newBlockIdRef.current}`)
       newBlockIdRef.current = null
       if (anchor && nearBottomRef.current) {
-        anchor.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        anchor.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' })
       }
       return
     }
@@ -1573,7 +1577,8 @@ export default function Play() {
             <Link
               to="/"
               title="Voltar ao início"
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+              aria-label="Voltar ao início"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
             >
               <ArrowLeft className="w-4 h-4" />
             </Link>
@@ -1685,18 +1690,22 @@ export default function Play() {
 
                 {/* Reader Typography Controls Popover */}
                 <button
+                  type="button"
                   onClick={() => setShowReaderModal(true)}
                   title="Tipografia e tema da leitura"
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+                  aria-label="Tipografia e tema da leitura"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <BookOpen className="w-4 h-4 text-accent-pri" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => setMapOpen(true)}
                   title="Mapa, locais e journal do mundo"
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+                  aria-label="Mapa, locais e journal do mundo"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
                 >
-                  <span className="text-xs font-semibold">Map</span>
+                  <span className="text-xs font-semibold">Mapa</span>
                 </button>
                 <Link to={`/adventures/${id}/novel`} title="Abrir Visual Novel e replay"
                   className="flex h-10 items-center rounded-full border border-subtle bg-surface px-3 text-xs font-medium text-secondary hover:bg-elevated">Novel</Link>
@@ -1706,7 +1715,8 @@ export default function Play() {
                 <Link
                   to="/settings"
                   title="Configurações (modelo, imagem, voz, memória)"
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+                  aria-label="Configurações (modelo, imagem, voz, memória)"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
                 >
                   <SettingsIcon className="w-4 h-4 text-secondary" />
                 </Link>
@@ -1744,6 +1754,16 @@ export default function Play() {
           playerAction={lastPlayer}
           onSceneChange={setSceneInfo}
         />
+
+        {generating && (
+          <div
+            className="shrink-0 border-b border-accent-pri/30 bg-canvas/95 px-4 py-1.5 text-sm text-accent-pri"
+            role="status"
+            aria-live="polite"
+          >
+            {gen.phaseLabel || (gen.text ? 'Narrando' : 'Preparando narrativa')}
+          </div>
+        )}
 
         {adventure.turn_mode && (
           <div
@@ -1880,7 +1900,7 @@ export default function Play() {
           >
             <aside
               aria-label="Controles do jogo"
-              className="flex min-h-0 max-h-[min(70dvh,100%)] w-full min-w-0 max-w-full flex-col overflow-hidden border-t border-subtle bg-surface shadow-2xl sm:h-full sm:max-h-full sm:w-[min(24rem,calc(100%-1rem))] sm:border-l sm:border-t-0"
+              className="flex min-h-0 max-h-[min(70dvh,var(--app-height,100dvh))] w-full min-w-0 max-w-full flex-col overflow-hidden border-t border-subtle bg-surface shadow-2xl sm:h-full sm:max-h-full sm:w-[min(24rem,calc(100%-1rem))] sm:border-l sm:border-t-0"
               onPointerDown={(event) => event.stopPropagation()}
             >
               <GamePanel
@@ -1906,7 +1926,7 @@ export default function Play() {
           <div className="z-10 min-w-0 max-w-full border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur">
             <div className={`mx-auto flex min-w-0 max-w-full items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
               <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                Suggested:
+                Sugestões:
               </span>
               {choices.map((c, i) => (
                 <button
@@ -1914,7 +1934,7 @@ export default function Play() {
                   onClick={() => pickChoice(c)}
                   disabled={actionLocked}
                   title={actionLocked ? 'Aguarde a sua vez' : `Send action as "${c.type}"`}
-                  className="min-h-8 shrink-0 flex items-center gap-1.5 rounded-full border border-subtle bg-elevated px-3 py-1 text-xs text-secondary hover:border-accent-pri hover:text-primary transition disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-subtle bg-elevated px-3 py-1 text-xs text-secondary hover:border-accent-pri hover:text-primary transition disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="text-[10px] font-bold uppercase text-accent-pri">{c.type}</span>
                   <span className="truncate max-w-[14rem]">{c.text}</span>
@@ -1928,7 +1948,7 @@ export default function Play() {
           <div className="z-10 min-w-0 max-w-full border-t border-subtle bg-surface/95 px-4 pt-2.5 backdrop-blur">
             <div className={`mx-auto flex min-w-0 max-w-full items-center gap-2 overflow-x-auto pb-2 ${colWidthCls}`}>
               <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                🌐 Sources:
+                🌐 Fontes:
               </span>
               {webSources.map((s, i) => {
                 const safe = typeof s.url === 'string' && /^https?:\/\//i.test(s.url)
@@ -2128,11 +2148,18 @@ export default function Play() {
         <div
           className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm"
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setMapOpen(false)
+            if (event.target === event.currentTarget) closeMap()
           }}
         >
-          <div className="h-full min-h-0 w-[min(40rem,calc(100%-0.5rem))] min-w-0 max-w-full overflow-x-hidden border-l border-subtle bg-canvas shadow-2xl">
-            <WorldMap adventure={adventure} open={mapOpen} onClose={() => setMapOpen(false)} />
+          <div
+            ref={mapDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mapa, locais e journal do mundo"
+            tabIndex={-1}
+            className="h-full min-h-0 w-[min(40rem,calc(100%-0.5rem))] min-w-0 max-w-full overflow-x-hidden border-l border-subtle bg-canvas shadow-2xl outline-none"
+          >
+            <WorldMap adventure={adventure} open={mapOpen} onClose={closeMap} />
           </div>
         </div>
       )}
