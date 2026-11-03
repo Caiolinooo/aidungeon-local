@@ -17,7 +17,7 @@ from PIL import Image
 from app import db, events, image_client, jobs, likeness, npc_assets
 from app.routes.images import _plan_see
 from app.schemas import SeeRequest
-from conftest import add_action, make_adventure
+from conftest import add_action, image_english_echo, make_adventure
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
 from test_v3 import use_tmp_storage
 from test_scene import _face, pipeline_transport
@@ -472,6 +472,22 @@ def _capture_generate(monkeypatch, tmp_path) -> list[dict]:
     return seen
 
 
+def _unused_echo(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/models"):
+        return httpx.Response(200, json={
+            "object": "list",
+            "data": [{"id": "mock-model", "object": "model"}],
+        })
+    if request.url.path.endswith("/chat/completions"):
+        payload = json.loads(request.content.decode("utf-8"))
+        if not payload.get("stream"):
+            echo = image_english_echo(payload)
+            if echo is not None:
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": echo}}]})
+    return httpx.Response(404, json={"error": "unused"})
+
+
 def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, monkeypatch):
     """Sem âncora, a foto da pessoa real entra em reference_images e init_image fica vazio."""
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
@@ -493,8 +509,7 @@ def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, m
     assert queued is not None
     _use_comfy()
     seen = _capture_generate(monkeypatch, tmp_path)
-    assert jobs.process_pending(httpx.MockTransport(
-        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
+    assert jobs.process_pending(httpx.MockTransport(_unused_echo)) == 1
     assert len(seen) == 1
     assert seen[0]["init_image"] is None
     assert seen[0]["reference_images"] == [PNG_BYTES]
@@ -603,8 +618,7 @@ def test_real_person_with_anchor_still_sends_the_reference(client, tmp_path, mon
     assert queued["payload"]["init_image_id"] == image["id"]
     _use_comfy()
     seen = _capture_generate(monkeypatch, tmp_path)
-    assert jobs.process_pending(httpx.MockTransport(
-        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
+    assert jobs.process_pending(httpx.MockTransport(_unused_echo)) == 1
     assert len(seen) == 1
     assert seen[0]["init_image"] is None
     sent = seen[0]["reference_images"]

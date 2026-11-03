@@ -11,8 +11,9 @@ Tipos:
 - `character_portrait` — se o card não tem portrait_prompt (e não há âncora
   nem foto de referência), o job nasce em `preparing`: o LLM (role
   image_prompt) escreve o prompt fora do worker e só então o job entra na
-  fila. O worker só gera a imagem no provider efetivo (mesmo do "See") e
-  vincula ao card (images kind='portrait'). Quem já tem prompt não chama o LLM.
+  fila. O worker traduz o prompt final para inglês e gera a imagem no provider
+  efetivo (mesmo do "See") e vincula ao card (images kind='portrait'). Quem já tem prompt não chama o LLM
+  de construção do retrato.
   A primeira foto vira a âncora (`portrait_anchor_id`). Geração automática
   não substitui um retrato que já existe. Pedido explícito de regenerar
   usa img2img a partir dessa âncora, para o rosto fictício continuar o mesmo.
@@ -22,8 +23,9 @@ Tipos:
   nas cenas (See e fundo), sem virar img2img da cena.
   CUDA out of memory não reenfileira o mesmo card na hora: a UI pede a cena
   de novo a cada poucos segundos, e cada erro virava outro txt2img.
-- `scene_backdrop` — pinta o fundo do lugar atual (payload.prompt já pronto,
-  sem LLM) em images kind='backdrop'. Wide 1344×768 (bucket SDXL).
+- `scene_backdrop` — monta o fundo do lugar atual sem LLM em `scene._prompt`;
+  o executor traduz o texto final para inglês e grava images kind='backdrop'.
+  Wide 1344×768 (bucket SDXL).
 - `see_image` — See assíncrono (C6). Nasce em `preparing`: o prompt (LLM,
   role image_prompt) roda numa thread e só então o job entra na fila do SD,
   para não prender o worker. Termina em `see_ready` ou `see_failed`.
@@ -38,7 +40,8 @@ Tipos:
   (`PRIORITY_BULK_PORTRAIT`), inclusive do jogador, ficam estáticos. O
   follow-up não cancela um clipe manual ativo na mesma fonte; o pedido
   explícito continua substituindo o pendente. Falha nesse follow-up não muda
-  o job de origem. Não chama narrador, voz nem LLM extra.
+  o job de origem. Não chama narrador nem voz; o executor traduz o prompt
+  final para inglês antes de gerar o clipe.
 - `character_turnaround` — gera mestre de corpo inteiro e ficha multivista; o
   Pillow monta o split com o rosto canônico, sem outra inferência. Usa o split
   no giro 360°, extrai 0/90/180/270 com OpenCV e monta a folha 2×2. Publica todos
@@ -67,7 +70,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from app import (db, events, game_engine, image_client, likeness, llm_client,
+from app import (db, events, game_engine, image_client, image_english, likeness, llm_client,
                     npc_assets, settings_store, turnaround)
 from app.errors import GameError
 from app.image_client import ImageError
@@ -1150,7 +1153,7 @@ def _portrait_bytes(image: dict) -> bytes:
 
 
 def _execute_portrait(job: dict, transport: Any) -> dict:
-    """Pinta um character_portrait já preparado. Não chama o LLM."""
+    """Pinta um character_portrait preparado; traduz o prompt final antes do provider."""
     payload = job.get("payload") or {}
     replace = bool(payload.get("replace"))
     force_reference = bool(payload.get("force_reference"))
@@ -1171,6 +1174,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
             return {"image": db.image_ref(existing), "card_id": card["id"],
                     "prompt": card.get("portrait_prompt") or "", "kept": True}
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
         if not img_cfg["enabled"]:
             raise GameError(503, "image_generation_disabled",
                             "Image generation is disabled in settings")
@@ -1234,6 +1238,8 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     elif force_reference and references:
         init_bytes = references[0]
         denoise = 0.12
+    final = image_english.render_english(
+        final, transport=transport, llm_cfg=llm_cfg)
     if not state_key:
         state_key = npc_assets.portrait_state_key(
             card, img_cfg, image_style=adv.get("image_style") or "",
@@ -1425,6 +1431,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     payload = job.get("payload") or {}
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled",
                         "Image generation is disabled in settings")
@@ -1451,6 +1458,8 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         )
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
+    prompt = image_english.render_english(
+        prompt, transport=transport, llm_cfg=llm_cfg)
     cache_key = backdrop_cache_key(
         img_cfg, prompt,
         include_people=bool(payload.get("include_people")),
@@ -1839,6 +1848,7 @@ def _execute_see(job: dict, transport: Any) -> dict:
         raise GameError(500, "generation_failed", "see job has no prompt")
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
@@ -1859,6 +1869,8 @@ def _execute_see(job: dict, transport: Any) -> dict:
         )
         if img_cfg.get("provider") in ("comfyui", "sdwebui") else []
     )
+    prompt = image_english.render_english(
+        prompt, transport=transport, llm_cfg=llm_cfg)
     cache_key = image_client.request_key(
         img_cfg, prompt, negative_extra=negative_extra,
         variation=payload.get("variation"), reference_images=references or None)
@@ -1905,10 +1917,13 @@ def _execute_location_image(job: dict, transport: Any) -> dict:
         raise GameError(500, "generation_failed", "location image job has no prompt")
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled", "Image generation is disabled")
-    cache_key = str(payload.get("cache_key") or image_client.request_key(
-        img_cfg, prompt, width=1344, height=768))
+    prompt = image_english.render_english(
+        prompt, transport=transport, llm_cfg=llm_cfg)
+    cache_key = image_client.request_key(
+        img_cfg, prompt, width=1344, height=768)
     image_id = db.new_id()
     meta = image_client.generate_image(
         img_cfg, prompt, adventure_id=job["adventure_id"],
@@ -1958,11 +1973,14 @@ def _execute_scene_clip(job: dict, transport: Any) -> dict:
         raise GameError(500, "generation_failed", "scene clip job has no prompt")
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
     source, raw = _clip_source_png(job)
     source_id = source["id"]
+    prompt = image_english.render_english(
+        prompt, transport=transport, llm_cfg=llm_cfg)
     cache_key = image_client.clip_request_key(img_cfg, prompt, raw)
     with db.session() as conn:
         cached = db.find_cached_image(
@@ -2029,6 +2047,7 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     """Mestre → ficha → split → 360; publica tudo ou não publica nada."""
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
+        llm_cfg = settings_store.effective_llm_settings(conn)
         card_id = str(job.get("ref_id") or "")
         card = db.get_card(conn, job["adventure_id"], card_id)
         if card is None:
@@ -2041,6 +2060,14 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                         "image generation is disabled (settings.image.enabled)")
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}
+    prompts = {
+        **prompts,
+        **{
+            key: image_english.render_english(
+                prompts[key], transport=transport, llm_cfg=llm_cfg)
+            for key in ("master", "design_sheet", "clip")
+        },
+    }
     created_paths: list[str] = []
     assets: dict[str, dict] = {}
 

@@ -1063,6 +1063,7 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
     variation_value = cfg.get("variation", 0) if variation is None else variation
     if variation_value not in (None, "", 0, "0"):
         payload["variation"] = str(variation_value)
+    payload["prompt_locale"] = "en"
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -1469,6 +1470,7 @@ def clip_request_key(cfg: dict, prompt: str, source: bytes) -> str:
         "prompt": " ".join(str(prompt or "").split()),
         "source": hashlib.sha256(source).hexdigest() if source else "",
     }
+    payload["prompt_locale"] = "en"
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

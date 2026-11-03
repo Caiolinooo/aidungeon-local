@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import access, auth, db, image_budget, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
+from app import access, auth, db, image_budget, image_client, image_english, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -45,7 +45,9 @@ Do not turn the moment into a portrait or a close-up of one face.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add a person who is not listed.
 If a player instruction for the picture is given, obey it.
-No dialogue, no quotes, no style words. Output ONLY that sentence."""
+No dialogue, no quotes, no style words.
+Never copy a Portuguese word. Translate the player order and the place into English.
+Output ONLY that sentence."""
 
 _EXPLICIT_BUILDER_SYSTEM = """You describe one adult moment of an interactive story for an uncensored text-to-image model.
 Write exactly one English sentence, under 35 words, describing the action happening right now: who does what to whom, in the place.
@@ -56,7 +58,9 @@ Do not fade to black. Do not censor adult nudity or sex.
 Do not describe hair, face, eyes or age.
 Do not replace a named person with a different face, hair, or skin tone.
 Do not add people who are not in the moment. Do not change the place.
-Do not sexualize a child. Output ONLY that sentence."""
+Do not sexualize a child.
+Never copy a Portuguese word. Translate the player order and the place into English.
+Output ONLY that sentence."""
 
 # Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
 _PORTRAIT_NEGATIVE = "solo portrait, bust, headshot, close-up"
@@ -1192,6 +1196,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # o rosto continua travado, mas a pessoa tem corpo e ângulos coerentes.
     cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
         cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=explicit)
+    prompt = image_english.render_english(
+        prompt, transport=transport, llm_cfg=llm_cfg)
     return (prompt, negative, caption, frame, cast_card_ids,
             reference_image_ids, len(names), explicit)
 
@@ -1235,6 +1241,8 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         (prompt, negative_extra, caption, frame, cast_card_ids,
          reference_image_ids, expected_people, explicit) = _build_final_prompt(
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
+    except image_client.ImageError as exc:
+        raise GameError(503, "generation_failed", str(exc)) from exc
     except llm_client.LlmError as exc:
         raise GameError(503, exc.code, exc.message) from exc
     # Cena explícita no Flux2: CFG 2.0 para o negativo de roupa valer.

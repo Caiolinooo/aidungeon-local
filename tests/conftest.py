@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
-from app import choices_service, db, events, image_client, llm_client, llm_scheduler, users  # noqa: E402
+from app import choices_service, db, events, image_client, image_english, llm_client, llm_scheduler, users  # noqa: E402
 
 # Credenciais de TESTE para a auth (nunca as do .env real — ver `_auth_env` e
 # `_clean_llm_state`, que aponta AIDUNGEON_ENV_PATH para um arquivo inexistente).
@@ -44,6 +44,16 @@ def _clean_llm_state(monkeypatch):
     monkeypatch.setenv("AIDUNGEON_ENV_PATH", str(Path("/nonexistent/.env")))
     yield
     llm_client.invalidate_discovery_cache()
+
+
+@pytest.fixture(autouse=True)
+def _image_english_reset():
+    """Prompts memoizados não vazam entre transports e respostas de teste."""
+    with image_english._CACHE_LOCK:
+        image_english._CACHE.clear()
+    yield
+    with image_english._CACHE_LOCK:
+        image_english._CACHE.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +144,17 @@ def client(tmp_db, auth_token):
 
 
 # ------------------------------------------------------------------ mock LLM
+IMAGE_ENGLISH_SYSTEM_PREFIX = "You rewrite an image-model prompt into English."
+
+
+def image_english_echo(payload: dict) -> str | None:
+    messages = payload.get("messages") or []
+    system = next((m.get("content") or "" for m in messages if m.get("role") == "system"), "")
+    if not str(system).startswith(IMAGE_ENGLISH_SYSTEM_PREFIX):
+        return None
+    return next((m.get("content") or "" for m in messages if m.get("role") == "user"), "")
+
+
 def sse_body(tokens, reasoning_only: bool = False,
              finish_reason: str | None = None) -> str:
     """Corpo SSE fake de /chat/completions."""
@@ -176,8 +197,14 @@ def make_llm_transport(tokens=("You", " open"), model_id="mock-model",
                 return httpx.Response(401, json={"error": "unauthorized"})
             if fail == "http500":
                 return httpx.Response(500, text="boom")
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             if capture is not None:
-                capture.append(json.loads(request.content.decode("utf-8")))
+                capture.append(payload)
             return httpx.Response(
                 200, headers={"content-type": "text/event-stream"},
                 text=sse_body(tokens, reasoning_only=reasoning_only,

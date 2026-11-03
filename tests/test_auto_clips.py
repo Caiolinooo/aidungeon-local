@@ -67,7 +67,7 @@ def _drain_origins() -> list[str]:
                 " AND status='pending'", (db.utcnow(), row["id"]))
             assert claimed.rowcount == 1
             job = db.get_job(conn, row["id"])
-        jobs._run_job(job, None)
+        jobs._run_job(job, make_llm_transport())
         ran.append(job["type"])
     return ran
 
@@ -308,7 +308,7 @@ def test_follow_up_skips_when_finish_returns_false(tmp_db, tmp_path, monkeypatch
     origin = _enqueue_scene(adv["id"])
     with db.session() as conn:
         job = db.claim_next_job(conn)
-    jobs._run_job(job, None)
+    jobs._run_job(job, make_llm_transport())
     assert called == []
     done = _jobs_of("scene_backdrop")[0]
     assert done["id"] == origin["id"]
@@ -575,7 +575,7 @@ def test_scene_clip_progress_interrupts_only_after_the_still_commits(
             "file_path": "x.png",
             "media_type": "image/png",
         }, _png(4, 4)))
-    jobs._run_job(claimed, None)
+    jobs._run_job(claimed, make_llm_transport())
     stored = next(job for job in _jobs_of("scene_clip") if job["id"] == auto["id"])
     assert stored["status"] == "canceled"
     assert stored["error"] == "preempted by queued image"

@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 
 from app import db, image_client, jobs, likeness, scene
-from conftest import add_action, make_adventure
+from conftest import add_action, image_english_echo, make_adventure
 from test_v2 import PNG_BYTES, override_transport
 from test_v3 import use_tmp_storage
 
@@ -48,6 +48,12 @@ def pipeline_transport(chat_content: str = "silver-haired sky captain, bust port
                 "data": [{"id": "mock-model", "object": "model"}],
             })
         if path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": chat_content}}],
             })

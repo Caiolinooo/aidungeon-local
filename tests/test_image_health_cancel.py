@@ -9,7 +9,7 @@ import httpx
 
 from app import auth as auth_core
 from app import db, deps, events, image_client, jobs
-from conftest import TEST_AUTH_SECRET, make_adventure
+from conftest import TEST_AUTH_SECRET, image_english_echo, make_adventure
 from test_v3 import PNG_B64, use_tmp_storage
 
 
@@ -174,6 +174,18 @@ def test_cancel_running_interrupts_and_never_publishes(client, tmp_path):
     interrupts = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [{"id": "mock-model", "object": "model"}],
+            })
+        if request.url.path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
         if request.url.path == "/sdapi/v1/txt2img":
             entered.set()
             release.wait(5)

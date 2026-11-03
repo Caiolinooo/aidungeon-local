@@ -30,7 +30,7 @@ from app import (
     settings_store,
 )
 from app.sim import intent
-from conftest import add_action, make_adventure, sse_body
+from conftest import add_action, image_english_echo, make_adventure, sse_body
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
            "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
@@ -61,6 +61,11 @@ def _transport(*, total_slots: int | None, capture: list | None = None,
             if chat_error is not None:
                 raise chat_error
             payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             if capture is not None:
                 capture.append(payload)
             if payload.get("stream"):

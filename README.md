@@ -31,6 +31,13 @@ OpenAI-compatível.
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
 
+## Funcionalidades (v0.15.0)
+
+- **Prompts visuais sempre em inglês**: See, backdrop, retrato, local, turnaround
+  e clipe passam pelo role `image_prompt` antes de chegar ao provider. O rewriter
+  preserva nomes, `BREAK` e o estilo, falha sem enviar o texto em português e
+  invalida caches antigas com `prompt_locale=en`; a legenda do See não muda.
+
 ## Funcionalidades (v0.14.0)
 
 - **Controles do Comfy**: o formulário libera o motor, os passos, o CFG e o
@@ -114,7 +121,9 @@ OpenAI-compatível.
 - **Geração visual coerente**: See síncrono/assíncrono envia e cacheia o mesmo
   negative; nudez e roupa são atribuídas por pessoa, sem ordem global de despir.
   Backdrop usa a referência efetiva na cache key e replaneja âncoras se o provider
-  mudar antes do worker. Prompts longos preservam ação e lugar atuais.
+  mudar antes do worker. Prompts longos preservam ação e lugar atuais. Todo prompt
+  positivo de See, backdrop, retrato, local, turnaround e clipe passa pelo role
+  `image_prompt` para chegar em inglês ao provider; a legenda do See não muda.
 
 ## Funcionalidades (v0.10.0)
 

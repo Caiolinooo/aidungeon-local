@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from app import db, image_client, jobs, likeness
-from conftest import add_action, make_adventure
+from conftest import add_action, image_english_echo, make_adventure
 from test_v2 import PNG_BYTES, override_transport
 from test_scene import _face, pipeline_transport
 from test_v3 import use_tmp_storage
@@ -41,9 +41,24 @@ def _capture_generate(monkeypatch, tmp_path) -> list[dict]:
     return seen
 
 
+def _unused_handler(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/models"):
+        return httpx.Response(200, json={
+            "object": "list",
+            "data": [{"id": "mock-model", "object": "model"}],
+        })
+    if request.url.path.endswith("/chat/completions"):
+        payload = json.loads(request.content.decode("utf-8"))
+        if not payload.get("stream"):
+            echo = image_english_echo(payload)
+            if echo is not None:
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": echo}}]})
+    return httpx.Response(404, json={"error": "unused"})
+
+
 def _unused_transport() -> httpx.MockTransport:
-    return httpx.MockTransport(
-        lambda request: httpx.Response(404, json={"error": "unused"}))
+    return httpx.MockTransport(_unused_handler)
 
 
 def _sd_handler(seen: list) -> httpx.MockTransport:
@@ -55,6 +70,12 @@ def _sd_handler(seen: list) -> httpx.MockTransport:
                 "data": [{"id": "mock-model", "object": "model"}],
             })
         if path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": "Clara steps into the rain."}}],
             })

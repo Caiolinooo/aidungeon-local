@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 from app import db, image_client, jobs, llm_client
-from conftest import make_adventure
+from conftest import image_english_echo, make_adventure
 
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
            "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
@@ -30,8 +30,14 @@ def make_assets_transport(chat_content="silver-haired sky captain, bust portrait
                 "data": [{"id": "mock-model", "object": "model"}],
             })
         if path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             if capture is not None:
-                capture.append(json.loads(request.content.decode("utf-8")))
+                capture.append(payload)
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": chat_content}}],
             })
@@ -302,8 +308,7 @@ def test_regenerate_portrait_img2img_from_anchor(client, tmp_path, monkeypatch):
     second = client.post(f"/api/adventures/{adv['id']}/cards/{npc['id']}/portrait").json()
     assert second["payload"]["replace"] is True
     assert second["payload"]["init_image_id"] == anchor
-    assert jobs.process_pending(httpx.MockTransport(
-        lambda request: httpx.Response(404, json={"error": "unused"}))) == 1
+    assert jobs.process_pending(httpx.MockTransport(_unused_echo)) == 1
     assert seen and seen[0]["init_image"] is None
     assert seen[0]["reference_images"] == [anchor_bytes]
     assert "same face" in seen[0]["prompt"]
@@ -318,9 +323,28 @@ def _stored_job(job_id: str) -> dict | None:
         return db.get_job(conn, job_id)
 
 
+def _unused_echo(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/models"):
+        return httpx.Response(200, json={
+            "object": "list",
+            "data": [{"id": "mock-model", "object": "model"}],
+        })
+    if request.url.path.endswith("/chat/completions"):
+        payload = json.loads(request.content.decode("utf-8"))
+        if not payload.get("stream"):
+            echo = image_english_echo(payload)
+            if echo is not None:
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": echo}}]})
+    return httpx.Response(404, json={"error": "unused"})
+
+
 def _spy_portrait_llm(monkeypatch, calls: list, *, gate=None, entered=None,
                       text: str = "silver-haired sky captain, bust portrait"):
     def spy(cfg, messages, **kwargs):
+        echo = image_english_echo({"messages": messages})
+        if echo is not None:
+            return echo
         if entered is not None:
             entered.set()
         if gate is not None:

@@ -1172,6 +1172,7 @@ def portrait_state_key(card: dict, img_cfg: dict, *, image_style: str = "",
         payload["visual_state"] = {key: reaction[key] for key in _VISUAL_STATE_KEYS if reaction.get(key)}
     if stage:
         payload["alignment_stage"] = stage
+    payload["prompt_locale"] = "en"
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

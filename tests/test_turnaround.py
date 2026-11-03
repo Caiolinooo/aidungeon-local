@@ -143,7 +143,7 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert queued["payload"]["source_image_id"] == anchor["id"]
 
     with events.subscribe(adv["id"]) as subscription:
-        assert jobs.process_pending() == 1
+        assert jobs.process_pending(pipeline_transport()) == 1
         terminal = []
         while (event := subscription.get(0.05)) is not None:
             if event.type == "turnaround_ready":
@@ -232,7 +232,7 @@ def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(
             jobs.cancel(conn, queued["id"])
 
     _mock_generation(monkeypatch, tmp_path, video, after_render=cancel_after_render)
-    assert jobs.process_pending() == 1
+    assert jobs.process_pending(pipeline_transport()) == 1
 
     with db.session() as conn:
         assert db.get_job(conn, queued["id"])["status"] == "canceled"
@@ -502,7 +502,7 @@ def test_portrait_schedules_complete_reference_only_once(tmp_db, tmp_path, monke
         db.update_card(conn, adv["id"], card["id"], {"portrait_prompt": "brown-haired traveller"})
         portrait = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
 
-    assert jobs.process_pending() == 2
+    assert jobs.process_pending(pipeline_transport()) == 2
     with db.session() as conn:
         turnarounds = [job for job in db.list_jobs(conn, adv["id"])
                        if job["type"] == "character_turnaround"]

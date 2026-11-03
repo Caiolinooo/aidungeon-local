@@ -24,7 +24,7 @@ import httpx
 import pytest
 
 from app import db, deps, llm_client, settings_store
-from conftest import sse_body
+from conftest import image_english_echo, sse_body
 
 # 1x1 transparent PNG
 PNG_B64 = (
@@ -77,13 +77,18 @@ class OpaqueMockTransport:
                 return httpx.Response(500, text="Internal Server Error")
 
             payload = json.loads(request.content.decode("utf-8"))
+            is_stream = bool(payload.get("stream", False))
+            if not is_stream:
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
+
             self.captured_requests.append({
                 "path": path,
                 "method": request.method,
                 "payload": payload,
             })
-
-            is_stream = bool(payload.get("stream", False))
 
             if self.chat_handler:
                 result = self.chat_handler(payload)

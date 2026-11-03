@@ -14,7 +14,7 @@ import pytest
 
 from app import auth as auth_core
 from app import db, deps, events, game_engine, jobs, settings_store
-from conftest import TEST_AUTH_SECRET, add_action, make_adventure, sse_body
+from conftest import TEST_AUTH_SECRET, add_action, image_english_echo, make_adventure, sse_body
 from test_scene import _face
 from test_v2 import PNG_BYTES
 from test_v3 import PNG_B64, make_npc, use_tmp_storage
@@ -47,6 +47,10 @@ class _Stack:
             if payload.get("stream"):
                 return httpx.Response(200, headers={"content-type": "text/event-stream"},
                                       text=sse_body(("The bar", " goes quiet.")))
+            echo = image_english_echo(payload)
+            if echo is not None:
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": echo}}]})
             self.llm_gate.wait(5)
             if self.llm_fail:
                 raise httpx.ConnectError("mock: connection refused")

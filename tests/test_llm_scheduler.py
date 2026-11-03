@@ -21,6 +21,7 @@ import httpx
 import pytest
 
 from app import db, llm_client, llm_scheduler, settings_store
+from conftest import image_english_echo
 from app.llm_scheduler import Limits, Scheduler
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -422,8 +423,14 @@ class _LlamaServer:
             if "/props" in request_line:
                 self._send_json(conn, {"total_slots": self.total_slots})
                 return
+            payload = json.loads(body or b"{}")
+            if "/chat/completions" in request_line and not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    self._send_json(conn, {"choices": [{"message": {"content": echo}}]})
+                    return
             with self._lock:
-                self.requests.append(json.loads(body or b"{}"))
+                self.requests.append(payload)
                 step = self.script.pop(0) if self.script else ("json", "ok")
             kind = step[0]
             if kind == "json":

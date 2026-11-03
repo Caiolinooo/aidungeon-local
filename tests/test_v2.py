@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from app import db, deps, settings_store
-from conftest import add_action, make_adventure, sse_body
+from conftest import add_action, image_english_echo, make_adventure, sse_body
 
 
 @pytest.fixture()
@@ -38,6 +38,11 @@ def make_v2_transport(chat_content="a dark tower under a blood-red sky",
             })
         if path.endswith("/chat/completions"):
             payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
             if capture is not None:
                 capture.append(payload)
             if payload.get("stream"):

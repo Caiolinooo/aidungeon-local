@@ -2356,7 +2356,8 @@ paths:
       description: |
         Fluxo: (1) o LLM resume a cena recente (até settings.image.prompt_builder
         .max_scene_chars) em um prompt de imagem EN, prefixado por
-        adventures.image_style; (2) chama o provedor configurado
+        adventures.image_style; (2) o role image_prompt reescreve em inglês o
+        prompt positivo final, sem alterar a legenda, e chama o provedor configurado
         (settings.image.provider: `sdwebui` → POST {base_url}/sdapi/v1/txt2img;
         `openai_compatible` → POST {base_url}/images/generations com Bearer);
         (3) salva o arquivo em settings.image.storage_dir/<adventure_id>/;

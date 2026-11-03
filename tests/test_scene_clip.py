@@ -11,7 +11,7 @@ import httpx
 
 from app import auth as auth_core
 from app import db, deps, events, image_client, jobs
-from conftest import TEST_AUTH_SECRET, make_adventure
+from conftest import TEST_AUTH_SECRET, image_english_echo, make_adventure
 from test_v3 import PNG_B64, PNG_BYTES, use_tmp_storage
 
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00mp41isom"
@@ -616,6 +616,18 @@ def _comfy_and_sd(order: list[str], release: threading.Event | None = None,
                   interrupts: list | None = None) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path.endswith("/models"):
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [{"id": "mock-model", "object": "model"}],
+            })
+        if path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            if not payload.get("stream"):
+                echo = image_english_echo(payload)
+                if echo is not None:
+                    return httpx.Response(200, json={
+                        "choices": [{"message": {"content": echo}}]})
         order.append(path)
         if path == "/sdapi/v1/txt2img":
             return httpx.Response(200, json={"images": [PNG_B64]})
