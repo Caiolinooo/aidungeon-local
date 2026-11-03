@@ -507,6 +507,74 @@ def test_stateful_action_tolerates_the_article_and_appends_missing_people():
     assert only.index("She dances") < only.index("A Donzela da Noite")
 
 
+def test_staged_explicit_action_gives_the_nude_woman_a_full_body_stance():
+    from app.routes.images import _staged_explicit_action, scrub_clothing_states
+
+    nude = "A Donzela da Noite"
+    clothed = "Caio"
+    predicates = {
+        nude: (
+            "completely naked, bare breasts fully exposed with visible nipples, "
+            "natural female anatomy, her whole body bare, natural skin"
+        ),
+        clothed: "fully clothed in his black suit",
+    }
+    pronouns = {nude: "her", clothed: "his"}
+    sentence = (
+        "A Donzela da Noite, completely naked, bare breasts fully exposed with "
+        "visible nipples, natural female anatomy, her whole body bare, natural "
+        "skin, traces Caio's clavicle with her black nails while he, having "
+        "shed his suit, stands beside her in the neon-lit room."
+    )
+    cleaned = scrub_clothing_states(sentence)
+    assert "shed" not in cleaned
+    action = _staged_explicit_action(
+        cleaned, [nude], [clothed], predicates, pronouns)
+    assert action == (
+        "A Donzela da Noite, completely naked, bare breasts fully exposed with "
+        "visible nipples, natural female anatomy, her whole body bare, natural "
+        "skin, stands in the center of the room, her arms raised as she traces "
+        "Caio's clavicle with her black nails, while Caio, fully clothed in his "
+        "black suit, standing before her."
+    )
+
+
+def test_action_core_drops_the_nude_predicate_and_keeps_only_the_verb():
+    from app.routes.images import _action_core
+
+    assert _action_core(
+        "The Donzela da Noite, breasts fully exposed with visible nipples, "
+        "natural female anatomy, natural skin, traces Caio's clavicle with "
+        "her black nails",
+        "A Donzela da Noite",
+    ) == "traces Caio's clavicle with her black nails"
+    # O scrub de "completely naked" deixa o advérbio órfão; ele não é ação.
+    assert _action_core(
+        "A Donzela da Noite, completely, traces Caio's jaw",
+        "A Donzela da Noite",
+    ) == "traces Caio's jaw"
+
+
+def test_staged_explicit_action_keeps_lying_and_sitting_postures():
+    from app.routes.images import _staged_explicit_action, scrub_clothing_states
+
+    nude = "A Donzela da Noite"
+    clothed = "Caio"
+    predicates = {
+        nude: "completely naked, natural skin",
+        clothed: "fully clothed in his black suit",
+    }
+    pronouns = {nude: "her", clothed: "his"}
+    for sentence in (
+        "A Donzela da Noite lies on the bed while Caio watches.",
+        "A Donzela da Noite is sitting on the sofa while Caio watches.",
+        "A Donzela da Noite kneels on the floor while Caio watches.",
+    ):
+        cleaned = scrub_clothing_states(sentence)
+        assert _staged_explicit_action(
+            cleaned, [nude], [clothed], predicates, pronouns) == ""
+
+
 def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
     adv = make_adventure()

@@ -219,11 +219,21 @@ _CLOTHING_STATE = re.compile(
     r"\b(?:nude|naked|topless|undressed|clothed|dressed|clad)\b"
 )
 _CLOTHING_ACTION = re.compile(
-    r"(?i)\b(?:after|while|before|by)\s+"
+    r"(?i)(?:"
+    r"\b(?:after|while|before|by)\s+"
     r"(?:removing|taking\s+off|slipping\s+out\s+of|pulling\s+off|unbuttoning|unzipping)\s+"
     r"(?:his|her|their|the)\s+"
     r"(?:clothes|clothing|suit|dress|shirt|top|blouse|pants|trousers|skirt|robe|gown|coat|jacket|uniform|outfit)\b"
     r"(?:\s+[^,.;]{0,40})?"
+    r"|"
+    # O builder também descreve a roupa já removida: "while he, having
+    # shed his suit, stands beside her". Isso virava contradição no CLIP.
+    r"\b(?:having\s+)?(?:shed|stripped\s+(?:off|out\s+of)|taken\s+off|"
+    r"removed|doffed|discarded|slipped\s+out\s+of|pulled\s+off)\s+"
+    r"(?:his|her|their|the)\s+"
+    r"(?:clothes|clothing|suit|dress|shirt|top|blouse|pants|trousers|skirt|robe|gown|coat|jacket|uniform|outfit)\b"
+    r"(?:\s+and\s+(?:his|her|their)\s+[a-z-]+)?"
+    r")"
 )
 _CLOTHING_PHRASE = re.compile(
     r"(?i)\b(?:wearing|dressed\s+in|clad\s+in|in)\s+"
@@ -388,6 +398,104 @@ def _stateful_action(sentence: str, states: list[tuple[str, str]]) -> str:
         tail = ". ".join(f"{name} is {predicate}" for name, predicate in missing)
         cleaned = f"{cleaned}. {tail}" if cleaned else tail
     return cleaned
+
+
+_POSTURE_ACTION = re.compile(
+    r"(?i)\b(?:lying|lies|lie|laid|reclin\w*|sitting|sits|sit|seated|"
+    r"kneeling|kneels|kneel|crouch\w*|squat\w*|spraw\w*|"
+    r"on\s+(?:the|a)\s+(?:bed|sofa|couch|floor|ground|chair|lap)|"
+    r"on\s+(?:her|his|their)\s+back|on\s+all\s+fours|"
+    r"in\s+(?:the|a)\s+(?:bed|sofa|couch|chair)|"
+    r"deitad\w*|sentad\w*|ajoelh\w*|na\s+cama|no\s+sof[áa]|"
+    r"no\s+ch[ãa]o|na\s+cadeira|no\s+colo)\b"
+)
+# Pedaços do predicado nu que o scrub deixa para trás. Eles não são ação e
+# não podem entrar no miolo da frase encenada.
+_STATE_SEGMENT = re.compile(
+    r"(?i)^(?:completely\s+(?:naked|nude)|fully\s+(?:naked|nude)|"
+    r"(?:bare\s+breasts|breasts\s+fully\s+exposed)\b[^,]*|"
+    r"natural\s+(?:female\s+)?anatomy|natural\s+skin|"
+    r"bare\s+(?:stomach|hips|thighs?|legs?|body)\b[^,]*|"
+    r"(?:her|his|their)\s+whole\s+body\s+(?:bare|completely\s+bare)\b[^,]*|"
+    r"bare\s+body\s+exposed|"
+    r"(?:completely|fully|totally|entirely|still|now|already))$"
+)
+_STANCE_AND_ACTION = re.compile(
+    r"(?i)^stands?\b[^,.;]*(?:,\s*[^,.;]*)?\s+as\s+"
+    r"(?:she|he|they)\s+(.+)$"
+)
+
+
+def _action_core(main_clause: str, name: str) -> str:
+    """A ação da pessoa nua, sem o nome nem os pedaços do estado nu."""
+    match = _name_pattern(name).search(main_clause)
+    if not match:
+        return ""
+    rest = main_clause[match.end():].lstrip(" ,")
+    segments = [segment.strip() for segment in rest.split(",")]
+    while segments and _STATE_SEGMENT.match(segments[0]):
+        segments.pop(0)
+    core = ", ".join(segment for segment in segments if segment).strip(" ,.;")
+    core = re.sub(r"(?i)^(?:as\s+)?(?:she|he|they)\s+", "", core)
+    core = re.sub(r"(?i)^(?:is|was)\s+", "", core)
+    core = re.sub(r"(?i)^(?:and|as)\s+", "", core)
+    return core.strip(" ,.;")
+
+
+def _staged_explicit_action(
+    sentence: str,
+    nude: list[str],
+    clothed: list[str],
+    predicate_by_name: dict[str, str],
+    pronoun_by_name: dict[str, str],
+) -> str:
+    """Encena a pessoa nua de corpo inteiro diante da pessoa vestida.
+
+    O Flux2 veste a mulher nua quando a ação é só um gesto de tronco. Em
+    3/3 seeds a forma que funcionou foi: sujeito nu + predicado nu + "stands
+    in the center of the room, ... arms raised as she <ação>", seguida de
+    "while <vestido>, <predicado>, standing before her". A postura original
+    (deitada, sentada, ajoelhada) é preservada e cai no `_stateful_action`.
+    """
+    if len(nude) != 1 or len(clothed) != 1:
+        return ""
+    nude_name, clothed_name = nude[0], clothed[0]
+    nude_predicate = predicate_by_name.get(nude_name) or ""
+    clothed_predicate = predicate_by_name.get(clothed_name) or ""
+    if not (nude_name and clothed_name and nude_predicate and clothed_predicate):
+        return ""
+    cleaned = " ".join((sentence or "").split()).strip(" ,.;")
+    if not cleaned:
+        return ""
+    # A pessoa vestida não pode ser o sujeito da oração principal.
+    main_clause = re.split(r"(?i)\bwhile\b", cleaned, maxsplit=1)[0].strip(" ,.;")
+    core = _action_core(main_clause, nude_name)
+    if not core:
+        return ""
+    if _POSTURE_ACTION.search(main_clause):
+        return ""
+    stance = _STANCE_AND_ACTION.match(core)
+    if stance:
+        core = stance.group(1).strip(" ,.;")
+    elif re.match(r"(?i)^(?:stands?|standing)\b", core):
+        # Já existe uma postura, mas sem a oração de ação que o template
+        # precisa; mexer nela só trocaria uma frase por outra pior.
+        return ""
+    if len(core.split()) < 2:
+        return ""
+    possessive = pronoun_by_name.get(nude_name, "their")
+    subject = {"his": "he", "her": "she"}.get(possessive, "they")
+    object_ = {"his": "him", "her": "her"}.get(possessive, "them")
+    words = core.split()
+    if words[0].casefold().endswith("ing") or (
+            len(words) > 1 and words[0].casefold().endswith("ly")
+            and words[1].casefold().endswith("ing")):
+        core = "is " + core
+    return (
+        f"{nude_name}, {nude_predicate}, stands in the center of the room, "
+        f"{possessive} arms raised as {subject} {core}, "
+        f"while {clothed_name}, {clothed_predicate}, standing before {object_}."
+    )
 
 
 def clip_words(text: str, limit: int) -> str:
@@ -868,7 +976,19 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             (name, predicate_by_name[name])
             for name in names if name in predicate_by_name
         ]
-        sentence = _stateful_action(cleaned, states) or cleaned
+        pronoun_by_name = {
+            name: _pronoun_for(
+                name,
+                resolved.get(name) or by_name.get(name) or _card_named(cards, name),
+            )
+            for name in names
+        }
+        # Só encena quando o quadro tem exatamente duas pessoas; com uma
+        # terceira criatura o template deixaria a ação dela de fora.
+        staged = _staged_explicit_action(
+            cleaned, nude, clothed, predicate_by_name, pronoun_by_name,
+        ) if len(names) == 2 else ""
+        sentence = staged or _stateful_action(cleaned, states) or cleaned
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
