@@ -99,3 +99,18 @@ def test_only_accepted_results_are_memoized(monkeypatch):
 
     assert first == second == "A Donzela da Noite bites the neck"
     assert len(calls) == 1
+
+
+def test_unaccented_portuguese_clause_can_be_translated(monkeypatch):
+    source = (
+        "criando uma cortina entre o mundo exterior e sua intimidade "
+        "BREAK ink sketch"
+    )
+    translated = (
+        "creating a curtain between the outside world and their intimacy "
+        "BREAK ink sketch"
+    )
+    calls = install_stub(monkeypatch, translated)
+
+    assert image_english.render_english(source, llm_cfg={}) == translated
+    assert len(calls) == 1

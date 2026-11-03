@@ -25,9 +25,7 @@ _NAME_SPAN = re.compile(
     r"|[ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*)+"
     r"|[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*[àáâãäéêíóôõúüç][\w'’.-]*"
 )
-_ASCII_WORD = re.compile(r"(?<![A-Za-z])([A-Za-z]{4,})(?![A-Za-z])")
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
-_DIACRITICS = frozenset("àáâãäéêíóôõúüç")
 _CACHE: OrderedDict[str, str] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _CACHE_SIZE = 128
@@ -53,29 +51,14 @@ def _clean_reply(reply: str) -> str:
     return text
 
 
-def _english_clauses(text: str) -> list[str]:
-    # An accented clause is translated as a unit. Other clauses keep their
-    # English words; no language-specific word list is needed.
-    return [
-        clause for clause in re.split(r"(?:\bBREAK\b|[.!?\n,;])+", text)
-        if not any(char in _DIACRITICS for char in clause.casefold())
-    ]
-
-
 def _accepted(masked: str, reply: str) -> bool:
     if not reply or reply.count("BREAK") != masked.count("BREAK"):
         return False
+    # Language cannot be inferred from accents: unaccented Portuguese must be
+    # translatable. Lexical preservation is instructed in _SYSTEM; these are
+    # the structural invariants that can be checked without a dictionary.
     placeholders = re.findall(r"\[\[\d+\]\]", masked)
-    if any(placeholder not in reply for placeholder in placeholders):
-        return False
-    for clause in _english_clauses(masked):
-        for match in _ASCII_WORD.finditer(clause):
-            word = match.group(1)
-            if not re.search(
-                    rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])",
-                    reply, re.IGNORECASE):
-                return False
-    return True
+    return all(placeholder in reply for placeholder in placeholders)
 
 
 def _cached(text: str) -> str | None:

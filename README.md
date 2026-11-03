@@ -31,6 +31,12 @@ OpenAI-compatível.
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
 
+## Funcionalidades (v0.15.1)
+
+- **Tradução visual sem falso negativo**: o rewriter não exige mais que palavras
+  portuguesas sem acento permaneçam na resposta inglesa. Nomes mascarados e
+  `BREAK` continuam validados; falhas do LLM ainda impedem o envio em português.
+
 ## Funcionalidades (v0.15.0)
 
 - **Prompts visuais sempre em inglês**: See, backdrop, retrato, local, turnaround
