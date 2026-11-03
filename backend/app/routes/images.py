@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import access, auth, db, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
+from app import access, auth, db, image_budget, image_client, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -574,6 +574,66 @@ def _image_settings_response(conn) -> dict:
         "denoising_strength": cfg["denoising_strength"],
         "timeout_seconds": cfg["timeout_seconds"],
         "sd_model_checkpoint": cfg["sd_model_checkpoint"],
+        **_public_engine_fields(cfg),
+    }
+
+
+def _public_engine_fields(cfg: dict) -> dict:
+    """Campos que o formulário edita. Omissão no PUT não passa por aqui."""
+    flux = cfg.get("comfyui_flux2") if isinstance(cfg.get("comfyui_flux2"), dict) else {}
+    zimage = cfg.get("comfyui_zimage") if isinstance(cfg.get("comfyui_zimage"), dict) else {}
+    video = cfg.get("comfyui_video") if isinstance(cfg.get("comfyui_video"), dict) else {}
+    return {
+        "comfyui_engine": cfg.get("comfyui_engine") or "qwen",
+        "flux2_steps": int(flux.get("steps", 4)),
+        "flux2_cfg": float(flux.get("cfg", 1.0)),
+        "flux2_sampler": str(flux.get("sampler") or "euler"),
+        "flux2_megapixels": float(flux.get("megapixels", 0.25)),
+        "zimage_steps": int(zimage.get("steps", 8)),
+        "zimage_cfg": float(zimage.get("cfg", 1.0)),
+        "zimage_shift": float(zimage.get("shift", 3.0)),
+        "video_engine": str(video.get("engine") or "ltxv"),
+        "video_steps": int(video.get("steps", 8)),
+        "video_cfg": float(video.get("cfg", 1.0)),
+        "video_width": int(video.get("width", 768)),
+        "video_height": int(video.get("height", 448)),
+        "video_frames": int(video.get("frames", 121)),
+        "video_fps": float(video.get("fps", 24)),
+    }
+
+
+def _fit(live: int | None, need: int) -> bool | None:
+    if live is None:
+        return None
+    return live >= need
+
+
+@router.get("/settings/image/budget")
+def get_image_budget(kind: str = Query(...), engine: str = Query(...),
+                     width: int = Query(...), height: int = Query(...),
+                     frames: int = Query(1)) -> dict:
+    """Estimativa do preset. Sempre 200. Não descarrega o narrador nem bloqueia o save."""
+    if kind not in ("image", "video"):
+        raise GameError(422, "validation_error", "kind deve ser image ou video")
+    try:
+        budget = image_budget.preset_budget(
+            kind, engine, width=width, height=height, frames=frames)
+    except ValueError as exc:
+        raise GameError(422, "validation_error", str(exc)) from exc
+    from app.routes import health as health_routes
+    memory = health_routes._memory()
+    if "vram_total_mb" in memory and "vram_used_mb" in memory:
+        vram_free = int(memory["vram_total_mb"]) - int(memory["vram_used_mb"])
+    else:
+        vram_free = None
+    ram_available = (
+        int(memory["ram_available_mb"]) if "ram_available_mb" in memory else None)
+    return {
+        **budget,
+        "vram_free_mib": vram_free,
+        "ram_available_mib": ram_available,
+        "fits_vram": _fit(vram_free, int(budget["vram_mib"])),
+        "fits_ram": _fit(ram_available, int(budget["ram_mib"])),
     }
 
 

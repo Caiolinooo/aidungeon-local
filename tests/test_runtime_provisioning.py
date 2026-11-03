@@ -105,9 +105,11 @@ def test_catalog_matches_installers_and_readme():
         "install_flux2_klein.sh",
         "install_ltxv_video.sh",
         "install_wan_video.sh",
+        "install_z_image_turbo.sh",
+        "install_h3_video.sh",
     ):
         pinned.extend(FETCH_RE.findall((DEPLOY / name).read_text(encoding="utf-8")))
-    assert len(pinned) == 8
+    assert len(pinned) == 14
     blob = json.dumps(catalog)
     for url, sha in pinned:
         assert url in blob

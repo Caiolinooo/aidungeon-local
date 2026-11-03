@@ -491,6 +491,13 @@ export const api = {
     request(`/adventures/${advId}/ui-state`, { method: 'PUT', body: { state } }),
   getImageSettings: () => request('/settings/image'),
   putImageSettings: (payload) => request('/settings/image', { method: 'PUT', body: payload }),
+  getImageBudget: (query) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value != null) params.set(key, String(value))
+    }
+    return request(`/settings/image/budget?${params.toString()}`)
+  },
   // Fetch autenticado da imagem (<img> não envia o header Bearer — ver downloadExport).
   fetchImageBlob: async (imageId) => {
     let res

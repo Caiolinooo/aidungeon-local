@@ -31,6 +31,19 @@ OpenAI-compatível.
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
 
+## Funcionalidades (v0.14.0)
+
+- **Controles do Comfy**: o formulário libera o motor, os passos, o CFG e o
+  sampler do Klein e do Z-Image, e também os knobs do vídeo. Os passos do
+  FineView continuam presos ao schedule de 8 passos.
+- **Z-Image-Turbo ao lado do narrador**: o DiT é o GGUF Q4_K_M, que cabe no
+  buraco livre da L4. O encoder fica na CPU. A identidade entra só pelo
+  prompt; esse motor não recebe as fotos de referência.
+- **MiniMax H3 com spill**: o GGUF Q4 não cabe inteiro no buraco de 7136 MiB
+  e troca o excesso com a RAM. Narrador, voz e embeddings permanecem
+  carregados. O cgroup do Comfy sobe para `MemoryMax=36G` e
+  `MemorySwapMax=8G`.
+
 ## Funcionalidades (v0.13.0)
 
 - **Livefeed durável**: `world_events` numera fatos e revisões por aventura,

@@ -275,6 +275,73 @@
           "poll_interval_s": 0.25
         },
         "source": "deploy/vm/README.md seção FineView e config/settings.json image.providers.comfyui (engine qwen)"
+      },
+      "z_image_turbo": {
+        "engine": "z_image_turbo",
+        "min_vram_mib": 6040,
+        "min_ram_mib": 5372,
+        "min_vram_note": "GGUF Q4_K_M 3992 MiB mais 2048 MiB de ativação em 1024². Cabe no buraco de 7136 MiB ao lado do narrador. O CLIP FP8 fica em CPU.",
+        "artifacts": [
+          {
+            "role": "unet",
+            "filename": "z-image-turbo-Q4_K_M.gguf",
+            "dest": "models/diffusion_models/z-image-turbo-Q4_K_M.gguf",
+            "url": "https://huggingface.co/unsloth/Z-Image-Turbo-GGUF/resolve/main/z-image-turbo-Q4_K_M.gguf",
+            "sha256": "4ab6bceb1f0b82c9e725f123848018eac662a6fc1d467c019e13e701afb7b55c",
+            "bytes": 3850130496
+          },
+          {
+            "role": "clip",
+            "filename": "qwen_3_4b_fp8_mixed.safetensors",
+            "dest": "models/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+            "sha256": "72450b19758172c5a7273cf7de729d1c17e7f434a104a00167624cba94f68f15",
+            "bytes": 5631994051
+          },
+          {
+            "role": "vae",
+            "filename": "ae.safetensors",
+            "dest": "models/vae/ae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+            "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+            "bytes": 335304388
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          },
+          {
+            "name": "ComfyUI-GGUF",
+            "git_url": "https://github.com/city96/ComfyUI-GGUF.git",
+            "git_ref": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
+            "requirements": "requirements.txt"
+          }
+        ],
+        "quality": {
+          "unet": "z-image-turbo-Q4_K_M.gguf",
+          "clip": "qwen_3_4b_fp8_mixed.safetensors",
+          "clip_type": "lumina2",
+          "clip_device": "cpu",
+          "vae": "ae.safetensors",
+          "steps": 8,
+          "cfg": 1.0,
+          "shift": 3.0,
+          "sampler": "res_multistep",
+          "scheduler": "simple"
+        },
+        "source": "deploy/vm/install_z_image_turbo.sh. Não usa o DiT BF16, NVFP4 nem INT8."
       }
     },
     "video": {
@@ -413,6 +480,83 @@
         },
         "vertical_note": "704x1280 é o quadro documentado 1280x704 invertido. O README não publica outro vertical.",
         "source": "deploy/vm/install_wan_video.sh; opt-in do README: engine=wan, clip UMT5, 20 passos, CFG 5, 1280x704"
+      },
+      "h3": {
+        "engine": "h3",
+        "min_vram_mib": 16687,
+        "min_ram_mib": 14961,
+        "min_vram_note": "GGUF Q4_0 mais o VAE de vídeo somam 13615 MiB. No quadro 768x448x56 a ativação é 3072 e o spill contra o buraco de 7136 MiB é 9551. O encoder NVFP4 fica em CPU. Não troca o pin do ComfyUI-GGUF.",
+        "artifacts": [
+          {
+            "role": "unet",
+            "filename": "MiniMax-H3-fl2va-curve-Q4_0.gguf",
+            "dest": "models/diffusion_models/MiniMax-H3-fl2va-curve-Q4_0.gguf",
+            "url": "https://huggingface.co/joeygambino/MiniMax-H3-curve-GGUF/resolve/main/fl2va/MiniMax-H3-fl2va-curve-Q4_0.gguf",
+            "sha256": "226c83f6b971077f61f4ccf4ffaaed5d7ccf914642b7c25359da1da2f13dcd1a",
+            "bytes": 11464827552
+          },
+          {
+            "role": "clip",
+            "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "dest": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            "bytes": 15687142551
+          },
+          {
+            "role": "vae",
+            "filename": "minimax_h3_video_vae_int8_convrot.safetensors",
+            "dest": "models/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+            "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+            "bytes": 2811065184
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          },
+          {
+            "name": "ComfyUI-GGUF",
+            "git_url": "https://github.com/city96/ComfyUI-GGUF.git",
+            "git_ref": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
+            "requirements": "requirements.txt"
+          },
+          {
+            "name": "ComfyUI-H3-Multishot",
+            "git_url": "https://github.com/jlucasmcrell/ComfyUI-H3-Multishot.git",
+            "git_ref": "d7d197709fc93c1afb125e3db1dfd4ac0ae28c60",
+            "tag": "v2.7.2"
+          }
+        ],
+        "config": {
+          "engine": "h3",
+          "unet": "MiniMax-H3-fl2va-curve-Q4_0.gguf",
+          "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "clip_type": "minimax",
+          "clip_device": "cpu",
+          "vae": "minimax_h3_video_vae_int8_convrot.safetensors",
+          "frames": 56,
+          "fps": 24,
+          "steps": 8,
+          "cfg": 1,
+          "width": 768,
+          "height": 448,
+          "vertical_width": 448,
+          "vertical_height": 768
+        },
+        "source": "deploy/vm/install_h3_video.sh. O GGUF Q4_0 derrama para a RAM; o narrador continua carregado."
       }
     }
   }

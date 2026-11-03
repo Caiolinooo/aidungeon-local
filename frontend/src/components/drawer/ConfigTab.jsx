@@ -5,6 +5,7 @@ import { useToast } from '../Toast.jsx'
 import VoiceCloneModal from '../VoiceCloneModal.jsx'
 import { HealthCheck } from '../settings/Controls.jsx'
 import ImageAdvancedControls from '../settings/ImageAdvancedControls.jsx'
+import ImageEngineFields, { imageEngineFrom, imageEnginePayload } from '../settings/ImageEngineFields.jsx'
 import LlmSamplingControls, { LLM_DEFAULTS } from '../settings/LlmSamplingControls.jsx'
 
 const HEALTH_STYLE = {
@@ -714,6 +715,11 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         denoising_strength: s.denoising_strength ?? 0.35,
         sd_model_checkpoint: s.sd_model_checkpoint ?? '',
         openai_api_key: '', // write-only: vazio = manter a chave atual
+        comfyui_base_url: s.comfyui_base_url ?? '',
+        comfyui_steps: s.comfyui_steps ?? 8,
+        comfyui_width: s.comfyui_width ?? 1024,
+        comfyui_height: s.comfyui_height ?? 1024,
+        ...imageEngineFrom(s),
       })
     } catch (e) {
       toast(e.message)
@@ -748,6 +754,11 @@ function ImageSettingsSection({ inputCls, labelCls }) {
         scheduler: form.scheduler,
         denoising_strength: Number(form.denoising_strength),
         sd_model_checkpoint: form.sd_model_checkpoint,
+        comfyui_base_url: form.comfyui_base_url,
+        comfyui_steps: Number(form.comfyui_steps),
+        comfyui_width: Number(form.comfyui_width),
+        comfyui_height: Number(form.comfyui_height),
+        ...imageEnginePayload(form),
       }
       if (form.openai_api_key) payload.openai_api_key = form.openai_api_key // só envia se digitado
       setLoaded(await api.putImageSettings(payload))
@@ -807,12 +818,48 @@ function ImageSettingsSection({ inputCls, labelCls }) {
             className={inputCls}
           >
             <option value="sdwebui">sdwebui (local/LAN)</option>
+            <option value="comfyui">comfyui</option>
             <option value="openai_compatible">openai_compatible</option>
           </select>
         </label>
       </div>
 
-      {form.provider === 'sdwebui' ? (
+      {form.provider === 'comfyui' ? (
+        <>
+          <label className="block">
+            <span className={labelCls}>URL base do ComfyUI</span>
+            <input
+              value={form.comfyui_base_url}
+              onChange={(e) => setForm({ ...form, comfyui_base_url: e.target.value })}
+              placeholder="http://127.0.0.1:8188"
+              className={inputCls}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className={labelCls}>Largura</span>
+              <input
+                type="number"
+                min={64}
+                value={form.comfyui_width}
+                onChange={(e) => setForm({ ...form, comfyui_width: e.target.value })}
+                className={inputCls}
+              />
+            </label>
+            <label className="block">
+              <span className={labelCls}>Altura</span>
+              <input
+                type="number"
+                min={64}
+                value={form.comfyui_height}
+                onChange={(e) => setForm({ ...form, comfyui_height: e.target.value })}
+                className={inputCls}
+              />
+            </label>
+          </div>
+          <ImageEngineFields form={form} onChange={setForm} inputCls={inputCls} labelCls={labelCls} />
+        </>
+      ) : form.provider === 'sdwebui' ? (
         <>
           <label className="block">
             <span className={labelCls}>sdwebui base URL</span>

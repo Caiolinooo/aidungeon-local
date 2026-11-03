@@ -134,3 +134,18 @@ Plano: `local://rpg-life-sim-plan.md`. Brief: `outputs/rpg-life-sim-research.md`
 
 Dependências: L1 → L2/L3 → L4/L5 → L6 → L7. Não declarar o simulador
 completo enquanto os gates do PLANO §12.1 não estiverem comprovados.
+
+## Motores ao lado do narrador (v0.14.0)
+
+O narrador, a voz e os embeddings ficam carregados. Z-Image Q4_K_M usa o
+buraco de 7136 MiB. H3 Q4 derrama o excesso para a RAM. Os instaladores de
+peso não rodam no pytest nem no deploy.
+
+| ID | Tarefa | Status |
+|---|---|---|
+| Z1 | Orçamento `image_budget` e `GET /api/settings/image/budget` | feito |
+| Z2 | Grafos Z-Image Q4_K_M e MiniMax H3 Q4, sem trocar o quant | feito |
+| Z3 | Campos do formulário; passos do FineView continuam no schedule | feito |
+| Z4 | Catálogo, instaladores e cgroup `MemoryMax=36G` / `MemorySwapMax=8G` | feito |
+| Z5 | Pytest dos motores e README v0.14.0 | feito |
+| Z6 | Merge em `main` e deploy staging → main, sem `--force` | em andamento |

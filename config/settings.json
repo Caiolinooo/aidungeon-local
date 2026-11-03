@@ -184,6 +184,18 @@
           "resolution_steps": 1,
           "max_references": 4
         },
+        "zimage": {
+          "unet": "z-image-turbo-Q4_K_M.gguf",
+          "clip": "qwen_3_4b_fp8_mixed.safetensors",
+          "clip_type": "lumina2",
+          "clip_device": "cpu",
+          "vae": "ae.safetensors",
+          "steps": 8,
+          "cfg": 1.0,
+          "shift": 3.0,
+          "sampler": "res_multistep",
+          "scheduler": "simple"
+        },
         "video": {
           "engine": "ltxv",
           "checkpoint": "ltxv-2b-0.9.6-distilled-04-25.safetensors",

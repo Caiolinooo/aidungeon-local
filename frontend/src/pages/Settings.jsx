@@ -7,6 +7,10 @@ import ReaderPreferencesModal from '../components/ReaderPreferencesModal.jsx'
 import VoiceCloneModal from '../components/VoiceCloneModal.jsx'
 import { HealthCheck, SettingField } from '../components/settings/Controls.jsx'
 import ImageAdvancedControls from '../components/settings/ImageAdvancedControls.jsx'
+import ImageEngineFields, {
+  IMAGE_ENGINE_DEFAULTS,
+  imageEnginePayload,
+} from '../components/settings/ImageEngineFields.jsx'
 import LlmSamplingControls, { LLM_DEFAULTS } from '../components/settings/LlmSamplingControls.jsx'
 import RuntimeSettings, {
   configFromRuntimeResponse,
@@ -74,6 +78,7 @@ export default function Settings() {
     comfyui_steps: 8,
     comfyui_width: 1024,
     comfyui_height: 1024,
+    ...IMAGE_ENGINE_DEFAULTS,
     negative_prompt: '',
     style_suffix: '',
     openai_base_url: 'https://api.openai.com/v1',
@@ -280,6 +285,7 @@ export default function Settings() {
           comfyui_steps: Number(imageForm.comfyui_steps),
           comfyui_width: Number(imageForm.comfyui_width),
           comfyui_height: Number(imageForm.comfyui_height),
+          ...imageEnginePayload(imageForm),
         }
         if (imageForm.openai_api_key) payload.openai_api_key = imageForm.openai_api_key
         const updated = await api.putImageSettings(payload)
@@ -785,17 +791,6 @@ export default function Settings() {
                               className={inputCls}
                             />
                           </div>
-                          <div>
-                            <label className={labelCls}>Passos fixos (FineView Turbo)</label>
-                            <input
-                              type="number"
-                              min="8"
-                              max="8"
-                              readOnly
-                              value={imageForm.comfyui_steps}
-                              className={inputCls}
-                            />
-                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -819,6 +814,13 @@ export default function Settings() {
                           </div>
                         </div>
 
+                        <ImageEngineFields
+                          form={imageForm}
+                          onChange={setImageForm}
+                          inputCls={inputCls}
+                          labelCls={labelCls}
+                        />
+
                         <div>
                           <label className={labelCls}>Sufixo de estilo</label>
                           <input
@@ -831,8 +833,7 @@ export default function Settings() {
                         </div>
 
                         <p className="text-xs text-secondary">
-                          Modelo, VAE e sampler ficam em <code>settings.json → image.providers.comfyui</code>.
-                          O prompt negativo não é usado com cfg 1.
+                          Os nomes dos arquivos continuam no settings. Este formulário não pede filename.
                         </p>
                       </div>
                     ) : (

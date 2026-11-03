@@ -62,10 +62,11 @@ OVERRIDE_KEYS = (
     "runtime.project_url",
     "runtime.registration.endpoints", "runtime.registration.hardware",
     "runtime.registration.last_seen", "runtime.registration.models",
-    # identidade de imagem/vídeo aplicada pelo runtime; sampling fica de fora
+    # identidade aplicada pelo runtime. O formulário grava steps/cfg dentro
+    # de image.comfyui_flux2, image.comfyui_zimage e image.comfyui_video.
     "image.comfyui_engine", "image.comfyui_unet", "image.comfyui_clip",
     "image.comfyui_clip_type", "image.comfyui_clip_device", "image.comfyui_vae",
-    "image.comfyui_flux2", "image.comfyui_video",
+    "image.comfyui_flux2", "image.comfyui_zimage", "image.comfyui_video",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")
@@ -78,6 +79,24 @@ _FLUX2_IDENTITY = (
     "unet", "clip", "vae", "clip_type", "clip_device", "weight_dtype",
     "max_references", "upscale_method",
 )
+_FLUX2_SAMPLING = ("steps", "cfg", "sampler", "megapixels")
+_FLUX2_MERGE = _FLUX2_IDENTITY + _FLUX2_SAMPLING
+_ZIMAGE_IDENTITY = (
+    "unet", "clip", "vae", "clip_type", "clip_device", "sampler", "scheduler",
+)
+_ZIMAGE_MERGE = _ZIMAGE_IDENTITY + ("steps", "cfg", "shift")
+_ZIMAGE_FILE_DEFAULTS = {
+    "unet": "z-image-turbo-Q4_K_M.gguf",
+    "clip": "qwen_3_4b_fp8_mixed.safetensors",
+    "clip_type": "lumina2",
+    "clip_device": "cpu",
+    "vae": "ae.safetensors",
+    "steps": 8,
+    "cfg": 1.0,
+    "shift": 3.0,
+    "sampler": "res_multistep",
+    "scheduler": "simple",
+}
 _QWEN_IDENTITY = ("unet", "clip", "vae", "clip_type", "clip_device")
 _VIDEO_FIELDS = (
     "engine", "checkpoint", "unet", "clip", "vae",
@@ -85,6 +104,38 @@ _VIDEO_FIELDS = (
     "frames", "fps", "steps", "cfg", "shift", "timeout_seconds",
     "width", "height", "vertical_width", "vertical_height",
 )
+_VIDEO_API_FIELDS = (
+    ("video_steps", "steps"),
+    ("video_cfg", "cfg"),
+    ("video_width", "width"),
+    ("video_height", "height"),
+    ("video_frames", "frames"),
+    ("video_fps", "fps"),
+)
+_WAN_ENGINE_PRESET = {
+    "engine": "wan",
+    "checkpoint": "ltxv-2b-0.9.6-distilled-04-25.safetensors",
+    "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
+    "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "vae": "wan2.2_vae.safetensors",
+    "steps": 20,
+    "cfg": 5,
+    "width": 1280,
+    "height": 704,
+    "vertical_width": 704,
+    "vertical_height": 1280,
+}
+_H3_ENGINE_PRESET = {
+    "engine": "h3",
+    "width": 768,
+    "height": 448,
+    "vertical_width": 448,
+    "vertical_height": 768,
+    "frames": 56,
+    "steps": 8,
+    "cfg": 1,
+    "fps": 24,
+}
 _QWEN_OVERRIDE_KEYS = {
     "unet": "image.comfyui_unet",
     "clip": "image.comfyui_clip",
@@ -428,7 +479,11 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "comfyui_flux2": _merge_identity(
             dict(comfyui.get("flux2") or {}),
             _get_override(conn, "image.comfyui_flux2"),
-            _FLUX2_IDENTITY),
+            _FLUX2_MERGE),
+        "comfyui_zimage": _merge_identity(
+            _zimage_file_block(comfyui),
+            _get_override(conn, "image.comfyui_zimage"),
+            _ZIMAGE_MERGE),
         # Clipe: LTXV no arquivo; Wan é video.engine=wan. Não entra no
         # ImageSettings público e não substitui provider/unet da imagem.
         # O override aplica o preset completo do engine de vídeo (ex.: Wan
@@ -485,7 +540,94 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         changed.add("seed")
     if _apply_key(conn, "image.openai_api_key", update.get("openai_api_key")):
         changed.add("openai_api_key")
+    if update.get("comfyui_engine"):
+        _set_override(
+            conn, "image.comfyui_engine",
+            str(update["comfyui_engine"]).strip().lower())
+        changed.add("comfyui_engine")
+    if _apply_sampling_block(conn, "image.comfyui_flux2", update, (
+            ("flux2_steps", "steps"), ("flux2_cfg", "cfg"),
+            ("flux2_sampler", "sampler"), ("flux2_megapixels", "megapixels"))):
+        changed.update(key for key in (
+            "flux2_steps", "flux2_cfg", "flux2_sampler", "flux2_megapixels")
+            if key in update and update[key] is not None)
+    if _apply_sampling_block(conn, "image.comfyui_zimage", update, (
+            ("zimage_steps", "steps"), ("zimage_cfg", "cfg"),
+            ("zimage_shift", "shift"))):
+        changed.update(key for key in ("zimage_steps", "zimage_cfg", "zimage_shift")
+                       if key in update and update[key] is not None)
+    if _apply_video_choice(conn, update):
+        changed.update(key for key in (
+            "video_engine", "video_steps", "video_cfg", "video_width",
+            "video_height", "video_frames", "video_fps")
+            if key in update and update[key] is not None)
     return changed
+
+
+def _apply_sampling_block(conn: sqlite3.Connection, key: str, update: dict,
+                          mapping: tuple[tuple[str, str], ...]) -> bool:
+    """Grava steps/cfg no override do bloco sem apagar a identidade já salva."""
+    if not any(src in update and update[src] is not None for src, _dest in mapping):
+        return False
+    current = _get_override(conn, key)
+    merged = dict(current) if isinstance(current, dict) else {}
+    for src, dest in mapping:
+        if src in update and update[src] is not None:
+            merged[dest] = update[src]
+    _set_override(conn, key, merged)
+    return True
+
+
+def _file_video_block() -> dict:
+    comfy = (load_file_settings().get("image", {}).get("providers", {})
+             .get("comfyui", {}))
+    raw = comfy.get("video") if isinstance(comfy, dict) else None
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _explicit_video_fields(update: dict) -> dict:
+    picked: dict = {}
+    for src, dest in _VIDEO_API_FIELDS:
+        if src in update and update[src] is not None:
+            picked[dest] = update[src]
+    return picked
+
+
+def _apply_video_choice(conn: sqlite3.Connection, update: dict) -> bool:
+    """Troca o engine de vídeo e preenche o preset só nos campos omitidos.
+
+    Leitura não regrava. Engine que já é `h3` não recebe de novo o quadro 56.
+    """
+    names = ("video_engine",) + tuple(src for src, _dest in _VIDEO_API_FIELDS)
+    if not any(key in update and update[key] is not None for key in names):
+        return False
+    current = dict(effective_image_settings(conn)["comfyui_video"])
+    explicit = _explicit_video_fields(update)
+    current_engine = str(current.get("engine") or "ltxv").strip().lower() or "ltxv"
+    requested = str(update.get("video_engine") or "").strip().lower()
+    if requested and requested != current_engine:
+        if requested == "wan":
+            base = dict(current)
+            base.update(_WAN_ENGINE_PRESET)
+        elif requested == "h3":
+            base = dict(current)
+            for key, value in _H3_ENGINE_PRESET.items():
+                if key not in explicit:
+                    base[key] = value
+        elif requested == "ltxv":
+            base = _file_video_block()
+            base["engine"] = "ltxv"
+        else:
+            base = dict(current)
+        base.update(explicit)
+        base["engine"] = requested
+    else:
+        base = current
+        base.update(explicit)
+        if requested:
+            base["engine"] = requested
+    _set_override(conn, "image.comfyui_video", _identity_from(base, _VIDEO_FIELDS))
+    return True
 
 
 # --------------------------------------------------------- config de voz (v4)
@@ -587,11 +729,19 @@ def _effective_engine(override: Any, file_value: Any) -> str:
     return str(raw or "qwen").strip().lower() or "qwen"
 
 
-def _merge_identity(base: dict, overlay: Any, allowed: tuple[str, ...]) -> dict:
-    """Completa o bloco do arquivo com a identidade gravada.
+def _zimage_file_block(comfyui: dict) -> dict:
+    """Defaults do Z-Image mais o bloco do arquivo. O engine ativo não muda."""
+    base = dict(_ZIMAGE_FILE_DEFAULTS)
+    raw = comfyui.get("zimage") if isinstance(comfyui, dict) else None
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key in _ZIMAGE_MERGE and value is not None:
+                base[key] = value
+    return base
 
-    steps, cfg, sampler, width, height, frames e fps ficam no `base`.
-    """
+
+def _merge_identity(base: dict, overlay: Any, allowed: tuple[str, ...]) -> dict:
+    """Completa o bloco do arquivo com as chaves permitidas do override."""
     merged = dict(base)
     if not isinstance(overlay, dict):
         return merged
@@ -828,15 +978,27 @@ def _apply_selected_models(conn: sqlite3.Connection, config: dict, catalog: dict
     image_src = _first_dict(image_entry, ("flux2", "quality"))
     if engine == "qwen":
         db.delete_setting(conn, "image.comfyui_flux2")
+        db.delete_setting(conn, "image.comfyui_zimage")
         identity = _identity_from(image_src, _QWEN_IDENTITY)
         for field, key in _QWEN_OVERRIDE_KEYS.items():
             if field in identity:
                 _set_override(conn, key, identity[field])
             else:
                 db.delete_setting(conn, key)
+    elif engine == "z_image_turbo":
+        for key in _QWEN_OVERRIDE_KEYS.values():
+            db.delete_setting(conn, key)
+        db.delete_setting(conn, "image.comfyui_flux2")
+        z_src = _first_dict(image_entry, ("zimage", "quality"))
+        overlay = _identity_from(z_src, _ZIMAGE_IDENTITY)
+        if overlay:
+            _set_override(conn, "image.comfyui_zimage", overlay)
+        else:
+            db.delete_setting(conn, "image.comfyui_zimage")
     else:
         for key in _QWEN_OVERRIDE_KEYS.values():
             db.delete_setting(conn, key)
+        db.delete_setting(conn, "image.comfyui_zimage")
         overlay = _identity_from(image_src, _FLUX2_IDENTITY)
         if overlay:
             _set_override(conn, "image.comfyui_flux2", overlay)

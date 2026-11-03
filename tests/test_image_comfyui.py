@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from app import db, image_client, jobs
+from app import db, image_budget, image_client, jobs
 
 
 def _cfg(tmp_path, **extra):
@@ -599,6 +599,127 @@ def test_comfy_progress_error_aborts_before_the_next_poll(tmp_path):
             transport=_polling_transport(capture, ready_after=1),
             progress=progress)
     assert capture["polls"] == 0
+
+
+def test_zimage_graph_uses_the_gguf_and_ignores_references(tmp_path):
+    capture: dict = {}
+    image_client.generate_image(
+        _cfg(
+            tmp_path,
+            comfyui_engine="z_image_turbo",
+            comfyui_zimage={
+                "unet": "z-image-turbo-Q4_K_M.gguf",
+                "clip": "qwen_3_4b_fp8_mixed.safetensors",
+                "clip_type": "lumina2",
+                "clip_device": "cpu",
+                "vae": "ae.safetensors",
+                "steps": 8,
+                "cfg": 1,
+                "shift": 3,
+                "sampler": "res_multistep",
+                "scheduler": "simple",
+            },
+        ),
+        "the same knight",
+        adventure_id="adv-1",
+        image_id="z-1",
+        init_image=b"anchor-png",
+        reference_images=[b"ref-a", b"ref-b"],
+        transport=_transport(capture),
+    )
+    nodes = _nodes(capture["graph"])
+    assert nodes["UnetLoaderGGUF"]["inputs"]["unet_name"] == (
+        "z-image-turbo-Q4_K_M.gguf")
+    assert nodes["CLIPLoader"]["inputs"]["device"] == "cpu"
+    assert nodes["CLIPLoader"]["inputs"]["type"] == "lumina2"
+    assert "ReferenceLatent" not in nodes
+    assert "TextEncodeZImageOmni" not in nodes
+    assert capture["uploads"] == []
+    assert image_budget.preset_budget(
+        "image", "z_image_turbo", width=1024, height=1024)["spill_mib"] == 0
+
+
+def _motion_transport(capture: dict, *, error: str | None = None) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/prompt":
+            capture["graph"] = json.loads(request.content)["prompt"]
+            return httpx.Response(200, json={"prompt_id": "pid-1", "node_errors": {}})
+        if path == "/history/pid-1":
+            if error:
+                return httpx.Response(200, json={"pid-1": {
+                    "status": {
+                        "status_str": "error",
+                        "messages": [["execution_error", {"exception_message": error}]],
+                    },
+                    "outputs": {},
+                }})
+            return httpx.Response(200, json={"pid-1": {
+                "status": {"status_str": "success", "completed": True},
+                "outputs": {"13": {"videos": [{
+                    "filename": "aidungeon_0001.mp4",
+                    "subfolder": "",
+                    "type": "output",
+                }]}},
+            }})
+        if path == "/view":
+            return httpx.Response(200, content=_MP4)
+        if path == "/upload/image":
+            return httpx.Response(200, json={
+                "name": "source.png", "subfolder": "", "type": "input"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def test_h3_graph_uses_the_reduced_gguf_and_spills(tmp_path):
+    capture: dict = {}
+    result = image_client.generate_clip(
+        _cfg(tmp_path, comfyui_video={
+            "engine": "h3",
+            "frames": 56,
+            "steps": 8,
+            "cfg": 1,
+            "fps": 24,
+            "width": 768,
+            "height": 448,
+        }),
+        "the knight turns",
+        adventure_id="adv-1",
+        image_id="h3-1",
+        source_png=_png(64, 32),
+        transport=_motion_transport(capture),
+    )
+    assert result["media_type"] == "video/mp4"
+    nodes = _nodes(capture["graph"])
+    assert nodes["UnetLoaderGGUF"]["inputs"]["unet_name"] == (
+        "MiniMax-H3-fl2va-curve-Q4_0.gguf")
+    assert nodes["CLIPLoader"]["inputs"]["device"] == "cpu"
+    latent = nodes["MiniMaxH3ImageToVideo"]["inputs"]
+    assert latent["length"] == 56
+    assert "last_frame" not in latent
+    dumped = json.dumps(capture["graph"])
+    assert "minimax_h3_audio" not in dumped
+    assert "VAEDecodeAudio" not in dumped
+    assert "minimax_h3_fl2v_turbo" not in dumped
+    assert image_budget.preset_budget(
+        "video", "h3", width=768, height=448, frames=56)["spill_mib"] == 9551
+
+
+def test_h3_gguf_rejection_names_the_required_pack(tmp_path):
+    with pytest.raises(image_client.ImageError) as caught:
+        image_client.generate_clip(
+            _cfg(tmp_path, comfyui_video={"engine": "h3", "frames": 56}),
+            "the knight turns",
+            adventure_id="adv-1",
+            image_id="h3-bad",
+            source_png=_png(64, 32),
+            transport=_motion_transport(
+                {}, error="Unexpected architecture type 'not-minimax'"),
+        )
+    assert caught.value.message == (
+        "config_error: h3 gguf was rejected; "
+        "ComfyUI-H3-Multishot v2.7.2 is required")
 
 
 def test_unknown_image_engine_fails(tmp_path):

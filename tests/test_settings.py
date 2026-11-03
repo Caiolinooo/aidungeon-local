@@ -350,3 +350,72 @@ def test_comfyui_steps_must_match_sigmas(client):
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "validation_error"
     assert client.get("/api/settings/image").json()["comfyui_steps"] == 8
+
+
+def test_engine_sampling_fields_roundtrip_and_keep_fineview_locked(client):
+    updated = client.put("/api/settings/image", json={
+        "comfyui_engine": "z_image_turbo",
+        "zimage_steps": 8,
+        "flux2_steps": 4,
+    })
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["comfyui_engine"] == "z_image_turbo"
+    assert body["zimage_steps"] == 8
+    assert body["flux2_steps"] == 4
+    assert body["comfyui_steps"] == 8
+
+    rejected = client.put("/api/settings/image", json={"comfyui_steps": 12})
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "validation_error"
+    assert client.get("/api/settings/image").json()["comfyui_steps"] == 8
+
+    megapixels = client.put("/api/settings/image", json={"flux2_megapixels": 0.5})
+    assert megapixels.status_code == 422
+    assert megapixels.json()["error"]["code"] == "validation_error"
+
+
+def test_video_engine_presets_fill_omitted_fields_only(client):
+    h3 = client.put("/api/settings/image", json={"video_engine": "h3"})
+    assert h3.status_code == 200, h3.text
+    body = h3.json()
+    assert body["video_engine"] == "h3"
+    assert body["video_width"] == 768
+    assert body["video_height"] == 448
+    assert body["video_frames"] == 56
+    assert body["video_steps"] == 8
+    assert body["video_cfg"] == 1
+    assert body["video_fps"] == 24
+    with db.session() as conn:
+        video = settings_store.effective_image_settings(conn)["comfyui_video"]
+    assert (video["vertical_width"], video["vertical_height"]) == (448, 768)
+    assert "MiniMax" not in json.dumps(video)
+
+    tuned = client.put("/api/settings/image", json={"video_frames": 90})
+    assert tuned.status_code == 200, tuned.text
+    assert tuned.json()["video_engine"] == "h3"
+    assert tuned.json()["video_frames"] == 90
+    assert client.get("/api/settings/image").json()["video_frames"] == 90
+
+    wan = client.put("/api/settings/image", json={"video_engine": "wan"})
+    assert wan.status_code == 200, wan.text
+    wan_body = wan.json()
+    assert wan_body["video_steps"] == 20
+    assert wan_body["video_cfg"] == 5
+    assert (wan_body["video_width"], wan_body["video_height"]) == (1280, 704)
+    assert wan_body["video_frames"] == 90
+    with db.session() as conn:
+        wan_video = settings_store.effective_image_settings(conn)["comfyui_video"]
+    assert wan_video["clip"] == "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    assert wan_video["checkpoint"] == "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+
+    ltxv = client.put("/api/settings/image", json={"video_engine": "ltxv"})
+    assert ltxv.status_code == 200, ltxv.text
+    restored = ltxv.json()
+    assert restored["video_engine"] == "ltxv"
+    assert restored["video_frames"] == 121
+    assert restored["video_width"] == 768
+    assert restored["video_steps"] == 8
+    with db.session() as conn:
+        ltx_video = settings_store.effective_image_settings(conn)["comfyui_video"]
+    assert ltx_video["clip"] == "t5xxl_fp8_e4m3fn_scaled.safetensors"

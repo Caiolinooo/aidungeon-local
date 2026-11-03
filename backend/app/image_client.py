@@ -17,8 +17,10 @@ Providers (settings.image.provider, config efetiva de settings_store):
   qwen_3_4b type=flux2, flux2-vae): EmptyFlux2LatentImage e Flux2Scheduler
   no mesmo canvas já múltiplo de 16 (860x820 vira 848x816; Qwen não alinha),
   4 passos, CFG 1, euler. Referências passam por LoadImage,
-  ImageScaleToTotalPixels, VAEEncode e ReferenceLatent (teto 4). Não altera
-  `comfyui_unet` nem os grafos LTXV/Wan.
+  ImageScaleToTotalPixels, VAEEncode e ReferenceLatent (teto 4).
+  `engine=z_image_turbo` é opt-in: UnetLoaderGGUF Q4_K_M, CLIP lumina2 na
+  CPU, EmptySD3LatentImage. Não liga referência. Não altera `comfyui_unet`
+  nem os grafos LTXV/Wan.
 
 O PNG decodificado é salvo em {storage_dir}/{adventure_id}/{image_id}.png
 (storage_dir relativo à raiz do repo) e o caminho RELATIVO é devolvido para
@@ -27,8 +29,9 @@ ser gravado em images.file_path.
 `generate_clip` é image-to-video no mesmo ComfyUI. O default é `ltxv`
 (CheckpointLoaderSimple + CLIPLoader `ltxv` + LTXVImgToVideo + SamplerCustom).
 `engine=wan` é opt-in e usa o TI2V 5B (template video_wan2_2_5B_ti2v; GGUF
-usa UnetLoaderGGUF). Lê `comfyui_video` e não apaga `unet`/`vae` do Wan nem
-altera `provider` ou `comfyui_unet`.
+usa UnetLoaderGGUF). `engine=h3` é opt-in: UnetLoaderGGUF Q4_0, CLIP minimax
+na CPU, MiniMaxH3ImageToVideo. Não carrega o VAE de áudio. Lê `comfyui_video`
+e não apaga `unet`/`vae` do Wan nem altera `provider` ou `comfyui_unet`.
 Não chama narrador nem voz. O arquivo gravado é um MP4 (ftyp), nunca um PNG
 renomeado.
 
@@ -51,7 +54,7 @@ from typing import Any, Callable
 
 import httpx
 
-from app import db, face_regions
+from app import db, face_regions, image_budget
 
 log = logging.getLogger("aidungeon.image")
 
@@ -444,9 +447,9 @@ _FLUX2_DEFAULTS = {
 
 
 def _comfy_image_engine(cfg: dict) -> str:
-    """`engine` omisso ou vazio é `qwen`. Outro valor só `flux2_klein` segue."""
+    """`engine` omisso ou vazio é `qwen`. `flux2_klein` e `z_image_turbo` são opt-in."""
     engine = str(cfg.get("comfyui_engine") or "qwen").strip().lower() or "qwen"
-    if engine not in ("qwen", "flux2_klein"):
+    if engine not in ("qwen", "flux2_klein", "z_image_turbo"):
         raise ImageError(f"config_error: image.engine desconhecido: {engine!r}")
     return engine
 
@@ -655,6 +658,97 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
     return graph
 
 
+_ZIMAGE_DEFAULTS = {
+    "unet": "z-image-turbo-Q4_K_M.gguf",
+    "clip": "qwen_3_4b_fp8_mixed.safetensors",
+    "clip_type": "lumina2",
+    "clip_device": "cpu",
+    "vae": "ae.safetensors",
+    "steps": 8,
+    "cfg": 1.0,
+    "shift": 3.0,
+    "sampler": "res_multistep",
+    "scheduler": "simple",
+}
+
+
+def zimage_settings(cfg: dict) -> dict:
+    """Bloco `image.providers.comfyui.zimage`. Não lê o UNET do FineView."""
+    raw = cfg.get("comfyui_zimage")
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = dict(_ZIMAGE_DEFAULTS)
+    for key, default in _ZIMAGE_DEFAULTS.items():
+        if key not in raw or raw[key] is None:
+            continue
+        if isinstance(default, float):
+            merged[key] = float(raw[key])
+        elif isinstance(default, int):
+            merged[key] = int(raw[key])
+        else:
+            text = str(raw[key]).strip()
+            if not text and key not in ("unet", "clip", "vae"):
+                continue
+            merged[key] = text
+    return merged
+
+
+def _zimage_side(value: int) -> int:
+    """Múltiplo de 16 para baixo, com piso 64."""
+    return max(64, (int(value) // 16) * 16)
+
+
+def _zimage_canvas(width: int, height: int) -> tuple[int, int]:
+    return _zimage_side(width), _zimage_side(height)
+
+
+def _comfy_zimage_graph(cfg: dict, prompt: str, *, width: int, height: int) -> dict:
+    """Z-Image-Turbo Q4_K_M. O sampler segue o template INT8; o DiT é o GGUF.
+
+    O CLIP fica na CPU. CFG <= 1 zera o negativo. Referência não entra:
+    TextEncodeZImageOmni fica de fora.
+    """
+    width, height = _zimage_canvas(width, height)
+    zimage = zimage_settings(cfg)
+    seed_value = cfg.get("seed")
+    noise_seed = (random.randint(0, 2**31 - 1)
+                  if seed_value is None or int(seed_value) < 0 else int(seed_value))
+    if float(zimage["cfg"]) <= 1:
+        negative = {"class_type": "ConditioningZeroOut", "inputs": {
+            "conditioning": ["4", 0]}}
+    else:
+        negative = {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0],
+            "text": str(cfg.get("negative_prompt") or "")}}
+    return {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {
+            "unet_name": zimage["unet"]}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": zimage["clip"],
+            "type": zimage["clip_type"] or "lumina2",
+            "device": zimage["clip_device"] or "cpu"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": zimage["vae"]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["2", 0], "text": prompt}},
+        "5": negative,
+        "6": {"class_type": "EmptySD3LatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1}},
+        "7": {"class_type": "ModelSamplingAuraFlow", "inputs": {
+            "model": ["1", 0], "shift": float(zimage["shift"])}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "model": ["7", 0], "positive": ["4", 0], "negative": ["5", 0],
+            "latent_image": ["6", 0], "seed": noise_seed,
+            "steps": int(zimage["steps"]), "cfg": float(zimage["cfg"]),
+            "sampler_name": zimage["sampler"] or "res_multistep",
+            "scheduler": zimage["scheduler"] or "simple", "denoise": 1}},
+        "9": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "SaveImage", "inputs": {
+            "images": ["9", 0], "filename_prefix": "aidungeon"}},
+    }
+
+
 def _comfy_upload(client: httpx.Client, base: str, content: bytes,
                   filename: str) -> str:
     """Sobe o PNG de referência para /upload/image; devolve o nome no input."""
@@ -802,6 +896,16 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
                       ) -> tuple[bytes, int, int]:
     width, height = _flux2_canvas(width, height, cfg)
     engine = _comfy_image_engine(cfg)
+    if engine == "z_image_turbo":
+        width, height = _zimage_canvas(width, height)
+        zimage = zimage_settings(cfg)
+        for label in ("unet", "clip", "vae"):
+            if not str(zimage.get(label) or "").strip():
+                raise ImageError(
+                    f"config_error: image.providers.comfyui.zimage.{label} vazio")
+        graph = _comfy_zimage_graph(cfg, prompt, width=width, height=height)
+        content = _comfy_run(cfg, client, graph, progress=progress)
+        return content, width, height
     if engine == "flux2_klein":
         _validate_flux2_canvas(width, height)
         flux = flux2_settings(cfg)
@@ -873,38 +977,57 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
     elif provider == "comfyui":
-        model = cfg.get("comfyui_unet") or ""
-        size = list(_flux2_canvas(width, height, cfg))
-        extra = {
-            "steps": cfg.get("comfyui_steps"),
-            "sampler": cfg.get("comfyui_sampler") or "euler",
-            "cfg": float(cfg.get("comfyui_cfg") or 1.0),
-            "clip": cfg.get("comfyui_clip") or "",
-            "clip_type": cfg.get("comfyui_clip_type") or "qwen_image",
-            "clip_device": cfg.get("comfyui_clip_device") or "default",
-            "vae": cfg.get("comfyui_vae") or "",
-            "shift": float(cfg.get("comfyui_shift") or 1.31),
-            "sigmas": list(cfg.get("comfyui_sigmas") or _COMFY_SIGMAS),
-        }
+        image_engine = _comfy_image_engine(cfg)
+        if image_engine == "z_image_turbo":
+            zimage = zimage_settings(cfg)
+            model = zimage["unet"]
+            size = list(_zimage_canvas(*_flux2_canvas(width, height, cfg)))
+            extra = {
+                "engine": "z_image_turbo",
+                "steps": int(zimage["steps"]),
+                "cfg": float(zimage["cfg"]),
+                "shift": float(zimage["shift"]),
+                "sampler": zimage["sampler"],
+                "scheduler": zimage["scheduler"],
+                "unet": zimage["unet"],
+                "clip": zimage["clip"],
+                "clip_type": zimage["clip_type"],
+                "clip_device": zimage["clip_device"],
+                "vae": zimage["vae"],
+            }
+        else:
+            model = cfg.get("comfyui_unet") or ""
+            size = list(_flux2_canvas(width, height, cfg))
+            extra = {
+                "steps": cfg.get("comfyui_steps"),
+                "sampler": cfg.get("comfyui_sampler") or "euler",
+                "cfg": float(cfg.get("comfyui_cfg") or 1.0),
+                "clip": cfg.get("comfyui_clip") or "",
+                "clip_type": cfg.get("comfyui_clip_type") or "qwen_image",
+                "clip_device": cfg.get("comfyui_clip_device") or "default",
+                "vae": cfg.get("comfyui_vae") or "",
+                "shift": float(cfg.get("comfyui_shift") or 1.31),
+                "sigmas": list(cfg.get("comfyui_sigmas") or _COMFY_SIGMAS),
+            }
+            if image_engine == "flux2_klein":
+                flux = flux2_settings(cfg)
+                extra["engine"] = "flux2_klein"
+                extra["flux2"] = {
+                    "unet": flux["unet"],
+                    "clip": flux["clip"],
+                    "clip_type": flux["clip_type"],
+                    "clip_device": flux["clip_device"],
+                    "vae": flux["vae"],
+                    "weight_dtype": flux["weight_dtype"],
+                    "steps": int(flux["steps"]),
+                    "cfg": float(flux["cfg"]),
+                    "sampler": flux["sampler"],
+                    "megapixels": float(flux["megapixels"]),
+                    "upscale_method": flux["upscale_method"],
+                    "resolution_steps": int(flux["resolution_steps"]),
+                }
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
-        if _comfy_image_engine(cfg) == "flux2_klein":
-            flux = flux2_settings(cfg)
-            extra["engine"] = "flux2_klein"
-            extra["flux2"] = {
-                "unet": flux["unet"],
-                "clip": flux["clip"],
-                "clip_type": flux["clip_type"],
-                "clip_device": flux["clip_device"],
-                "vae": flux["vae"],
-                "weight_dtype": flux["weight_dtype"],
-                "steps": int(flux["steps"]),
-                "cfg": float(flux["cfg"]),
-                "sampler": flux["sampler"],
-                "megapixels": float(flux["megapixels"]),
-                "upscale_method": flux["upscale_method"],
-                "resolution_steps": int(flux["resolution_steps"]),
-            }
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -919,8 +1042,11 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         "extra": extra,
         "init": hashlib.sha256(init_image).hexdigest() if init_image is not None else "",
     }
-    klein = provider == "comfyui" and _comfy_image_engine(cfg) == "flux2_klein"
-    if klein:
+    image_engine = (
+        _comfy_image_engine(cfg) if provider == "comfyui" else "")
+    if image_engine == "z_image_turbo":
+        payload["init"] = ""
+    elif image_engine == "flux2_klein":
         used = _flux2_used_references(
             init_image, reference_images,
             int(flux2_settings(cfg)["max_references"]))
@@ -1018,7 +1144,24 @@ def video_settings(cfg: dict) -> dict:
 
 
 def _video_engine(video: dict) -> str:
-    return str(video.get("engine") or "ltxv").strip().lower() or "ltxv"
+    """`ltxv` é o default. `wan` e `h3` são opt-in."""
+    engine = str(video.get("engine") or "ltxv").strip().lower() or "ltxv"
+    if engine not in ("ltxv", "wan", "h3"):
+        raise ImageError(f"config_error: video.engine desconhecido: {engine!r}")
+    return engine
+
+
+def _h3_gguf_rejected(message: str) -> bool:
+    """Comfy recusou o GGUF ou o node nativo não aceita esse DiT."""
+    text = str(message or "").lower()
+    if "unexpected architecture type" in text:
+        return True
+    return "minimaxh3imagetovideo" in text and "cannot" in text
+
+
+_H3_GGUF_ERROR = (
+    "config_error: h3 gguf was rejected; ComfyUI-H3-Multishot v2.7.2 is required"
+)
 
 
 def _png_size(content: bytes) -> tuple[int, int]:
@@ -1155,6 +1298,58 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
         "12": {"class_type": "SaveVideo", "inputs": {
             "video": ["11", 0], "filename_prefix": "video/aidungeon",
             "format": "mp4", "codec": "auto"}},
+    }
+
+
+_H3_UNET = "MiniMax-H3-fl2va-curve-Q4_0.gguf"
+_H3_CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+_H3_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
+
+
+def _h3_i2v_graph(video: dict, prompt: str, image_name: str, *,
+                  width: int, height: int, seed: int) -> dict:
+    """Cadeia i2v oficial do H3 com o DiT trocado pelo GGUF Q4_0.
+
+    O CLIP fica na CPU. Não há VAE de áudio, LoRA, ref2va nem ControlNet.
+    BasicGuider do Comfy atual não tem soquete de CFG; CFG 1 é o default e
+    usa esse node. CFG acima de 1 passa pelo CFGGuider, que aplica o valor.
+    """
+    length = image_budget.h3_length(int(video["frames"]))
+    cfg = float(video["cfg"])
+    if cfg > 1:
+        guider = {"class_type": "CFGGuider", "inputs": {
+            "model": ["1", 0], "positive": ["5", 0], "negative": ["5", 0],
+            "cfg": cfg}}
+    else:
+        guider = {"class_type": "BasicGuider", "inputs": {
+            "model": ["1", 0], "conditioning": ["5", 0]}}
+    return {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": _H3_UNET}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": _H3_CLIP, "type": "minimax", "device": "cpu"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": _H3_VAE}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "5": {"class_type": "MiniMaxH3ImageToVideo", "inputs": {
+            "clip": ["2", 0], "vae": ["3", 0], "prompt": prompt,
+            "width": int(width), "height": int(height), "length": length,
+            "first_frame": ["4", 0]}},
+        "6": {"class_type": "KSamplerSelect", "inputs": {
+            "sampler_name": "res_multistep"}},
+        "7": {"class_type": "BasicScheduler", "inputs": {
+            "model": ["1", 0], "scheduler": "simple",
+            "steps": int(video["steps"]), "denoise": 1}},
+        "8": {"class_type": "RandomNoise", "inputs": {"noise_seed": int(seed)}},
+        "9": guider,
+        "10": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["8", 0], "guider": ["9", 0], "sampler": ["6", 0],
+            "sigmas": ["7", 0], "latent_image": ["5", 1]}},
+        "11": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["10", 0], "vae": ["3", 0]}},
+        "12": {"class_type": "CreateVideo", "inputs": {
+            "images": ["11", 0], "fps": float(video["fps"])}},
+        "13": {"class_type": "SaveVideo", "inputs": {
+            "video": ["12", 0], "filename_prefix": "video/aidungeon",
+            "format": "mp4", "codec": "h264"}},
     }
 
 
@@ -1326,6 +1521,8 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         if frames < 9 or (frames - 1) % 8 != 0:
             raise ImageError(
                 "config_error: video.frames do LTXV deve ser 8n+1 (mínimo 9)")
+    elif engine == "h3":
+        pass
     else:
         raise ImageError(f"config_error: video.engine desconhecido: {engine!r}")
     base = _comfy_base(cfg)
@@ -1344,17 +1541,24 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 client, base, source_png,
                 f"aidungeon-clip-{hashlib.sha256(source_png).hexdigest()[:16]}.png",
             )
+            seed = _clip_seed(cfg)
             if engine == "ltxv":
                 graph = _ltxv_i2v_graph(
-                    video, prompt, name, width=frame_w, height=frame_h,
-                    seed=_clip_seed(cfg))
+                    video, prompt, name, width=frame_w, height=frame_h, seed=seed)
+            elif engine == "h3":
+                graph = _h3_i2v_graph(
+                    video, prompt, name, width=frame_w, height=frame_h, seed=seed)
             else:
                 graph = _wan_ti2v_graph(
-                    video, prompt, name, width=frame_w, height=frame_h,
-                    seed=_clip_seed(cfg))
-            content = _comfy_run(
-                cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video,
-                progress=progress)
+                    video, prompt, name, width=frame_w, height=frame_h, seed=seed)
+            try:
+                content = _comfy_run(
+                    cfg, client, graph, timeout=timeout, fetch=_comfy_fetch_video,
+                    progress=progress)
+            except ImageError as exc:
+                if engine == "h3" and _h3_gguf_rejected(exc.message):
+                    raise ImageError(_H3_GGUF_ERROR) from exc
+                raise
         file_path = _save_mp4(cfg, adventure_id, image_id, content)
     finally:
         if release_for_forge:
@@ -1365,7 +1569,9 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         "height": frame_h,
         "provider": "comfyui",
         "media_type": "video/mp4",
-        "duration_ms": int(round(frames * 1000 / fps)),
+        "duration_ms": int(round(
+            (image_budget.h3_length(frames) if engine == "h3" else frames)
+            * 1000 / fps)),
     }
 
 
@@ -1490,6 +1696,8 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                           {"Accept": "application/json"}, "system_stats")
                 if engine == "flux2_klein":
                     result["unet"] = flux2_settings(cfg)["unet"] or None
+                elif engine == "z_image_turbo":
+                    result["unet"] = zimage_settings(cfg)["unet"] or None
                 else:
                     result["unet"] = cfg.get("comfyui_unet") or None
                 result["engine"] = engine

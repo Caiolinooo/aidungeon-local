@@ -319,6 +319,31 @@ class ImageSettingsUpdate(BaseModel):
     denoising_strength: float | None = Field(default=None, ge=0.0, le=1.0)
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
     sd_model_checkpoint: str | None = Field(default=None, max_length=300)
+    comfyui_engine: Literal["qwen", "flux2_klein", "z_image_turbo"] | None = None
+    flux2_steps: int | None = Field(default=None, ge=1, le=8)
+    flux2_cfg: float | None = Field(default=None, ge=1.0, le=2.0)
+    flux2_sampler: Literal["euler", "res_multistep"] | None = None
+    flux2_megapixels: float | None = None
+    zimage_steps: int | None = Field(default=None, ge=1, le=20)
+    zimage_cfg: float | None = Field(default=None, ge=0.0, le=20.0)
+    zimage_shift: float | None = Field(default=None, ge=0.01, le=100.0)
+    video_engine: Literal["ltxv", "wan", "h3"] | None = None
+    video_steps: int | None = Field(default=None, ge=1, le=40)
+    video_cfg: float | None = Field(default=None, ge=0.0, le=20.0)
+    video_width: int | None = Field(default=None, ge=64, le=1920)
+    video_height: int | None = Field(default=None, ge=64, le=1920)
+    video_frames: int | None = Field(default=None, ge=5, le=241)
+    video_fps: float | None = Field(default=None, ge=8.0, le=30.0)
+
+    @field_validator("flux2_megapixels")
+    @classmethod
+    def _flux2_megapixels(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        number = float(value)
+        if number not in (0.25, 1.0):
+            raise ValueError("flux2_megapixels deve ser 0.25 ou 1")
+        return number
 
 
 # ------------------------------------------------------------------ v4: voice

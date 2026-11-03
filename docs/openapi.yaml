@@ -2682,6 +2682,49 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/settings/image/budget:
+    get:
+      tags: [settings]
+      summary: Estimar VRAM e RAM de um preset de imagem ou vídeo
+      operationId: getImageBudget
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [image, video]
+        - name: engine
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: width
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: height
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: frames
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Estimativa. Sempre 200 para uma consulta válida, mesmo se não couber.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageBudget'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   # ------------------------------------------------------------------- voice
   /api/voices:
     get:
@@ -6469,6 +6512,92 @@ components:
           type: integer
         sd_model_checkpoint:
           type: string
+        comfyui_engine:
+          type: string
+          enum: [qwen, flux2_klein, z_image_turbo]
+        flux2_steps:
+          type: integer
+          minimum: 1
+          maximum: 8
+        flux2_cfg:
+          type: number
+          minimum: 1
+          maximum: 2
+        flux2_sampler:
+          type: string
+          enum: [euler, res_multistep]
+        flux2_megapixels:
+          type: number
+          enum: [0.25, 1]
+        zimage_steps:
+          type: integer
+          minimum: 1
+          maximum: 20
+        zimage_cfg:
+          type: number
+          minimum: 0
+          maximum: 20
+        zimage_shift:
+          type: number
+          minimum: 0.01
+          maximum: 100
+        video_engine:
+          type: string
+          enum: [ltxv, wan, h3]
+        video_steps:
+          type: integer
+          minimum: 1
+          maximum: 40
+        video_cfg:
+          type: number
+          minimum: 0
+          maximum: 20
+        video_width:
+          type: integer
+          minimum: 64
+          maximum: 1920
+        video_height:
+          type: integer
+          minimum: 64
+          maximum: 1920
+        video_frames:
+          type: integer
+          minimum: 5
+          maximum: 241
+        video_fps:
+          type: number
+          minimum: 8
+          maximum: 30
+
+    ImageBudget:
+      type: object
+      description: Estimativa do preset. Não descarrega o narrador e não bloqueia o save.
+      properties:
+        weights_vram_mib:
+          type: integer
+        activation_mib:
+          type: integer
+        vram_mib:
+          type: integer
+        ram_mib:
+          type: integer
+        weights_known:
+          type: boolean
+        spill_mib:
+          type: integer
+          description: 0 quando o preset cabe no buraco de 7136 MiB; senão vram_mib - 7136.
+        vram_free_mib:
+          type: integer
+          nullable: true
+        ram_available_mib:
+          type: integer
+          nullable: true
+        fits_vram:
+          type: boolean
+          nullable: true
+        fits_ram:
+          type: boolean
+          nullable: true
 
     ImageSettingsUpdate:
       type: object
@@ -6534,6 +6663,62 @@ components:
           maximum: 600
         sd_model_checkpoint:
           type: string
+        comfyui_engine:
+          type: string
+          enum: [qwen, flux2_klein, z_image_turbo]
+        flux2_steps:
+          type: integer
+          minimum: 1
+          maximum: 8
+        flux2_cfg:
+          type: number
+          minimum: 1
+          maximum: 2
+        flux2_sampler:
+          type: string
+          enum: [euler, res_multistep]
+        flux2_megapixels:
+          type: number
+          enum: [0.25, 1]
+        zimage_steps:
+          type: integer
+          minimum: 1
+          maximum: 20
+        zimage_cfg:
+          type: number
+          minimum: 0
+          maximum: 20
+        zimage_shift:
+          type: number
+          minimum: 0.01
+          maximum: 100
+        video_engine:
+          type: string
+          enum: [ltxv, wan, h3]
+        video_steps:
+          type: integer
+          minimum: 1
+          maximum: 40
+        video_cfg:
+          type: number
+          minimum: 0
+          maximum: 20
+        video_width:
+          type: integer
+          minimum: 64
+          maximum: 1920
+        video_height:
+          type: integer
+          minimum: 64
+          maximum: 1920
+        video_frames:
+          type: integer
+          minimum: 5
+          maximum: 241
+        video_fps:
+          type: number
+          minimum: 8
+          maximum: 30
 
     VoiceList:
       type: object
