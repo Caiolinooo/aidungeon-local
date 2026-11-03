@@ -115,14 +115,15 @@ export default function Home() {
             onClick={() => setShowReaderModal(true)}
             title="Tema e tipografia da leitura"
             aria-label="Tema e tipografia da leitura"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <BookOpen className="w-4 h-4 text-accent-pri" />
           </button>
           <Link
             to="/users"
             title="Contas e senha"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+            aria-label="Contas e senha"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <UsersIcon className="w-4 h-4 text-secondary" />
           </Link>
@@ -130,7 +131,8 @@ export default function Home() {
             <Link
               to="/rulesets"
               title="Rulesets de personagem"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+              aria-label="Rulesets de personagem"
+              className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
             >
               <ShieldCheck className="w-4 h-4 text-secondary" />
             </Link>
@@ -138,7 +140,8 @@ export default function Home() {
           <Link
             to="/settings"
             title="Configurações (modelo, imagem, voz, memória)"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+            aria-label="Configurações (modelo, imagem, voz, memória)"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <SettingsIcon className="w-4 h-4 text-secondary" />
           </Link>
@@ -146,7 +149,7 @@ export default function Home() {
             onClick={() => setShowImport(true)}
             title="Importar backup do AI Dungeon (.zip)"
             aria-label="Importar backup do AI Dungeon"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition"
           >
             <Upload className="w-4 h-4 text-muted" />
           </button>
@@ -155,7 +158,7 @@ export default function Home() {
             disabled={backingUp}
             title={backingUp ? 'Exportando…' : 'Baixar um .zip com todas as aventuras'}
             aria-label="Baixar um .zip com todas as aventuras"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-secondary hover:text-primary hover:bg-elevated transition disabled:opacity-50"
           >
             <Download className="w-4 h-4 text-muted" />
           </button>
@@ -178,7 +181,7 @@ export default function Home() {
             onClick={logout}
             title="Sair e voltar para o login"
             aria-label="Sair"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-muted hover:text-danger-400 hover:bg-elevated transition"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-subtle bg-surface text-muted hover:text-danger-400 hover:bg-elevated transition"
           >
             <LogOut className="w-4 h-4" />
           </button>

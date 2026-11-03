@@ -112,7 +112,8 @@ def test_health_shows_scheduler_slots_jobs_memory_and_watchdog(probe):
     assert data["slots"]["total"] == 5
     assert data["slots"]["roles"] == {"narrative": 0, "choices": 1, "chronicle": 2,
                                       "summary": 2, "image_prompt": 3, "assistant": 3,
-                                      "meta": 3, "assets": 2}
+                                      "meta": 3, "assets": 2, "sim_intent": 3,
+                                      "turn_gate": 3, "turn_check": 4}
     assert data["slots"]["watchdog"]["restarts"] == 1
     assert data["slots"]["watchdog"]["stale"] is False
     assert data["jobs"]["pending"] == {"scene_backdrop": 1, "character_portrait": 1}
@@ -217,7 +218,8 @@ def test_narrative_ttft_and_speed_of_recent_turns(probe):
         _narrative(ttft, tok_s=17.5 + ttft)
     _narrative(30.0, tok_s=0.0, outcome="timeout", prompt_n=None, cache_n=None)
 
-    stats = probe()["narrative"]
+    data = probe()
+    stats = data["narrative"]
 
     assert stats["samples"] == 5
     assert stats["ttft_p50_s"] == 3.0
@@ -225,6 +227,9 @@ def test_narrative_ttft_and_speed_of_recent_turns(probe):
     assert stats["tok_s_p50"] == 20.5
     assert stats["last"]["outcome"] == "timeout"
     assert stats["last"]["at"].endswith("Z")
+    assert len(data["recent_calls"]) == 6
+    assert {"role", "slot", "outcome", "waited_s", "ttft_s", "prompt_n", "cache_n",
+            "prompt_per_second", "predicted_per_second"} <= set(data["recent_calls"][-1])
 
 
 def test_narrative_stats_empty():

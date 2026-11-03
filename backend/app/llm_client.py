@@ -7,8 +7,14 @@
 - Roles e slots (contrato C1, docs/agents/CONTRATOS.md): cada chamada declara
   um role. `GET {base}/props` (`base` = base_url sem `/v1`) informa
   `total_slots`; com ≥ 2 slots a narrativa fica no slot 0 com
-  `cache_prompt=true` e as auxiliares nunca usam o slot 0. Com 4 slots:
-  choices → 1, chronicle/summary → 2, image_prompt/assistant/meta → 3.
+  `cache_prompt=true` e as auxiliares não usam o slot 0. Com 4 slots:
+  choices → 1, chronicle/summary/assets → 2, image_prompt/assistant/meta → 3,
+  sim_intent/turn_gate → 3, turn_check → 2. Com 5+ os três papéis de turno
+  mudam (intent/gate 3, check 4); o resto do mapa de 4 permanece. Com 1 slot
+  só sim_intent, turn_check e turn_gate fixam o slot 0.
+  `scheduler.role_overrides[role].slot` (inteiro >= 0) fixa o slot e não chama
+  /props. `role_config` copia o cfg e só substitui base_url, model_alias e
+  api_key desse papel. Sem override, o mapa e o servidor principal permanecem.
   Auxiliares vão com `cache_prompt=false`: slot fixado + prompt cache trava o
   llama.cpp em modelos híbridos (llama.cpp #28280).
 - A narrativa vem em SSE; as auxiliares em JSON (`stream=false`). Cancelar
@@ -56,18 +62,21 @@ log = logging.getLogger("aidungeon.llm")
 PROBE_TIMEOUT = 15.0
 
 ROLES = ("narrative", "choices", "chronicle", "summary",
-         "image_prompt", "assistant", "meta", "assets")
+         "image_prompt", "assistant", "meta", "assets",
+         "sim_intent", "turn_check", "turn_gate")
 
 # Slot de cada auxiliar quando o servidor tem 4+ slots.
-# `assets` (ficha viva do NPC) divide o slot 2 com chronicle/summary: assim
-# ele não disputa o slot 3 com a checagem de viabilidade (meta) nem com o
-# prompt de retrato (image_prompt), que rodam no turno do jogador.
+# Papéis do turno não entram: com 4 slots o check usa o 2 e intent/gate o 3;
+# com 5+ o check usa o 4 e intent/gate continuam no 3 (image_prompt também,
+# com prioridade menor). `assets` divide o slot 2 com chronicle/summary.
 _AUX_SLOTS_4 = {"choices": 1, "chronicle": 2, "summary": 2, "assets": 2,
                 "image_prompt": 3, "assistant": 3, "meta": 3}
+_TURN_ROLES = ("sim_intent", "turn_check", "turn_gate")
 
 DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 45.0, "summary": 60.0,
                          "image_prompt": 20.0, "assistant": 90.0, "meta": 45.0,
-                         "assets": 120.0}
+                         "assets": 120.0, "sim_intent": 20.0,
+                         "turn_check": 12.0, "turn_gate": 12.0}
 
 # Cache de descoberta: (base_url, model_alias) -> id do modelo (ou None)
 _discovery_cache: dict[tuple[str, str], str | None] = {}
@@ -361,7 +370,32 @@ def normalize_role(role: str | None) -> str:
     return role
 
 
+def _turn_slot(role: str, total: int) -> int | None:
+    """Slot de sim_intent, turn_check e turn_gate.
+
+    Total desconhecido (0) não fixa slot. 1 → 0. 2 → 1. 3 → check 1 e
+    intent/gate 2. 4 → check 2 e intent/gate 3. 5+ → check 4 e intent/gate 3.
+    """
+    if total < 1:
+        return None
+    if total == 1:
+        return 0
+    if total == 2:
+        return 1
+    if role == "turn_check":
+        if total == 3:
+            return 1
+        if total == 4:
+            return 2
+        return 4
+    if total == 3:
+        return 2
+    return 3
+
+
 def _role_slot_for_total(role: str, total: int) -> int | None:
+    if role in _TURN_ROLES:
+        return _turn_slot(role, total)
     if total < 2:
         return None
     if role == "narrative":
@@ -373,10 +407,82 @@ def _role_slot_for_total(role: str, total: int) -> int | None:
     return 1
 
 
+def _role_override(cfg: dict, role: str) -> dict | None:
+    raw = cfg.get("scheduler") if isinstance(cfg, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    overrides = raw.get("role_overrides")
+    if not isinstance(overrides, dict):
+        return None
+    spec = overrides.get(role)
+    return spec if isinstance(spec, dict) else None
+
+
+def _override_text(spec: dict, key: str) -> str | None:
+    value = spec.get(key)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or not text.isascii() or not text.isprintable():
+        return None
+    return text
+
+
+def _override_slot(cfg: dict, role: str) -> int | None:
+    """Slot pinado no override, ou None para cair no mapa e no /props."""
+    spec = _role_override(cfg, role)
+    if spec is None or "slot" not in spec:
+        return None
+    value = spec.get("slot")
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        slot = value
+    elif isinstance(value, float) and value.is_integer():
+        slot = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or not text.lstrip("-").isdigit():
+            return None
+        slot = int(text)
+    else:
+        return None
+    if slot < 0:
+        return None
+    return slot
+
+
+def role_config(cfg: dict, role: str) -> dict:
+    """Cópia rasa de cfg com base_url, model_alias e api_key do override do role.
+
+    Sem override, os valores copiados são os do cfg. O slot não é copiado para
+    o topo: `slot_for` lê `scheduler.role_overrides` e, com slot explícito,
+    não consulta /props.
+    """
+    role = normalize_role(role)
+    out = dict(cfg) if isinstance(cfg, dict) else {}
+    spec = _role_override(out, role)
+    if spec is None:
+        return out
+    for key in ("base_url", "model_alias", "api_key"):
+        text = _override_text(spec, key)
+        if text is not None:
+            out[key] = text
+    return out
+
+
 def slot_for(cfg: dict, role: str,
              transport: httpx.BaseTransport | None = None) -> int | None:
-    """Slot fixo do role, ou None (o servidor escolhe)."""
-    return _role_slot_for_total(normalize_role(role), server_slot_count(cfg, transport))
+    """Slot fixo do role, ou None (o servidor escolhe).
+
+    Slot explícito no override daquele role volta direto, sem GET /props.
+    Sem o campo, o mapa C1 consulta /props como antes.
+    """
+    role = normalize_role(role)
+    pinned = _override_slot(cfg, role)
+    if pinned is not None:
+        return pinned
+    return _role_slot_for_total(role, server_slot_count(cfg, transport))
 
 
 def slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:

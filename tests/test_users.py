@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+
+from app import auth as auth_core
 from app import db, users
 
 from conftest import TEST_AUTH_PASSWORD, TEST_AUTH_USER
@@ -80,3 +83,85 @@ def test_new_adventure_belongs_to_the_signed_in_user(client):
     _login(client, TEST_AUTH_USER, TEST_AUTH_PASSWORD)
     adv = client.post("/api/adventures", json={"title": "Mine"}).json()
     assert adv["owner"] == TEST_AUTH_USER
+
+
+def test_password_hash_is_salted_scrypt_and_legacy_still_matches(tmp_db):
+    fresh = users.password_hash("correct-horse")
+    other = users.password_hash("correct-horse")
+    assert fresh.startswith("scrypt$")
+    assert fresh != other
+    salt_hex = fresh.split("$")[1]
+    assert len(bytes.fromhex(salt_hex)) == 16
+    assert users.password_matches("correct-horse", fresh)
+    assert not users.password_matches("correct-horsE", fresh)
+
+    legacy = hashlib.sha256(b"legacy-pass-123").hexdigest()
+    assert users.is_legacy_password_hash(legacy)
+    assert users.password_matches("legacy-pass-123", legacy)
+    assert users.password_matches("legacy-pass-123", legacy.upper())
+    assert not users.password_matches("nope-pass-xxxx", legacy)
+    assert not users.password_matches("correct-horse", "scrypt$not-hex$abcd")
+
+    with db.session() as conn:
+        users.create_user(conn, "Nilo", "nilo-pass")
+        users.set_password(conn, "Nilo", "nilo-new1")
+        stored = users.get_user(conn, "Nilo")["password_hash"]
+    assert stored.startswith("scrypt$")
+    assert users.password_matches("nilo-new1", stored)
+    assert not users.password_matches("nilo-pass", stored)
+
+
+def test_legacy_login_upgrades_hash_and_wrong_password_does_not(client):
+    legacy = hashlib.sha256(b"legacy-pass-123").hexdigest()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT INTO users(username, password_hash, role, created_at) VALUES(?,?,?,?)",
+            ("Legacy", legacy, "user", db.utcnow()),
+        )
+    bad = client.post("/api/auth/login", json={"username": "Legacy", "password": "wrong-pass-xx"})
+    assert bad.status_code == 401
+    with db.session() as conn:
+        assert users.get_user(conn, "Legacy")["password_hash"] == legacy
+    ok = client.post(
+        "/api/auth/login",
+        json={"username": "Legacy", "password": "legacy-pass-123"},
+    )
+    assert ok.status_code == 200, ok.text
+    with db.session() as conn:
+        stored = users.get_user(conn, "Legacy")["password_hash"]
+    assert stored.startswith("scrypt$")
+    assert stored != legacy
+    assert users.password_matches("legacy-pass-123", stored)
+    assert not users.password_matches("wrong-pass-xx", stored)
+    again = client.post(
+        "/api/auth/login",
+        json={"username": "Legacy", "password": "legacy-pass-123"},
+    )
+    assert again.status_code == 200, again.text
+
+
+def test_non_caio_auth_user_is_admin_and_repairs(client, monkeypatch):
+    monkeypatch.setenv("AUTH_USER", "Nara")
+    monkeypatch.setenv(
+        "AUTH_PASSWORD_HASH",
+        hashlib.sha256(b"nara-password").hexdigest(),
+    )
+    res = client.post("/api/auth/login", json={"username": "Nara", "password": "nara-password"})
+    assert res.status_code == 200, res.text
+    token = res.json()["token"]
+    check = client.get("/api/auth/check", headers={"Authorization": f"Bearer {token}"})
+    assert check.status_code == 200, check.text
+    assert check.json()["user"] == "Nara"
+    assert check.json()["admin"] is True
+
+    with db.session() as conn:
+        before = users.get_user(conn, "Nara")["password_hash"]
+        conn.execute("UPDATE users SET role='user' WHERE username='Nara'")
+        users.ensure_seed(conn, auth_core.auth_config())
+        row = users.get_user(conn, "Nara")
+        users.create_user(conn, "Mira", "mira-pass")
+    assert row["role"] == "admin"
+    assert row["password_hash"] == before
+    assert users.is_admin("Nara") is True
+    assert users.is_admin(users.ADMIN_USERNAME) is True
+    assert users.is_admin("Mira") is False

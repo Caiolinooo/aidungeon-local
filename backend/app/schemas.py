@@ -7,7 +7,7 @@ como true/false, timestamps ISO-8601).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -436,6 +436,71 @@ class ScriptingSettingsUpdate(BaseModel):
     input_modifier: str | None = None
     context_modifier: str | None = None
     output_modifier: str | None = None
+
+
+class RuntimePlacementUpdate(BaseModel):
+    llm: Literal["local", "colab"] | None = None
+    comfyui: Literal["local", "colab"] | None = None
+
+
+class RuntimeModelUpdate(BaseModel):
+    llm: str | None = Field(default=None, min_length=1, max_length=200)
+    image: str | None = Field(default=None, min_length=1, max_length=200)
+    video: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class RuntimeEndpointUpdate(BaseModel):
+    """String vazia é rascunho válido no lado Colab. Não omitir o campo vazio."""
+    local_llm: str | None = Field(default=None, max_length=500)
+    local_comfyui: str | None = Field(default=None, max_length=500)
+    colab_llm: str | None = Field(default=None, max_length=500)
+    colab_comfyui: str | None = Field(default=None, max_length=500)
+
+    @field_validator("local_llm", "local_comfyui", "colab_llm", "colab_comfyui")
+    @classmethod
+    def _strip_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class RuntimeSettingsUpdate(BaseModel):
+    """PUT /api/settings/runtime. Campo omitido permanece."""
+    mode: Literal["local", "hybrid", "colab"] | None = None
+    placements: RuntimePlacementUpdate | None = None
+    models: RuntimeModelUpdate | None = None
+    endpoints: RuntimeEndpointUpdate | None = None
+    project_url: str | None = Field(default=None, max_length=500)
+
+    @field_validator("project_url")
+    @classmethod
+    def _strip_project_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class RuntimeRegistrationEndpoints(BaseModel):
+    llm: str = ""
+    comfyui: str = ""
+
+    @field_validator("llm", "comfyui")
+    @classmethod
+    def _strip_endpoint(cls, value: str) -> str:
+        return value.strip()
+
+
+class RuntimeRegistrationModels(BaseModel):
+    llm: str = Field(min_length=1, max_length=200)
+    image: str = Field(min_length=1, max_length=200)
+    video: str = Field(min_length=1, max_length=200)
+
+
+class RuntimeRegistration(BaseModel):
+    """POST /api/runtime/register. Os ids têm de ser os modelos já selecionados."""
+    endpoints: RuntimeRegistrationEndpoints
+    models: RuntimeRegistrationModels
+    hardware: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdventureScriptsUpdate(BaseModel):

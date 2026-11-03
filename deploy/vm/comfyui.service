@@ -1,6 +1,6 @@
 # /etc/systemd/system/comfyui.service
 # ComfyUI para FineView opcional e vídeo Wan 2.2 TI2V 5B.
-# Loopback 8188. Não reserva VRAM: carrega o UNET no primeiro /prompt.
+# Loopback 8188. DynamicVRAM mantém 2 GB livres para narrador/voz e picos do VAE.
 # O worker usa /free entre jobs; não executar imagem e vídeo ao mesmo tempo.
 [Unit]
 Description=ComfyUI (FineView opcional e Wan 2.2 TI2V 5B)
@@ -12,7 +12,7 @@ User=caio
 WorkingDirectory=/home/caio/ComfyUI
 Environment=PATH=/home/caio/ComfyUI/venv/bin:/home/caio/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-ExecStart=/home/caio/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+ExecStart=/home/caio/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188 --vram-headroom 2
 Restart=on-failure
 RestartSec=15
 MemoryHigh=20G

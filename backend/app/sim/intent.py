@@ -1,4 +1,4 @@
-"""Uma chamada LLM `meta` transforma a frase do jogador em intenção estruturada.
+"""Uma chamada LLM `sim_intent` transforma a frase do jogador em intenção estruturada.
 
 Falha de rede, de JSON ou de prazo devolve None: o turno segue só com narração.
 """
@@ -103,7 +103,7 @@ def classify(text: str, actor_view: dict, foes: list[str], pack: dict | None,
     ]
     try:
         reply = llm_client.chat_completion(
-            llm_cfg, messages, role="meta", temperature=0.1,
+            llm_client.role_config(llm_cfg, "sim_intent"), messages, role="sim_intent", temperature=0.1,
             max_tokens=int(cfg.get("max_tokens", 220)),
             timeout_s=cfg.get("timeout_seconds", 20),
             transport=transport, cancel=cancel,

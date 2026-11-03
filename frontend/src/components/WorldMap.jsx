@@ -234,7 +234,7 @@ export default function WorldMap({ adventure, open = true, onClose }) {
         </div>
         <div className="flex gap-1">
           <button onClick={() => setShowGenerate((v) => !v)} className="rounded-md border border-accent-800 px-2 py-1 text-xs text-accent-pri">+ Local com IA</button>
-          <button onClick={onClose} className="rounded-md px-2 text-secondary">✕</button>
+          <button type="button" onClick={onClose} aria-label="Fechar mapa" className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-secondary hover:bg-elevated">✕</button>
         </div>
       </div>
       {data?.progression && (

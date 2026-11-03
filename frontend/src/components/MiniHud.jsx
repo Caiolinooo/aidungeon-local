@@ -92,7 +92,7 @@ export default function MiniHud({
             type="button"
             onClick={onOpenCharacter}
             title="Abrir a ficha do personagem"
-            className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border border-subtle bg-elevated/80 px-2.5 text-[11px] font-semibold text-primary hover:border-accent-pri/60 transition"
+            className="inline-flex min-h-11 sm:min-h-7 shrink-0 items-center gap-1 rounded-full border border-subtle bg-elevated/80 px-2.5 text-[11px] font-semibold text-primary hover:border-accent-pri/60 transition"
           >
             <UserRound className="h-3 w-3 text-accent-pri" />
             <span className="max-w-[10rem] truncate">{title}</span>
@@ -102,7 +102,7 @@ export default function MiniHud({
         {location && (
           <span
             title={location}
-            className={`inline-flex min-h-7 max-w-[14rem] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${TONE.info}`}
+            className={`inline-flex min-h-11 sm:min-h-7 max-w-[14rem] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${TONE.info}`}
           >
             <MapPin className="h-3 w-3" />
             <span className="truncate">{location}</span>
@@ -118,7 +118,7 @@ export default function MiniHud({
             <span
               key={stat.name}
               title={pct !== null ? `${stat.name}: ${value}/${max}` : `${stat.name}: ${value}`}
-              className={`inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
+              className={`inline-flex min-h-11 sm:min-h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
                 low ? TONE.danger : TONE.neutral
               }`}
             >
@@ -133,7 +133,7 @@ export default function MiniHud({
         {(pain > 0 || conditions.length > 0) && (
           <span
             title={conditionText || `Dor ${pain}/10`}
-            className={`inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
+            className={`inline-flex min-h-11 sm:min-h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
               pain >= 7 ? TONE.danger : TONE.warn
             }`}
           >
@@ -151,7 +151,7 @@ export default function MiniHud({
           <span
             key={`${item.label}-${item.value}`}
             title={`${item.label}: ${item.value}`}
-            className={`inline-flex min-h-7 max-w-[16rem] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
+            className={`inline-flex min-h-11 sm:min-h-7 max-w-[16rem] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] ${
               TONE[item.tone] || TONE.neutral
             }`}
           >

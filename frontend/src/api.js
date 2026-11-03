@@ -360,6 +360,37 @@ export const api = {
   putEmbeddingsSettings: (payload) => request('/settings/embeddings', { method: 'PUT', body: payload }),
   getScriptingSettings: () => request('/settings/scripting'),
   putScriptingSettings: (payload) => request('/settings/scripting', { method: 'PUT', body: payload }),
+  getRuntimeSettings: () => request('/settings/runtime'),
+  putRuntimeSettings: (payload) => request('/settings/runtime', { method: 'PUT', body: payload }),
+  // .ipynb autenticado. <a href> não envia Bearer — mesmo padrão de downloadExport.
+  // text/html aqui é o fallback SPA, não um notebook.
+  downloadRuntimeNotebook: async () => {
+    let res
+    try {
+      res = await fetch(`${API_BASE}/api/runtime/notebook`, { headers: authHeaders() })
+    } catch {
+      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+    }
+    if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized()
+      throw await parseError(res)
+    }
+    const contentType = (res.headers.get('content-type') || '').toLowerCase()
+    const blob = await res.blob()
+    let html = contentType.includes('text/html')
+    if (!html && !contentType) {
+      const head = (await blob.slice(0, 80).text()).trimStart()
+      html = head.startsWith('<')
+    }
+    if (html) {
+      throw new ApiError(
+        res.status,
+        'invalid_response',
+        'Backend returned a non-notebook response — it is probably running an older version.',
+      )
+    }
+    return blob
+  },
 
 
   // --------------------------------------------------------- assistant (v2)

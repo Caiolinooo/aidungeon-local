@@ -474,7 +474,7 @@ def test_preparing_thread_failure_marks_job_failed(client, monkeypatch):
         conn.execute("UPDATE jobs SET status='preparing' WHERE id=?", (job["id"],))
     monkeypatch.setattr(jobs, "_prepare_portrait_job",
                         lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
-    jobs._portrait_prepare_thread(job["id"])
+    jobs._run_one_portrait_prepare(job["id"])
     stored = _stored_job(job["id"])
     assert stored["status"] == "error"
     assert "could not prepare" in stored["error"]

@@ -4,7 +4,7 @@ Formato do token:  base64url(user).base64url(exp_unix).hexsig
 onde hexsig = HMAC-SHA256(AUTH_SECRET, "{user}.{exp_unix}") em hexdigest.
 
 Credenciais SOMENTE via ambiente/.env (nomes em settings.json → auth.*_env):
-AUTH_USER, AUTH_PASSWORD_HASH (sha256 hex da senha), AUTH_SECRET (hex aleatório).
+AUTH_USER, AUTH_PASSWORD_HASH (scrypt$salt$hash, ou sha256 hex legado), AUTH_SECRET (hex aleatório).
 
 Fail closed: faltando qualquer uma das 3 variáveis, `auth_config()` devolve
 None — `require_auth` responde 401 em todas as rotas protegidas e o login

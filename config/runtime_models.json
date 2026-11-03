@@ -1,0 +1,419 @@
+{
+  "schema": 1,
+  "models": {
+    "llm": {
+      "qwen3.6-35b-a3b": {
+        "model_alias": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf",
+        "role": "narrator",
+        "min_vram_mib": 14424,
+        "min_ram_mib": 0,
+        "min_vram_note": "deploy/vm/README.md: llama-server carregado ~14424 MiB. Não há URL nem SHA256 desse GGUF no repositório.",
+        "notes": "O -c 262144 é o contexto do llama-server. context_size 32768 é o orçamento do app em config/settings.json. Não são o mesmo número.",
+        "artifacts": [
+          {
+            "role": "weights",
+            "filename": "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf",
+            "dest": "models/llm/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf",
+            "url": null,
+            "sha256": null,
+            "bytes": null,
+            "url_variable": "narrator_gguf_url",
+            "sha256_variable": "narrator_gguf_sha256"
+          },
+          {
+            "role": "mmproj",
+            "filename": "mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf",
+            "dest": "models/llm/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf",
+            "url": null,
+            "sha256": null,
+            "bytes": null,
+            "url_variable": "narrator_mmproj_url",
+            "sha256_variable": "narrator_mmproj_sha256"
+          }
+        ],
+        "runtime": {
+          "listen_host": "0.0.0.0",
+          "port": 1234,
+          "health_path": "/health",
+          "cuda": true,
+          "env": {},
+          "argv_before_model": [
+            "--host", "{listen_host}",
+            "--port", "1234",
+            "-t", "8",
+            "--threads-batch", "16",
+            "-np", "5",
+            "--kv-unified",
+            "-cram", "0",
+            "--ctx-checkpoints", "8",
+            "--metrics",
+            "-c", "262144",
+            "-ctk", "q8_0",
+            "-ctv", "q8_0",
+            "-b", "2048",
+            "-ub", "1024",
+            "-rea", "auto",
+            "-fa", "on",
+            "--tools", "all",
+            "--jinja"
+          ],
+          "argv_after_model": [
+            "--n-gpu-layers", "99",
+            "-ncmoe", "24",
+            "--no-mmap",
+            "--image-min-tokens", "1024"
+          ]
+        },
+        "dependencies": [
+          {
+            "name": "llama.cpp-turboq-mtp",
+            "git_fork": "Indras-Mirror/llama.cpp-turboq-mtp",
+            "git_url": "https://github.com/Indras-Mirror/llama.cpp-turboq-mtp.git",
+            "git_ref": "c8064719f",
+            "build": "b10281-c8064719f",
+            "cuda": true
+          }
+        ],
+        "quality": {
+          "disable_thinking": true,
+          "context_size": 32768,
+          "streaming": true,
+          "timeout_seconds": 180,
+          "sampler": {
+            "temperature": 0.85,
+            "top_p": 1.0,
+            "min_p": 0.08,
+            "repetition_penalty": 1.02,
+            "presence_penalty": 0.15,
+            "frequency_penalty": 0.1,
+            "dry_multiplier": 0.8,
+            "dry_base": 1.75,
+            "dry_allowed_length": 2,
+            "dry_penalty_last_n": 512,
+            "max_tokens": 300,
+            "max_tokens_slider": {"min": 100, "max": 2048},
+            "retry_temperature_step": 0.05,
+            "max_retry_temperature": 1.15
+          }
+        },
+        "source": "deploy/vm/README.md llama-server (G2); config/settings.json llm+sampler. URL e SHA256 não publicados."
+      },
+      "qwen2.5-3b-instruct-q4_k_m": {
+        "model_alias": "qwen2.5-3b-instruct-q4_k_m",
+        "role": "fallback",
+        "min_vram_mib": 0,
+        "min_ram_mib": 6144,
+        "min_vram_note": "CPU, -ngl 0, CUDA_VISIBLE_DEVICES vazio. MemoryMax=6G em deploy/vm/llama-aux.service.",
+        "artifacts": [
+          {
+            "role": "weights",
+            "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
+            "dest": "models/llm/qwen2.5-3b-instruct-q4_k_m.gguf",
+            "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true",
+            "sha256": "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+            "bytes": 2104932768
+          }
+        ],
+        "runtime": {
+          "listen_host": "127.0.0.1",
+          "port": 1240,
+          "health_path": "/health",
+          "cuda": false,
+          "env": {"CUDA_VISIBLE_DEVICES": ""},
+          "argv_before_model": [
+            "--host", "{listen_host}",
+            "--port", "1240",
+            "-ngl", "0",
+            "-t", "8",
+            "-c", "8192",
+            "-np", "2",
+            "-b", "512",
+            "-ub", "512",
+            "--alias", "qwen2.5-3b-instruct-q4_k_m"
+          ],
+          "argv_after_model": []
+        },
+        "dependencies": [
+          {
+            "name": "llama.cpp-turboq-mtp",
+            "git_fork": "Indras-Mirror/llama.cpp-turboq-mtp",
+            "git_url": "https://github.com/Indras-Mirror/llama.cpp-turboq-mtp.git",
+            "git_ref": "c8064719f",
+            "build": "b10281-c8064719f",
+            "cuda": false
+          }
+        ],
+        "source": "deploy/vm/install_qwen_aux.sh e deploy/vm/llama-aux.service"
+      }
+    },
+    "image": {
+      "flux2_klein": {
+        "engine": "flux2_klein",
+        "min_vram_mib": null,
+        "min_ram_mib": 0,
+        "min_vram_note": "Pico isolado não publicado. O notebook falha até MIN_VRAM_MIB ser informado; não reduz passos, CFG nem resolução.",
+        "artifacts": [
+          {
+            "role": "unet",
+            "filename": "flux-2-klein-4b-fp8.safetensors",
+            "dest": "models/diffusion_models/flux-2-klein-4b-fp8.safetensors",
+            "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/main/flux-2-klein-4b-fp8.safetensors?download=true",
+            "sha256": "97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6",
+            "bytes": null
+          },
+          {
+            "role": "clip",
+            "filename": "qwen_3_4b.safetensors",
+            "dest": "models/text_encoders/qwen_3_4b.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors?download=true",
+            "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a",
+            "bytes": null
+          },
+          {
+            "role": "vae",
+            "filename": "flux2-vae.safetensors",
+            "dest": "models/vae/flux2-vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors?download=true",
+            "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+            "bytes": null
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          }
+        ],
+        "quality": {
+          "unet": "flux-2-klein-4b-fp8.safetensors",
+          "clip": "qwen_3_4b.safetensors",
+          "clip_type": "flux2",
+          "clip_device": "default",
+          "vae": "flux2-vae.safetensors",
+          "weight_dtype": "default",
+          "steps": 4,
+          "cfg": 1.0,
+          "sampler": "euler",
+          "megapixels": 0.25,
+          "upscale_method": "nearest-exact",
+          "resolution_steps": 1,
+          "max_references": 4
+        },
+        "source": "deploy/vm/install_flux2_klein.sh e config/settings.json image.providers.comfyui.flux2"
+      },
+      "fineview_qwen": {
+        "engine": "qwen",
+        "min_vram_mib": 7432,
+        "min_ram_mib": 8918,
+        "min_vram_note": "UNET+VAE da tabela FineView em deploy/vm/README.md (ceil de bytes/1048576). O CLIP Qwen3-VL 8B INT8 fica em CPU (clip_device=cpu) e entra em min_ram_mib.",
+        "artifacts": [
+          {
+            "role": "unet",
+            "filename": "fineviewQWEN_qw21TurboFixed_3299367.safetensors",
+            "dest": "models/diffusion_models/fineviewQWEN_qw21TurboFixed_3299367.safetensors",
+            "url": "https://civitai.com/api/download/models/3407540?fileId=3299367",
+            "sha256": "7ba6c0774c233540ef6ea0ea3971acf3cbf403f70bd3672af57eaca00c33578e",
+            "bytes": 7116801326,
+            "auth_secret": "CIVITAI_API_KEY"
+          },
+          {
+            "role": "clip",
+            "filename": "qwen3vl_8b_int8_convrot.safetensors",
+            "dest": "models/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f",
+            "bytes": 9350798360
+          },
+          {
+            "role": "vae",
+            "filename": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+            "dest": "models/vae/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+            "url": "https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1/resolve/main/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+            "sha256": "36f56608b02077a50a08ea3dbcdb88351298ceba49948f41f9f87186378e6908",
+            "bytes": 675509688
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          }
+        ],
+        "quality": {
+          "unet": "fineviewQWEN_qw21TurboFixed_3299367.safetensors",
+          "clip": "qwen3vl_8b_int8_convrot.safetensors",
+          "clip_type": "qwen_image",
+          "clip_device": "cpu",
+          "vae": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+          "width": 1024,
+          "height": 1024,
+          "steps": 8,
+          "sampler": "euler",
+          "cfg": 1.0,
+          "sigmas": [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0.0],
+          "shift": 1.31,
+          "poll_interval_s": 0.25
+        },
+        "source": "deploy/vm/README.md seção FineView e config/settings.json image.providers.comfyui (engine qwen)"
+      }
+    },
+    "video": {
+      "ltxv": {
+        "engine": "ltxv",
+        "min_vram_mib": null,
+        "min_ram_mib": 0,
+        "min_vram_note": "Pico isolado não publicado. O notebook falha até MIN_VRAM_MIB ser informado; não reduz frames, passos nem resolução.",
+        "artifacts": [
+          {
+            "role": "checkpoint",
+            "filename": "ltxv-2b-0.9.6-distilled-04-25.safetensors",
+            "dest": "models/checkpoints/ltxv-2b-0.9.6-distilled-04-25.safetensors",
+            "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-distilled-04-25.safetensors?download=true",
+            "sha256": "94891bd4bd08de30d484befbfc54fdcffe6d1596a131baad700b9baa5e1de86b",
+            "bytes": null
+          },
+          {
+            "role": "clip",
+            "filename": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+            "dest": "models/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/mochi_preview_repackaged/resolve/main/split_files/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors?download=true",
+            "sha256": "a498f0485dc9536735258018417c3fd7758dc3bccc0a645feaa472b34955557a",
+            "bytes": null
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          }
+        ],
+        "config": {
+          "engine": "ltxv",
+          "checkpoint": "ltxv-2b-0.9.6-distilled-04-25.safetensors",
+          "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
+          "clip": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+          "vae": "wan2.2_vae.safetensors",
+          "frames": 121,
+          "fps": 24,
+          "steps": 8,
+          "cfg": 1,
+          "shift": 8,
+          "timeout_seconds": 1800,
+          "width": 768,
+          "height": 448,
+          "vertical_width": 448,
+          "vertical_height": 768,
+          "auto_scene": true,
+          "auto_portraits": true,
+          "auto_turnaround": true
+        },
+        "source": "deploy/vm/install_ltxv_video.sh e config/settings.json image.providers.comfyui.video"
+      },
+      "wan": {
+        "engine": "wan",
+        "min_vram_mib": null,
+        "min_ram_mib": 0,
+        "min_vram_note": "Pico de VRAM não publicado. Disco citado no README: GGUF 5,40 GB, UMT5 6,74 GB, VAE 1,41 GB. O notebook não converte isso em piso de VRAM.",
+        "artifacts": [
+          {
+            "role": "unet",
+            "filename": "Wan2.2-TI2V-5B-Q8_0.gguf",
+            "dest": "models/diffusion_models/Wan2.2-TI2V-5B-Q8_0.gguf",
+            "url": "https://huggingface.co/QuantStack/Wan2.2-TI2V-5B-GGUF/resolve/57437632ddd08bdcbd1508c866aa22e126ed51d2/Wan2.2-TI2V-5B-Q8_0.gguf?download=true",
+            "sha256": "57bece983817ab2f957546683bb670f13be7d99022d45674840cd999a050ea8f",
+            "bytes": null
+          },
+          {
+            "role": "clip",
+            "filename": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "dest": "models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Wan-2.2/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors?download=true",
+            "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+            "bytes": null
+          },
+          {
+            "role": "vae",
+            "filename": "wan2.2_vae.safetensors",
+            "dest": "models/vae/wan2.2_vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Wan-2.2/resolve/main/split_files/vae/wan2.2_vae.safetensors?download=true",
+            "sha256": "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156",
+            "bytes": null
+          }
+        ],
+        "service": {
+          "port": 8188,
+          "listen_host": "127.0.0.1",
+          "health_path": "/system_stats",
+          "argv": ["--listen", "{listen_host}", "--port", "8188", "--vram-headroom", "2"],
+          "env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+          "min_version": "0.42"
+        },
+        "dependencies": [
+          {
+            "name": "ComfyUI",
+            "min_version": "0.42",
+            "git_url_variable": "comfyui_git_url",
+            "git_ref_variable": "comfyui_git_ref"
+          },
+          {
+            "name": "ComfyUI-GGUF",
+            "git_url": "https://github.com/city96/ComfyUI-GGUF.git",
+            "git_ref": "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
+            "requirements": "requirements.txt"
+          }
+        ],
+        "config": {
+          "engine": "wan",
+          "checkpoint": "ltxv-2b-0.9.6-distilled-04-25.safetensors",
+          "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
+          "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "vae": "wan2.2_vae.safetensors",
+          "frames": 121,
+          "fps": 24,
+          "steps": 20,
+          "cfg": 5,
+          "shift": 8,
+          "timeout_seconds": 1800,
+          "width": 1280,
+          "height": 704,
+          "vertical_width": 704,
+          "vertical_height": 1280,
+          "auto_scene": true,
+          "auto_portraits": true
+        },
+        "vertical_note": "704x1280 é o quadro documentado 1280x704 invertido. O README não publica outro vertical.",
+        "source": "deploy/vm/install_wan_video.sh; opt-in do README: engine=wan, clip UMT5, 20 passos, CFG 5, 1280x704"
+      }
+    }
+  }
+}

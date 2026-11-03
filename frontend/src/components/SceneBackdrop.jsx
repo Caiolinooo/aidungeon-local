@@ -221,32 +221,32 @@ export default function SceneBackdrop({
   const videoProps = clipVideoDomProps({ reducedMotion: prefersReducedMotion(), autoPlay: true })
 
   return (
-    <section className="play-scene relative shrink-0 overflow-hidden border-b border-subtle bg-black">
-      <div className="play-media-frame relative flex w-full items-center justify-center bg-black">
+    <section className="play-scene relative min-h-0 shrink overflow-hidden border-b border-subtle bg-black max-md:max-h-[22svh] max-sm:[html.kb-open_&]:h-16 max-sm:[html.kb-open_&]:max-h-16">
+      <div className="play-media-frame relative flex min-h-0 w-full max-h-full items-center justify-center bg-black">
       {playingClip ? (
         <video
           key={sceneClip.clip.id}
           src={sceneClip.clip.url}
           {...videoProps}
           onError={sceneClip.failPlayback}
-          className="play-scene-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain object-center"
+          className="play-scene-media h-auto max-h-full w-full bg-black object-contain object-center max-md:max-h-[22svh] md:max-h-[min(34vh,18rem)]"
         />
       ) : backdropUrl ? (
         <img
           src={backdropUrl}
           alt={place || 'Cenário da cena'}
-          className={`play-scene-media h-auto max-h-[min(34vh,18rem)] w-full bg-black object-contain object-center transition-all duration-700 ${filters} ${
+          className={`play-scene-media h-auto max-h-full w-full bg-black object-contain object-center max-md:max-h-[22svh] md:max-h-[min(34vh,18rem)] transition-all duration-700 ${filters} ${
             reacting ? 'scene-react' : ''
           }`}
         />
       ) : (
         <div className={`w-full bg-elevated ${scene.notice ? 'h-28' : 'h-24'}`} />
       )}
-      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-t ${
+      <div className={`play-scene-chrome pointer-events-none absolute inset-0 bg-gradient-to-t max-sm:[html.kb-open_&]:hidden ${
         playingClip ? 'from-canvas/35 via-transparent to-canvas/20' : 'from-canvas via-canvas/55 to-transparent'
       }`} />
 
-      <div className="pointer-events-none absolute inset-0 flex min-h-0 flex-col px-4 py-3">
+      <div className="play-scene-chrome pointer-events-none absolute inset-0 flex min-h-0 flex-col px-4 py-3 max-sm:[html.kb-open_&]:hidden">
         <div className="pointer-events-auto flex items-start justify-between gap-2">
           {place || scene.notice ? (
             <div className="max-w-[75%]">

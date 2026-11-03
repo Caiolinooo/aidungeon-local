@@ -176,5 +176,6 @@ def health_llm(transport: Any = Depends(get_http_transport)) -> dict:
         jobs=jobs,
         memory=_memory(),
         narrative=llm_client.narrative_stats(),
+        recent_calls=llm_client.recent_calls(200),
     )
     return result

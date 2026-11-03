@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Minus } from 'lucide-react'
+import { useDialog } from '../hooks/useDialog.js'
 
 // Modal genérico: overlay escuro + painel central; fecha no clique fora ou no ✕.
 // minimizable default true em modais grandes (wide). Minimizado = chip fixo no
@@ -19,6 +20,8 @@ export default function Modal({
   const controlled = minimized !== undefined
   const isMinimized = controlled ? Boolean(minimized) : internalMinimized
   const restoreRef = useRef(null)
+  const titleId = useId()
+  const dialogRef = useDialog(!isMinimized, onClose)
 
   const setMinimized = (next) => {
     const value = typeof next === 'function' ? next(isMinimized) : next
@@ -40,24 +43,34 @@ export default function Modal({
         }}
       >
         <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={title ? titleId : undefined}
+          tabIndex={-1}
           className={`flex max-h-[min(85dvh,var(--app-height,85dvh))] w-full flex-col overflow-hidden rounded-xl border border-subtle bg-elevated shadow-2xl ${
             wide ? 'max-w-2xl' : 'max-w-lg'
           }`}
         >
           <div className="flex items-center justify-between gap-2 border-b border-subtle px-5 py-3">
-            <h2 className="min-w-0 flex-1 truncate text-lg font-semibold text-primary">{title}</h2>
+            <h2 id={titleId} className="min-w-0 flex-1 truncate text-lg font-semibold text-primary">{title}</h2>
             <div className="flex shrink-0 items-center gap-2">
               {canMinimize && (
                 <button
                   type="button"
                   onClick={() => setMinimized(true)}
-                  className="text-secondary hover:text-primary"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center text-secondary hover:text-primary"
                   aria-label="Minimizar"
                 >
                   <Minus className="h-5 w-5" aria-hidden="true" />
                 </button>
               )}
-              <button type="button" onClick={onClose} className="text-secondary hover:text-primary" aria-label="Fechar">
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex min-h-11 min-w-11 items-center justify-center text-secondary hover:text-primary"
+                aria-label="Fechar"
+              >
                 ✕
               </button>
             </div>
@@ -66,7 +79,7 @@ export default function Modal({
         </div>
       </div>
       {isMinimized && (
-        <div className="fixed bottom-4 right-4 z-40 flex max-w-[min(20rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-subtle bg-elevated py-1.5 pl-3 pr-1.5 shadow-2xl">
+        <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 flex max-w-[min(20rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-subtle bg-elevated py-1.5 pl-3 pr-1.5 shadow-2xl">
           <span className="truncate text-sm font-medium text-primary">{title}</span>
           <button
             ref={restoreRef}

@@ -12,11 +12,13 @@ Cada turno:
      cada --see-every turnos), um POST /see sai assim que chega o primeiro token.
   2. No `done`, POST /choices e POST /scene em paralelo (como o Play.jsx).
   3. O turno seguinte sai logo depois do `done`, sem esperar o choices.
-No fim: p50/p95 de TTFT, turno e choices, os jobs criados durante o replay
+No fim: p50/p95 de TTFT, turno, choices e de cada fase `turn_phase`
+(elapsed_ms/1000 em phase:<nome>), os jobs criados durante o replay
 (espera na fila e duração) e, com --expect-card, quanto tempo cada card levou
 para existir. Soak: --repeat repete a lista de turnos; turno acima de
 --slow-turn conta como falha (slot preso no llama-server). --yield-to e
 --yield-db pausam o soak enquanto o jogador do app principal está ativo.
+Fases guardam só nome e duração; prompts e prosa não entram no relatório.
 
 Token: mintado com AUTH_USER/AUTH_SECRET do .env, no formato de
 backend/app/auth.py, e nunca impresso. Ou --token / env AIDUNGEON_TOKEN.
@@ -152,7 +154,7 @@ class Api:
             f"{self.base}/api/adventures/{adventure_id}/action", data=body,
             method="POST", headers={**self.headers, "Accept": "text/event-stream"})
         result: dict = {"status": None, "ttft_s": None, "total_s": None, "tokens": 0,
-                        "seq": None, "error": None}
+                        "seq": None, "error": None, "phases": []}
         started = time.monotonic()
         try:
             resp = self.opener.open(req, timeout=self.timeout)
@@ -181,6 +183,13 @@ class Api:
                         result["ttft_s"] = time.monotonic() - started
                         if on_first_token is not None:
                             on_first_token()
+                elif event == "turn_phase":
+                    phase = data.get("phase")
+                    elapsed = data.get("elapsed_ms")
+                    if data.get("state") == "end" and isinstance(phase, str) and phase \
+                            and isinstance(elapsed, int) and not isinstance(elapsed, bool) \
+                            and elapsed >= 0:
+                        result["phases"].append({"phase": phase, "elapsed_ms": elapsed})
                 elif event == "done":
                     result["seq"] = (data.get("action") or {}).get("seq")
                 elif event == "error":
@@ -352,6 +361,9 @@ class Replay:
                 if turn["ttft_s"] is not None:
                     self.stats["ttft"].append(turn["ttft_s"])
                 self.stats["turn"].append(turn["total_s"])
+                for item in turn.get("phases") or []:
+                    self.stats.setdefault(f"phase:{item['phase']}", []).append(
+                        item["elapsed_ms"] / 1000)
                 if turn["total_s"] > self.args.slow_turn:
                     self.fail(f"turno {index}: {turn['total_s']:.0f}s > {self.args.slow_turn:.0f}s")
                 last_seq = turn["seq"]

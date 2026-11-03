@@ -10,7 +10,9 @@ import json
 
 import httpx
 
-from app import action_check, db, game_engine, settings_store
+import pytest
+
+from app import action_check, db, game_engine, llm_client, settings_store
 from app import events as events_bus
 from conftest import add_action, make_adventure, sse_body
 
@@ -158,6 +160,7 @@ def test_world_facts_block_skips_aux_models_without_npcs(tmp_db):
 
 
 def test_valid_llm_verdict_reaches_the_narrator_and_the_event(tmp_db):
+    llm_client.invalidate_slot_cache()
     narrator = _Narrator()
     events = _play(_rich()["id"], narrator, "wait quietly by the gate", user="hero")
     aux = narrator.aux_calls()
@@ -165,7 +168,7 @@ def test_valid_llm_verdict_reaches_the_narrator_and_the_event(tmp_db):
     assert len(checks) == 1
     aux = checks
     assert aux[0]["temperature"] == 0.15
-    assert aux[0]["id_slot"] == 3
+    assert aux[0]["id_slot"] == 2
     portrait = aux[0]["messages"][-1]["content"]
     for piece in ("Mira", "wary", "spare key", "ladino", "scar over the brow",
                   "Torch", "loose stone", "sem magia de fogo"):
@@ -309,3 +312,173 @@ def test_check_reads_world_after_sim_resolution(tmp_db, monkeypatch):
     assert '"status": "dead"' in portrait
     assert '"hp": 0' in portrait
     assert '"what": "PV"' in portrait
+
+
+def _capture_check(monkeypatch):
+    calls = []
+
+    def fake(cfg, messages, **kwargs):
+        calls.append((messages, kwargs))
+        return json.dumps(VERDICT)
+
+    monkeypatch.setattr(action_check.llm_client, "chat_completion", fake)
+    return calls
+
+
+def _bounded_state() -> dict:
+    canon = "Cânone essencial " * 200
+    return {
+        "where": "gate",
+        "canon_blob": canon,
+        "character_rules": "regra " * 400,
+        "blocked_items": ["lanterna antiga", "corda"],
+        "blocked_places": ["quarto selado"],
+        "resisted": ["Mira"],
+        "invented_people": ["Fantasma Novo"],
+        "memories": [f"MEM-{index} " + ("fato " * 80) for index in range(6)],
+        "recent_actions": [
+            {"type": "do", "text": f"ACAO-{index} " + ("passo " * 80)}
+            for index in range(10)
+        ],
+        "absent": [
+            {"name": f"Ausente {index}", "status": "missing", "lore": "segredo", "stats": {"str": 99}}
+            for index in range(19)
+        ] + ["SoNome", {"name": "Extra", "status": "alive", "lore": "nao"}],
+        "present_npcs": [{
+            "name": "Mira",
+            "status": "alive",
+            "class": "ranger",
+            "stats": {"dex": 16, "hp": 20},
+            "canon": canon,
+            "bonds": {"trust": 3},
+            "mood_line": "Mira — wary",
+            "memory": "She hid the spare key. " + ("detalhe " * 80),
+        }],
+        "player": {
+            "name": "Caio",
+            "class": "ladino",
+            "appearance": "scar over the brow",
+            "status": "alive",
+            "clothing": "grey cloak",
+            "stats": {"dex": 16, "hp": 11},
+            "canon": canon,
+            "inventory": [{"name": f"item-{index}", "detail": "x" * 80} for index in range(40)],
+            "dice": {"last": 17, "history": [1, 2, 17], "note": "ignore"},
+            "character": {"scar": "brow"},
+            "ui_state": {"note": "z" * 2000, "flag": True},
+        },
+        "sim": {
+            "marker": "SIM-COMPLETO",
+            "actors": [{"name": "Caio", "hp": 11, "dead": False}],
+            "log": [f"evt-{index}" for index in range(30)],
+        },
+    }
+
+
+def test_hard_blockers_and_allow_llm_never_touch_the_network(tmp_db, monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("network")
+
+    monkeypatch.setattr(action_check.llm_client, "chat_completion", boom)
+    state = {
+        "blocked_items": ["lanterna antiga"],
+        "blocked_places": ["quarto selado"],
+        "resisted": ["Mira"],
+        "invented_people": ["Fantasma Novo"],
+    }
+    expected = [
+        "Sem item: lanterna antiga.",
+        "Não existe: quarto selado.",
+        "Mira recusa.",
+        "Fantasma Novo não está estabelecido no mundo.",
+    ]
+    assert action_check.hard_blockers(state) == expected
+    blocked = action_check.check_action(
+        "abro a porta", "do", state, llm_cfg={}, transport=None, cfg={},
+        allow_llm=False,
+    )
+    assert blocked.possible is False
+    assert blocked.blockers == expected
+    assert blocked.risks == []
+    assert blocked.cost == "" and blocked.consequence == ""
+    supplied = action_check.check_action(
+        "abro a porta", "do", state, llm_cfg={}, transport=None, cfg={},
+        blockers=["motivo externo"],
+    )
+    assert supplied.possible is False
+    assert supplied.blockers == ["motivo externo"]
+    empty = action_check.check_action(
+        "eu falo baixo", "say", state, llm_cfg={}, transport=None, cfg={},
+        allow_llm=False, blockers=[],
+    )
+    assert empty.to_dict() == {
+        "possible": True, "blockers": [], "risks": [], "notes": "",
+        "cost": "", "consequence": "",
+    }
+
+
+def test_check_prompt_bounds_keep_present_stats_sim_and_blockers(monkeypatch):
+    calls = _capture_check(monkeypatch)
+    state = _bounded_state()
+    original_memory = state["present_npcs"][0]["memory"]
+    original_sim = json.loads(json.dumps(state["sim"]))
+    verdict = action_check.check_action(
+        "exameno o portao", "do", state, llm_cfg={}, transport=None, cfg={},
+        blockers=[],
+    )
+    assert verdict.possible is True
+    assert calls[0][1]["role"] == "turn_check"
+    assert len(state["memories"]) == 6
+    assert isinstance(state["player"]["inventory"], list)
+    assert state["player"]["ui_state"]["flag"] is True
+    assert state["sim"] == original_sim
+    world = json.loads(calls[0][0][1]["content"])["world"]
+    assert world["player"]["name"] == "Caio"
+    assert world["player"]["stats"] == {"dex": 16, "hp": 11}
+    assert world["player"]["appearance"] == "scar over the brow"
+    assert world["player"]["dice"] == {"last": 17}
+    assert isinstance(world["player"]["ui_state"], str)
+    assert len(world["player"]["ui_state"]) <= 1200
+    assert isinstance(world["player"]["inventory"], str)
+    assert len(world["player"]["inventory"]) <= 1200
+    assert len(world["player"]["canon"]) <= 1200
+    assert world["player"]["canon"].startswith("Cânone essencial")
+    assert len(world["canon_blob"]) <= 1200
+    assert len(world["character_rules"]) <= 1200
+    assert world["character_rules"].startswith("regra")
+    assert len(state["character_rules"]) > 1200
+    mira = world["present_npcs"][0]
+    assert mira["stats"] == {"dex": 16, "hp": 20}
+    assert mira["bonds"] == {"trust": 3}
+    assert mira["mood_line"] == "Mira — wary"
+    assert mira["memory"] == original_memory
+    assert len(mira["canon"]) <= 1200
+    assert world["sim"] == original_sim
+    assert world["blocked_items"] == ["lanterna antiga", "corda"]
+    assert world["blocked_places"] == ["quarto selado"]
+    assert world["resisted"] == ["Mira"]
+    assert world["invented_people"] == ["Fantasma Novo"]
+    assert [item[:5] for item in world["memories"]] == [f"MEM-{index}" for index in range(4)]
+    assert all(len(item) <= 160 for item in world["memories"])
+    assert "MEM-4" not in json.dumps(world["memories"])
+    assert [item["text"][:6] for item in world["recent_actions"]] == [f"ACAO-{index}" for index in range(4, 10)]
+    assert all(len(item["text"]) <= 240 for item in world["recent_actions"])
+    assert "ACAO-0" not in json.dumps(world["recent_actions"])
+    assert len(world["absent"]) == 20
+    assert world["absent"][0] == {"name": "Ausente 0", "status": "missing"}
+    assert world["absent"][-1] == {"name": "SoNome", "status": ""}
+    assert all(set(item) == {"name", "status"} for item in world["absent"])
+    assert "segredo" not in json.dumps(world["absent"])
+    assert "Extra" not in json.dumps(world["absent"])
+
+
+def test_cancelled_check_still_propagates(monkeypatch):
+    def cancel(*args, **kwargs):
+        raise llm_client.LlmCancelled("stop")
+
+    monkeypatch.setattr(action_check.llm_client, "chat_completion", cancel)
+    with pytest.raises(llm_client.LlmCancelled):
+        action_check.check_action(
+            "olho", "do", {"player": {"name": "Caio"}},
+            llm_cfg={}, transport=None, cfg={}, blockers=[],
+        )

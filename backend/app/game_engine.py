@@ -43,6 +43,8 @@ import logging
 import os
 import sqlite3
 import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -136,12 +138,19 @@ def acquire_generation_lock(adventure_id: str) -> bool:
 
 
 def release_generation_lock(adventure_id: str) -> None:
-    lock = _lock_for(adventure_id)
-    if lock.locked():
+    try:
+        lock = _lock_for(adventure_id)
+        if lock.locked():
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+    finally:
         try:
-            lock.release()
-        except RuntimeError:
-            pass
+            from app import jobs
+            jobs.resume_portrait_prepare()
+        except Exception:
+            log.warning("não foi possível retomar preparação de retratos", exc_info=True)
 
 
 def is_any_generation_active() -> bool:
@@ -181,6 +190,25 @@ def _publish_live(adventure_id: str, type_: str, data: dict) -> None:
         events_bus.publish(adventure_id, type_, data)
     except Exception:
         log.warning("live event %s not published", type_, exc_info=True)
+
+
+def _turn_phase_event(adventure_id: str, phase: str, state: str,
+                      started: float | None = None) -> dict:
+    data = {"phase": phase, "state": state}
+    if started is not None:
+        data["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+    _publish_live(adventure_id, "turn_phase", data)
+    return {"event": "turn_phase", "data": data}
+
+
+def _run_turn_phase(adventure_id: str, phase: str, call) -> Iterator[dict]:
+    """Executa uma chamada e sempre fecha a fase, inclusive em exceções."""
+    started = time.monotonic()
+    yield _turn_phase_event(adventure_id, phase, "start")
+    try:
+        return call()
+    finally:
+        yield _turn_phase_event(adventure_id, phase, "end", started)
 
 
 def _format_player_text(type_: str, text: str) -> str:
@@ -484,14 +512,16 @@ def _action_check_state(adventure_id: str, user: str,
 
 
 def _apply_action_check(built, text: str, type_: str, state: dict | None,
-                        llm_cfg: dict, transport: Any, cfg: dict, cancel=None):
+                        llm_cfg: dict, transport: Any, cfg: dict, cancel=None,
+                        *, allow_llm: bool = True,
+                        blockers: list[str] | None = None):
     """Injeta o bloco no contexto. None se não houve veredito; nunca propaga."""
     if state is None:
         return None
     try:
         verdict = action_check.check_action(
             text, type_, state, llm_cfg=llm_cfg, transport=transport, cfg=cfg,
-            cancel=cancel,
+            cancel=cancel, allow_llm=allow_llm, blockers=blockers,
         )
     except llm_client.LlmCancelled:
         raise
@@ -506,6 +536,28 @@ def _apply_action_check(built, text: str, type_: str, state: dict | None,
             built.messages[-1]["content"], action_check.verdict_block(verdict)),
     }
     return verdict
+
+
+def _npc_gate_world_check(adventure_id: str, player_action: dict | None,
+                          raw_query_text: str, llm_cfg: dict, transport: Any,
+                          user: str, *, action_blockers: list[str] | None = None,
+                          cancel=None) -> dict | None:
+    from app import npc_gate
+
+    if player_action is None:
+        return npc_gate.own_beat(adventure_id, llm_cfg, transport, cancel=cancel)
+    world_check = None
+    if action_blockers is not None:
+        world_check = {"action_blockers": action_blockers[:8]}
+    return npc_gate.decide(
+        adventure_id,
+        player_action.get("text") or raw_query_text or "",
+        llm_cfg,
+        transport,
+        user,
+        world_check=world_check,
+        cancel=cancel,
+    )
 
 
 def _compliance_flag(text: str, adjudication: dict | None) -> list[str]:
@@ -773,10 +825,12 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
 
             from app.sim import engine as sim_engine
             if player_action is not None and retry_of is None:
-                outcome = sim_engine.run_turn(
-                    adventure_id, adventure, player_action, actions, user,
-                    llm_cfg, cfg, transport, cancel=cancel,
-                )
+                outcome = yield from _run_turn_phase(
+                    adventure_id, "intent",
+                    lambda: sim_engine.run_turn(
+                        adventure_id, adventure, player_action, actions, user,
+                        llm_cfg, cfg, transport, cancel=cancel,
+                    ))
                 if outcome and outcome.get("refusal"):
                     refusal = outcome["refusal"]
                     with appending(adventure_id) as conn:
@@ -842,11 +896,71 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 yield {"event": "rules_roll", "data": rolled}
                 _publish_live(adventure_id, "rules_roll", rolled)
 
+            social_turn = retry_of is None and (
+                player_action is None or player_action.get("type") in ("do", "say")
+            )
+            blockers = None
             if check_text:
                 check_state = _action_check_state(adventure_id, user, resolution)
-            verdict = _apply_action_check(
-                built, check_text, check_type, check_state, llm_cfg, transport, check_cfg,
-                cancel=cancel)
+                if check_state is not None:
+                    blockers = action_check.hard_blockers(check_state)
+
+            def run_check():
+                return _apply_action_check(
+                    built, check_text, check_type, check_state, llm_cfg, transport,
+                    check_cfg, cancel=cancel, allow_llm=check_type != "say",
+                    blockers=blockers)
+
+            def adjudicate():
+                return _npc_gate_world_check(
+                    adventure_id, player_action, raw_query_text, llm_cfg,
+                    transport, user, action_blockers=blockers, cancel=cancel)
+
+            if check_text and social_turn:
+                check_started = time.monotonic()
+                gate_started = time.monotonic()
+                yield _turn_phase_event(adventure_id, "action_check", "start")
+                yield _turn_phase_event(adventure_id, "npc_gate", "start")
+                executor = ThreadPoolExecutor(max_workers=2)
+                check_future = executor.submit(run_check)
+                gate_future = executor.submit(adjudicate)
+                pending = {
+                    check_future: ("action_check", check_started),
+                    gate_future: ("npc_gate", gate_started),
+                }
+                try:
+                    while pending:
+                        finished, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                        for future in finished:
+                            phase, started = pending.pop(future)
+                            yield _turn_phase_event(
+                                adventure_id, phase, "end", started)
+                    verdict = check_future.result()
+                    try:
+                        adjudication = gate_future.result()
+                    except llm_client.LlmCancelled:
+                        raise
+                    except Exception:
+                        log.warning("npc_gate: adjudicador indisponível", exc_info=True)
+                        adjudication = None
+                finally:
+                    executor.shutdown(wait=True)
+                    for phase, started in pending.values():
+                        yield _turn_phase_event(adventure_id, phase, "end", started)
+            else:
+                if check_text:
+                    verdict = yield from _run_turn_phase(
+                        adventure_id, "action_check", run_check)
+                if social_turn:
+                    try:
+                        adjudication = yield from _run_turn_phase(
+                            adventure_id, "npc_gate", adjudicate)
+                    except llm_client.LlmCancelled:
+                        raise
+                    except Exception:
+                        log.warning("npc_gate: adjudicador indisponível", exc_info=True)
+                        adjudication = None
+
             if verdict is not None:
                 payload = verdict.to_dict()
                 yield {"event": "action_check", "data": payload}
@@ -858,31 +972,9 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     live["seq"] = player_action.get("seq")
                 _publish_live(adventure_id, "action_check", live)
 
-            social_turn = retry_of is None and (
-                player_action is None or player_action.get("type") in ("do", "say")
-            )
             if social_turn:
                 from app import npc_gate
                 roster = _living_roster(adventure_id)
-                try:
-                    if player_action is None:
-                        adjudication = npc_gate.own_beat(
-                            adventure_id, llm_cfg, transport, cancel=cancel)
-                    else:
-                        adjudication = npc_gate.decide(
-                            adventure_id,
-                            (player_action.get("text") or raw_query_text or ""),
-                            llm_cfg,
-                            transport,
-                            user,
-                            world_check=verdict.to_dict() if verdict else None,
-                            cancel=cancel,
-                        )
-                except llm_client.LlmCancelled:
-                    raise
-                except Exception:
-                    log.warning("npc_gate: adjudicador indisponível", exc_info=True)
-                    adjudication = None
                 cue = npc_gate.cue_block(adjudication, roster)
                 if cue and built.messages:
                     last = built.messages[-1]
@@ -896,13 +988,30 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                     _publish_live(adventure_id, "adjudication", visible)
 
             stream_state = llm_client.StreamState()
-            for token in llm_client.stream_chat_completion(
-                    llm_cfg, built.messages, sampler=sampler,
-                    stop=built.stop_sequences, transport=transport,
-                    state=stream_state, cancel=cancel):
-                full.append(token)
-                _publish_live(adventure_id, "token", {"token": token})
-                yield {"event": "token", "data": {"token": token}}
+            narrative_started = time.monotonic()
+            narrative_open = True
+            yield _turn_phase_event(adventure_id, "narrative_wait", "start")
+            yield _turn_phase_event(adventure_id, "narrative_ttft", "start")
+            try:
+                for token in llm_client.stream_chat_completion(
+                        llm_cfg, built.messages, sampler=sampler,
+                        stop=built.stop_sequences, transport=transport,
+                        state=stream_state, cancel=cancel):
+                    if narrative_open:
+                        yield _turn_phase_event(
+                            adventure_id, "narrative_wait", "end", narrative_started)
+                        yield _turn_phase_event(
+                            adventure_id, "narrative_ttft", "end", narrative_started)
+                        narrative_open = False
+                    full.append(token)
+                    _publish_live(adventure_id, "token", {"token": token})
+                    yield {"event": "token", "data": {"token": token}}
+            finally:
+                if narrative_open:
+                    yield _turn_phase_event(
+                        adventure_id, "narrative_wait", "end", narrative_started)
+                    yield _turn_phase_event(
+                        adventure_id, "narrative_ttft", "end", narrative_started)
 
             text = output_sanitizer.clean_narration("".join(full), stream_state.truncated)
             text = npc_bonds.strip_leaked(text)
@@ -912,15 +1021,17 @@ def _stream_generation(adventure_id: str, *, player_action: dict | None,
                 text = scripting.run_output_modifier(out_script, text)
             player_text = (player_action or {}).get("text") or raw_query_text or ""
             compliance = _compliance_flag(text, adjudication)
-            text, quality = _correct_narration(
-                text, player_text=player_text, retry_of=retry_of, built=built,
-                llm_cfg=llm_cfg, sampler=sampler, transport=transport,
-                out_script=out_script,
-                extra_flags=compliance,
-                adjudication=adjudication,
-                adventure_id=adventure_id,
-                cancel=cancel,
-            )
+            text, quality = yield from _run_turn_phase(
+                adventure_id, "correction",
+                lambda: _correct_narration(
+                    text, player_text=player_text, retry_of=retry_of, built=built,
+                    llm_cfg=llm_cfg, sampler=sampler, transport=transport,
+                    out_script=out_script,
+                    extra_flags=compliance,
+                    adjudication=adjudication,
+                    adventure_id=adventure_id,
+                    cancel=cancel,
+                ))
             beat = (adjudication or {}).get("initiative") or {}
             if beat.get("line") and beat.get("npc") and beat["npc"].casefold() not in text.casefold():
                 text = (text.rstrip() + "\n\n" + beat["line"]).strip()
@@ -1152,14 +1263,19 @@ def handle_continue(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
-    _preempt_automatic_clips(adventure_id, transport)
-    cancel_post_turn(adventure_id)
-    generation_id = db.new_id()
-    with appending(adventure_id) as conn:
-        canon.capture(conn, adventure_id, generation_id)
-    return _stream_generation(adventure_id, player_action=None,
-                              retry_of=None, retry_count=0, transport=transport,
-                              cancel=cancel, generation_id=generation_id)
+    # O finally do gerador não roda se o preparo estourar antes do return.
+    try:
+        _preempt_automatic_clips(adventure_id, transport)
+        cancel_post_turn(adventure_id)
+        generation_id = db.new_id()
+        with appending(adventure_id) as conn:
+            canon.capture(conn, adventure_id, generation_id)
+        return _stream_generation(adventure_id, player_action=None,
+                                  retry_of=None, retry_count=0, transport=transport,
+                                  cancel=cancel, generation_id=generation_id)
+    except BaseException:
+        release_generation_lock(adventure_id)
+        raise
 
 
 def handle_retry(adventure_id: str, transport: Any = None, *,
@@ -1176,22 +1292,27 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
     if not acquire_generation_lock(adventure_id):
         raise GameError.conflict("generation_in_progress",
                                  "a generation is already running for this adventure")
-    _preempt_automatic_clips(adventure_id, transport)
-    cancel_post_turn(adventure_id)
+    # O finally do gerador não roda se o preparo estourar antes do return.
+    try:
+        _preempt_automatic_clips(adventure_id, transport)
+        cancel_post_turn(adventure_id)
 
-    with appending(adventure_id) as conn:
-        _restore_body_from_action(conn, adventure_id, old)
-    key = (adventure_id, int(old["seq"]))
-    if retry_count is None:
-        _retry_counts[key] = _retry_counts.get(key, 0) + 1
-        effective_count = _retry_counts[key]
-    else:
-        effective_count = retry_count
+        with appending(adventure_id) as conn:
+            _restore_body_from_action(conn, adventure_id, old)
+        key = (adventure_id, int(old["seq"]))
+        if retry_count is None:
+            _retry_counts[key] = _retry_counts.get(key, 0) + 1
+            effective_count = _retry_counts[key]
+        else:
+            effective_count = retry_count
 
-    return _stream_generation(adventure_id, player_action=None,
-                              retry_of=old, retry_count=effective_count,
-                              transport=transport, cancel=cancel,
-                              generation_id=db.new_id())
+        return _stream_generation(adventure_id, player_action=None,
+                                  retry_of=old, retry_count=effective_count,
+                                  transport=transport, cancel=cancel,
+                                  generation_id=db.new_id())
+    except BaseException:
+        release_generation_lock(adventure_id)
+        raise
 
 
 def _discard_pending_canon(adventure_id: str, generation_id: str) -> None:

@@ -31,6 +31,39 @@
   background: #000;
 }
 
+/* Palco: no celular o cenário cede espaço ao teclado. Desktop segue 34vh. */
+@media (max-width: 767px) {
+  .play-scene {
+    max-height: 22svh;
+  }
+
+  .play-scene-media {
+    max-height: min(22svh, 100%);
+  }
+}
+
+@media (max-width: 639px) {
+  html.kb-open .play-scene {
+    height: 4rem;
+    max-height: 4rem;
+  }
+
+  html.kb-open .play-scene .play-media-frame {
+    height: 100%;
+    max-height: 100%;
+  }
+
+  html.kb-open .play-scene-media {
+    height: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  html.kb-open .play-scene-chrome {
+    display: none;
+  }
+}
+
 @media (max-width: 639px) {
   .play-portrait-rail {
     max-width: 100%;

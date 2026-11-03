@@ -16,6 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import auth as auth_core  # noqa: E402
+from app import db, users  # noqa: E402
 from app.routes import auth as auth_routes  # noqa: E402
 
 from conftest import TEST_AUTH_PASSWORD, TEST_AUTH_SECRET, TEST_AUTH_USER  # noqa: E402
@@ -58,7 +59,12 @@ def test_login_ok_returns_token_and_check_passes(raw_client):
     data = check.json()
     assert data["ok"] is True
     assert data["user"] == TEST_AUTH_USER
+    assert data["admin"] is True
     assert data["expires_at"] == body["expires_at"]
+    with db.session() as conn:
+        stored = users.get_user(conn, TEST_AUTH_USER)["password_hash"]
+    assert stored.startswith("scrypt$")
+    assert users.password_matches(TEST_AUTH_PASSWORD, stored)
 
 
 def test_login_wrong_password_generic_401(raw_client):
@@ -87,6 +93,59 @@ def test_login_throttle_429_after_5_failures(raw_client):
     assert res.json()["error"]["code"] == "rate_limited"
     # durante o lockout até a credencial correta é bloqueada
     assert _login(raw_client).status_code == 429
+
+
+def test_login_throttle_is_per_ip_and_success_clears_that_key(raw_client, monkeypatch):
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(auth_routes.time, "monotonic", lambda: clock["now"])
+    raw_client._transport.client = ("198.51.100.4", 50000)
+    for _ in range(4):
+        assert _login(raw_client, password="nope").status_code == 401
+    assert _login(raw_client).status_code == 200
+    assert _login(raw_client, password="nope").status_code == 401
+    assert _login(raw_client).status_code == 200
+
+    raw_client._transport.client = ("198.51.100.5", 50000)
+    for _ in range(5):
+        assert _login(raw_client, password="nope").status_code == 401
+    assert _login(raw_client).status_code == 429
+    raw_client._transport.client = ("198.51.100.4", 50000)
+    assert _login(raw_client).status_code == 200
+
+    raw_client._transport.client = ("198.51.100.5", 50000)
+    assert _login(raw_client).status_code == 429
+    clock["now"] = 1_061.0
+    assert _login(raw_client).status_code == 200
+
+
+def test_login_throttle_without_host_uses_unknown(raw_client):
+    raw_client._transport.client = ("", 50000)
+    assert _login(raw_client, password="nope").status_code == 401
+    assert "unknown" in auth_routes._attempts
+    raw_client._transport.client = ("203.0.113.8", 50000)
+    assert _login(raw_client, password="nope").status_code == 401
+    assert auth_routes._attempts["unknown"][0] == 1
+    assert auth_routes._attempts["203.0.113.8"][0] == 1
+
+
+def test_throttle_drops_expired_entries():
+    auth_routes._attempts["old-lock"] = (0, 10.0, 10.0)
+    auth_routes._attempts["stale-partial"] = (4, 0.0, 10.0)
+    auth_routes._attempts["fresh-partial"] = (2, 0.0, 90.0)
+    auth_routes._attempts["active-lock"] = (0, 200.0, 10.0)
+    auth_routes._prune_attempts(100.0)
+    assert "old-lock" not in auth_routes._attempts
+    assert "stale-partial" not in auth_routes._attempts
+    assert auth_routes._attempts["fresh-partial"][0] == 2
+    assert auth_routes._attempts["active-lock"][1] == 200.0
+
+
+def test_client_host_falls_back_to_unknown():
+    from types import SimpleNamespace
+
+    assert auth_routes._client_host(SimpleNamespace(client=None)) == "unknown"
+    assert auth_routes._client_host(SimpleNamespace(client=SimpleNamespace(host=""))) == "unknown"
+    assert auth_routes._client_host(SimpleNamespace(client=SimpleNamespace(host=" 10.0.0.8 "))) == "10.0.0.8"
 
 
 # --------------------------------------------------------- rotas protegidas

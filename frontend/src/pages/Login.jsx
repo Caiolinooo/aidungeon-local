@@ -78,13 +78,14 @@ export default function Login() {
                 autoComplete="current-password"
                 required
                 placeholder="Digite sua senha"
-                className="w-full rounded-xl border border-subtle bg-surface-input pl-9 pr-9 py-2 text-xs text-primary placeholder-muted outline-none focus:border-accent-pri transition"
+                className="min-h-12 w-full rounded-xl border border-subtle bg-surface-input py-2 pl-9 pr-12 text-xs text-primary placeholder-muted outline-none transition focus:border-accent-pri"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Esconder senha' : 'Mostrar senha'}
-                className="absolute right-3 top-2.5 text-muted hover:text-primary transition"
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                aria-pressed={showPassword}
+                className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center text-muted transition hover:text-primary"
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>

@@ -1,4 +1,4 @@
-"""Gerência de usuários. Só o Caio cria, apaga e redefine senha alheia."""
+"""Gerência de usuários. Só um admin cria, apaga e redefine senha alheia."""
 
 from __future__ import annotations
 
