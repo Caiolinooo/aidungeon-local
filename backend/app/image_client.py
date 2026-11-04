@@ -1096,6 +1096,7 @@ _VIDEO_DEFAULTS = {
     "unet": "Wan2.2-TI2V-5B-Q8_0.gguf",
     "clip": "t5xxl_fp8_e4m3fn_scaled.safetensors",
     "vae": "wan2.2_vae.safetensors",
+    "clip_projection": "",
     "frames": 121,
     "fps": 24.0,
     "steps": 8,
@@ -1302,8 +1303,9 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
     }
 
 
-_H3_UNET = "MiniMax-H3-fl2va-curve-Q4_0.gguf"
-_H3_CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+_H3_UNET = "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf"
+_H3_CLIP = "qwen3vl_4b_int8_convrot.safetensors"
+_H3_PROJECTION = "mmh3-4b-ClipProj-v3.1-mlp.safetensors"
 _H3_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
 
 
@@ -1317,6 +1319,19 @@ def _h3_i2v_graph(video: dict, prompt: str, image_name: str, *,
     """
     length = image_budget.h3_length(int(video["frames"]))
     cfg = float(video["cfg"])
+    unet_name = str(video.get("unet") or _H3_UNET)
+    clip_name = str(video.get("clip") or _H3_CLIP)
+    projection = str(video.get("clip_projection") or "")
+    vae_name = str(video.get("vae") or _H3_VAE)
+    if projection:
+        clip_node = {"class_type": "CCTechClipProjLoader", "inputs": {
+            "clip_name": clip_name, "type": "auto", "projection": projection}}
+    elif clip_name.lower().endswith(".gguf"):
+        clip_node = {"class_type": "CLIPLoaderGGUF", "inputs": {
+            "clip_name": clip_name, "type": "minimax"}}
+    else:
+        clip_node = {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": clip_name, "type": "minimax", "device": "cpu"}}
     if cfg > 1:
         guider = {"class_type": "CFGGuider", "inputs": {
             "model": ["1", 0], "positive": ["5", 0], "negative": ["5", 0],
@@ -1325,10 +1340,9 @@ def _h3_i2v_graph(video: dict, prompt: str, image_name: str, *,
         guider = {"class_type": "BasicGuider", "inputs": {
             "model": ["1", 0], "conditioning": ["5", 0]}}
     return {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": _H3_UNET}},
-        "2": {"class_type": "CLIPLoader", "inputs": {
-            "clip_name": _H3_CLIP, "type": "minimax", "device": "cpu"}},
-        "3": {"class_type": "VAELoader", "inputs": {"vae_name": _H3_VAE}},
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet_name}},
+        "2": clip_node,
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
         "4": {"class_type": "LoadImage", "inputs": {"image": image_name}},
         "5": {"class_type": "MiniMaxH3ImageToVideo", "inputs": {
             "clip": ["2", 0], "vae": ["3", 0], "prompt": prompt,

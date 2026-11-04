@@ -483,25 +483,33 @@
       },
       "h3": {
         "engine": "h3",
-        "min_vram_mib": 16687,
-        "min_ram_mib": 14961,
-        "min_vram_note": "GGUF Q4_0 mais o VAE de vídeo somam 13615 MiB. No quadro 768x448x56 a ativação é 3072 e o spill contra o buraco de 7136 MiB é 9551. O encoder NVFP4 fica em CPU. Não troca o pin do ComfyUI-GGUF.",
+        "min_vram_mib": 13923,
+        "min_ram_mib": 4634,
+        "min_vram_note": "GGUF UD-Q2_K_XL (8,06 GB), VAE INT8 (2,81 GB) e projeção (0,50 GB) somam 10851 MiB. No quadro 768x448x56 a ativação é 3072 e o spill contra o buraco de 7136 MiB é 6787. O encoder Qwen3-VL 4B INT8 fica em CPU; a matriz projeta para os 5120 canais do H3.",
         "artifacts": [
           {
             "role": "unet",
-            "filename": "MiniMax-H3-fl2va-curve-Q4_0.gguf",
-            "dest": "models/diffusion_models/MiniMax-H3-fl2va-curve-Q4_0.gguf",
-            "url": "https://huggingface.co/joeygambino/MiniMax-H3-curve-GGUF/resolve/main/fl2va/MiniMax-H3-fl2va-curve-Q4_0.gguf",
-            "sha256": "226c83f6b971077f61f4ccf4ffaaed5d7ccf914642b7c25359da1da2f13dcd1a",
-            "bytes": 11464827552
+            "filename": "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+            "dest": "models/diffusion_models/minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+            "url": "https://huggingface.co/unsloth/MiniMax-H3-GGUF/resolve/main/minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+            "sha256": "cfe0795c00ab6e6ebf8c64fe4574f45a828e8a93e0876bca704e055662a9d7b8",
+            "bytes": 8063029344
           },
           {
             "role": "clip",
-            "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-            "dest": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-            "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
-            "bytes": 15687142551
+            "filename": "qwen3vl_4b_int8_convrot.safetensors",
+            "dest": "models/text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Winnougan/Comfy-Qwen3-VL-INT8/resolve/main/qwen3vl_4b_int8_convrot.safetensors",
+            "sha256": "0455ed10f89789557a1b4f9983e778512cba1ad1268576b676f62f432a00a4dd",
+            "bytes": 4829126213
+          },
+          {
+            "role": "projection",
+            "filename": "mmh3-4b-ClipProj-v3.1-mlp.safetensors",
+            "dest": "models/clip_projections/mmh3-4b-ClipProj-v3.1-mlp.safetensors",
+            "url": "https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3/resolve/main/mmh3-4b-ClipProj-v3.1-mlp.safetensors",
+            "sha256": "902a9b96ed041aedf7463251c59d917fba94963b944dd3196c00b23ff0f2b6b0",
+            "bytes": 503423800
           },
           {
             "role": "vae",
@@ -534,16 +542,17 @@
             "requirements": "requirements.txt"
           },
           {
-            "name": "ComfyUI-H3-Multishot",
-            "git_url": "https://github.com/jlucasmcrell/ComfyUI-H3-Multishot.git",
-            "git_ref": "d7d197709fc93c1afb125e3db1dfd4ac0ae28c60",
-            "tag": "v2.7.2"
+            "name": "ComfyUI-GGUF-Loader",
+            "git_url": "https://github.com/ChrisColeTech/ComfyUI-GGUF-Loader.git",
+            "git_ref": "109a281b1a49570cb708f8543efea6383baba40a",
+            "requirements": "requirements.txt"
           }
         ],
         "config": {
           "engine": "h3",
-          "unet": "MiniMax-H3-fl2va-curve-Q4_0.gguf",
-          "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "unet": "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+          "clip": "qwen3vl_4b_int8_convrot.safetensors",
+          "clip_projection": "mmh3-4b-ClipProj-v3.1-mlp.safetensors",
           "clip_type": "minimax",
           "clip_device": "cpu",
           "vae": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -556,7 +565,7 @@
           "vertical_width": 448,
           "vertical_height": 768
         },
-        "source": "deploy/vm/install_h3_video.sh. O GGUF Q4_0 derrama para a RAM; o narrador continua carregado."
+        "source": "deploy/vm/install_h3_small.sh. H3 UD-Q2 com encoder Qwen3-VL 4B INT8 já instalado e projeção mmh3-4b; o encoder roda em CPU."
       }
     }
   }

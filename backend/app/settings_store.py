@@ -99,7 +99,7 @@ _ZIMAGE_FILE_DEFAULTS = {
 }
 _QWEN_IDENTITY = ("unet", "clip", "vae", "clip_type", "clip_device")
 _VIDEO_FIELDS = (
-    "engine", "checkpoint", "unet", "clip", "vae",
+    "engine", "checkpoint", "unet", "clip", "vae", "clip_projection",
     "clip_type", "clip_device", "weight_dtype",
     "frames", "fps", "steps", "cfg", "shift", "timeout_seconds",
     "width", "height", "vertical_width", "vertical_height",
@@ -127,6 +127,10 @@ _WAN_ENGINE_PRESET = {
 }
 _H3_ENGINE_PRESET = {
     "engine": "h3",
+    "unet": "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+    "clip": "qwen3vl_4b_int8_convrot.safetensors",
+    "clip_projection": "mmh3-4b-ClipProj-v3.1-mlp.safetensors",
+    "vae": "minimax_h3_video_vae_int8_convrot.safetensors",
     "width": 768,
     "height": 448,
     "vertical_width": 448,

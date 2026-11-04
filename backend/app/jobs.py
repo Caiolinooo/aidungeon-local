@@ -1756,6 +1756,8 @@ def _enqueue_clip_followup(job: dict, result: dict) -> None:
     job_type = job.get("type")
     if job_type not in ("character_portrait", "scene_backdrop"):
         return
+    if (result or {}).get("reused"):
+        return
     image_id = str(((result or {}).get("image") or {}).get("id") or "")
     if not image_id:
         return

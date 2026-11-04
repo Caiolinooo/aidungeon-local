@@ -389,7 +389,10 @@ def test_video_engine_presets_fill_omitted_fields_only(client):
     with db.session() as conn:
         video = settings_store.effective_image_settings(conn)["comfyui_video"]
     assert (video["vertical_width"], video["vertical_height"]) == (448, 768)
-    assert "MiniMax" not in json.dumps(video)
+    assert video["unet"] == "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf"
+    assert video["clip"] == "qwen3vl_4b_int8_convrot.safetensors"
+    assert video["clip_projection"] == "mmh3-4b-ClipProj-v3.1-mlp.safetensors"
+    assert video["vae"] == "minimax_h3_video_vae_int8_convrot.safetensors"
 
     tuned = client.put("/api/settings/image", json={"video_frames": 90})
     assert tuned.status_code == 200, tuned.text

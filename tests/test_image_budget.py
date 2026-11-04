@@ -26,8 +26,8 @@ def test_h3_budget_uses_the_snapped_length():
     budget = image_budget.preset_budget(
         "video", "h3", width=768, height=448, frames=121)
     assert budget["activation_mib"] == round(3072 * 124 / 56)
-    assert budget["weights_vram_mib"] == 13615
-    assert budget["ram_mib"] == 14961
+    assert budget["weights_vram_mib"] == 10851
+    assert budget["ram_mib"] == 4606
     assert budget["weights_known"] is True
 
 
@@ -35,8 +35,8 @@ def test_h3_default_frame_spills_past_the_hole():
     budget = image_budget.preset_budget(
         "video", "h3", width=768, height=448, frames=56)
     assert budget["activation_mib"] == 3072
-    assert budget["vram_mib"] == 16687
-    assert budget["spill_mib"] == 9551
+    assert budget["vram_mib"] == 13923
+    assert budget["spill_mib"] == 6787
 
 
 def test_unknown_engine_is_rejected():
@@ -82,7 +82,7 @@ def test_budget_route_compares_live_memory_and_stays_200(client, monkeypatch):
     assert unknown["ram_available_mib"] is None
     assert unknown["fits_vram"] is None
     assert unknown["fits_ram"] is None
-    assert unknown["spill_mib"] == 9551
+    assert unknown["spill_mib"] == 6787
 
     missing = client.get("/api/settings/image/budget", params={
         "kind": "image", "engine": "qwen", "height": "wide",

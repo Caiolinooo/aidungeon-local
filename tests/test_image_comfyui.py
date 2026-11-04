@@ -677,6 +677,10 @@ def test_h3_graph_uses_the_reduced_gguf_and_spills(tmp_path):
     result = image_client.generate_clip(
         _cfg(tmp_path, comfyui_video={
             "engine": "h3",
+            "unet": "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf",
+            "clip": "qwen3vl_4b_int8_convrot.safetensors",
+            "clip_projection": "mmh3-4b-ClipProj-v3.1-mlp.safetensors",
+            "vae": "minimax_h3_video_vae_int8_convrot.safetensors",
             "frames": 56,
             "steps": 8,
             "cfg": 1,
@@ -693,8 +697,12 @@ def test_h3_graph_uses_the_reduced_gguf_and_spills(tmp_path):
     assert result["media_type"] == "video/mp4"
     nodes = _nodes(capture["graph"])
     assert nodes["UnetLoaderGGUF"]["inputs"]["unet_name"] == (
-        "MiniMax-H3-fl2va-curve-Q4_0.gguf")
-    assert nodes["CLIPLoader"]["inputs"]["device"] == "cpu"
+        "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf")
+    clip = nodes["CCTechClipProjLoader"]["inputs"]
+    assert clip["clip_name"] == "qwen3vl_4b_int8_convrot.safetensors"
+    assert clip["projection"] == "mmh3-4b-ClipProj-v3.1-mlp.safetensors"
+    assert nodes["VAELoader"]["inputs"]["vae_name"] == (
+        "minimax_h3_video_vae_int8_convrot.safetensors")
     latent = nodes["MiniMaxH3ImageToVideo"]["inputs"]
     assert latent["length"] == 56
     assert "last_frame" not in latent
@@ -703,7 +711,7 @@ def test_h3_graph_uses_the_reduced_gguf_and_spills(tmp_path):
     assert "VAEDecodeAudio" not in dumped
     assert "minimax_h3_fl2v_turbo" not in dumped
     assert image_budget.preset_budget(
-        "video", "h3", width=768, height=448, frames=56)["spill_mib"] == 9551
+        "video", "h3", width=768, height=448, frames=56)["spill_mib"] == 6787
 
 
 def test_h3_gguf_rejection_names_the_required_pack(tmp_path):

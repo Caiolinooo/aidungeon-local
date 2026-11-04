@@ -20,9 +20,10 @@ _QWEN_CLIP_BYTES = 9350798360
 _ZIMAGE_UNET_BYTES = 3850130496
 _ZIMAGE_VAE_BYTES = 335304388
 _ZIMAGE_CLIP_BYTES = 5631994051
-_H3_UNET_BYTES = 11464827552
+_H3_UNET_BYTES = 8063029344
 _H3_VAE_BYTES = 2811065184
-_H3_CLIP_BYTES = 15687142551
+_H3_CLIP_BYTES = 4829126213
+_H3_PROJECTION_BYTES = 503423800
 
 _catalog_cache: dict | None = None
 
@@ -114,11 +115,15 @@ def preset_budget(kind: str, engine: str, *, width: int, height: int,
         activation = round(
             2048 * width * height / (1280 * 704) * max(frames, 1) / 121)
     elif kind_name == "video" and engine_name == "h3":
-        weights = _mib(_H3_UNET_BYTES + _H3_VAE_BYTES)
-        ram = _mib(_H3_CLIP_BYTES)
+        weights, known = _known_mib(
+            "video", "h3", ("unet", "vae", "projection"))
+        if not known:
+            weights = _mib(
+                _H3_UNET_BYTES + _H3_VAE_BYTES + _H3_PROJECTION_BYTES)
+        clip_bytes = _artifact_bytes("video", "h3", "clip")
+        ram = _mib(clip_bytes if clip_bytes is not None else _H3_CLIP_BYTES)
         activation = round(
             3072 * width * height / (768 * 448) * h3_length(frames) / 56)
-        known = True
     else:
         raise ValueError(f"engine desconhecido: {kind_name}:{engine_name}")
     vram = weights + activation

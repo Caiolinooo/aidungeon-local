@@ -548,6 +548,19 @@ def test_backdrop_enqueue_does_not_preempt_running_auto_clip(tmp_db):
         assert not stored.get("error")
 
 
+def test_reused_still_does_not_enqueue_a_clip(tmp_db, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        jobs, "enqueue_scene_clip",
+        lambda *args, **kwargs: called.append((args, kwargs)))
+    job = {"type": "scene_backdrop", "adventure_id": "adv", "ref_id": "room"}
+    result = {"image": {"id": "cached"}, "reused": True}
+
+    jobs._schedule_clip_followup(job, result)
+
+    assert called == []
+
+
 def test_scene_clip_progress_interrupts_only_after_the_still_commits(
         tmp_db, monkeypatch):
     clock = {"t": 3000.0}
