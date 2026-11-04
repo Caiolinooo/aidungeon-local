@@ -255,11 +255,16 @@ curl -fL \
 # Conferir os três SHA256 da tabela antes de remover o sufixo .part.
 ```
 
-A unit é `deploy/vm/comfyui.service`, instalada como
-`/etc/systemd/system/comfyui.service`. O ComfyUI escuta somente em
-`127.0.0.1:8188`. Antes do primeiro retrato, `GET /system_stats` deve responder
-e os três arquivos precisam ter os hashes acima. `clip_device = "cpu"` mantém o
-Qwen3-VL 8B INT8 fora da VRAM; UNET FP8 e VAE dividem a L4 com narrador e voz.
+A unit efetiva na VM é a de usuário
+`/home/caio/.config/systemd/user/comfyui.service`
+([`comfyui.user.service`](comfyui.user.service)): `MemoryHigh=20G`,
+`MemoryMax=24G`, `MemorySwapMax=4G`. O limite antigo de 12 GiB prendia o
+FLUX em reclaim e uma imagem levou 10m52s. `deploy/vm/comfyui.service` é a
+alternativa de sistema, instalada como `/etc/systemd/system/comfyui.service`.
+O ComfyUI escuta somente em `127.0.0.1:8188`. Antes do primeiro retrato,
+`GET /system_stats` deve responder e os três arquivos precisam ter os hashes
+acima. `clip_device = "cpu"` mantém o Qwen3-VL 8B INT8 fora da VRAM; UNET FP8 e
+VAE dividem a L4 com narrador e voz.
 `--vram-headroom 2` mantém 2 GB de folga para o VAE do LTXV. Em 29/10/2026,
 FLUX terminou em 24,802 s com 2.264 MiB livres e LTXV em 35,528 s com 1.248
 MiB livres; ambos acima do piso de 900 MiB e sem crescimento de swap.

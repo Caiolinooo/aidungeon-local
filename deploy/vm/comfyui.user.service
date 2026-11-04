@@ -1,0 +1,21 @@
+# /home/caio/.config/systemd/user/comfyui.service
+# Unit efetiva do ComfyUI na VM. O limite de 12 GiB fazia o FLUX entrar em
+# reclaim por 10m52s; 20/24 GiB dá folga ao FP8, ao VAE e ao Python.
+[Unit]
+Description=ComfyUI (API de imagem, FLUX.3 Klein INT8)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/caio/ComfyUI
+Environment=PATH=/home/caio/ComfyUI/venv/bin:/home/caio/.local/bin:/usr/local/bin:/usr/bin
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ExecStart=/home/caio/ComfyUI/venv/bin/python main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=15
+MemoryHigh=20G
+MemoryMax=24G
+MemorySwapMax=4G
+
+[Install]
+WantedBy=default.target
