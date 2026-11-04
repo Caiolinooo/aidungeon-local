@@ -128,6 +128,5 @@ def test_scene_context_is_private_and_order_stays_the_user_message(monkeypatch):
     assert result == "she takes off the dress"
     messages = calls[0]["messages"]
     assert messages[0]["role"] == "system"
-    assert messages[1]["role"] == "system"
-    assert "A Donzela da Noite stands beside Caio" in messages[1]["content"]
-    assert messages[2] == {"role": "user", "content": "ela tira o vestido"}
+    assert "A Donzela da Noite stands beside Caio" in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "ela tira o vestido"}

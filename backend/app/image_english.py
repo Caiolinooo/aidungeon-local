@@ -110,17 +110,17 @@ def render_english(text: str, *, transport=None,
 
     messages = [{"role": "system", "content": _SYSTEM}]
     if context and context.strip():
-        messages.append({
-            "role": "system",
-            "content": (
-                "Story context, for meaning only; never translate, repeat or "
-                "output it:\n" + " ".join(context.split())[:1800]
-            ),
-        })
+        messages[0]["content"] = (
+            _SYSTEM
+            + "\n\nStory context, for meaning only; never translate, repeat "
+            "or output it:\n"
+            + " ".join(context.split())[:1800]
+        )
     messages.append({"role": "user", "content": masked})
 
     for attempt in range(2):
-        system = _SYSTEM if attempt == 0 else _SYSTEM + "\n" + _RETRY_SUFFIX
+        system = messages[0]["content"] if attempt == 0 else (
+            messages[0]["content"] + "\n" + _RETRY_SUFFIX)
         attempt_messages = [dict(message) for message in messages]
         attempt_messages[0]["content"] = system
         try:
