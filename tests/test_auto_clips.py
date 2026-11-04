@@ -531,6 +531,23 @@ def test_queued_still_cancels_running_auto_clip_after_commit(tmp_db, monkeypatch
     assert final["error"] == "preempted by queued image"
 
 
+def test_backdrop_enqueue_does_not_preempt_running_auto_clip(tmp_db):
+    """Atualizações de fundo, inclusive cache hits, não starve a animação."""
+    adv = make_adventure()
+    with db.session() as conn:
+        auto = jobs.enqueue_scene_clip(
+            conn, adv["id"], "auto-src", "rain moves", automatic=True)
+        assert db.claim_next_job(conn)["id"] == auto["id"]
+        jobs.enqueue(
+            conn, "scene_backdrop", adv["id"], "room",
+            {"prompt": "same cached room", "cache_key": "same-cache-key"})
+
+    with db.session() as conn:
+        stored = db.get_job(conn, auto["id"])
+        assert stored["status"] == "running"
+        assert not stored.get("error")
+
+
 def test_scene_clip_progress_interrupts_only_after_the_still_commits(
         tmp_db, monkeypatch):
     clock = {"t": 3000.0}
@@ -552,7 +569,7 @@ def test_scene_clip_progress_interrupts_only_after_the_still_commits(
         progress()
         with db.session() as conn:
             jobs.enqueue(
-                conn, "scene_backdrop", adventure_id, "room", {"prompt": "hall"})
+                conn, "location_image", adventure_id, "room", {"prompt": "hall"})
         progress()
         assert interrupted == []
         clock["t"] += jobs._HEARTBEAT_INTERVAL_S
@@ -579,5 +596,5 @@ def test_scene_clip_progress_interrupts_only_after_the_still_commits(
     stored = next(job for job in _jobs_of("scene_clip") if job["id"] == auto["id"])
     assert stored["status"] == "canceled"
     assert stored["error"] == "preempted by queued image"
-    backdrops = _jobs_of("scene_backdrop")
+    backdrops = _jobs_of("location_image")
     assert len(backdrops) == 1 and backdrops[0]["status"] == "pending"

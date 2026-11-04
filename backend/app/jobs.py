@@ -41,7 +41,8 @@ Tipos:
   follow-up não cancela um clipe manual ativo na mesma fonte; o pedido
   explícito continua substituindo o pendente. Falha nesse follow-up não muda
   o job de origem. Não chama narrador nem voz; o executor traduz o prompt
-  final para inglês antes de gerar o clipe.
+  final para inglês antes de gerar o clipe. Atualizações de backdrop, inclusive
+  cache hits, não interrompem clipes automáticos; ações novas preemptam à parte.
 - `character_turnaround` — gera mestre de corpo inteiro e ficha multivista; o
   Pillow monta o split com o rosto canônico, sem outra inferência. Usa o split
   no giro 360°, extrai 0/90/180/270 com OpenCV e monta a folha 2×2. Publica todos
@@ -238,7 +239,9 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
                         payload=payload, priority=priority,
                         supersede_key=supersede_key or "", status=status)
     superseded = db.supersede_jobs(conn, supersede_key, job["id"]) if supersede_key else []
-    if type_ in _IMAGE_JOB_TYPES:
+    # Backdrop refreshes frequently reuse cache. They must not cancel an
+    # automatic clip before that lookup; explicit turn actions preempt separately.
+    if type_ in _IMAGE_JOB_TYPES and type_ != "scene_backdrop":
         _cancel_running_automatic_clips(conn)
     events.record(
         conn, adventure_id, "job_queued",

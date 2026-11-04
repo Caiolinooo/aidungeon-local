@@ -31,6 +31,13 @@ OpenAI-compatível.
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
 
+## Funcionalidades (v0.15.2)
+
+- **Animações sem starvation por backdrop**: atualizações e cache hits de fundo
+  não cancelam mais clipes automáticos. A preempção por ação nova, See, local
+  e retrato continua ativa; o ComfyUI deixa de receber interrupts em loops de
+  atualização da mesma cena.
+
 ## Funcionalidades (v0.15.1)
 
 - **Tradução visual sem falso negativo**: o rewriter não exige mais que palavras
