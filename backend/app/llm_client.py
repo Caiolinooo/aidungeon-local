@@ -278,6 +278,21 @@ def resolve_model(cfg: dict, transport: httpx.BaseTransport | None = None) -> st
     return _discovery_cache[key]
 
 
+def _model_matches_alias(model: dict, alias: str) -> bool:
+    """llama.cpp pode anunciar o id como caminho absoluto e o alias como nome."""
+    wanted = Path(str(alias)).name
+    values = [model.get("id"), model.get("model")]
+    aliases = model.get("aliases")
+    if isinstance(aliases, list):
+        values.extend(aliases)
+    for value in values:
+        if not value:
+            continue
+        if str(value) == alias or Path(str(value)).name == wanted:
+            return True
+    return False
+
+
 def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
     """Sonda /models em tempo real → schema LlmHealth (sempre devolve dict)."""
     base = cfg["base_url"].rstrip("/")
@@ -315,7 +330,7 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
         if not models:
             result["status"] = "degraded"
             result["details"] = "servidor respondeu, mas nenhum modelo carregado"
-        elif not any(m.get("id") == alias for m in models):
+        elif not any(_model_matches_alias(m, alias) for m in models):
             result["status"] = "degraded"
             result["details"] = f"alias '{alias}' não consta em /models"
     return result

@@ -213,6 +213,19 @@ def test_empty_models_or_missing_alias_degrades_health(alias, models):
     assert result["model_loaded"] is bool(models)
 
 
+def test_absolute_model_path_matches_basename_alias():
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
+        "data": [{"id": "/srv/models/Qwen3.6-35B-IQ2_M.gguf",
+                  "model": "/srv/models/Qwen3.6-35B-IQ2_M.gguf"}]}))
+    result = llm_client.health({
+        "base_url": "http://llm.local/v1",
+        "model_alias": "Qwen3.6-35B-IQ2_M.gguf",
+    }, transport=transport)
+
+    assert result["status"] == "ok"
+    assert result["model_loaded"] is True
+
+
 def test_narrative_ttft_and_speed_of_recent_turns(probe):
     for ttft in (1.0, 2.0, 3.0, 4.0, 9.0):
         _narrative(ttft, tok_s=17.5 + ttft)
