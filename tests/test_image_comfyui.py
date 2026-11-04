@@ -696,7 +696,7 @@ def test_h3_graph_uses_the_reduced_gguf_and_spills(tmp_path):
     )
     assert result["media_type"] == "video/mp4"
     nodes = _nodes(capture["graph"])
-    assert nodes["UnetLoaderGGUF"]["inputs"]["unet_name"] == (
+    assert nodes["UnetLoaderGGUFAdvanced"]["inputs"]["unet_name"] == (
         "minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf")
     clip = nodes["CCTechClipProjLoader"]["inputs"]
     assert clip["clip_name"] == "qwen3vl_4b_int8_convrot.safetensors"

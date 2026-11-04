@@ -1340,7 +1340,9 @@ def _h3_i2v_graph(video: dict, prompt: str, image_name: str, *,
         guider = {"class_type": "BasicGuider", "inputs": {
             "model": ["1", 0], "conditioning": ["5", 0]}}
     return {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet_name}},
+        "1": {"class_type": "UnetLoaderGGUFAdvanced", "inputs": {
+            "unet_name": unet_name, "dequant_dtype": "default",
+            "patch_dtype": "default", "patch_on_device": False}},
         "2": clip_node,
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
         "4": {"class_type": "LoadImage", "inputs": {"image": image_name}},
