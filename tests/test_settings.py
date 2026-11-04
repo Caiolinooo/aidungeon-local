@@ -382,7 +382,7 @@ def test_video_engine_presets_fill_omitted_fields_only(client):
     assert body["video_engine"] == "h3"
     assert body["video_width"] == 768
     assert body["video_height"] == 448
-    assert body["video_frames"] == 56
+    assert body["video_frames"] == 121
     assert body["video_steps"] == 8
     assert body["video_cfg"] == 1
     assert body["video_fps"] == 24

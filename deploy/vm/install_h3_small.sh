@@ -6,7 +6,15 @@ set -euo pipefail
 
 COMFY=${COMFY_HOME:-/home/caio/ComfyUI}
 NODE="$COMFY/custom_nodes/ComfyUI-GGUF-Loader"
+DISABLED="$COMFY/custom_nodes-disabled"
 PIN=109a281b1a49570cb708f8543efea6383baba40a
+
+# O ComfyUI-GGUF antigo registra os mesmos nomes e mascara o fork que lê H3
+# pruned. A troca é reversível: a pasta é movida, nunca apagada.
+if [[ -d "$COMFY/custom_nodes/ComfyUI-GGUF" ]]; then
+  mkdir -p "$DISABLED"
+  mv "$COMFY/custom_nodes/ComfyUI-GGUF" "$DISABLED/ComfyUI-GGUF"
+fi
 
 if ! rg -n "class MiniMaxH3" "$COMFY/comfy/supported_models.py" >/dev/null; then
   echo 'ComfyUI sem suporte nativo a MiniMax H3; não baixar' >&2

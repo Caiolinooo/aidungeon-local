@@ -556,7 +556,7 @@
           "clip_type": "minimax",
           "clip_device": "cpu",
           "vae": "minimax_h3_video_vae_int8_convrot.safetensors",
-          "frames": 56,
+          "frames": 121,
           "fps": 24,
           "steps": 8,
           "cfg": 1,

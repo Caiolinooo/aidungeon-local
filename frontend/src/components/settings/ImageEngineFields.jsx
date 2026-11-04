@@ -31,7 +31,7 @@ const VIDEO_PRESETS = {
     video_cfg: 1,
     video_width: 768,
     video_height: 448,
-    video_frames: 56,
+    video_frames: 121,
     video_fps: 24,
   },
   ltxv: {

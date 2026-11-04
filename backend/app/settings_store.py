@@ -135,7 +135,7 @@ _H3_ENGINE_PRESET = {
     "height": 448,
     "vertical_width": 448,
     "vertical_height": 768,
-    "frames": 56,
+    "frames": 121,
     "steps": 8,
     "cfg": 1,
     "fps": 24,

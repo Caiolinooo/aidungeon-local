@@ -31,6 +31,14 @@ OpenAI-compatível.
   são preparados fora do worker GPU e o áudio reutiliza conexões, vozes e
   AudioContext. O PCM usa `read1` no serviço OmniVoice para não esperar 64 KiB.
 
+## Funcionalidades (v0.16.0)
+
+- **Z-Image Turbo e H3 compacto**: imagem passa a usar Z-Image Q4_K_M e vídeo
+  H3 UD-Q2_K_XL com o encoder Qwen3-VL 4B já instalado, projetado para os 5120
+  canais do H3. O preset H3 gera 121 frames em 768×448 e o encoder fica em CPU.
+- **Menos jobs de cache**: backdrop ou retrato reutilizado não enfileira um novo
+  clipe; o follow-up só nasce de uma imagem realmente renderizada.
+
 ## Funcionalidades (v0.15.2)
 
 - **Animações sem starvation por backdrop**: atualizações e cache hits de fundo

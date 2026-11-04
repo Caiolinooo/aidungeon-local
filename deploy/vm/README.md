@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0 --device none`, `CUDA_VISIBLE_DEVICES=`; 0 MiB de VRAM) na porta 8091 |
-| Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; FineView Qwen (`engine=qwen`) e Forge/epiCRealism continuam disponíveis para rollback |
+| Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; Z-Image Q4_K_M é o perfil compacto, H3 UD-Q2 o vídeo alternativo. FineView e Forge/epiCRealism continuam disponíveis para rollback |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -168,9 +168,36 @@ Neo reservava ~17 GB e via 0 MB úteis (o modelo inteiro ia para a RAM). Com
 passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 `GET /health` 200.
 
-Não instalados, porque não cabem ao lado do narrador: Z-Image-Turbo (o README
-do Neo não publica quantização que caiba em 5,5 GB; o cartão pede 16 GB) e
-Wan 2.1. O ComfyUI/FLUX.2 Klein é o provider ativo; FineView e Forge/epiCRealism são rollback.
+## Z-Image Turbo e H3 compacto
+
+O Z-Image Q4_K_M (UNet 3,85 GB, encoder Qwen3 4B FP8 na CPU e VAE ae) é o
+perfil de imagem. Na L4 com o narrador carregado, 848×816 em 8 passos levou
+44,5 s. Instalação:
+
+```bash
+bash deploy/vm/install_z_image_turbo.sh
+```
+
+O vídeo H3 usa `minimax_h3_fl2va_pruned-UD-Q2_K_XL.gguf` (8,06 GB), VAE INT8
+(2,81 GB) e o encoder Qwen3-VL 4B INT8 já instalado (4,83 GB) com a matriz
+`mmh3-4b-ClipProj-v3.1-mlp` (0,50 GB). O encoder roda em CPU e a projeção
+entrega os 5120 canais esperados pelo H3. Medições reais, 768×448, 8 passos:
+
+| Modelo | Frames | Tempo |
+|---|---:|---:|
+| LTXV 2B distilled | 121 | ~35,3 s |
+| H3 UD-Q2 + 4B projetado | 56 | 135,4 s |
+| H3 UD-Q2 + 4B projetado | 121 | 259,7 s |
+| Wan 2.2 Q8 anterior | 121 | ~577,6 s |
+
+```bash
+bash deploy/vm/install_h3_small.sh
+```
+
+O instalador move `custom_nodes/ComfyUI-GGUF` para
+`custom_nodes-disabled/ComfyUI-GGUF` e ativa o fork CCTech, que lê GGUF H3
+pruned. A troca é reversível e o Z-Image continua no mesmo loader. O Wan 2.1
+e o FineView permanecem como rollback, não como defaults.
 
 Rollback: parar o Forge, subir o A1111 e devolver a URL.
 
