@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import access, auth, db, image_budget, image_client, image_english, jobs, likeness, llm_client, npc_assets, scene, settings_store
+from app import access, auth, db, death_rules, image_budget, image_client, image_english, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -744,14 +744,18 @@ def _player_card(cards: list[dict], name: str) -> dict | None:
 
 
 def _cards_in_frame(cards: list[dict], text: str, plot: str) -> list[dict]:
-    """Quem a pintura tem de mostrar: citados pelo nome, e o jogador quando é 'you'."""
+    """Quem a pintura tem de mostrar: citados e o protagonista da aventura.
+
+    A narração em terceira pessoa chama o NPC de "ela" e frequentemente não
+    repete "você"/"Caio". Sem o card do jogador, o See recebia só a referência
+    do NPC e inventava outro homem. O jogador entra sempre que está vivo e não
+    foi declarado ausente; `assessment.absent` ainda o remove depois.
+    """
     frame = list(scene._cast(cards, text))
-    name = _protagonist_name(plot)
-    you = re.search(r"(?<!\w)you(?!\w)", text or "", re.IGNORECASE)
-    if you or (name and npc_assets._mentioned(text, name)):
-        player = _player_card(cards, name)
-        if player and all(player.get("id") != card.get("id") for card in frame):
-            frame.insert(0, player)
+    player = _player_card(cards, _protagonist_name(plot))
+    if (player is not None and not death_rules.is_dead(player)
+            and all(player.get("id") != card.get("id") for card in frame)):
+        frame.insert(0, player)
     return frame
 
 

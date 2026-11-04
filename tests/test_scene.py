@@ -830,6 +830,43 @@ def test_cast_anchors_keep_order_for_see_and_backdrop(client, tmp_path):
     assert image["cache_key"] == backdrop["payload"]["cache_key"]
 
 
+def test_see_without_prompt_anchors_player_and_named_npc(client, tmp_path):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    player_blob = b"\x89PNG\r\nplayer-anchor"
+    nia_blob = b"\x89PNG\r\nnia-anchor"
+    with db.session() as conn:
+        player = db.insert_card(
+            conn, adv["id"], type="character", title="Caio", triggers=["Caio"],
+            entry="The player.", use_for_character_creation=True,
+            portrait_prompt="short brown hair",
+        )
+        nia = db.insert_card(
+            conn, adv["id"], type="character", title="Nia", triggers=["Nia"],
+            entry="Ranger.", portrait_prompt="black hair",
+        )
+    _face(adv["id"], player["id"], player_blob)
+    _face(adv["id"], nia["id"], nia_blob)
+    # A narração em terceira pessoa não repete o nome do jogador.
+    add_action(adv["id"], 0, "continue", "Nia waits for her lover in the tavern.")
+    _use_comfy()
+    capture: dict = {}
+    override_transport(client, pipeline_transport(capture=capture))
+    try:
+        seen = client.post(f"/api/adventures/{adv['id']}/see", json={"action_seq": 0})
+    finally:
+        client.app.dependency_overrides.clear()
+
+    assert seen.status_code == 200, seen.text
+    assert any(player_blob in upload for upload in capture["uploads"])
+    assert any(nia_blob in upload for upload in capture["uploads"])
+    prompt = seen.json()["prompt"]
+    assert "Exactly 2 people" in prompt
+    assert "Caio" in prompt and "Nia" in prompt
+    references = _reference_image_nodes(capture["graphs"][0])
+    assert len(references) == 2
+
+
 def test_second_anchor_invalidates_only_that_scene(client, tmp_path):
     use_tmp_storage(tmp_path)
     _use_comfy()
