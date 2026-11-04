@@ -922,9 +922,11 @@ def _build_portrait_prompt(adv: dict, card: dict, llm_cfg: dict,
         user += f"\nCharacter sheet:\n{sheet_ctx}"
     messages = [{"role": "system", "content": _PORTRAIT_SYSTEM},
                 {"role": "user", "content": user}]
-    prompt = llm_client.chat_completion(llm_cfg, messages, role="image_prompt",
-                                        temperature=0.5, max_tokens=160,
-                                        transport=transport).strip()
+    with image_english.IMAGE_LLM_LOCK:
+        prompt = llm_client.chat_completion(
+            llm_cfg, messages, role="image_prompt",
+            temperature=0.5, max_tokens=160,
+            transport=transport).strip()
     if not prompt:
         raise GameError(503, "generation_failed",
                         "LLM returned an empty portrait prompt; try again")

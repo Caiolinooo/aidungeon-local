@@ -28,6 +28,10 @@ _NAME_SPAN = re.compile(
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
 _CACHE: OrderedDict[str, str] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
+# O llama-server admite uma auxiliar por slot. Sem esta trava, dois jobs
+# visuais disputam o mesmo slot e o segundo estoura o prazo de 20 s mesmo com
+# o modelo saudável. A fila aqui acontece antes do prazo do role.
+IMAGE_LLM_LOCK = threading.Lock()
 _CACHE_SIZE = 128
 
 
@@ -83,8 +87,14 @@ def _failed() -> None:
 
 
 def render_english(text: str, *, transport=None,
-                   llm_cfg: dict | None = None) -> str:
-    """Return an English provider prompt, or fail rather than send the source."""
+                   llm_cfg: dict | None = None,
+                   context: str = "") -> str:
+    """Return an English provider prompt, or fail rather than send the source.
+
+    `context` is the story beat the fragment belongs to. It goes as a second
+    system message, never into the user content, so the model translates
+    pronouns and actions with the scene in view without echoing the context.
+    """
     if text is None:
         return ""
     if not text.strip():
@@ -98,16 +108,32 @@ def render_english(text: str, *, transport=None,
         with db.session() as conn:
             llm_cfg = settings_store.effective_llm_settings(conn)
 
+    messages = [{"role": "system", "content": _SYSTEM}]
+    if context and context.strip():
+        messages.append({
+            "role": "system",
+            "content": (
+                "Story context, for meaning only; never translate, repeat or "
+                "output it:\n" + " ".join(context.split())[:1800]
+            ),
+        })
+    messages.append({"role": "user", "content": masked})
+
     for attempt in range(2):
         system = _SYSTEM if attempt == 0 else _SYSTEM + "\n" + _RETRY_SUFFIX
+        attempt_messages = [dict(message) for message in messages]
+        attempt_messages[0]["content"] = system
         try:
-            reply = llm_client.chat_completion(
-                llm_cfg,
-                [{"role": "system", "content": system},
-                 {"role": "user", "content": masked}],
-                role="image_prompt", temperature=0, max_tokens=800,
-                transport=transport,
-            )
+            with IMAGE_LLM_LOCK:
+                cached = _cached(text)
+                if cached is not None:
+                    return cached
+                reply = llm_client.chat_completion(
+                    llm_cfg,
+                    attempt_messages,
+                    role="image_prompt", temperature=0, max_tokens=800,
+                    transport=transport,
+                )
         except llm_client.LlmError:
             if attempt == 1:
                 _failed()

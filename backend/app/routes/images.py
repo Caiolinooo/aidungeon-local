@@ -1013,9 +1013,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         {"role": "system", "content": _EXPLICIT_BUILDER_SYSTEM if explicit else _PROMPT_BUILDER_SYSTEM},
         {"role": "user", "content": user},
     ]
-    summarized = llm_client.chat_completion(
-        llm_cfg, messages, role="image_prompt", temperature=0.2,
-        max_tokens=int(pb.get("max_tokens", 180)), transport=transport).strip().strip('"')
+    with image_english.IMAGE_LLM_LOCK:
+        summarized = llm_client.chat_completion(
+            llm_cfg, messages, role="image_prompt", temperature=0.2,
+            max_tokens=int(pb.get("max_tokens", 180)),
+            transport=transport).strip().strip('"')
     if not explicit:
         summarized = likeness.strip_explicit(summarized)
     summarized, neg_summary = contradicting_looks(summarized, clause)
@@ -1058,7 +1060,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         where.append(location)
     if atmosphere != "neutral":
         where.append(atmosphere.replace("+", " "))
-    order_lock = _explicit_order_lock(order) if explicit else ""
+    order_en = image_english.render_english(
+        order,
+        transport=transport,
+        llm_cfg=llm_cfg,
+        context=f"{sentence}. Place: {location}.",
+    ) if order else ""
+    order_lock = _explicit_order_lock(order_en) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
@@ -1082,8 +1090,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # omitia a frase do momento, e "donzela sem roupa" virava só um retrato.
     if sentence and not refusal:
         lead_bits.append(sentence)
-    if order and not order_lock:
-        lead_bits.append(order)
+    if order_en and not order_lock:
+        lead_bits.append(order_en)
     if where:
         lead_bits.append("Place: " + ", ".join(where))
     lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
@@ -1140,15 +1148,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             "Wide full-body composition, entire body visible, not a close-up portrait.")
         if sentence:
             blocks.append(sentence.rstrip(".") + ".")
-        if order and not order_lock:
-            blocks.append(order.rstrip(".") + ".")
+        if order_en and not order_lock:
+            blocks.append(order_en.rstrip(".") + ".")
         for name, predicate in states:
             blocks.append(f"{name} is {predicate}.")
         if location and location != "the current scene":
-            place_line = f"Place: {location}"
-            if entry:
-                place_line += f", {clip_words(entry, 220).rstrip('.')}"
-            blocks.append(place_line + ".")
+            blocks.append(f"Place: {location}.")
         if names:
             if len(who_bits) == 2:
                 people = " and ".join(who_bits)
@@ -1172,7 +1177,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     else:
         lead = ", ".join(lead_bits)
         tail = ", ".join(part for part in (
-            (entry or "")[:160] if location and location != "the current scene" else "",
             adv.get("image_style") or "",
             suffix,
         ) if part)
@@ -1196,8 +1200,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # o rosto continua travado, mas a pessoa tem corpo e ângulos coerentes.
     cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
         cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=explicit)
-    prompt = image_english.render_english(
-        prompt, transport=transport, llm_cfg=llm_cfg)
     return (prompt, negative, caption, frame, cast_card_ids,
             reference_image_ids, len(names), explicit)
 

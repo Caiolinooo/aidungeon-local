@@ -170,9 +170,11 @@ passos voltou HTTP 200 em 24 s, com o `llama-server` ainda em ~14,5 GB e
 
 ## Z-Image Turbo e H3 compacto
 
-O Z-Image Q4_K_M (UNet 3,85 GB, encoder Qwen3 4B FP8 na CPU e VAE ae) é o
-perfil de imagem. Na L4 com o narrador carregado, 848×816 em 8 passos levou
-44,5 s. Instalação:
+O FLUX.2 Klein 4B distilled é o perfil de imagem ativo: 848×816 em 4 passos
+levou 24,8 s na L4 com o narrador carregado. O Z-Image Q4_K_M (UNet 3,85 GB,
+encoder Qwen3 4B FP8 na CPU e VAE ae) fica instalado como rollback/experimento:
+mediu 44,5 s em bancada isolada e 51,7–61,8 s nos jobs reais, por isso não é o
+default. Instalação do Z-Image:
 
 ```bash
 bash deploy/vm/install_z_image_turbo.sh

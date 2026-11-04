@@ -114,3 +114,20 @@ def test_unaccented_portuguese_clause_can_be_translated(monkeypatch):
 
     assert image_english.render_english(source, llm_cfg={}) == translated
     assert len(calls) == 1
+
+
+def test_scene_context_is_private_and_order_stays_the_user_message(monkeypatch):
+    calls = install_stub(monkeypatch, "she takes off the dress")
+
+    result = image_english.render_english(
+        "ela tira o vestido",
+        llm_cfg={},
+        context="A Donzela da Noite stands beside Caio in the refuge.",
+    )
+
+    assert result == "she takes off the dress"
+    messages = calls[0]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "system"
+    assert "A Donzela da Noite stands beside Caio" in messages[1]["content"]
+    assert messages[2] == {"role": "user", "content": "ela tira o vestido"}
