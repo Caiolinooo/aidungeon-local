@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 from fastapi import APIRouter, Depends, Response, status
 
-from app import db, embeddings_client, settings_store
+from app import db, embeddings_client, settings_store, events
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import MemoryCreate, MemoryPatch, MemoryUpdate
@@ -52,6 +52,7 @@ def put_memory(adventure_id: str, body: MemoryUpdate) -> dict:
     with db.session() as conn:
         _ensure_adventure(conn, adventure_id)
         db.update_adventure_memory(conn, adventure_id, **fields)
+        events.record(conn, adventure_id, "plot_updated", {"fields": sorted(fields)})
     return _memory_state(adventure_id)
 
 
@@ -100,6 +101,7 @@ def create_memory_endpoint(
             embedding_model=model_name,
             embedding_dim=dim,
         )
+        events.record(conn, adventure_id, "memory_updated", {"action": "created", "memory_id": created["id"]}, entity_id=str(created["id"]))
     return created
 
 
@@ -149,6 +151,7 @@ def patch_memory_endpoint(
             adventure_id=adventure_id,
             **updates,
         )
+        events.record(conn, adventure_id, "memory_updated", {"action": "updated", "memory_id": memory_id}, entity_id=str(memory_id))
     return updated
 
 
@@ -160,6 +163,7 @@ def delete_memory_endpoint(adventure_id: str, memory_id: int) -> Response:
         if not existing or existing["adventure_id"] != adventure_id:
             raise GameError.not_found(f"memory {memory_id} not found in adventure {adventure_id}")
         db.delete_memory(conn, memory_id, adventure_id=adventure_id)
+        events.record(conn, adventure_id, "memory_updated", {"action": "deleted", "memory_id": memory_id}, entity_id=str(memory_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

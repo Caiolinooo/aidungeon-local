@@ -257,7 +257,12 @@ def committed(conn: sqlite3.Connection) -> None:
     if entry is None or entry[0] is not conn:
         return
     for created in entry[1]:
-        publish_record(created)
+        publish_committed(created)
+
+
+def publish_committed(record: dict) -> int:
+    """Publica um evento já committed; seguro chamar mais de uma vez."""
+    return publish_record(record)
 
 
 def rolled_back(conn: sqlite3.Connection) -> None:

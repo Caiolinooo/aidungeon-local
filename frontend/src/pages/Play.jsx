@@ -625,7 +625,7 @@ export default function Play() {
       if (!readyRef.current) return
       const data = parse(ev)
       if (!data || typeof data !== 'object' || data.id == null) return
-      fan('player_action', data)
+      fan('player_action', data, ev.lastEventId)
       const actor = typeof data.actor === 'string' ? data.actor : ''
       if (actor === currentUserRef.current) return
       if (seenIdsRef.current.has(data.id)) return
@@ -650,7 +650,7 @@ export default function Play() {
     const onAction = (ev) => {
       if (!readyRef.current) return
       const data = parse(ev)
-      fan('action', data)
+      fan('action', data, ev.lastEventId)
       setLive('')
       if (genRef.current) return
       if (!data || typeof data !== 'object' || data.id == null) return
@@ -688,11 +688,11 @@ export default function Play() {
       const next = mergeBeat(liveBeatRef.current, view)
       liveBeatRef.current = next
       setLiveBeat(next)
-      fan('adjudication', view)
+      fan('adjudication', view, ev.lastEventId)
     }
-    const fan = (type, data) => {
+    const fan = (type, data, lastEventId = '') => {
       window.dispatchEvent(new CustomEvent('aidungeon-live', {
-        detail: { type, adventureId: id, data },
+        detail: { type, adventureId: id, data, lastEventId },
       }))
     }
     const onTurnDone = () => {
@@ -707,20 +707,20 @@ export default function Play() {
       setChoices([])
     }
     const onPortrait = (ev) => {
-      fan('portrait_ready', parse(ev))
+      fan('portrait_ready', parse(ev), ev.lastEventId)
     }
     const onTurnaround = (ev) => {
-      fan('turnaround_ready', parse(ev))
+      fan('turnaround_ready', parse(ev), ev.lastEventId)
     }
     const onJobChanged = (ev) => {
-      fan('job_changed', parse(ev))
-      fan('job_progress', parse(ev))
+      fan('job_changed', parse(ev), ev.lastEventId)
+      fan('job_progress', parse(ev), ev.lastEventId)
     }
     const onBackdrop = (ev) => {
-      fan('backdrop_ready', parse(ev))
+      fan('backdrop_ready', parse(ev), ev.lastEventId)
     }
     const onClip = (ev) => {
-      fan('clip_ready', parse(ev))
+      fan('clip_ready', parse(ev), ev.lastEventId)
     }
     const onSee = (ev) => {
       const data = parse(ev)
@@ -742,10 +742,10 @@ export default function Play() {
       })
     }
     const onCardAssets = (ev) => {
-      fan('card_assets_ready', parse(ev))
+      fan('card_assets_ready', parse(ev), ev.lastEventId)
     }
     const onCard = (ev) => {
-      fan('card_changed', parse(ev))
+      fan('card_changed', parse(ev), ev.lastEventId)
       if (!genRef.current) refreshAdventure()
     }
     const onCharacter = (ev) => {

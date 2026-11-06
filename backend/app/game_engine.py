@@ -1299,6 +1299,8 @@ def handle_retry(adventure_id: str, transport: Any = None, *,
 
         with appending(adventure_id) as conn:
             _restore_body_from_action(conn, adventure_id, old)
+            from app import jobs as image_jobs
+            image_jobs.cancel_adventure_jobs(conn, adventure_id, "superseded by retry")
         key = (adventure_id, int(old["seq"]))
         if retry_count is None:
             _retry_counts[key] = _retry_counts.get(key, 0) + 1
@@ -1393,6 +1395,10 @@ def handle_undo(adventure_id: str) -> dict:
                 _restore_body_from_action(conn, adventure_id, last)
         for action in removed:
             db.delete_action(conn, action["id"])
+
+        # Work started against the removed canon must never publish into it.
+        from app import jobs as image_jobs
+        image_jobs.cancel_adventure_jobs(conn, adventure_id, "superseded by undo")
 
         removed.sort(key=lambda a: a["seq"])
         db.touch_adventure(conn, adventure_id)

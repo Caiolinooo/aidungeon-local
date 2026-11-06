@@ -1751,6 +1751,7 @@ def job_to_dict(row: sqlite3.Row) -> dict:
         "error": row["error"],
         "priority": row["priority"],
         "supersede_key": row["supersede_key"] or "",
+        "source_revision": row["source_revision"],
         "created_at": row["created_at"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
@@ -1771,9 +1772,11 @@ def insert_job(conn: sqlite3.Connection, *, adventure_id: str, type: str,
     jid = job_id or new_id()
     conn.execute(
         "INSERT INTO jobs(id, adventure_id, type, status, ref_id, payload, priority,"
-        " supersede_key, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        " supersede_key, created_at, source_revision)"
+        " VALUES(?,?,?,?,?,?,?,?,?,COALESCE((SELECT state_revision FROM world_event_counters"
+        " WHERE adventure_id=?),0))",
         (jid, adventure_id, type, status, ref_id, _dumps(payload, {}), int(priority),
-         supersede_key, utcnow()),
+         supersede_key, utcnow(), adventure_id),
     )
     return job_to_dict(conn.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone())
 

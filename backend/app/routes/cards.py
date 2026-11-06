@@ -56,6 +56,7 @@ def create_card(adventure_id: str, body: StoryCardUpsert) -> dict:
             sheet=_sheet_str(body.sheet),
         )
         card = db.attach_portrait(conn, card)
+        events.record(conn, adventure_id, "card_created", {"card_id": card["id"]}, entity_id=card["id"])
     _publish_card(adventure_id, card["id"], "created")
     return card
 
@@ -89,6 +90,10 @@ def bulk_cards(adventure_id: str, body: CardBulkAction) -> dict:
         updated_count = db.bulk_cards_action(
             conn, adventure_id, body.action, body.card_ids, new_type=new_type
         )
+        if updated_count:
+            kind = "card_deleted" if body.action == "delete" else "card_updated"
+            for card_id in body.card_ids:
+                events.record(conn, adventure_id, kind, {"card_id": card_id}, entity_id=card_id)
     if updated_count:
         kind = "deleted" if body.action == "delete" else "updated"
         for card_id in body.card_ids:
@@ -130,6 +135,7 @@ def update_card(adventure_id: str, card_id: str, body: StoryCardUpsert) -> dict:
                 pass
         if card:
             db.attach_portrait(conn, card)
+            events.record(conn, adventure_id, "card_updated", {"card_id": card_id}, entity_id=card_id)
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
     _publish_card(adventure_id, card_id, "updated")
@@ -215,6 +221,8 @@ def delete_portrait(adventure_id: str, card_id: str) -> Response:
 def delete_card(adventure_id: str, card_id: str) -> Response:
     with db.session() as conn:
         ok = db.delete_card(conn, adventure_id, card_id)
+        if ok:
+            events.record(conn, adventure_id, "card_deleted", {"card_id": card_id}, entity_id=card_id)
     if not ok:
         raise GameError.not_found(f"card {card_id} not found")
     _publish_card(adventure_id, card_id, "deleted")

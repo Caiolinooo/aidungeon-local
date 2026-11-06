@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Activity, ChevronDown, X } from 'lucide-react'
+import { Activity, ChevronDown, Pause, Play, X } from 'lucide-react'
 import { api } from '../api.js'
 import { jobTypeLabel } from '../sceneClip.js'
 import { useToast } from './Toast.jsx'
@@ -130,11 +130,18 @@ export default function LiveFeed({ adventureId }) {
   const [open, setOpen] = useState(false)
   const [events, setEvents] = useState([])
   const [filter, setFilter] = useState('all')
+  const [npcFilter, setNpcFilter] = useState('all')
+  const [locationFilter, setLocationFilter] = useState('all')
+  const [severityFilter, setSeverityFilter] = useState('all')
+  const [paused, setPaused] = useState(false)
+  const [heldEvents, setHeldEvents] = useState([])
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const listRef = useRef(null)
   const triggerRef = useRef(null)
   const nearBottomRef = useRef(true)
+  const revisionRef = useRef(0)
+  const requestRef = useRef(0)
   const [anchor, setAnchor] = useState(null)
 
   const merge = useCallback((incoming) => {
@@ -155,17 +162,38 @@ export default function LiveFeed({ adventureId }) {
     })
   }, [])
 
+  const acceptLive = useCallback((event) => {
+    revisionRef.current += 1
+    if (paused) setHeldEvents((current) => [...current, event])
+    else merge(event)
+  }, [merge, paused])
+
   const load = useCallback(async () => {
     if (!adventureId) return
+    const requestId = ++requestRef.current
+    const startRevision = revisionRef.current
     setLoading(true)
     try {
-      const response = await api.getEventHistory(adventureId, { limit: 100 })
-      merge(response.events || response)
+      let after = 0
+      let response
+      const history = []
+      do {
+        response = await api.getEventHistory(adventureId, { after, limit: 100 })
+        if (response.reset_required) {
+          after = response.latest_event_id ?? after
+          history.length = 0
+        } else {
+          history.push(...(response.events || []))
+          after = response.next_cursor ?? response.after ?? after
+        }
+      } while (response.has_more && !response.reset_required)
+      if (requestId !== requestRef.current || startRevision !== revisionRef.current) return
+      merge(history.length ? history : response.events || response)
       setLoaded(true)
     } catch (e) {
       toast(e.message || 'Não foi possível carregar a atividade.')
     } finally {
-      setLoading(false)
+      if (requestId === requestRef.current) setLoading(false)
     }
   }, [adventureId, merge, toast])
 
@@ -180,8 +208,8 @@ export default function LiveFeed({ adventureId }) {
       const detail = event.detail || {}
       if (detail.adventureId !== adventureId) return
       const data = detail.data || {}
-      merge({
-        event_id: data.event_id ?? data.id ?? `live-${detail.type}-${Date.now()}-${Math.random()}`,
+      acceptLive({
+        event_id: detail.lastEventId || data.event_id || data.id || `live-${detail.type}-${Date.now()}-${Math.random()}`,
         type: detail.type,
         data,
         created_at: data.created_at || new Date().toISOString(),
@@ -189,7 +217,14 @@ export default function LiveFeed({ adventureId }) {
     }
     window.addEventListener('aidungeon-live', onLive)
     return () => window.removeEventListener('aidungeon-live', onLive)
-  }, [adventureId, merge])
+  }, [adventureId, acceptLive])
+
+  useEffect(() => {
+    if (!paused && heldEvents.length) {
+      merge(heldEvents)
+      setHeldEvents([])
+    }
+  }, [paused, heldEvents, merge])
 
   useEffect(() => {
     const element = listRef.current
@@ -220,7 +255,29 @@ export default function LiveFeed({ adventureId }) {
     setOpen((current) => !current)
   }
 
-  const visible = filter === 'all' ? events : events.filter((event) => categoryOf(event.type) === filter)
+  const valueOf = (event, keys) => {
+    const data = event.data || event.payload || {}
+    for (const key of keys) {
+      const value = data[key] ?? event[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    return ''
+  }
+  const npcs = [...new Set(events.map((event) => valueOf(event, ['npc', 'npc_name', 'character_name', 'actor'])).filter(Boolean))].sort()
+  const locations = [...new Set(events.map((event) => valueOf(event, ['location', 'location_name', 'place'])).filter(Boolean))].sort()
+  const severityOf = (event) => {
+    const data = event.data || event.payload || {}
+    const severity = String(data.severity || event.severity || '').toLowerCase()
+    if (['info', 'warn', 'critical'].includes(severity)) return severity
+    if (['generation_failed', 'see_failed'].includes(event.type)) return 'critical'
+    if (['generation_cancelled', 'stale_work_dropped'].includes(event.type)) return 'warn'
+    return 'info'
+  }
+  const visible = events.filter((event) =>
+    (filter === 'all' || categoryOf(event.type) === filter)
+    && (npcFilter === 'all' || valueOf(event, ['npc', 'npc_name', 'character_name', 'actor']) === npcFilter)
+    && (locationFilter === 'all' || valueOf(event, ['location', 'location_name', 'place']) === locationFilter)
+    && (severityFilter === 'all' || severityOf(event) === severityFilter))
   const activeCount = events.length
 
   return (
@@ -266,8 +323,25 @@ export default function LiveFeed({ adventureId }) {
               </button>
             ))}
           </div>
+          <div className="flex shrink-0 flex-wrap gap-2 border-b border-subtle p-2">
+            <select aria-label="Filtrar por NPC" value={npcFilter} onChange={(event) => setNpcFilter(event.target.value)} className="min-h-8 max-w-28 rounded-md bg-elevated px-2 text-xs text-secondary">
+              <option value="all">Todos NPCs</option>{npcs.map((npc) => <option key={npc} value={npc}>{npc}</option>)}
+            </select>
+            <select aria-label="Filtrar por local" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)} className="min-h-8 max-w-28 rounded-md bg-elevated px-2 text-xs text-secondary">
+              <option value="all">Todos locais</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}
+            </select>
+            <select aria-label="Filtrar por gravidade" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)} className="min-h-8 rounded-md bg-elevated px-2 text-xs text-secondary">
+              <option value="all">Todas gravidades</option><option value="info">Info</option><option value="warn">Aviso</option><option value="critical">Crítico</option>
+            </select>
+            <button type="button" onClick={() => setPaused((value) => !value)} aria-pressed={paused} className="ml-auto inline-flex min-h-8 items-center gap-1 rounded-md bg-elevated px-2 text-xs text-secondary">
+              {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}{paused ? `Retomar${heldEvents.length ? ` (${heldEvents.length})` : ''}` : 'Pausar feed'}
+            </button>
+          </div>
           <div
             ref={listRef}
+            role="log"
+            aria-live="polite"
+            aria-label="Eventos recentes do jogo"
             onScroll={(event) => {
               const el = event.currentTarget
               nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
@@ -285,6 +359,7 @@ export default function LiveFeed({ adventureId }) {
                       <time>{eventTime(event)}</time>
                     </div>
                     <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-primary">{eventText(event)}</p>
+                    {(event.data?.reason || event.data?.motive || event.payload?.reason || event.payload?.motive) && <p className="mt-1 text-[11px] leading-relaxed text-muted"><span className="font-semibold">Por que isto aconteceu:</span> {event.data?.reason || event.data?.motive || event.payload?.reason || event.payload?.motive}</p>}
                   </li>
                 ))}
               </ol>

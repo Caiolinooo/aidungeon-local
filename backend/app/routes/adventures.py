@@ -521,6 +521,7 @@ def post_sharing(adventure_id: str, body: AdventureShareCreate,
         except sqlite3.IntegrityError:
             raise GameError.conflict("already_shared",
                                      f"{username} already has access") from None
+        events.record(conn, adventure_id, "sharing_changed", {"username": username, "shared": True}, actor=info.user)
         return _sharing_view(conn, adventure_id)
 
 
@@ -530,6 +531,7 @@ def delete_sharing(adventure_id: str, username: str,
     with db.session() as conn:
         _managed_adventure(conn, adventure_id, info.user)
         db.unshare_adventure(conn, adventure_id, username)
+        events.record(conn, adventure_id, "sharing_changed", {"username": username, "shared": False}, actor=info.user)
         return _sharing_view(conn, adventure_id)
 
 

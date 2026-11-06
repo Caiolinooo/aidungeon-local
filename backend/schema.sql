@@ -117,6 +117,7 @@ ALTER TABLE adventures ADD COLUMN owner TEXT DEFAULT '';
 -- --- Grok (G5): jobs com prioridade e chave de substituição (C5, migration 021)
 ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 2;
 ALTER TABLE jobs ADD COLUMN supersede_key TEXT DEFAULT '';
+ALTER TABLE jobs ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX jobs_queue ON jobs(status, priority, created_at);
 
 -- Compartilhar aventura e turno (migration 022). Banco novo não roda o

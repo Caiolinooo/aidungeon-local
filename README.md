@@ -36,6 +36,10 @@ OpenAI-compatível.
 - **Perfis compactos**: H3 UD-Q2 gera vídeo com o encoder Qwen3-VL 4B já
   instalado; Z-Image Q4 fica como alternativa. A imagem ativa continua FLUX.2
   Klein (24,8 s), porque o Z-Image mediu 44,5–61,8 s na L4.
+- **Runtimes portáteis e provisionamento**: suporte a runtimes GPU sob demanda
+  (Colab, Vast.ai, RunPod ou endpoints locais/remotos) com túnel dinâmico e
+  geração de notebooks automatizada via `/api/settings/runtime` e
+  `/api/runtime/notebook`.
 - **Menos jobs de cache**: backdrop ou retrato reutilizado não enfileira um novo
   clipe; o follow-up só nasce de uma imagem realmente renderizada.
 
@@ -391,7 +395,8 @@ serviço externo. O build estático do frontend é servido pelo próprio FastAPI
 O backend nunca fala com um runtime específico: tanto a LLM (`llm_client`) quanto a
 geração de imagens (`image_client`) usam protocolos padrão — `/v1/chat/completions` com
 streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime é editar
-**uma URL** na aba Config (ou em `config/settings.json`), sem tocar em código:
+**uma URL** na aba Config (ou em `config/settings.json`), ou provisionar dinamicamente
+via túneis e notebooks Colab/Vast na aba Runtime (`/api/settings/runtime`):
 
 - **LLM**: padrão atual é o `llama.cpp` da VM (`http://vm.groupabz.com:1234/v1`, modelo
   descoberto em runtime via `GET /models`). Vale KoboldCpp, Ollama, LM Studio ou

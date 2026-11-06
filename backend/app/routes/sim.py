@@ -268,6 +268,7 @@ def post_advance(adventure_id: str, body: AdvanceBody,
             from app import jobs
             jobs.enqueue_day_tick(conn, adventure_id, reason="clock")
         db.set_sim_state(conn, adventure_id, sim)
+        events.record(conn, adventure_id, "sim_advanced", {"minutes": body.minutes, "activity": body.activity}, actor=info.user, sim_day=life_state.get("day"), sim_minute=life_state.get("minute"))
         saved = db.get_adventure(conn, adventure_id) or adventure
         payload = _view(saved, info.user, conn)
     _publish(adventure_id)
@@ -366,6 +367,7 @@ def put_actor(adventure_id: str, body: ActorBody,
         if body.xp is not None:
             actor["xp"] = max(0, min(1000000, int(body.xp)))
         db.set_sim_state(conn, adventure_id, sim)
+        events.record(conn, adventure_id, "actor_updated", {"username": info.user}, actor=info.user, entity_id=state.actor_key(info.user))
         saved = db.get_adventure(conn, adventure_id) or adventure
         payload = _view(saved, info.user, conn)
     _publish(adventure_id)
@@ -511,6 +513,7 @@ def _mutate_quests(adventure_id: str, user: str, fn) -> dict:
         except quests.QuestError as exc:
             _raise_quest(exc)
         db.set_sim_state(conn, adventure_id, sim)
+        events.record(conn, adventure_id, "quest_updated", {"quests": sim.get("quests") or {}}, actor=user)
         saved = db.get_adventure(conn, adventure_id) or adventure
         payload = _view(saved, user, conn)
     _publish(adventure_id)

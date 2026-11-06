@@ -43,3 +43,6 @@ Thumbs.db
 deploy/vm/*.zip
 data/images/
 data/references/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

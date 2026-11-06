@@ -230,6 +230,32 @@ def _finish(job: dict, status: str, *, result: dict | None = None,
                 )
     return finished
 
+
+def cancel_adventure_jobs(conn, adventure_id: str, reason: str = "adventure revision changed") -> list[dict]:
+    """Cancel active media work and publish terminal progress in the undo transaction."""
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE adventure_id=? AND status IN ('preparing','pending','running')",
+        (adventure_id,),
+    ).fetchall()
+    canceled = []
+    for row in rows:
+        job = db.job_to_dict(row)
+        result = db.cancel_job(conn, job["id"], reason=reason)
+        if not result:
+            continue
+        canceled.append(result)
+        events.record(conn, adventure_id, "job_progress",
+                      {"job_id": job["id"], "type": job["type"], "status": "canceled"},
+                      entity_id=job["id"], correlation_id=job["id"],
+                      idempotency_key=f"job:{job['id']}:canceled")
+        if job["type"] == "see_image":
+            events.record(conn, adventure_id, "see_failed",
+                          {"job_id": job["id"], "code": "superseded",
+                           "message": reason}, entity_id=job["id"],
+                          correlation_id=job["id"],
+                          idempotency_key=f"job:{job['id']}:see_failed")
+    return canceled
+
 # ------------------------------------------------------------- enfileirar
 def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
             payload: dict | None = None, priority: int = PRIORITY_BACKDROP,
@@ -256,6 +282,11 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
             entity_id=old["id"], correlation_id=job["id"],
             idempotency_key=f"job:{old['id']}:{old['status']}",
         )
+    # job_queued is itself an event; use the post-enqueue snapshot as origin.
+    conn.execute(
+        "UPDATE jobs SET source_revision=COALESCE((SELECT state_revision"
+        " FROM world_event_counters WHERE adventure_id=?),0) WHERE id=?",
+        (adventure_id, job["id"]))
     wake()
     return job
 
@@ -1515,6 +1546,16 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
     síncrona e job). Devolve o ImageResult."""
     try:
         with game_engine.appending(adventure_id) as conn:
+            if job_id:
+                job = db.get_job(conn, job_id)
+                counter = conn.execute(
+                    "SELECT state_revision FROM world_event_counters WHERE adventure_id=?",
+                    (adventure_id,)).fetchone()
+                if not job or job["status"] not in db.JOB_ACTIVE:
+                    raise db.JobCanceled(job_id)
+                if counter and job.get("source_revision") != int(counter["state_revision"]):
+                    db.cancel_job(conn, job_id, reason="superseded by adventure revision")
+                    raise db.JobCanceled(job_id)
             action = game_engine.append_action(conn, adventure_id, "see", caption)
             db.insert_image(conn, adventure_id=adventure_id, action_seq=action["seq"],
                             prompt=prompt, negative_prompt=negative_prompt,

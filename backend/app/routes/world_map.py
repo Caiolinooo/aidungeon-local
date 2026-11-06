@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app import auth, db, image_client, jobs, settings_store, world_map
+from app import auth, db, events, image_client, jobs, settings_store, world_map
 from app.deps import get_http_transport
 from app.errors import GameError
 
@@ -52,6 +52,8 @@ def post_travel(adventure_id: str, card_id: str) -> dict:
             result = world_map.travel(conn, adventure_id, card_id)
         except ValueError as exc:
             raise GameError(409, "travel_not_allowed", str(exc)) from exc
+        if result.get("travelled"):
+            events.record(conn, adventure_id, "travel_completed", {"from": result["from"]["id"], "to": card_id}, entity_id=card_id)
         return result
 
 
@@ -68,6 +70,7 @@ def post_reveal(adventure_id: str, card_id: str,
             if code == "location_not_found":
                 raise GameError.not_found("location not found") from exc
             raise GameError(409, "reveal_not_allowed", code) from exc
+        events.record(conn, adventure_id, "location_revealed", {"card_id": card_id}, entity_id=card_id, actor=info.user)
         return world_map.map_payload(conn, adventure_id, viewer=info.user)
 
 
