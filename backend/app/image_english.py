@@ -86,9 +86,28 @@ def _failed() -> None:
     raise image_client.ImageError(_FAILURE)
 
 
+_PT_STOPWORDS = {
+    "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+    "um", "uma", "uns", "umas", "com", "sem", "para", "por", "que",
+    "olhos", "cabelos", "pele", "corpo", "rosto", "mulher", "homem",
+    "vestindo", "usando", "roupa", "fundo", "cabeça", "braço",
+    "perna", "calça", "camisa", "vestido", "olhando", "sorrindo",
+}
+
+
+def _is_probable_english(text: str) -> bool:
+    # If text has no typical Portuguese stopwords and has ASCII letters, it is safe to treat as English
+    words = re.findall(r"[a-zA-ZáàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]+", text.lower())
+    if not words:
+        return True
+    pt_hits = sum(1 for w in words if w in _PT_STOPWORDS)
+    return pt_hits == 0
+
+
 def render_english(text: str, *, transport=None,
                    llm_cfg: dict | None = None,
-                   context: str = "") -> str:
+                   context: str = "",
+                   allow_passthrough: bool = True) -> str:
     """Return an English provider prompt, or fail rather than send the source.
 
     `context` is the story beat the fragment belongs to. It goes as a second
@@ -136,15 +155,24 @@ def render_english(text: str, *, transport=None,
                 )
         except llm_client.LlmError:
             if attempt == 1:
+                if allow_passthrough and _is_probable_english(text):
+                    _remember(text, text)
+                    return text
                 _failed()
             continue
         cleaned = _clean_reply(reply or "")
         if not _accepted(masked, cleaned):
             if attempt == 1:
+                if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
+                    _remember(text, text)
+                    return text
                 _failed()
             continue
         for index, name in enumerate(names):
             cleaned = cleaned.replace(f"[[{index}]]", name)
         _remember(text, cleaned)
         return cleaned
+    if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
+        _remember(text, text)
+        return text
     _failed()
