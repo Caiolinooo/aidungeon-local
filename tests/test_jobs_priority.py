@@ -308,7 +308,9 @@ def test_async_see_answers_202_fast_and_paints_in_the_job(client, stack, style):
                                json={"action_seq": 0, "extra_prompt": "from the door"})
         elapsed = time.monotonic() - started
         assert resp.status_code == 202, resp.text
-        assert elapsed < 0.3
+        # O LLM está preso em llm_gate (espera 5 s): responder em menos de 2 s
+        # prova que o 202 não esperou o prompt, mesmo numa máquina ocupada.
+        assert elapsed < 2.0
         job_id = resp.json()["job_id"]
 
         polled = client.get(f"/api/jobs/{job_id}").json()
@@ -709,7 +711,24 @@ def test_heartbeat_is_written_for_running_jobs_and_hidden_after(tmp_db, monkeypa
     assert "heartbeat_at" not in done["payload"]
 
 
+def _portrait_threads(ignore: set[int]) -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate()
+            if thread.name == "portrait-prompt" and thread.is_alive()
+            and thread.ident not in ignore]
+
+
 def test_portrait_prepare_is_single_and_waits_out_the_narrative(tmp_db, monkeypatch):
+    # Uma thread de preparação de outro teste (máquina lenta, worker ligado
+    # por env ausente) ainda podia estar viva aqui e era contada como desta
+    # rodada. Espera as antigas, zera o estado e só conta as novas.
+    for thread in _portrait_threads(set()):
+        thread.join(10)
+    with jobs._prepare_lock:
+        jobs._prepare_queue.clear()
+        jobs._prepare_queued.clear()
+        jobs._prepare_inflight.clear()
+        jobs._prepare_running = False
+    leftovers = {thread.ident for thread in _portrait_threads(set())}
     active = {"on": True}
     monkeypatch.setattr(jobs, "worker_enabled", lambda: True)
     monkeypatch.setattr(game_engine, "is_any_generation_active", lambda: active["on"])
@@ -746,8 +765,7 @@ def test_portrait_prepare_is_single_and_waits_out_the_narrative(tmp_db, monkeypa
         jobs.resume_portrait_prepare()
         assert not first_entered.wait(0.2)
         assert state["order"] == []
-        alive = [thread for thread in threading.enumerate()
-                 if thread.name == "portrait-prompt" and thread.is_alive()]
+        alive = _portrait_threads(leftovers)
         assert alive == []
 
         active["on"] = False
@@ -756,8 +774,7 @@ def test_portrait_prepare_is_single_and_waits_out_the_narrative(tmp_db, monkeypa
         assert state["order"] == [first["id"]]
         assert state["max"] == 1
         assert state["current"] == 1
-        alive = [thread for thread in threading.enumerate()
-                 if thread.name == "portrait-prompt" and thread.is_alive()]
+        alive = _portrait_threads(leftovers)
         assert len(alive) == 1
 
         active["on"] = True

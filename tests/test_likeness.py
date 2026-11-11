@@ -354,7 +354,9 @@ def test_async_see_enqueues_an_explicit_real_person(client):
         json={"action_seq": 0},
         headers={"Prefer": "respond-async"},
     )
-    assert time.monotonic() - started < 0.3
+    # Rápido = não espera o plano do See (LLM). 2 s de folga para máquina
+    # ocupada; um See síncrono passaria disso esperando o modelo.
+    assert time.monotonic() - started < 2.0
     assert resp.status_code == 202, resp.text
     with db.session() as conn:
         assert db.list_jobs(conn, adv["id"])

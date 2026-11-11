@@ -8,7 +8,9 @@ Provides three hooks:
 Sandbox Invariants:
 1. AST Static Inspection: Rejects imports, dunder attribute traversal, and dangerous builtins.
 2. Sterile Execution: Minimal builtins namespace, no filesystem/process/network access.
-3. Timeout: Strict 1.0s timeout with process kill to abort infinite loops.
+3. Timeout: Strict 1.0s timeout with process kill to abort infinite loops. The
+   clock starts when the child reports ready, so a slow `spawn` on a busy host
+   does not eat the script's budget (startup has its own 20s ceiling).
 4. Fail-Safe: Any error, syntax failure, security rejection, or timeout logs a warning
    and returns the original unmodified input.
 """
@@ -137,6 +139,7 @@ def validate_script_ast(script: str) -> None:
 
 def _sandbox_worker(pipe: Any, hook_type: str, script_code: str, payload: Any) -> None:
     """Worker process entry point executing the script in a sterile namespace."""
+    pipe.send(("ready", None))
     try:
         ns: dict[str, Any] = {
             "__builtins__": SAFE_BUILTINS,
@@ -324,6 +327,7 @@ def _sandbox_worker_chain(pipe: Any, hook_type: str, parts: list[str], payload: 
     e é removido do namespace. Falha de um trecho restaura o payload daquele
     trecho e segue. O caminho de um script só não passa por aqui.
     """
+    pipe.send(("ready", None))
     try:
         ns: dict[str, Any] = {"__builtins__": SAFE_BUILTINS, "math": math}
         if hook_type == "input":
@@ -384,6 +388,49 @@ def _sandbox_worker_chain(pipe: Any, hook_type: str, parts: list[str], payload: 
         pipe.send(("err", f"{type(exc).__name__}: {exc}"))
 
 
+# Subir um interpretador `spawn` leva de 0,1 s a vários segundos numa VM
+# ocupada (LLM e GPU no mesmo host). O prazo do script conta a partir do
+# "ready" do filho; antes disso só vale este teto de partida.
+_STARTUP_TIMEOUT_S = 20.0
+
+
+def _stop_child(proc: Any, parent_conn: Any) -> None:
+    """Encerra o filho (script travado ou já terminado) e fecha o pipe."""
+    try:
+        parent_conn.close()
+    except Exception:
+        pass
+    try:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=0.05)
+        if proc.is_alive():
+            proc.kill()
+        proc.join(timeout=0.5)
+    except Exception:
+        pass
+
+
+def _run_child(proc: Any, parent_conn: Any, hook_type: str, label: str,
+               timeout: float, payload: Any) -> Any:
+    """Espera o filho ficar pronto, aplica o prazo ao script e lê o resultado."""
+    if not parent_conn.poll(_STARTUP_TIMEOUT_S):
+        log.warning("Scripting %s %s did not start in %.0fs", hook_type, label,
+                    _STARTUP_TIMEOUT_S)
+        return payload
+    status, _ = parent_conn.recv()
+    if status != "ready":
+        return payload
+    if not parent_conn.poll(timeout):
+        log.warning("Scripting %s %s timed out after %.2fs", hook_type, label, timeout)
+        return payload
+    status, res = parent_conn.recv()
+    if status == "ok":
+        return res
+    log.warning("Scripting %s %s execution error: %s", hook_type, label, res)
+    return payload
+
+
 def _execute_chain(hook_type: str, parts: list[str], payload: Any, timeout: float) -> Any:
     safe: list[str] = []
     for part in parts:
@@ -410,34 +457,11 @@ def _execute_chain(hook_type: str, parts: list[str], payload: Any, timeout: floa
     try:
         proc.start()
         child_conn.close()
-        proc.join(timeout=effective_timeout)
-        if proc.is_alive():
-            log.warning("Scripting %s chain timed out after %.2fs", hook_type, effective_timeout)
-            proc.terminate()
-            proc.join(timeout=0.05)
-            if proc.is_alive():
-                proc.kill()
-                proc.join(timeout=0.05)
-            parent_conn.close()
-            return payload
-        if parent_conn.poll():
-            status, res = parent_conn.recv()
-            if status == "ok":
-                return res
-            log.warning("Scripting %s chain execution error: %s", hook_type, res)
-            return payload
+        return _run_child(proc, parent_conn, hook_type, "chain", effective_timeout, payload)
     except Exception as exc:
         log.warning("Scripting %s chain subprocess error: %s", hook_type, exc)
     finally:
-        try:
-            parent_conn.close()
-        except Exception:
-            pass
-        if proc.is_alive():
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        _stop_child(proc, parent_conn)
     return payload
 
 
@@ -467,37 +491,11 @@ def _execute_sandboxed(hook_type: str, script: str, payload: Any, timeout: float
     try:
         proc.start()
         child_conn.close()
-        proc.join(timeout=effective_timeout)
-
-        if proc.is_alive():
-            log.warning("Scripting %s modifier timed out after %.2fs", hook_type, effective_timeout)
-            proc.terminate()
-            proc.join(timeout=0.05)
-            if proc.is_alive():
-                proc.kill()
-                proc.join(timeout=0.05)
-            parent_conn.close()
-            return payload
-
-        if parent_conn.poll():
-            status, res = parent_conn.recv()
-            if status == "ok":
-                return res
-            log.warning("Scripting %s modifier execution error: %s", hook_type, res)
-            return payload
-
+        return _run_child(proc, parent_conn, hook_type, "modifier", effective_timeout, payload)
     except Exception as exc:
         log.warning("Scripting %s modifier subprocess error: %s", hook_type, exc)
     finally:
-        try:
-            parent_conn.close()
-        except Exception:
-            pass
-        if proc.is_alive():
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        _stop_child(proc, parent_conn)
 
     return payload
 

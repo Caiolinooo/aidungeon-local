@@ -153,7 +153,9 @@ while True:
         res = scripting.run_input_modifier(infinite_loop, {"type": "do", "text": "safe"}, timeout=0.15)
         elapsed = time.time() - t0
 
-        assert elapsed < 0.8, f"Timeout took too long: {elapsed}s"
+        # O prazo conta do "ready" do filho (subir o interpretador numa máquina
+        # ocupada leva segundos); o teto só prova que o laço foi morto.
+        assert elapsed < 15.0, f"Timeout took too long: {elapsed}s"
         assert res == {"type": "do", "text": "safe"}
 
         time.sleep(0.1)
@@ -174,7 +176,7 @@ while True:
         res = scripting.run_output_modifier(heavy_script, initial, timeout=0.15)
         elapsed = time.time() - t0
 
-        assert elapsed < 0.8
+        assert elapsed < 15.0
         assert res == initial
 
 
