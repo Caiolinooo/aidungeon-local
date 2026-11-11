@@ -46,6 +46,7 @@ WantedBy=multi-user.target
 
 - O app usa contexto de 32768 tokens, escala dinâmica 1.0 e DRY nos últimos 512 tokens. O NPC gate é ignorado quando não existe NPC vivo e, quando necessário, tem teto de 400 tokens de saída.
 - **Benchmark LLM de 1 nov 2026:** 128 tokens com thinking desabilitado; TTFT 1,89 s, geração 6,49 s, total 8,38 s e 19,73 tok/s. A credencial foi validada sem ser persistida nem impressa.
+- **11 nov 2026:** llama.cpp upstream com `--moe-cache-mib 2048`: 65,9 tok/s de geração na mesma VRAM (seção llama-server).
 - O prompt textual de retratos é preparado antes de entrar na fila do worker de GPU. O polling do ComfyUI usa 0,25 s; o piso de configuração é 0,2 s.
 - O cliente de voz mantém conexões HTTP por endpoint e faz upload do RVQ de uma voz clonada uma vez por processo, validando o hash local antes do PUT.
 - Em `/home/caio/Desktop/abz-voice-local/audio_server.py`, o streaming OmniVoice precisa usar `proc.stdout.read1(65536)`. `read(65536)` segura PCM até encher o buffer ou encerrar o processo. No benchmark M1 com 169 caracteres, `read1` antecipou o primeiro PCM de 10,709 s para 8,814 s e o WAV completo de 10,974 s para 9,059 s, sem mudar modelo, texto ou bytes PCM.
@@ -355,20 +356,25 @@ sem evento `max`/`oom` em `memory.events`. Sem tcmalloc o render trava sob o
 ## llama-server (G2)
 
 Unit `/etc/systemd/system/llama-server.service` (root, modo 600 enquanto a
-chave estiver na linha de comando; a G8 troca por `--api-key-file`). Build
-`b10281-c8064719f` do fork `Indras-Mirror/llama.cpp-turboq-mtp`:
+chave estiver na linha de comando; a G8 troca por `--api-key-file`). Desde
+11 nov 2026 o build é o upstream `ggml-org/llama.cpp`, `b12296-1648d6411`,
+em `/home/caio/llama.cpp-upstream` (worktree do clone
+`/home/caio/llama.cpp-hybrid-cache-test`). As units `llama-embeddings` e
+`llama-aux` usam o mesmo binário.
 
 ```ini
-ExecStart=/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server --host 0.0.0.0 --port 1234 \
+ExecStart=/home/caio/llama.cpp-upstream/build/bin/llama-server --host 0.0.0.0 --port 1234 \
   -t 8 --threads-batch 16 -np 5 --kv-unified -cram 0 --ctx-checkpoints 8 --metrics \
   -c 262144 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024 --api-key <chave> -rea auto -fa on \
   --tools all --jinja -m /home/caio/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
   --mmproj /home/caio/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf \
-  --n-gpu-layers 99 -ncmoe 24 --no-mmap --image-min-tokens 1024
+  --n-gpu-layers 99 -ncmoe 32 --moe-cache-mib 2048 -lm none --image-min-tokens 1024
 ```
 
 | Flag | Por quê |
 |---|---|
+| `-ncmoe 32 --moe-cache-mib 2048` | experts de 32 camadas na RAM e um cache de 2 GiB na GPU para os mais usados (`docs/moe-cache.md` do llama.cpp). Mesma VRAM do `-ncmoe 24` sem cache (~10,6 GB) e 2,4× a geração. Só existe no upstream |
+| `-lm none` | substitui o `--no-mmap`, que o upstream removeu. Sem mmap os experts ficam em memória pinada e o upload para o cache usa a banda toda do barramento |
 | `-np 5 --kv-unified` | slots 0–3 do app (contrato C1) e o 4 para clientes sem `id_slot`; o KV unificado divide os 262144 tokens entre eles |
 | `-cram 0` | sem prompt cache no servidor: era ele que disparava o livelock #28280; também libera ~7 GB de RAM |
 | `--ctx-checkpoints 8` | o padrão é 32 checkpoints de ~63 MiB por slot |
@@ -376,7 +382,38 @@ ExecStart=/home/caio/llama.cpp-turboq-mtp/build/bin/llama-server --host 0.0.0.0 
 | `--metrics` | `/metrics` para a G10 |
 
 Medições e decisões em `docs/vm_runbooks/phase5_slots_record.md`. Backups da
-unit: `llama-server.service.v090.bak` (original) e `.g2-np2.bak` (`-np 2`).
+unit: `llama-server.service.v090.bak` (original), `.g2-np2.bak` (`-np 2`) e
+`.pre-upstream.bak` (fork `Indras-Mirror/llama.cpp-turboq-mtp`, `-ncmoe 24
+--no-mmap`; o binário do fork continua em `/home/caio/llama.cpp-turboq-mtp`).
+`llama-embeddings` e `llama-aux` têm o mesmo `.pre-upstream.bak`.
+
+Medido em 11 nov 2026 na L4, com ComfyUI e voz carregados, thinking desligado,
+prompt de 4,3 mil tokens sem cache e 300 tokens gerados (mediana de 3):
+
+| Build e flags | VRAM | geração | prompt |
+|---|---:|---:|---:|
+| fork, `-ncmoe 24` (anterior) | 10600 MiB | 27,5 tok/s | 861 tok/s |
+| upstream, `-ncmoe 24` | 10524 MiB | 25,3 tok/s | 1058 tok/s |
+| upstream, `-ncmoe 24 --moe-cache-mib 1024` | 11566 MiB | 64,0 tok/s | 1165 tok/s |
+| upstream, `-ncmoe 24 --moe-cache-mib 2048` | 12590 MiB | 67,0 tok/s | 1277 tok/s |
+| upstream, `-cmoe --moe-cache-mib 2048` | 8656 MiB | 62,2 tok/s | 883 tok/s |
+| **upstream, `-ncmoe 32 --moe-cache-mib 2048`** | 10622 MiB | 65,9 tok/s | 1028 tok/s |
+
+Turno com a narrativa no slot 0 (4 mil tokens em cache, 200 gerados) e
+auxiliares de 3 mil tokens sem cache, tempo de parede do turno inteiro:
+
+| Build e flags | sozinha | + 2 auxiliares | + 3 auxiliares |
+|---|---:|---:|---:|
+| fork, `-ncmoe 24` (anterior) | 8,2 s | 19,0 s | 25,1 s |
+| upstream, `-ncmoe 32 --moe-cache-mib 2048` | 3,6 s | 11,9 s | 16,5 s |
+
+No `tools/bench_slots.py`, a linha "narrativa >= 13 tok/s com 3 auxiliares"
+falha com o build novo (5,9 tok/s): ela lê o `predicted_per_second` do slot
+enquanto os lotes de prompt das auxiliares ocupam a GPU. O turno inteiro
+termina antes, como na tabela acima. O `-cmoe --moe-cache-mib 2048` é a opção
+para devolver ~2 GB de VRAM ao ComfyUI com a mesma geração e o prompt de antes.
+O RSS do llama-server sobe de 7,9 GB para 9,8 GB com 32 camadas na RAM.
+Embeddings: cosseno 0,9994 a 0,9996 contra o build anterior, mesma dimensão.
 Rollback: copiar o backup por cima, `sudo systemctl daemon-reload` e
 `sudo systemctl restart llama-server` (~30 s para carregar o modelo). Reinicie
 só com os slots ociosos (`GET /slots`), fora do horário de jogo.

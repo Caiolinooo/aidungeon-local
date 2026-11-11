@@ -146,7 +146,7 @@ def test_catalog_matches_installers_and_readme():
     assert dep["build"] in readme
     assert dep["git_url"] == f"https://github.com/{dep['git_fork']}.git"
     joined = " ".join(narrator["runtime"]["argv_before_model"] + narrator["runtime"]["argv_after_model"])
-    for flag in ("-cram", "-ub", "--no-mmap", "-ncmoe", "--kv-unified", "-np"):
+    for flag in ("-cram", "-ub", "-lm", "-ncmoe", "--moe-cache-mib", "--kv-unified", "-np"):
         assert flag in joined
     assert "--api-key" not in joined
     assert narrator["runtime"]["argv_before_model"][narrator["runtime"]["argv_before_model"].index("-ub") + 1] == "1024"
@@ -527,7 +527,7 @@ def test_notebook_contract_and_selected_services():
     assert "CIVITAI" not in llm_src
     assert llm_vars["narrator_gguf_url"] == ""
     assert llm_vars["narrator_gguf_sha256"] == ""
-    assert llm_vars["llama_git_ref"] == "c8064719f"
+    assert llm_vars["llama_git_ref"] == "1648d6411"
     assert llm_vars["min_vram_mib"] == 14424
     assert llm_vars["vram_unspecified"] == []
     assert "não será inventado" in llm_src
