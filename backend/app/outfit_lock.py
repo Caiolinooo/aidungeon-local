@@ -33,6 +33,12 @@ _FALLBACK = {
     "footwear": "plain dark closed shoes",
     "accessories": "none",
 }
+# v2: a v1 aceitava "bottom: none (one-piece)" para uma blusa e a ficha da
+# Renata saiu de short. Trava sem versão é refeita.
+LOCK_VERSION = 2
+_NONE = re.compile(r"(?i)^\s*(none|no|n/?a|nothing|-)\b")
+_ONE_PIECE = re.compile(r"(?i)\b(dress|gown|robe|jumpsuit|overalls?|romper|one-piece|kimono|habit|tunic)\b")
+_BAREFOOT = re.compile(r"(?i)\bbare ?foot\b|\bdescal")
 _OUTFIT_LINE = re.compile(
     r"(?i)\b(attire|outfit|clothing|clothes|wears|wearing|dressed|garment|"
     r"roupa|roupas|veste|vestindo|traje|usa|usando)\b")
@@ -44,7 +50,9 @@ Rules:
 - Fill only what the card leaves out with plain, simple, everyday items that fit the character and the setting.
 - "accessories": worn items such as glasses, jewellery, hats, belts or bags; "none" when there are none.
 - No nudity, no underwear-only outfits, no logos, no text, no armour or weapons unless the card states them.
-- A one-piece garment goes in "top" and "bottom" says "none (one-piece)"."""
+- "bottom" is always a real garment covering the legs or hips (trousers, jeans, skirt, shorts...). Only when the
+  card states a dress, gown, robe or jumpsuit, "bottom" names that same one-piece garment again.
+- "footwear" is always real shoes, boots or sandals unless the card says barefoot."""
 
 
 def _sheet(card: dict) -> dict:
@@ -91,6 +99,16 @@ def _parse(reply: str) -> dict | None:
     return slots
 
 
+def _complete(slots: dict, text: str) -> dict:
+    """Perna e pé nunca ficam vazios por engano do LLM."""
+    slots = dict(slots)
+    if _NONE.search(slots["bottom"]) and not _ONE_PIECE.search(f"{slots['top']} {text}"):
+        slots["bottom"] = _FALLBACK["bottom"]
+    if _NONE.search(slots["footwear"]) and not _BAREFOOT.search(text):
+        slots["footwear"] = _FALLBACK["footwear"]
+    return slots
+
+
 def _ask_llm(card: dict, text: str, *, transport=None, llm_cfg: dict) -> dict | None:
     sheet = _sheet(card)
     lines = [f"Character: {card.get('title') or 'character'}"]
@@ -127,6 +145,8 @@ def current(card: dict) -> dict | None:
         return None
     if lock.get("basis_hash") != _basis_hash(basis(card)):
         return None
+    if lock.get("version") != LOCK_VERSION:
+        return None
     if not all(isinstance(lock.get(key), str) and lock.get(key) for key in SLOTS):
         return None
     return lock
@@ -146,12 +166,14 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
         llm_cfg = settings_store.effective_llm_settings(conn)
     slots = _ask_llm(card, text, transport=transport, llm_cfg=llm_cfg)
     source = "llm"
+    if slots is not None:
+        slots = _complete(slots, text)
     if slots is None:
         slots = dict(_FALLBACK)
         if text:
             slots["top"] = _clean(text)
         source = "fallback"
-    lock = {**slots, "basis_hash": _basis_hash(text), "source": source,
+    lock = {**slots, "version": LOCK_VERSION, "basis_hash": _basis_hash(text), "source": source,
             "created_at": db.utcnow()}
     fresh = db.get_card(conn, card["adventure_id"], card["id"]) or card
     sheet = _sheet(fresh)

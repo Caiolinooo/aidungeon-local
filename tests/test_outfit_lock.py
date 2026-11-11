@@ -146,3 +146,28 @@ def test_default_portrait_wears_the_lock_but_story_outfit_wins(tmp_db, tmp_path,
         jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
     jobs.process_pending(pipeline_transport())
     assert "Default outfit" not in capture["image_calls"][-1]["prompt"]
+
+
+def test_a_top_never_ends_up_without_trousers(tmp_db, tmp_path):
+    """Staging: o LLM devolveu "bottom: none (one-piece)" para "black top" e a
+    ficha saiu de short. Sem vestido no card, a perna ganha calça neutra; a
+    trava v1 já gravada é refeita."""
+    adv = make_adventure()
+    card, _ = _character(adv["id"], tmp_path)
+    card = _set_sheet(adv["id"], card["id"], clothing="black top with a round neckline",
+                      outfit_lock={"top": "black top", "bottom": "none (one-piece)",
+                                   "footwear": "black sandals", "accessories": "none",
+                                   "basis_hash": "x"})
+    assert outfit_lock.current(card) is None
+    reply = json.dumps({**OUTFIT, "bottom": "none (one-piece)", "footwear": "none"})
+    with db.session() as conn:
+        lock = outfit_lock.ensure(conn, card, transport=_transport(reply))
+    assert lock["bottom"] == "plain dark straight-leg trousers"
+    assert lock["footwear"] == "plain dark closed shoes"
+
+    dress, _ = _character(adv["id"], tmp_path, title="Dama")
+    dress = _set_sheet(adv["id"], dress["id"], clothing="long red silk dress")
+    reply = json.dumps({**OUTFIT, "top": "long red silk dress", "bottom": "none (one-piece)"})
+    with db.session() as conn:
+        lock = outfit_lock.ensure(conn, dress, transport=_transport(reply))
+    assert lock["bottom"] == "none (one-piece)"
