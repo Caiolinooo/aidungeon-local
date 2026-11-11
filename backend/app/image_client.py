@@ -1178,6 +1178,8 @@ def video_settings(cfg: dict) -> dict:
 # `video.turnaround` sobrescreve qualquer chave; `engine: "none"` desliga.
 _TURNAROUND_VIDEO_DEFAULTS = {
     "engine": "wan",
+    # Mesmo quadro no começo e no fim: o giro tem de voltar à frente.
+    "loop": True,
     "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
     "frames": 121,
     "fps": 24.0,
@@ -1329,7 +1331,14 @@ def _unload_local_forge(cfg: dict, transport: httpx.BaseTransport | None) -> Non
 
 def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
                     width: int, height: int, seed: int) -> dict:
-    """API prompt do Wan2.2 TI2V 5B. O loader segue a extensão do arquivo."""
+    """API prompt do Wan2.2 TI2V 5B. O loader segue a extensão do arquivo.
+
+    `video.loop` fixa o mesmo quadro no começo e no fim: o último latente
+    recebe a imagem codificada e a máscara de ruído zera o primeiro e o
+    último latente (o modelo trata os dois como contexto limpo). Só com
+    nodes do core: ReplaceVideoLatentFrames e uma máscara feita de imagens
+    pretas e brancas em lote.
+    """
     unet_name = str(video.get("unet") or "")
     if unet_name.lower().endswith(".gguf"):
         loader = "UnetLoaderGGUF"
@@ -1356,6 +1365,7 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
             "vae": ["3", 0], "start_image": ["7", 0],
             "width": int(width), "height": int(height),
             "length": int(video["frames"]), "batch_size": 1}},
+        **(_wan_loop_nodes(video, width, height) if video.get("loop") else {}),
         "9": {"class_type": "KSampler", "inputs": {
             "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0],
             "latent_image": ["8", 0], "seed": int(seed),
@@ -1368,6 +1378,37 @@ def _wan_ti2v_graph(video: dict, prompt: str, image_name: str, *,
         "12": {"class_type": "SaveVideo", "inputs": {
             "video": ["11", 0], "filename_prefix": "video/aidungeon",
             "format": "mp4", "codec": "auto"}},
+    }
+
+
+def _wan_loop_nodes(video: dict, width: int, height: int) -> dict:
+    """Nodes que trocam o latente "8" por um com o último quadro fixo.
+
+    O KSampler lê `["8", 0]`; aqui "8" vira o SetLatentNoiseMask e o latente
+    original passa a "30".
+    """
+    latents = (int(video["frames"]) - 1) // 4 + 1
+    if latents < 3:
+        raise ImageError("config_error: video.loop precisa de ao menos 9 frames")
+    return {
+        "30": {"class_type": "Wan22ImageToVideoLatent", "inputs": {
+            "vae": ["3", 0], "start_image": ["7", 0],
+            "width": int(width), "height": int(height),
+            "length": int(video["frames"]), "batch_size": 1}},
+        "31": {"class_type": "Wan22ImageToVideoLatent", "inputs": {
+            "vae": ["3", 0], "start_image": ["7", 0],
+            "width": int(width), "height": int(height), "length": 1, "batch_size": 1}},
+        "32": {"class_type": "ReplaceVideoLatentFrames", "inputs": {
+            "destination": ["30", 0], "source": ["31", 0], "index": -1}},
+        "33": {"class_type": "EmptyImage", "inputs": {
+            "width": 64, "height": 64, "batch_size": 1, "color": 0}},
+        "34": {"class_type": "EmptyImage", "inputs": {
+            "width": 64, "height": 64, "batch_size": latents - 2, "color": 0xFFFFFF}},
+        "35": {"class_type": "ImageBatch", "inputs": {"image1": ["33", 0], "image2": ["34", 0]}},
+        "36": {"class_type": "ImageBatch", "inputs": {"image1": ["35", 0], "image2": ["33", 0]}},
+        "37": {"class_type": "ImageToMask", "inputs": {"image": ["36", 0], "channel": "red"}},
+        "8": {"class_type": "SetLatentNoiseMask", "inputs": {
+            "samples": ["32", 0], "mask": ["37", 0]}},
     }
 
 

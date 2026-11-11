@@ -62,27 +62,31 @@ def _character(adventure_id: str, tmp_path: Path, title: str = "NPC") -> tuple[d
         return db.get_card(conn, adventure_id, card["id"]), anchor
 
 
-def _fake_view_cycle(sheet_png, output_path, **_kwargs):
+def _fake_view_cycle(view_pngs, output_path, **_kwargs):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_bytes(b"\x00\x00\x00\x18ftypisom-cycle")
     return 4000
 
 
+# Mestre, frente, perfil, costas e close-up, nessa ordem, cada um de uma cor.
+PAINT_COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)]
+
+
 def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
                      capture: dict | None = None, after_render=None,
-                     after_sheet=None) -> None:
+                     after_sheet=None, checks=None, clip_report=None) -> None:
+    """Pinturas e clipe falsos. `checks(kind, call_index)` simula o conferidor
+    das vistas (padrão: tudo aceito); `clip_report` o portão do Wan (padrão:
+    recusado, para o giro das vistas ficar)."""
     image_calls: list[dict] = []
     clip_calls: list[dict] = []
-    payloads = [
-        _png_bytes((255, 0, 0)),
-        _png_bytes((0, 255, 0)),
-        _png_bytes((0, 0, 255)),
-    ]
+    payloads = [_png_bytes(color) for color in PAINT_COLORS]
 
     def generate_image(cfg, prompt, *, adventure_id, image_id, **kwargs):
         index = len(image_calls)
         content = payloads[index % len(payloads)]
-        image_calls.append({"prompt": prompt, "content": content, **kwargs})
+        image_calls.append({"prompt": prompt, "content": content, "seed": cfg.get("seed"),
+                            **kwargs})
         target = tmp_path / "imgs" / adventure_id / f"{image_id}.png"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
@@ -94,6 +98,14 @@ def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
             "file_path": str(target), "provider": "comfyui",
             "width": kwargs.get("width") or 8, "height": kwargs.get("height") or 8,
         }
+
+    def check_view(content, kind):
+        return list(checks(kind, len(image_calls) - 1)) if checks else []
+
+    def analyze_clip(path):
+        if clip_report is not None:
+            return dict(clip_report)
+        return {"clean": False, "problems": ["half_turn"]}
 
     def generate_clip(cfg, prompt, *, adventure_id, image_id, source_png, transport,
                       **kwargs):
@@ -116,39 +128,89 @@ def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
     monkeypatch.setattr(image_client, "generate_image", generate_image)
     monkeypatch.setattr(image_client, "generate_clip", generate_clip)
     monkeypatch.setattr(turnaround_module, "build_view_cycle", _fake_view_cycle)
+    monkeypatch.setattr(turnaround_module, "check_view", check_view)
+    monkeypatch.setattr(turnaround_module, "analyze_clip", analyze_clip)
 
 
-def test_extracts_quarter_frames_and_builds_2x2_sheet(tmp_path):
-    video = tmp_path / "turn.mp4"
-    _write_video(video)
-    views = [tmp_path / f"view-{index}.png" for index in range(4)]
+def _figure_png(size=(672, 1152), *, box=None, color=(20, 20, 20),
+                background=(214, 214, 214), extra_box=None) -> bytes:
+    """Estúdio cinza com um retângulo escuro no lugar da pessoa."""
+    width, height = size
+    image = Image.new("RGB", size, background)
+    x0, y0, x1, y1 = box or (width * 3 // 8, height // 12, width * 5 // 8, height * 11 // 12)
+    image.paste(Image.new("RGB", (x1 - x0, y1 - y0), color), (x0, y0))
+    if extra_box:
+        ex0, ey0, ex1, ey1 = extra_box
+        image.paste(Image.new("RGB", (ex1 - ex0, ey1 - ey0), color), (ex0, ey0))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
+    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "")
+    assert turnaround_module.check_view(_figure_png(), "back") == []
+    assert turnaround_module.check_view(_figure_png(), "profile") == []
+    cut = _figure_png(box=(252, 96, 420, 1152))
+    assert "feet_cut" in turnaround_module.check_view(cut, "back")
+    head = _figure_png(box=(252, 0, 420, 1000))
+    assert "head_cut" in turnaround_module.check_view(head, "back")
+    assert turnaround_module.check_view(_figure_png(box=(300, 500, 310, 510)), "back") == ["empty"]
+    twins = _figure_png(box=(60, 96, 230, 1050), extra_box=(440, 96, 610, 1050))
+    assert "extra_figure" in turnaround_module.check_view(twins, "back")
+    small = _figure_png(box=(300, 600, 372, 1000))
+    assert "too_small" in turnaround_module.check_view(small, "back")
+    # o rosto é do YuNet: de frente na frente e no close-up, nenhum nas costas
+    assert "no_face" in turnaround_module.check_view(_figure_png(), "front")
+    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "frontal")
+    assert turnaround_module.check_view(_figure_png(), "front") == []
+    assert "face_visible" in turnaround_module.check_view(_figure_png(), "back")
+    assert "not_profile" in turnaround_module.check_view(_figure_png(), "profile")
+    closeup = _figure_png((768, 1024), box=(160, 120, 610, 1024))
+    assert turnaround_module.check_view(closeup, "face") == []
+    assert "not_closeup" in turnaround_module.check_view(_figure_png((768, 1024)), "face")
+
+
+def test_view_check_reads_a_gradient_floor_as_background(monkeypatch):
+    """Chão de estúdio mais escuro embaixo não é figura nem corta os pés."""
+    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "")
+    width, height = 672, 1152
+    pixels = np.zeros((height, width, 3), np.uint8)
+    for y in range(height):
+        pixels[y, :] = 225 - int(70 * y / height)       # 225 no alto, 155 embaixo
+    pixels[96:1050, 252:420] = 20
+    output = io.BytesIO()
+    Image.fromarray(pixels).save(output, format="PNG")
+    assert turnaround_module.check_view(output.getvalue(), "back") == []
+
+
+def test_sheets_have_a_fixed_layout_from_the_painted_views(tmp_path):
+    """Folha 2×2 e ficha 1×4 em grade fixa: nenhuma célula vazia ou trocada."""
+    views = [_png_bytes(color) for color in PAINT_COLORS[1:]]
+    master = _png_bytes(PAINT_COLORS[0])
     sheet = tmp_path / "sheet.png"
-
-    size = turnaround_module.extract_turnaround(video, views, sheet)
-
-    assert size == (12, 16)
-    assert all(Image.open(path).size == (12, 16) for path in views)
+    design = tmp_path / "design.png"
+    assert turnaround_module.compose_reference_sheet(views, sheet) == (448, 768)
+    assert turnaround_module.compose_design_sheet(master, views, design) == (1792, 768)
     with Image.open(sheet) as image:
-        assert image.size == (24, 32)
-        assert image.getpixel((0, 0))[2] > 180       # frame 0: azul em RGB
-        assert image.getpixel((12, 0))[1] > 180      # frame 2: verde
-        assert image.getpixel((0, 16))[0] > 180      # frame 4: vermelho
-        assert image.getpixel((12, 16))[0] > 180     # frame 6: branco
-        assert image.getpixel((12, 16))[1] > 180
+        assert image.size == (896, 1536)
+        got = [image.getpixel((224 + 448 * (i % 2), 384 + 768 * (i // 2))) for i in range(4)]
+    assert got == PAINT_COLORS[1:]
+    with Image.open(design) as image:
+        got = [image.getpixel((224 + 448 * i, 384)) for i in range(4)]
+    # mestre, perfil, costas, close-up
+    assert got == [PAINT_COLORS[0], PAINT_COLORS[2], PAINT_COLORS[3], PAINT_COLORS[4]]
 
 
-def test_builds_split_from_canonical_face_and_master_body(tmp_path):
-    anchor = _png_bytes((255, 0, 0))
-    master = _png_bytes((0, 0, 255))
-    output = tmp_path / "split.png"
-
-    assert turnaround_module.build_split_frame(anchor, master, output) == (1344, 768)
-
+def test_master_frame_has_no_inner_border(tmp_path):
+    """O mestre vira o quadro do Wan por redução, sem moldura cinza: o
+    retângulo do fundo antigo aparecia nos primeiros frames do vídeo."""
+    output = tmp_path / "frame.png"
+    assert turnaround_module.build_master_frame(
+        _png_bytes((230, 230, 232)), output) == (448, 768)
     with Image.open(output) as image:
-        assert image.size == (1344, 768)
-        assert image.getpixel((224, 384)) == (0, 0, 255)
-        assert image.getpixel((896, 384)) == (255, 0, 0)
-        assert image.getpixel((448, 384)) == (224, 224, 224)
+        assert image.size == (448, 768)
+        assert {image.getpixel((1, 1)), image.getpixel((446, 766))} == {(230, 230, 232)}
 
 
 def test_route_executor_result_event_and_card_reference(client, tmp_path, monkeypatch):
@@ -168,7 +230,7 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert queued["payload"]["source_image_id"] == anchor["id"]
 
     with events.subscribe(adv["id"]) as subscription:
-        # turnaround + giro do Wan; o vídeo do mock troca o fundo e é recusado
+        # turnaround + giro do Wan; o portão do mock recusa o giro
         assert jobs.process_pending(pipeline_transport()) == 2
         terminal = []
         while (event := subscription.get(0.05)) is not None:
@@ -207,19 +269,30 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
         assert split["source_image_id"] == master["id"]
         assert clip["kind"] == "turnaround_clip"
         assert clip["media_type"] == "video/mp4"
-        assert clip["provider"] == "pillow"           # giro da ficha, sem modelo
-        assert clip["source_image_id"] == design_sheet["id"]
+        assert clip["provider"] == "pillow"           # giro das vistas, sem modelo
+        assert clip["source_image_id"] == master["id"]
         assert clip["duration_ms"] == 4000
+        assert design_sheet["provider"] == "pillow"   # montada, não pintada
+        assert (design_sheet["width"], design_sheet["height"]) == (1792, 768)
         clip_job = [job for job in db.list_jobs(conn, adv["id"])
                     if job["type"] == "turnaround_clip"]
         assert len(clip_job) == 1 and clip_job[0]["status"] == "done"
         assert clip_job[0]["result"]["rejected"] is True
         assert clip_job[0]["payload"]["source_image_id"] == split["id"]
         assert sheet["kind"] == "reference_sheet"
-        # folha 2×2 com células de 1/3 × 1/2 da ficha (8×8 no mock)
-        assert (sheet["width"], sheet["height"]) == (4, 8)
+        # folha 2×2 montada das quatro vistas pintadas, célula 448×768
+        assert (sheet["width"], sheet["height"]) == (896, 1536)
         assert [view["kind"] for view in views] == ["reference_view"] * 4
         assert all(view["ref_id"] == card["id"] for view in views)
+        assert all(view["source_image_id"] == master["id"] for view in views)
+        assert all(view["provider"] == "comfyui" for view in views)
+        assert [(view["width"], view["height"]) for view in views] == [
+            (672, 1152), (672, 1152), (672, 1152), (768, 1024)]
+        with Image.open(likeness.stored_image_path(sheet["file_path"])) as grid:
+            cells = [grid.getpixel((224 + 448 * (i % 2), 384 + 768 * (i // 2)))
+                     for i in range(4)]
+        assert cells == PAINT_COLORS[1:]               # frente, perfil, costas, rosto
+        assert "view_problems" not in result or result["view_problems"] == {}
         assert len(terminal) == 1
         assert terminal[0]["card_id"] == card["id"]
         assert terminal[0]["sheet"] == result["sheet"]
@@ -227,12 +300,21 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
         assert terminal[0]["views"] == result["views"]
 
     image_calls = capture["image_calls"]
-    assert len(image_calls) == 2
+    assert len(image_calls) == 5                      # mestre + 4 vistas, uma a uma
+    master_png = image_calls[0]["content"]
     assert image_calls[0]["reference_images"] == [PNG_BYTES]
-    assert image_calls[1]["reference_images"] == [image_calls[0]["content"]]
-    # recusado pelo portão: uma segunda semente, nunca mais que isso
+    for call in image_calls[1:4]:
+        assert call["reference_images"] == [master_png]
+        assert (call["width"], call["height"]) == (672, 1152)
+    assert image_calls[4]["reference_images"] == [master_png, PNG_BYTES]
+    assert (image_calls[4]["width"], image_calls[4]["height"]) == (768, 1024)
+    assert "seen from directly behind" in image_calls[3]["prompt"]
+    assert "Head-and-shoulders close-up" in image_calls[4]["prompt"]
+    assert "soles of the shoes" in image_calls[1]["prompt"]
+    # recusado pelo portão: até três sementes, nunca mais que isso
     clip_calls = capture["clip_calls"]
-    assert len(clip_calls) == 2
+    assert len(clip_calls) == 3
+    assert clip_calls[0]["video_overrides"]["loop"] is True
     assert all(isinstance(call["seed"], int) for call in clip_calls)
     assert all(call["video_overrides"]["engine"] == "wan" for call in clip_calls)
     assert clip_calls[0]["video_overrides"]["steps"] == 20
@@ -241,10 +323,10 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert not list((tmp_path / "imgs").rglob("*.mp4")) or all(
         path.read_bytes().endswith(b"cycle") for path in (tmp_path / "imgs").rglob("*.mp4"))
     with Image.open(io.BytesIO(capture["source_png"])) as frame:
-        # o vídeo parte só do mestre (vermelho no mock), num quadro vertical
+        # o vídeo parte só do mestre (vermelho no mock), sem moldura cinza
         assert frame.size == (448, 768)
         assert frame.getpixel((224, 384)) == (255, 0, 0)
-        assert frame.getpixel((2, 2)) == (224, 224, 224)
+        assert frame.getpixel((2, 2)) == (255, 0, 0)
 
     repeated = client.post(
         f"/api/adventures/{adv['id']}/cards/{card['id']}/turnaround")
@@ -260,9 +342,9 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert forced.json()["status"] == "pending"
 
 
-def test_uploaded_photo_leads_the_master_and_the_sheet(client, tmp_path, monkeypatch):
-    """Com foto enviada no card, ela é a primeira referência das duas etapas;
-    a âncora (e depois o mestre) vem em seguida. Miniatura sobe para 512 px."""
+def test_uploaded_photo_leads_the_master_and_every_view(client, tmp_path, monkeypatch):
+    """Com foto enviada no card, ela é a primeira referência de toda pintura;
+    depois vêm a âncora (mestre) ou o mestre (vistas). Miniatura sobe para 512 px."""
     use_tmp_storage(tmp_path)
     refs = tmp_path / "refs"
     refs.mkdir()
@@ -285,15 +367,17 @@ def test_uploaded_photo_leads_the_master_and_the_sheet(client, tmp_path, monkeyp
     assert response.status_code == 202, response.text
     assert jobs.process_pending(pipeline_transport()) == 2   # + giro do Wan
 
-    master_call, sheet_call = capture["image_calls"][:2]
-    assert len(master_call["reference_images"]) == 2
-    assert len(sheet_call["reference_images"]) == 2
+    master_call, *view_calls = capture["image_calls"]
+    assert len(view_calls) == 4
     with Image.open(io.BytesIO(master_call["reference_images"][0])) as lead:
         assert lead.format == "PNG"
         assert lead.size == (512, 512)
-    assert master_call["reference_images"][0] == sheet_call["reference_images"][0]
-    assert master_call["reference_images"][1] == PNG_BYTES            # âncora
-    assert sheet_call["reference_images"][1] == master_call["content"]  # mestre
+    photo_png = master_call["reference_images"][0]
+    assert master_call["reference_images"] == [photo_png, PNG_BYTES]        # foto, âncora
+    for call in view_calls[:3]:
+        assert call["reference_images"] == [photo_png, master_call["content"]]
+    assert view_calls[3]["reference_images"] == [
+        photo_png, master_call["content"], PNG_BYTES]                        # close-up
 
 
 def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(
@@ -611,26 +695,6 @@ def test_upload_preserves_and_clear_removes_turnaround(tmp_db, tmp_path, monkeyp
         assert json.loads(cleared["sheet"])["reference"] == {}
 
 
-def test_sheet_views_come_from_the_design_sheet_cells(tmp_path):
-    """Frente, perfil e costas da linha de cima e o close-up de frente."""
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
-    sheet = Image.new("RGB", (30, 20))
-    for index, color in enumerate(colors):
-        column, row = index % 3, index // 3
-        sheet.paste(Image.new("RGB", (10, 10), color), (column * 10, row * 10))
-    raw = io.BytesIO(); sheet.save(raw, format="PNG")
-    views = [tmp_path / f"v{i}.png" for i in range(4)]
-    out = tmp_path / "grid.png"
-    assert turnaround_module.extract_sheet_views(raw.getvalue(), views, out) == (10, 10)
-    got = []
-    for path in views:
-        with Image.open(path) as view:
-            got.append(view.convert("RGB").getpixel((5, 5)))
-    assert got == [colors[0], colors[1], colors[2], colors[3]]
-    with Image.open(out) as grid:
-        assert grid.size == (20, 20)
-
-
 def _published_turnaround(adv_id: str, card_id: str) -> dict:
     with db.session() as conn:
         card = db.get_card(conn, adv_id, card_id)
@@ -646,7 +710,16 @@ def test_clean_wan_clip_replaces_the_sheet_cycle(tmp_db, tmp_path, monkeypatch):
     video = tmp_path / "clean.mp4"
     _write_video(video, frames=16, size=(48, 80), clean=True)
     capture: dict = {}
-    _mock_generation(monkeypatch, tmp_path, video, capture)
+    _mock_generation(monkeypatch, tmp_path, video, capture,
+                     clip_report={"clean": True, "loop_end": 12, "problems": []})
+    loops = []
+
+    def finalize_loop(source, output, end):
+        loops.append(end)
+        Path(output).write_bytes(Path(source).read_bytes() + b"looped")
+        return 500
+
+    monkeypatch.setattr(turnaround_module, "finalize_loop", finalize_loop)
     with db.session() as conn:
         queued = jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
 
@@ -666,6 +739,10 @@ def test_clean_wan_clip_replaces_the_sheet_cycle(tmp_db, tmp_path, monkeypatch):
         assert clip["kind"] == "turnaround_clip"
         assert clip["provider"] == "comfyui"
         assert clip["source_image_id"] == result["split"]["id"]
+        assert clip["duration_ms"] == 500                 # cortado no ponto de loop
+        assert likeness.stored_image_path(clip["file_path"]).read_bytes().endswith(b"looped")
+    assert loops == [12]
+    assert not list((tmp_path / "imgs").rglob("*.loop.mp4"))
     assert len(capture["clip_calls"]) == 1
     assert [bool(item.get("views")) for item in ready] == [True, False]
     assert ready[1]["clip"]["id"] == saved["clip_image_id"]
@@ -722,24 +799,12 @@ def test_new_image_preempts_the_wan_clip_and_requeues_it(tmp_db, tmp_path):
             clip = again[0]
 
 
-def test_quality_gate_rejects_a_changing_background(tmp_path):
-    clean, dirty = tmp_path / "clean.mp4", tmp_path / "dirty.mp4"
-    _write_video(clean, frames=16, size=(48, 80), clean=True)
-    _write_video(dirty, frames=16, size=(48, 80))
-    assert turnaround_module.clip_is_clean(clean) is True
-    assert turnaround_module.clip_is_clean(dirty) is False
-    assert turnaround_module.clip_is_clean(tmp_path / "missing.mp4") is False
-
-
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg não instalado")
 def test_view_cycle_is_a_browser_mp4_through_four_views(tmp_path):
     colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
-    sheet = Image.new("RGB", (90, 80), (224, 224, 224))
-    for column, color in enumerate(colors):
-        sheet.paste(Image.new("RGB", (10, 30), color), (column * 30 + 10, 5))
-    raw = io.BytesIO(); sheet.save(raw, format="PNG")
+    views = [_figure_png((48, 80), box=(16, 10, 32, 70), color=color) for color in colors]
     out = tmp_path / "cycle.mp4"
-    duration = turnaround_module.build_view_cycle(raw.getvalue(), out, size=(48, 80), fps=10)
+    duration = turnaround_module.build_view_cycle(views, out, size=(48, 80), fps=10)
     assert duration == 4000                       # 4 vistas × (6 + 4 frames) a 10 fps
     capture = cv2.VideoCapture(str(out))
     try:
@@ -787,23 +852,109 @@ def test_broken_view_cycle_never_fails_the_turnaround(tmp_db, tmp_path, monkeypa
     assert list((tmp_path / "imgs").rglob("*.mp4")) == []
 
 
-def test_sheet_views_keep_feet_that_cross_the_middle(tmp_path):
-    """Ficha real: os tênis da fileira de cima descem abaixo de h/2. O corte
-    vai para a faixa de fundo entre as fileiras e os pés ficam na vista."""
-    grey = (224, 224, 224)
-    sheet = Image.new("RGB", (300, 200), grey)
-    for column in range(3):                      # corpo + pés até y=115
-        sheet.paste(Image.new("RGB", (20, 105), (0, 0, 0)), (column * 100 + 40, 10))
-        sheet.paste(Image.new("RGB", (20, 5), (255, 255, 255)), (column * 100 + 40, 110))
-    sheet.paste(Image.new("RGB", (40, 40), (150, 90, 60)), (30, 140))   # close-up
-    raw = io.BytesIO(); sheet.save(raw, format="PNG")
-    views = [tmp_path / f"v{i}.png" for i in range(4)]
-    width, height = turnaround_module.extract_sheet_views(
-        raw.getvalue(), views, tmp_path / "grid.png")
-    assert width == 100 and height >= 115    # metade seria 100: pés fora
-    for path in views[:3]:
-        with Image.open(path) as view:
-            assert view.convert("RGB").getpixel((50, 112)) == (255, 255, 255)
-    with Image.open(views[3]) as face:
-        assert face.size == (width, height)
-        assert (150, 90, 60) in [face.convert("RGB").getpixel((50, y)) for y in range(0, 60)]
+
+
+def test_a_view_that_fails_the_check_is_painted_again(tmp_db, tmp_path, monkeypatch):
+    """Costas com pés cortados: mais uma semente; fica a boa e a ruim some.
+    Close-up que falha duas vezes fica a de menos problemas, registrada."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "source.mp4"
+    _write_video(video)
+    capture: dict = {}
+    seen = []
+
+    def checks(kind, index):
+        seen.append((kind, index))
+        if kind == "back" and len([k for k, _ in seen if k == "back"]) == 1:
+            return ["feet_cut"]
+        if kind == "face":
+            first = len([k for k, _ in seen if k == "face"]) == 1
+            return ["no_face", "too_small"] if first else ["no_face"]
+        return []
+
+    _mock_generation(monkeypatch, tmp_path, video, capture, checks=checks)
+    with db.session() as conn:
+        queued = jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
+    with db.session() as conn:
+        job = db.claim_next_job(conn)
+    jobs._run_job(job, pipeline_transport())
+    calls = capture["image_calls"]
+    assert len(calls) == 7                         # mestre, frente, perfil, 2 costas, 2 rostos
+    with db.session() as conn:
+        result = db.get_job(conn, queued["id"])["result"]
+        views = [db.get_image(conn, view["id"]) for view in result["views"]]
+    back_png = likeness.stored_image_path(views[2]["file_path"]).read_bytes()
+    assert back_png == calls[4]["content"]         # a segunda costas
+    assert result["view_problems"] == {"face": ["no_face"]}
+    # 5 pinturas aceitas + quadro do Wan + ficha + folha; as recusadas sumiram
+    assert len(list((tmp_path / "imgs" / adv["id"]).glob("*.png"))) == 8
+    # a segunda tentativa troca a semente e repete as referências
+    assert isinstance(calls[4]["seed"], int) and calls[4]["seed"] != calls[3]["seed"]
+    assert calls[4]["reference_images"] == calls[3]["reference_images"]
+
+
+def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
+    """F de frente, < > rosto virado, . sem rosto. Ida e volta por lados
+    opostos = volta completa; o loop fecha no primeiro retorno."""
+    loop = turnaround_module._loop_from_faces
+    def run(text):
+        timeline = list(text)
+        distances = [0.0 if mark == "F" else 0.1 for mark in timeline]
+        return loop(timeline, distances, len(timeline))
+    full = "FFFF>>>>" + "." * 20 + "<<<<" + "FFFFFF" + ">>>" + "." * 10 + "<<FFFF"
+    end, problems = run(full)
+    assert problems == [] and full[end] == "F" and end < full.index("FFFFFF") + 6
+    assert run("FFFF>>>>" + "." * 20 + ">>>>FFFFFF") == (None, ["half_turn"])
+    assert run("FFFF<<<<<<<<FFFF<<<<<FFFF") == (None, ["no_back_view"])
+    wobble = "FFFF>>>>" + "." * 12 + "<<<<" + "." * 12 + "<<<FFFFF"
+    assert run(wobble) == (None, ["wobble"])
+    end, problems = run("FFFF>>>>" + "." * 20 + "<<<<<<")      # nunca volta à frente
+    assert end is None and problems == []
+
+
+def _synthetic_clip(path: Path, *, stray: bool = False, panel: bool = False,
+                    frames: int = 40) -> None:
+    """Figura que afina (de perfil) e volta; opcional mancha solta ou painel."""
+    size = (448, 768)
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 24, size)
+    assert writer.isOpened()
+    for index in range(frames):
+        frame = np.full((size[1], size[0], 3), 214, np.uint8)
+        phase = abs((index % 32) - 16) / 16          # 1 → 0 → 1
+        half = int(30 + 50 * phase)
+        frame[64:704, 224 - half:224 + half] = (40, 40, 40)
+        frame[64:150, 200:248] = (60, 90, 160)       # cabeça
+        if stray and 20 <= index < 30:
+            frame[300:420, 20:90] = (200, 120, 60)
+        if panel and index >= 12:
+            frame[:, 400:] = 250
+        writer.write(frame)
+    writer.release()
+
+
+def test_clip_analysis_catches_stray_shapes_and_background_panels(tmp_path):
+    good, stray, panel = tmp_path / "good.mp4", tmp_path / "stray.mp4", tmp_path / "panel.mp4"
+    _synthetic_clip(good)
+    _synthetic_clip(stray, stray=True)
+    _synthetic_clip(panel, panel=True)
+    report = turnaround_module.analyze_clip(good)
+    assert report["clean"] is True, report
+    assert 24 <= report["loop_end"] <= 36            # volta ao quadro 0 no fim do ciclo
+    assert "stray_shapes" in turnaround_module.analyze_clip(stray)["problems"]
+    assert "background_changes" in turnaround_module.analyze_clip(panel)["problems"]
+    assert turnaround_module.analyze_clip(tmp_path / "missing.mp4")["clean"] is False
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg não instalado")
+def test_finalize_loop_keeps_frames_up_to_the_loop_point(tmp_path):
+    source, output = tmp_path / "clip.mp4", tmp_path / "loop.mp4"
+    _synthetic_clip(source, frames=40)
+    assert turnaround_module.finalize_loop(source, output, 30) == 1250
+    capture = cv2.VideoCapture(str(output))
+    try:
+        assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 30
+    finally:
+        capture.release()
+    assert output.read_bytes()[4:8] == b"ftyp"

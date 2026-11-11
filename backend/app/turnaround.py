@@ -1,4 +1,12 @@
-"""Quadros, vistas da ficha, giro de reserva e portão de qualidade do clipe 360°."""
+"""Vistas pintadas uma a uma, folhas montadas em grade fixa, giro de reserva
+e portão de qualidade do clipe 360°.
+
+As vistas eram recortes de uma ficha 3×2 pintada pelo modelo, que não
+respeita a grade: close-ups por cima do corpo, painel faltando, pés fora do
+corte. Agora cada vista é uma imagem própria, conferida aqui (pessoa
+presente, não vazia, pés e cabeça dentro do quadro), e as duas folhas são
+montadas com Pillow numa grade que não muda.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +15,27 @@ import subprocess
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image, ImageOps
 
 
 class TurnaroundExtractionError(RuntimeError):
-    """O clipe não contém quatro frames legíveis para a folha de referência."""
+    """Imagem ou clipe ilegível para montar as folhas ou o giro."""
+
+
+# Ordem das vistas em `view_image_ids`, na folha 2×2 e no giro de reserva.
+VIEW_KINDS = ("front", "profile", "back", "face")
+FULL_BODY_KINDS = ("master", "front", "profile", "back")
+# Célula das folhas e quadro do Wan/giro: 448×768. Mestre e vistas de corpo
+# inteiro são pintados em 672×1152 (a mesma proporção), então caber na
+# célula é só reduzir: sem corte, sem faixa de fundo emendada.
+CELL = (448, 768)
+CYCLE_SIZE = CELL
+FULL_BODY_SIZE = (672, 1152)
+FACE_SIZE = (768, 1024)
 
 
 def reference_photo_png(photo: bytes, *, min_side: int = 512) -> bytes:
@@ -42,285 +63,210 @@ def reference_photo_png(photo: bytes, *, min_side: int = 512) -> bytes:
     return out.getvalue()
 
 
-def build_split_frame(anchor_png: bytes, master_png: bytes,
-                      output_path: str | Path, *, size: tuple[int, int] = (1344, 768)
-                      ) -> tuple[int, int]:
-    """Corpo do mestre à esquerda e rosto canônico à direita, sem outro modelo.
+def _image(png: bytes) -> Image.Image:
+    try:
+        with Image.open(BytesIO(png)) as source:
+            return ImageOps.exif_transpose(source).convert("RGB")
+    except Exception as exc:
+        raise TurnaroundExtractionError("could not read the image") from exc
 
-    A âncora conserva os detalhes faciais originais; o mestre fornece corpo e
-    roupa. `contain` não corta cabeça, mãos ou calçados nem inventa pixels.
-    """
-    if not anchor_png or not master_png:
-        raise TurnaroundExtractionError("split requires anchor and master PNGs")
-    width, height = size
-    if width < 3 or height < 1:
-        raise ValueError("split frame is too small")
-    with Image.open(BytesIO(anchor_png)) as source:
-        anchor = ImageOps.exif_transpose(source).convert("RGB")
-    with Image.open(BytesIO(master_png)) as source:
-        master = ImageOps.exif_transpose(source).convert("RGB")
-    canvas = Image.new("RGB", size, (224, 224, 224))
-    left_width = width // 3
-    margin = max(2, width // 336)
-    body = ImageOps.contain(
-        master, (max(1, left_width - 2 * margin), max(1, height - 2 * margin)),
-        Image.Resampling.LANCZOS,
-    )
-    face = ImageOps.contain(
-        anchor, (max(1, width - left_width - 2 * margin), max(1, height - 2 * margin)),
-        Image.Resampling.LANCZOS,
-    )
-    canvas.paste(body, ((left_width - body.width) // 2, (height - body.height) // 2))
-    right_x = left_width + margin
-    right_width = width - left_width - margin
-    canvas.paste(face, (
-        right_x + (right_width - face.width) // 2,
-        (height - face.height) // 2,
-    ))
-    destination = Path(output_path)
+
+def _save(image: Image.Image, path: str | Path) -> None:
+    destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(destination, format="PNG")
-    return size
+    image.save(destination, format="PNG")
+
+
+# ------------------------------------------------------------ figura
+def figure_mask(rgb: np.ndarray) -> np.ndarray:
+    """Pixels de figura num fundo de estúdio liso.
+
+    O fundo de cada linha vem das bordas laterais, o que aguenta o degradê
+    do chão. Linha cuja borda salta em relação à linha de cima (figura
+    encostando na lateral) herda o fundo da última linha boa.
+    """
+    blurred = cv2.GaussianBlur(np.ascontiguousarray(rgb, dtype=np.uint8), (5, 5), 0)
+    arr = blurred.astype(np.int16)
+    height, width = arr.shape[:2]
+    edge = max(2, width // 25)
+    sides = np.concatenate([arr[:, :edge], arr[:, width - edge:]], axis=1)
+    row_bg = np.median(sides, axis=1)
+    current = np.median(arr[: max(2, height // 20), :edge].reshape(-1, 3), axis=0)
+    for y in range(height):
+        if np.abs(row_bg[y] - current).max() <= 25:
+            current = row_bg[y]
+        else:
+            row_bg[y] = current
+    diff = np.abs(arr - row_bg[:, None, :]).max(axis=2)
+    mask = (diff > 30).astype(np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    return mask.astype(bool)
+
+
+def _components(mask: np.ndarray, *, min_fraction: float = 0.002) -> list[dict]:
+    """Componentes conexos, do maior para o menor, sem poeira."""
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=8)
+    floor = mask.size * min_fraction
+    found = []
+    for index in range(1, count):
+        x, y, w, h, area = (int(value) for value in stats[index])
+        if area >= floor:
+            found.append({"x": x, "y": y, "w": w, "h": h, "area": area})
+    found.sort(key=lambda item: item["area"], reverse=True)
+    return found
+
+
+_FACE_MODEL = Path(__file__).with_name("models") / "face_detection_yunet_2023mar.onnx"
+_FRONTAL_EYES = 0.3   # distância entre olhos / largura do rosto: acima disso, de frente
+_detectors: dict[tuple[int, int], Any] = {}
+
+
+def face_pose(rgb: np.ndarray) -> tuple[bool, float, float] | None:
+    """(tem rosto, olhos/largura, desvio do nariz) do rosto mais confiável.
+
+    O desvio é (nariz − meio dos olhos) / largura do rosto: negativo com o
+    rosto virado para a esquerda da imagem, positivo para a direita. YuNet,
+    o mesmo modelo de `face_regions`. Sem modelo ou sem `FaceDetectorYN` no
+    OpenCV devolve None e as checagens de rosto saem.
+    """
+    if not _FACE_MODEL.is_file() or not hasattr(cv2, "FaceDetectorYN"):
+        return None
+    height, width = rgb.shape[:2]
+    try:
+        detector = _detectors.get((width, height))
+        if detector is None:
+            detector = cv2.FaceDetectorYN.create(
+                str(_FACE_MODEL), "", (width, height), score_threshold=0.6)
+            _detectors[(width, height)] = detector
+        _, faces = detector.detect(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    except cv2.error:
+        return None
+    if faces is None or not len(faces):
+        return False, 0.0, 0.0
+    best = max(faces, key=lambda row: float(row[-1]))
+    face_width = max(1.0, float(best[2]))
+    eyes = abs(float(best[6]) - float(best[4])) / face_width
+    yaw = (float(best[8]) - (float(best[4]) + float(best[6])) / 2) / face_width
+    return True, eyes, yaw
+
+
+def face_kind(rgb: np.ndarray, *, max_yaw: float = 0.12) -> str | None:
+    """`"frontal"`, `"turned"` (rosto de lado) ou `""` (nenhum rosto)."""
+    pose = face_pose(rgb)
+    if pose is None:
+        return None
+    found, eyes, yaw = pose
+    if not found:
+        return ""
+    return "frontal" if eyes > _FRONTAL_EYES and abs(yaw) <= max_yaw else "turned"
+
+
+def check_view(png: bytes, kind: str) -> list[str]:
+    """Problemas baratos de uma vista; lista vazia é vista aceita.
+
+    `empty`: quase nada além do fundo. `extra_figure`: outra figura grande
+    (gente duplicada, grade de painéis). Corpo inteiro: `feet_cut`,
+    `head_cut`, `side_cut`, `too_small` e `not_standing`. Close-up:
+    `head_cut`, `too_small` e `not_closeup` (corpo inteiro no lugar do rosto).
+    Rosto (YuNet): frente, mestre e close-up precisam de rosto de frente
+    (`no_face`); costas não podem mostrar rosto (`face_visible`); perfil não
+    pode estar de frente (`not_profile`).
+    """
+    try:
+        image = _image(png)
+    except TurnaroundExtractionError:
+        return ["unreadable"]
+    rgb = np.asarray(image)
+    height, width = rgb.shape[:2]
+    figures = _components(figure_mask(rgb))
+    if not figures or figures[0]["area"] < 0.02 * height * width:
+        return ["empty"]
+    main = figures[0]
+    problems: list[str] = []
+    if any(other["area"] >= 0.15 * main["area"] for other in figures[1:]):
+        problems.append("extra_figure")
+    top_margin = max(1, height // 200)
+    if main["y"] <= top_margin:
+        problems.append("head_cut")
+    if kind in FULL_BODY_KINDS:
+        if main["y"] + main["h"] >= height - max(2, height // 100):
+            problems.append("feet_cut")
+        if main["x"] <= 1 or main["x"] + main["w"] >= width - 1:
+            problems.append("side_cut")
+        if main["h"] < 0.55 * height:
+            problems.append("too_small")
+        if main["h"] < 1.6 * main["w"]:
+            problems.append("not_standing")
+    else:
+        if main["area"] < 0.12 * height * width:
+            problems.append("too_small")
+        if main["w"] < 0.3 * width or main["h"] > 2.2 * main["w"]:
+            problems.append("not_closeup")
+    face = face_kind(rgb)
+    if face is not None:
+        if kind in ("master", "front", "face") and face != "frontal":
+            problems.append("no_face")
+        elif kind == "back" and face:
+            problems.append("face_visible")
+        elif kind == "profile" and face == "frontal":
+            problems.append("not_profile")
+    return problems
+
+
+# ------------------------------------------------------------ folhas
+def _cell(png: bytes, size: tuple[int, int] = CELL) -> Image.Image:
+    """Vista na célula por recorte central da proporção (sem faixa emendada).
+
+    Corpo inteiro já vem na proporção da célula; o close-up 3:4 perde só as
+    pontas dos ombros.
+    """
+    return ImageOps.fit(_image(png), size, Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+
+def compose_reference_sheet(view_pngs: list[bytes], path: str | Path) -> tuple[int, int]:
+    """Folha 2×2 fixa: frente, perfil / costas, close-up. Devolve a célula."""
+    if len(view_pngs) != 4:
+        raise ValueError("the reference sheet needs exactly four views")
+    width, height = CELL
+    grid = Image.new("RGB", (width * 2, height * 2))
+    for index, png in enumerate(view_pngs):
+        grid.paste(_cell(png), ((index % 2) * width, (index // 2) * height))
+    _save(grid, path)
+    return CELL
+
+
+def compose_design_sheet(master_png: bytes, view_pngs: list[bytes],
+                         path: str | Path) -> tuple[int, int]:
+    """Ficha 1×4 fixa: mestre, perfil, costas, close-up. Devolve o tamanho."""
+    if len(view_pngs) != 4:
+        raise ValueError("the design sheet needs the four views")
+    width, height = CELL
+    panels = [master_png, view_pngs[1], view_pngs[2], view_pngs[3]]
+    sheet = Image.new("RGB", (width * len(panels), height))
+    for index, png in enumerate(panels):
+        sheet.paste(_cell(png), (index * width, 0))
+    _save(sheet, path)
+    return sheet.size
 
 
 def build_master_frame(master_png: bytes, output_path: str | Path, *,
-                       size: tuple[int, int] = (448, 768)) -> tuple[int, int]:
-    """Só o mestre de corpo inteiro, em pé, num quadro vertical.
+                       size: tuple[int, int] = CYCLE_SIZE) -> tuple[int, int]:
+    """Primeiro (e último) quadro do Wan: o mestre inteiro, reduzido.
 
-    O quadro dividido (mestre + close-up grande) não girava no LTXV 2B: a
-    figura da esquerda ficava parada e o close-up encolhia e ganhava pernas.
-    Com uma figura só, o vídeo mantém a pessoa e o corpo vira de verdade.
+    Antes o mestre entrava encolhido num canvas cinza fixo e o fundo dele,
+    mais claro, desenhava um retângulo que o vídeo carregava nos primeiros
+    frames. Agora é recorte central da proporção, sem moldura.
     """
     if not master_png:
         raise TurnaroundExtractionError("frame requires the master PNG")
-    with Image.open(BytesIO(master_png)) as source:
-        master = ImageOps.exif_transpose(source).convert("RGB")
-    width, height = size
-    canvas = Image.new("RGB", size, (224, 224, 224))
-    margin = max(2, height // 64)
-    body = ImageOps.contain(
-        master, (max(1, width - 2 * margin), max(1, height - 2 * margin)),
-        Image.Resampling.LANCZOS)
-    canvas.paste(body, ((width - body.width) // 2, (height - body.height) // 2))
-    destination = Path(output_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(destination, format="PNG")
+    _save(_cell(master_png, size), output_path)
     return size
 
 
-# Ficha 3 colunas × 2 fileiras: em cima frente, perfil e costas de corpo
-# inteiro; embaixo close-ups de frente, três-quartos e perfil.
-def _sheet_row_split(sheet: Image.Image) -> int:
-    """Linha de fundo entre as duas fileiras da ficha.
-
-    O modelo não respeita a metade exata: na ficha real da Renata os tênis
-    desciam até ~54 % da altura e o corte em h/2 tirava os pés das vistas.
-    Procura, entre 35 % e 75 %, a linha com menos pixels de figura; sem faixa
-    de fundo limpa, volta à metade.
-    """
-    width, height = sheet.size
-    background = sheet.getpixel((min(2, width - 1), min(2, height - 1)))
-    diff = ImageChops.difference(sheet, Image.new("RGB", sheet.size, background))
-    mask = np.asarray(diff.convert("L")) > 28
-    counts = mask.sum(axis=1)
-    low, high = int(height * 0.35), max(int(height * 0.35) + 1, int(height * 0.75))
-    middle = height // 2
-    best = min(range(low, min(high, height)),
-               key=lambda y: (int(counts[y]), abs(y - middle)))
-    # Sem uma faixa de fundo de verdade (ficha sem respiro), fica a metade.
-    return best if counts[best] <= max(1, width // 50) else middle
-
-
-def _sheet_cells(sheet: Image.Image) -> list[Image.Image]:
-    """Frente, perfil e costas de corpo inteiro e o close-up de frente, todos
-    no mesmo tamanho (fundo da ficha completa a célula mais baixa)."""
-    cell_w = sheet.width // 3
-    split = _sheet_row_split(sheet)
-    if cell_w < 1 or split < 1 or split >= sheet.height:
-        raise TurnaroundExtractionError("design sheet is too small")
-    cells = [sheet.crop((column * cell_w, 0, (column + 1) * cell_w, split))
-             for column in range(3)]
-    cells.append(sheet.crop((0, split, cell_w, sheet.height)))
-    cell_h = max(cell.height for cell in cells)
-    background = sheet.getpixel((min(2, sheet.width - 1), min(2, sheet.height - 1)))
-    padded = []
-    for cell in cells:
-        canvas = Image.new("RGB", (cell_w, cell_h), background)
-        canvas.paste(cell, (0, 0))
-        padded.append(canvas)
-    return padded
-
-
-def extract_sheet_views(sheet_png: bytes, view_paths: list[str | Path],
-                        sheet_path: str | Path) -> tuple[int, int]:
-    """Vistas frente/perfil/costas/rosto recortadas da ficha e uma folha 2×2.
-
-    As vistas saíam de quadros do vídeo, que não gira: eram quatro frentes e a
-    última com defeito. A ficha já traz os ângulos certos da mesma pessoa.
-    """
-    if len(view_paths) != 4:
-        raise ValueError("turnaround requires exactly four view paths")
-    try:
-        with Image.open(BytesIO(sheet_png)) as source:
-            sheet = source.convert("RGB")
-    except Exception as exc:
-        raise TurnaroundExtractionError("could not read the design sheet") from exc
-    if sheet.width < 3 or sheet.height < 2:
-        raise TurnaroundExtractionError("design sheet is too small")
-    cells = _sheet_cells(sheet)
-    cell_w, cell_h = cells[0].size
-    for view, output in zip(cells, view_paths):
-        destination = Path(output)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        view.save(destination, format="PNG")
-    grid = Image.new("RGB", (cell_w * 2, cell_h * 2))
-    for index, view in enumerate(cells):
-        grid.paste(view, ((index % 2) * cell_w, (index // 2) * cell_h))
-    destination = Path(sheet_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    grid.save(destination, format="PNG")
-    return cell_w, cell_h
-
-
-def extract_turnaround(video_path: str | Path, view_paths: list[str | Path],
-                       sheet_path: str | Path) -> tuple[int, int]:
-    """Grava vistas 0/90/180/270 e uma folha RGB 2×2, sem rótulos.
-
-    Os ângulos correspondem aos quartos do clipe. O chamador escolhe nomes
-    únicos e remove os arquivos se a publicação no banco não concluir.
-    """
-    if len(view_paths) != 4:
-        raise ValueError("turnaround requires exactly four view paths")
-    capture = cv2.VideoCapture(str(video_path))
-    if not capture.isOpened():
-        capture.release()
-        raise TurnaroundExtractionError("could not open turnaround clip")
-    try:
-        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        if frame_count < 4:
-            raise TurnaroundExtractionError("turnaround clip has fewer than four frames")
-        size: tuple[int, int] | None = None
-        for index, output in enumerate(view_paths):
-            frame_index = min(index * frame_count // 4, frame_count - 1)
-            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                raise TurnaroundExtractionError(
-                    f"could not read turnaround frame {frame_index}")
-            height, width = frame.shape[:2]
-            if size is None:
-                size = (width, height)
-            elif size != (width, height):
-                raise TurnaroundExtractionError("turnaround frames have inconsistent sizes")
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            destination = Path(output)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            image.save(destination, format="PNG")
-    finally:
-        capture.release()
-
-    assert size is not None
-    sheet = Image.new("RGB", (size[0] * 2, size[1] * 2))
-    for index, output in enumerate(view_paths):
-        with Image.open(output) as view:
-            sheet.paste(view.convert("RGB"), ((index % 2) * size[0],
-                                               (index // 2) * size[1]))
-    destination = Path(sheet_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(destination, format="PNG")
-    return size
-
-
-# Portão do giro 360°: fundo cinza liso que muda nas bordas é o defeito típico
-# (painéis brancos, manchas coloridas, texto sob os pés). Medido em 8 clipes
-# reais do Wan/LTXV na L4: os bons ficaram em ≤0,7 % de pixels alterados nas
-# faixas laterais/topo e 0 % na faixa de baixo; os ruins em 3,3–33 %.
-_CLEAN_SIDE_FRACTION = 0.02
-_CLEAN_BOTTOM_FRACTION = 0.02
-
-
-def clip_is_clean(video_path: str | Path) -> bool:
-    """True quando o fundo das bordas fica parecido com o do primeiro frame."""
-    capture = cv2.VideoCapture(str(video_path))
-    if not capture.isOpened():
-        capture.release()
-        return False
-    frames = []
-    try:
-        index = 0
-        while True:
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                break
-            if index % 2 == 0:
-                frames.append(frame)
-            index += 1
-    finally:
-        capture.release()
-    if len(frames) < 4:
-        return False
-    height, width = frames[0].shape[:2]
-    side, top, bottom = max(2, width // 10), max(2, height // 20), max(2, height // 25)
-
-    def border(frame):
-        return np.concatenate([
-            frame[:, :side].reshape(-1, 3), frame[:, width - side:].reshape(-1, 3),
-            frame[:top].reshape(-1, 3),
-        ]).astype(np.int16)
-
-    first_border = border(frames[0])
-    first_bottom = frames[0][height - bottom:].astype(np.int16)
-    for frame in frames[1:]:
-        if frame.shape[:2] != (height, width):
-            return False
-        changed = (np.abs(border(frame) - first_border).max(axis=1) > 40).mean()
-        if changed > _CLEAN_SIDE_FRACTION:
-            return False
-        floor = (np.abs(frame[height - bottom:].astype(np.int16) - first_bottom)
-                 .max(axis=2) > 60).mean()
-        if floor > _CLEAN_BOTTOM_FRACTION:
-            return False
-    return True
-
-
-def _figure_frame(panel: Image.Image, size: tuple[int, int]) -> Image.Image:
-    """Figura recortada do fundo do painel e centrada na altura do quadro."""
-    width, height = size
-    background = panel.getpixel((min(2, panel.width - 1), min(2, panel.height - 1)))
-    diff = ImageChops.difference(panel, Image.new("RGB", panel.size, background))
-    box = diff.convert("L").point(lambda value: 255 if value > 28 else 0).getbbox()
-    figure = panel.crop(box) if box else panel
-    margin = max(2, height // 64)
-    figure = ImageOps.contain(
-        figure, (max(1, width - 2 * margin), max(1, height - 2 * margin)),
-        Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", size, background)
-    canvas.paste(figure, ((width - figure.width) // 2, (height - figure.height) // 2))
-    return canvas
-
-
-CYCLE_SIZE = (448, 768)
-
-
-def build_view_cycle(sheet_png: bytes, output_path: str | Path, *,
-                     size: tuple[int, int] = CYCLE_SIZE, fps: int = 24,
-                     hold_s: float = 0.6, fade_s: float = 0.4) -> int:
-    """MP4 H.264 em loop: frente, perfil, costas, perfil espelhado, com fusão.
-
-    Sai da ficha, sem modelo de vídeo: é o giro imediato e o que fica quando o
-    clipe do Wan falha ou é recusado. Devolve a duração em ms.
-    """
-    try:
-        with Image.open(BytesIO(sheet_png)) as source:
-            sheet = source.convert("RGB")
-    except Exception as exc:
-        raise TurnaroundExtractionError("could not read the design sheet") from exc
-    if sheet.width < 3 or sheet.height < 2:
-        raise TurnaroundExtractionError("design sheet is too small")
-    front, profile, back = (_figure_frame(cell, size) for cell in _sheet_cells(sheet)[:3])
-    keys = [front, profile, back, ImageOps.mirror(profile)]
-    hold = max(1, round(hold_s * fps))
-    fade = max(1, round(fade_s * fps))
+# ------------------------------------------------------------ giro de reserva
+def _encode(frames, output_path: str | Path, size: tuple[int, int], fps: float) -> int:
+    """Frames RGB (PIL ou ndarray) em MP4 H.264. Devolve quantos foram."""
     width, height = size
     command = [
         shutil.which("ffmpeg") or "ffmpeg", "-v", "error", "-y",
@@ -340,24 +286,300 @@ def build_view_cycle(sheet_png: bytes, output_path: str | Path, *,
         except OSError as exc:
             raise TurnaroundExtractionError("ffmpeg is not available") from exc
         try:
-            for index, key in enumerate(keys):
-                following = keys[(index + 1) % len(keys)]
-                for _ in range(hold):
-                    process.stdin.write(key.tobytes())
-                    count += 1
-                for step in range(1, fade + 1):
-                    process.stdin.write(
-                        Image.blend(key, following, step / (fade + 1)).tobytes())
-                    count += 1
+            for frame in frames:
+                data = frame.tobytes() if isinstance(frame, Image.Image) else \
+                    np.ascontiguousarray(frame, dtype=np.uint8).tobytes()
+                process.stdin.write(data)
+                count += 1
             process.stdin.close()
             returncode = process.wait(timeout=120)
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             process.kill()
             process.wait()
-            raise TurnaroundExtractionError(
-                "ffmpeg failed to encode the view cycle") from exc
+            raise TurnaroundExtractionError("ffmpeg failed to encode the clip") from exc
         if returncode != 0:
             error_log.seek(0)
             raise TurnaroundExtractionError(
                 f"ffmpeg failed: {error_log.read(200).decode(errors='replace')}")
+    return count
+
+
+def build_view_cycle(view_pngs: list[bytes], output_path: str | Path, *,
+                     size: tuple[int, int] = CYCLE_SIZE, fps: int = 24,
+                     hold_s: float = 0.6, fade_s: float = 0.4) -> int:
+    """MP4 em loop: frente, perfil, costas, perfil espelhado, com fusão.
+
+    Sai das vistas pintadas (frente, perfil, costas), sem modelo de vídeo: é
+    o giro imediato e o que fica quando o clipe do Wan falha ou é recusado.
+    Devolve a duração em ms.
+    """
+    if len(view_pngs) < 3:
+        raise TurnaroundExtractionError("the view cycle needs front, profile and back")
+    front, profile, back = (_cell(png, size) for png in view_pngs[:3])
+    keys = [front, profile, back, ImageOps.mirror(profile)]
+    hold = max(1, round(hold_s * fps))
+    fade = max(1, round(fade_s * fps))
+
+    def frames():
+        for index, key in enumerate(keys):
+            following = keys[(index + 1) % len(keys)]
+            for _ in range(hold):
+                yield key
+            for step in range(1, fade + 1):
+                yield Image.blend(key, following, step / (fade + 1))
+
+    count = _encode(frames(), output_path, size, fps)
+    return int(round(count * 1000 / fps))
+
+
+# ------------------------------------------------------------ clipe do Wan
+def _read_frames(video_path: str | Path) -> tuple[list[np.ndarray], float]:
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        capture.release()
+        return [], 0.0
+    frames: list[np.ndarray] = []
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        while True:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                break
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    finally:
+        capture.release()
+    return frames, fps
+
+
+def _descriptor(rgb: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray | None:
+    """Figura recortada, 16×40, em Lab: compara pose e cores, não tamanho."""
+    if mask is None:
+        mask = figure_mask(rgb)
+    figures = _components(mask)
+    if not figures:
+        return None
+    main = figures[0]
+    crop = rgb[main["y"]:main["y"] + main["h"], main["x"]:main["x"] + main["w"]]
+    small = cv2.resize(crop, (16, 40), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32) / 255.0
+
+
+# Calibrado em 17 clipes reais da L4 (11/11/2026). Bons: Wan livres que
+# voltam à frente e Wan com primeiro/último quadro fixos. Ruins: fundo em
+# painéis (s1234), arcos e barbatanas (lock2/wan2), manchas de 12 passos,
+# texto no chão (81/20), fantasmas do LTXV guiado e o meio giro do LTXV.
+_ANALYSIS_SCALE = 4
+_TAIL_FRAMES = 4         # o último latente fixo sai escurecido no decode
+_SKIP_START = 8          # o quadro inicial ainda assenta
+_BACK_RUN = 8            # costas: ao menos 8 quadros seguidos sem rosto
+_FRONT_RUN = 3           # volta: 3 quadros seguidos de rosto de frente
+_BORDER_DELTA = 25       # bons ≤ 0,7 % das bordas mudadas; ruins ≥ 3 %
+_BORDER_FRACTION = 0.015
+_FLOOR_DELTA = 60
+_FLOOR_FRACTION = 0.02
+_ZONE_WIDTH = 1.35       # faixa da figura: bons ≤ 0,41 % fora; ruins ≥ 1,5 %
+_OUTSIDE_FRACTION = 0.008
+_JUMP_RATIO = 2.0        # área da figura entre quadros: bons ≤ 1,63×; ruins ≥ 3,4×
+
+
+_LOOP_YAW = 0.06         # de frente no clipe: nariz no meio dos olhos
+
+
+def _faces_timeline(frames: list[np.ndarray]) -> list[str] | None:
+    """Por quadro: F (de frente), < ou > (virado para esse lado), . (sem rosto)."""
+    timeline = []
+    for frame in frames:
+        pose = face_pose(frame)
+        if pose is None:
+            return None
+        found, eyes, yaw = pose
+        if not found:
+            timeline.append(".")
+        elif eyes > _FRONTAL_EYES and abs(yaw) <= _LOOP_YAW:
+            timeline.append("F")
+        else:
+            timeline.append("<" if yaw < 0 else ">")
+    return timeline
+
+
+def _side(marks: str) -> int:
+    left, right = marks.count("<"), marks.count(">")
+    return 0 if left == right else (-1 if left > right else 1)
+
+
+def _loop_from_faces(timeline: list[str], to_front: list[float],
+                     usable: int) -> tuple[int | None, list[str]]:
+    """(loop_end, problemas) pela linha do tempo do rosto.
+
+    Costas = a primeira sequência de `_BACK_RUN` quadros sem rosto. Volta
+    completa = o rosto some virado para um lado e reaparece vindo do outro;
+    o mesmo lado na ida e na volta é meia-volta desfeita (o Wan s7 fazia
+    frente → perfil → costas → o mesmo perfil → frente). O primeiro trecho
+    de rosto de frente depois das costas fecha o loop no quadro mais parecido
+    com o 0; uma segunda volta, que o Wan às vezes dá para cair no último
+    quadro fixo, fica de fora.
+    """
+    run = 0
+    back_start = back_end = None
+    for index in range(usable):
+        run = run + 1 if timeline[index] == "." else 0
+        if run >= _BACK_RUN:
+            back_start, back_end = index - run + 1, index
+            while back_end + 1 < usable and timeline[back_end + 1] == ".":
+                back_end += 1
+            break
+    if back_end is None:
+        return None, ["no_back_view"]
+    out_side = _side("".join(timeline[:back_start]))
+    index = back_end + 1
+    while index + _FRONT_RUN <= usable:
+        if all(timeline[j] == "F" for j in range(index, index + _FRONT_RUN)):
+            stop = index
+            while stop + 1 < usable and timeline[stop + 1] == "F":
+                stop += 1
+            # lado de chegada: o trecho virado logo antes do F (furos de 1 quadro ok)
+            start = index
+            while start > back_end + 1 and (timeline[start - 1] in "<>" or (
+                    timeline[start - 1] == "." and start - 2 > back_end
+                    and timeline[start - 2] in "<>")):
+                start -= 1
+            in_side = _side("".join(timeline[start:index]))
+            if out_side and in_side and in_side == out_side:
+                return None, ["half_turn"]
+            # Duas costas antes de voltar: vai e volta (lock2/wan0, flf99).
+            backs = [len(chunk) for chunk in "".join(timeline[back_start:index]).split("F")
+                     for chunk in chunk.replace("<", " ").replace(">", " ").split()
+                     if len(chunk) >= _BACK_RUN]
+            if len(backs) > 1:
+                return None, ["wobble"]
+            best = min(range(index, stop + 1), key=lambda j: to_front[j])
+            return best, []
+        index += 1
+    return None, []
+
+
+def analyze_clip(video_path: str | Path) -> dict[str, Any]:
+    """Volta completa, ponto de loop e defeitos do giro 360°.
+
+    Volta completa = o rosto some por uma sequência de quadros (costas) e
+    volta de frente. `loop_end` é o quadro, nesse retorno, mais parecido com
+    o 0: o clipe cortado em [0, loop_end) emenda sem salto. Personagem sem
+    rosto detectável no quadro 0 (máscara, criatura) cai na distância da
+    figura ao quadro 0. Os defeitos só contam no trecho que fica.
+    """
+    frames, fps = _read_frames(video_path)
+    report: dict[str, Any] = {"frames": len(frames), "fps": fps, "problems": []}
+    problems: list[str] = report["problems"]
+    if len(frames) < 16:
+        problems.append("unreadable")
+        report["clean"] = False
+        return report
+    height, width = frames[0].shape[:2]
+    scale = _ANALYSIS_SCALE
+    small = [cv2.resize(frame, (width // scale, height // scale),
+                        interpolation=cv2.INTER_AREA) for frame in frames]
+    masks = [figure_mask(frame) for frame in small]
+    descriptors = [_descriptor(frame, mask) for frame, mask in zip(small, masks)]
+    if descriptors[0] is None:
+        problems.append("no_figure")
+        report["clean"] = False
+        return report
+
+    def distance(a, b):
+        return float(np.abs(a - b).mean()) if a is not None and b is not None else 1.0
+
+    to_front = [distance(item, descriptors[0]) for item in descriptors]
+    usable = len(frames) - _TAIL_FRAMES
+    timeline = _faces_timeline(frames)
+    report["faces"] = "".join(timeline) if timeline else None
+    if timeline and timeline[0] == "F":
+        loop_end, turn_problems = _loop_from_faces(timeline, to_front, usable)
+        problems.extend(turn_problems)
+    else:
+        peak_at = int(np.argmax(to_front[:usable]))
+        peak = to_front[peak_at]
+        loop_end = None
+        for index in range(peak_at + 1, usable):
+            if to_front[index] <= 0.3 * peak:
+                loop_end = min(range(index, usable), key=lambda j: to_front[j])
+                break
+        if peak < 0.03:
+            problems.append("no_turn")
+    if loop_end is None or loop_end < 24:
+        problems.append("no_return")
+        loop_end = usable
+    report["loop_end"] = loop_end
+
+    kept = small[:loop_end]
+    kept_masks = masks[:loop_end]
+    h, w = kept[0].shape[:2]
+    side, top, bottom = max(2, w // 10), max(2, h // 20), max(2, h // 25)
+    blurred = [cv2.GaussianBlur(frame, (5, 5), 0).astype(np.int16) for frame in kept]
+
+    def border(frame):
+        return np.concatenate([
+            frame[:, :side].reshape(-1, 3), frame[:, w - side:].reshape(-1, 3),
+            frame[:top].reshape(-1, 3)])
+
+    borders = np.stack([border(frame) for frame in blurred])
+    floors = np.stack([frame[h - bottom:] for frame in blurred])
+    border_ref = np.median(borders, axis=0)
+    floor_ref = np.median(floors, axis=0)
+    boxes = []
+    for mask in kept_masks:
+        figures = _components(mask)
+        boxes.append(figures[0] if figures else None)
+    present = [box for box in boxes if box]
+    centre = float(np.median([box["x"] + box["w"] / 2 for box in present])) if present else w / 2
+    half = float(np.percentile([box["w"] / 2 for box in present], 95)) if present else w / 4
+    top_line = min((box["y"] for box in present), default=0) - max(2, h // 33)
+    zone = np.zeros((h, w), bool)
+    zone[max(0, top_line):, int(max(0, centre - _ZONE_WIDTH * half)):
+         int(min(w, centre + _ZONE_WIDTH * half + 1))] = True
+    worst_border = worst_floor = worst_outside = 0.0
+    worst_jump = 1.0
+    previous_area = 0
+    for index, (frame_border, frame_floor, mask, box) in enumerate(
+            zip(borders, floors, kept_masks, boxes)):
+        area = box["area"] if box else 0
+        if previous_area and area:
+            worst_jump = max(worst_jump, area / previous_area, previous_area / area)
+        previous_area = area or previous_area
+        if index < _SKIP_START:
+            continue
+        delta = frame_border - border_ref
+        delta = delta - np.median(delta, axis=0)   # cintilação global de luz
+        worst_border = max(worst_border,
+                           float((np.abs(delta).max(axis=1) > _BORDER_DELTA).mean()))
+        floor = np.abs(frame_floor - floor_ref).max(axis=2) > _FLOOR_DELTA
+        worst_floor = max(worst_floor, float(floor.mean()))
+        worst_outside = max(worst_outside, float((mask & ~zone).mean()))
+    report.update({
+        "border": round(worst_border, 4), "floor": round(worst_floor, 4),
+        "outside": round(worst_outside, 4), "jump": round(worst_jump, 2),
+    })
+    if worst_border > _BORDER_FRACTION:
+        problems.append("background_changes")
+    if worst_floor > _FLOOR_FRACTION:
+        problems.append("floor_changes")
+    if worst_outside > _OUTSIDE_FRACTION:
+        problems.append("stray_shapes")
+    if worst_jump > _JUMP_RATIO:
+        problems.append("figure_jumps")
+    report["clean"] = not problems
+    return report
+
+
+def finalize_loop(source_path: str | Path, output_path: str | Path, end: int) -> int:
+    """Regrava o clipe com os quadros [0, end): o último emenda no primeiro.
+
+    Devolve a duração em ms.
+    """
+    frames, fps = _read_frames(source_path)
+    if not frames or end < 2:
+        raise TurnaroundExtractionError("clip has no frames to keep")
+    kept = frames[:end]
+    height, width = kept[0].shape[:2]
+    fps = fps or 24.0
+    count = _encode(kept, output_path, (width, height), fps)
     return int(round(count * 1000 / fps))

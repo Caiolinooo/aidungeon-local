@@ -1695,55 +1695,97 @@ def _default_look(card: dict) -> dict:
     return {**card, "sheet": json.dumps(sheet, ensure_ascii=False)}
 
 
-def _turnaround_prompts(card: dict, lock: dict | None = None, *,
-                        with_outfit: bool = True) -> dict[str, str]:
-    """Mestre, ficha e giro com a mesma identidade e a mesma roupa travada.
-
-    `with_outfit=False` deixa a roupa de fora: o executor traduz o resto e
-    acrescenta a frase da trava depois, literal, sem passar pelo LLM.
-    """
+def _turnaround_identity(card: dict) -> str:
+    """Quem é a pessoa, para todo prompt do turnaround (aparência padrão)."""
     card = _default_look(card)
     identity = likeness.opening_clause([card])
     if not identity:
         bits = npc_assets.scene_bits(card)
         name = str(card.get("title") or "character").strip()
         identity = f"{name}: {'; '.join(bits)}" if bits else name
-    identity = identity[:700]
-    if lock is None and with_outfit:
-        lock = outfit_lock.current(card)
-    outfit = outfit_lock.full_text(lock) if with_outfit else ""
+    return identity[:700]
+
+
+_TURNAROUND_SIDES = (
+    "Keep every distinctive and asymmetrical detail on the character's own "
+    "LEFT or RIGHT side exactly as shown; never mirror or move it."
+)
+_TURNAROUND_STUDIO = (
+    "One single person only, alone in the frame. Clean seamless light grey studio "
+    "background, soft even lighting, sharp focus, 85mm lens. No text, no labels, "
+    "no logos, no extra panels, no split screen."
+)
+_TURNAROUND_FULL_BODY = (
+    "The whole figure from the top of the hair to the soles of the shoes is inside "
+    "the frame, with empty floor visible below the shoes and empty space above the "
+    "head; the figure fills about 85 percent of the image height, centred."
+)
+# Cada vista é uma imagem própria (antes era um painel recortado da ficha).
+_TURNAROUND_VIEWS = {
+    "front": (
+        "Full-body photograph of this exact character standing in a relaxed neutral "
+        "pose, body and face turned straight to the camera, arms relaxed at the sides, "
+        "feet slightly apart."
+    ),
+    "profile": (
+        "Full-body photograph of this exact character standing in a strict side "
+        "profile view: head, body and feet turned 90 degrees so the character's right "
+        "side faces the camera and the face points to the left edge of the image, "
+        "arms relaxed at the sides."
+    ),
+    "back": (
+        "Full-body photograph of this exact character seen from directly behind: the "
+        "back of the head, the back and the heels face the camera, the face is not "
+        "visible, arms relaxed at the sides."
+    ),
+    "face": (
+        "Head-and-shoulders close-up portrait of this exact character facing the "
+        "camera straight on, calm neutral expression, the face large and sharp in the "
+        "centre, the top of the hair and both shoulders inside the frame."
+    ),
+}
+
+
+def _turnaround_prompts(card: dict, lock: dict | None = None, *,
+                        identity: str | None = None) -> dict[str, str]:
+    """Mestre, as quatro vistas e o giro, com a mesma identidade e a roupa
+    travada repetida literalmente.
+
+    `identity` já traduzida vem do executor (uma chamada de LLM só); sem ela
+    a identidade sai do card, como no enqueue, que só guarda os textos.
+    """
+    if identity is None:
+        identity = _turnaround_identity(card)
+    if lock is None:
+        lock = outfit_lock.current(_default_look(card))
+    outfit = outfit_lock.full_text(lock)
     outfit = f" {outfit}" if outfit else ""
-    sides = (
-        "Keep every distinctive and asymmetrical detail on the character's own "
-        "LEFT or RIGHT side exactly as shown; never mirror or move it."
-    )
-    master = (
-        f"Create a full-body master portrait of this exact character. {identity}. "
-        "Standing upright in a relaxed neutral pose, facing the camera, arms at the "
-        "sides, feet slightly apart, entire body and shoes visible. Preserve the face, "
-        f"hair, body, outfit and accessories exactly.{outfit} {sides} Clean seamless light grey "
-        "studio background, soft even three-point lighting, sharp focus head to toe, "
-        "85mm lens. No text, no labels, no logos."
-    )
-    sheet = (
-        "Turn this exact character into a clean professional character reference sheet. "
-        f"Keep {identity}, body, outfit and accessories exactly identical to the reference."
-        f"{outfit} {sides} Two rows on a seamless light grey background. Top row: three full-body "
-        "views at the same scale and in the same neutral pose: front, RIGHT profile, back. "
-        "Bottom row: three head-and-shoulders close-ups: front, three-quarter, side profile. "
-        "Even studio lighting, aligned panels, consistent colour. No text, no labels, "
-        "no arrows, no logos."
-    )
-    clip = (
+    keep = f"Keep {identity}, body, outfit and accessories exactly identical to the references."
+    prompts = {
+        "master": (
+            f"Create a full-body master portrait of this exact character. {identity}. "
+            "Standing upright in a relaxed neutral pose, facing the camera, arms at the "
+            "sides, feet slightly apart. Preserve the face, hair, body, outfit and "
+            f"accessories exactly.{outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
+            f"{_TURNAROUND_STUDIO}"
+        ),
+    }
+    for kind, pose in _TURNAROUND_VIEWS.items():
+        framing = "" if kind == "face" else f" {_TURNAROUND_FULL_BODY}"
+        prompts[kind] = (
+            f"{pose} {keep}{outfit} {_TURNAROUND_SIDES}{framing} {_TURNAROUND_STUDIO}"
+        )
+    prompts["clip"] = (
         "Turntable shot of one person standing alone in a seamless grey studio. "
         f"Keep {identity}, body, outfit and accessories exactly unchanged.{outfit} "
-        "The person slowly turns the whole body in place clockwise through a full "
-        "360 degree circle: front, the right side in profile, the back, the left side "
-        "in profile, then front again. Feet stay planted on the floor, legs straight, "
+        "The person slowly turns the whole body in place through exactly one full "
+        "360 degree turn, always in the same direction: front, the right side in "
+        "profile, the back, the left side in profile, then facing the camera again "
+        "exactly as in the first frame. Feet stay planted on the floor, legs straight, "
         "smooth constant rotation, static locked-off camera, calm neutral expression, "
-        f"no talking. {sides} No extra people, no text."
+        f"no talking. {_TURNAROUND_SIDES} No extra people, no text."
     )
-    return {"master": master, "design_sheet": sheet, "clip": clip}
+    return prompts
 
 _PORTRAIT_CLIP_STILL = (
     "No stated action, emotion or pose. Do not invent a gesture. "
@@ -2219,8 +2261,21 @@ def _execute_scene_clip(job: dict, transport: Any) -> dict:
     }
 
 
+# Tamanho de cada pintura do turnaround. Corpo inteiro na proporção exata da
+# célula das folhas e do quadro do Wan (448×768); close-up em 3:4.
+_TURNAROUND_PAINTS = (
+    ("master", turnaround.FULL_BODY_SIZE),
+    ("front", turnaround.FULL_BODY_SIZE),
+    ("profile", turnaround.FULL_BODY_SIZE),
+    ("back", turnaround.FULL_BODY_SIZE),
+    ("face", turnaround.FACE_SIZE),
+)
+
+
 def _execute_turnaround(job: dict, transport: Any) -> dict:
-    """Mestre → ficha → split → 360; publica tudo ou não publica nada."""
+    """Mestre → frente, perfil, costas e close-up, cada um pintado e conferido
+    → ficha e folha 2×2 montadas em grade fixa → quadro do Wan e giro de
+    reserva. Publica tudo ou não publica nada."""
     with db.session() as conn:
         img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
@@ -2231,23 +2286,17 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
-    # Roupa travada antes de qualquer pintura: os prompts do payload podem ser
-    # de antes da trava, por isso são refeitos aqui com ela.
+    # Roupa travada antes de qualquer pintura; a identidade é traduzida uma
+    # vez e a frase da roupa entra literal, sem passar pelo LLM.
     with db.session() as conn:
         lock = outfit_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
-    prompts = _turnaround_prompts(card, with_outfit=False)
+    identity = image_english.render_english(
+        _turnaround_identity(card), transport=transport, llm_cfg=llm_cfg)
+    prompts = _turnaround_prompts(card, lock, identity=identity)
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}
-    outfit = outfit_lock.full_text(lock)
-    prompts = {
-        **prompts,
-        **{
-            key: f"{image_english.render_english(prompts[key], transport=transport, llm_cfg=llm_cfg)} {outfit}".strip()
-            for key in ("master", "design_sheet", "clip")
-        },
-    }
     created_paths: list[str] = []
-    assets: dict[str, dict] = {}
+    painted: dict[str, dict] = {}
 
     def ensure_running() -> None:
         with db.session() as conn:
@@ -2255,9 +2304,8 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         if not current or current.get("status") != "running":
             raise db.JobCanceled(job["id"])
 
-    # Foto enviada (ou a da pessoa do card) manda na identidade: entra em toda
-    # etapa, na frente da âncora e do mestre. Sem isso o turnaround nascia só
-    # do retrato gerado e a foto nunca chegava ao mestre nem à ficha.
+    # Foto enviada (ou a da pessoa do card) manda na identidade: vem primeiro
+    # em toda pintura, antes da âncora e do mestre.
     photos: list[bytes] = []
     if not likeness.is_minor(card):
         for blob in likeness.portrait_pixels(card)[:1]:
@@ -2265,70 +2313,78 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
             if png:
                 photos.append(png)
 
-    try:
-        reference = raw
-        reference_id = source["id"]
-        master_raw = b""
-        for key, kind, width, height in (
-            ("master", "character_master", 768, 1152),
-            ("design_sheet", "character_sheet", 1344, 768),
-        ):
+    def paint(kind: str, size: tuple[int, int], references: list[bytes]) -> dict:
+        """Pinta, confere e, se a vista falhar, tenta mais uma semente.
+
+        Fica a tentativa com menos problemas; nenhuma vista derruba o
+        turnaround (o problema vai para o log e para o resultado).
+        """
+        attempts = []
+        for attempt in range(2):
+            cfg = reference_cfg if attempt == 0 else {
+                **reference_cfg, "seed": random.randint(0, 2**31 - 1)}
             image_id = db.new_id()
             meta = image_client.generate_image(
-                reference_cfg, prompts[key], adventure_id=job["adventure_id"],
-                image_id=image_id, transport=transport, width=width, height=height,
-                reference_images=[*photos, reference],
+                cfg, prompts[kind], adventure_id=job["adventure_id"],
+                image_id=image_id, transport=transport, width=size[0], height=size[1],
+                reference_images=references,
             )
             created_paths.append(str(meta["file_path"]))
-            generated = likeness.read_stored_image_bytes(meta)
-            assets[key] = {
-                "id": image_id, "kind": kind, "meta": meta,
-                "prompt": prompts[key], "source_image_id": reference_id,
-            }
-            if key == "master":
-                master_raw = generated
-                reference = generated
-                reference_id = image_id
+            content = likeness.read_stored_image_bytes(meta)
+            problems = turnaround.check_view(content, kind)
+            attempts.append({"id": image_id, "meta": meta, "raw": content,
+                             "problems": problems})
             ensure_running()
+            if not problems:
+                break
+            log.info("job %s: vista %s recusada (tentativa %d): %s",
+                     job["id"], kind, attempt + 1, ", ".join(problems))
+        best = min(attempts, key=lambda item: len(item["problems"]))
+        for item in attempts:
+            if item is not best:
+                _discard_render(str(item["meta"]["file_path"]))
+                created_paths.remove(str(item["meta"]["file_path"]))
+        if best["problems"]:
+            log.warning("job %s: vista %s publicada com %s", job["id"], kind,
+                        ", ".join(best["problems"]))
+        return best
 
-        split_id = db.new_id()
-        master_path = likeness.stored_image_path(assets["master"]["meta"]["file_path"])
-        split_path = master_path.parent / f"{split_id}.png"
-        width, height = turnaround.build_master_frame(master_raw, split_path)
-        created_paths.append(str(split_path))
-        assets["split"] = {
-            "id": split_id, "kind": "turnaround_start",
-            "meta": {
-                "file_path": str(split_path), "provider": "pillow",
-                "width": width, "height": height,
-            },
-            "prompt": "Deterministic frame: full-body master alone",
-            "source_image_id": assets["master"]["id"],
-        }
-        ensure_running()
+    try:
+        for kind, size in _TURNAROUND_PAINTS:
+            if kind == "master":
+                references = [*photos, raw]
+            elif kind == "face":
+                references = [*photos, painted["master"]["raw"], raw]
+            else:
+                references = [*photos, painted["master"]["raw"]]
+            painted[kind] = paint(kind, size, references)
+        master = painted["master"]
+        views = [painted[kind] for kind in turnaround.VIEW_KINDS]
+        view_raws = [view["raw"] for view in views]
+        folder = likeness.stored_image_path(master["meta"]["file_path"]).parent
 
-        view_ids = [db.new_id() for _ in range(4)]
-        sheet_id = db.new_id()
-        view_paths = [split_path.parent / f"{image_id}.png" for image_id in view_ids]
-        sheet_path = split_path.parent / f"{sheet_id}.png"
-        created_paths.extend(str(path) for path in (*view_paths, sheet_path))
-        design_raw = likeness.read_stored_image_bytes(assets["design_sheet"]["meta"])
-        width, height = turnaround.extract_sheet_views(design_raw, view_paths, sheet_path)
-        # Giro imediato a partir da ficha. O vídeo gerado sai depois, em
+        def place(suffix: str = "png") -> tuple[str, Path]:
+            image_id = db.new_id()
+            path = folder / f"{image_id}.{suffix}"
+            created_paths.append(str(path))
+            return image_id, path
+
+        split_id, split_path = place()
+        frame_size = turnaround.build_master_frame(master["raw"], split_path)
+        design_id, design_path = place()
+        design_size = turnaround.compose_design_sheet(master["raw"], view_raws, design_path)
+        sheet_id, sheet_path = place()
+        cell = turnaround.compose_reference_sheet(view_raws, sheet_path)
+        # Giro imediato das vistas pintadas. O vídeo do Wan sai depois, em
         # `turnaround_clip`, e só substitui este se passar no portão.
-        clip_id = db.new_id()
-        clip_path = split_path.parent / f"{clip_id}.mp4"
+        clip_id, clip_path = place("mp4")
         clip_meta: dict | None = None
         try:
-            created_paths.append(str(clip_path))
-            duration_ms = turnaround.build_view_cycle(design_raw, clip_path)
-            clip_meta = {
-                "file_path": str(clip_path), "provider": "pillow",
-                "width": turnaround.CYCLE_SIZE[0], "height": turnaround.CYCLE_SIZE[1],
-                "duration_ms": duration_ms,
-            }
+            duration_ms = turnaround.build_view_cycle(view_raws[:3], clip_path)
+            clip_meta = {"width": turnaround.CYCLE_SIZE[0],
+                         "height": turnaround.CYCLE_SIZE[1], "duration_ms": duration_ms}
         except Exception as exc:  # o giro é só preview: nunca derruba o turnaround
-            log.warning("job %s: giro da ficha indisponível: %s: %s",
+            log.warning("job %s: giro das vistas indisponível: %s: %s",
                         job["id"], type(exc).__name__, exc)
             _discard_render(str(clip_path))
         ensure_running()
@@ -2336,57 +2392,53 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
             card = db.get_card(conn, job["adventure_id"], card_id)
             if card is None:
                 raise GameError.not_found(f"card {card_id} not found")
-            rows = {}
-            for key, asset in assets.items():
-                meta = asset["meta"]
-                rows[key] = db.insert_image(
+
+            def insert(image_id, file_path, prompt, kind, width, height, source_id, *,
+                       provider="pillow", **extra):
+                return db.insert_image(
                     conn, adventure_id=job["adventure_id"], action_seq=-1,
-                    file_path=meta["file_path"], prompt=asset["prompt"],
+                    file_path=str(file_path), prompt=prompt,
                     negative_prompt=img_cfg.get("negative_prompt") or "",
-                    provider=meta.get("provider") or "comfyui",
-                    width=meta.get("width"), height=meta.get("height"),
-                    image_id=asset["id"], kind=asset["kind"], ref_id=card_id,
-                    job_id=job["id"], source_image_id=asset["source_image_id"],
+                    provider=provider, width=width, height=height,
+                    image_id=image_id, kind=kind, ref_id=card_id,
+                    job_id=job["id"], source_image_id=source_id, **extra,
                 )
+
+            master_row = insert(
+                master["id"], master["meta"]["file_path"], prompts["master"],
+                "character_master", master["meta"].get("width"),
+                master["meta"].get("height"), source["id"],
+                provider=master["meta"].get("provider") or "comfyui")
+            view_rows = [
+                insert(view["id"], view["meta"]["file_path"], prompts[kind],
+                       "reference_view", view["meta"].get("width"),
+                       view["meta"].get("height"), master_row["id"],
+                       provider=view["meta"].get("provider") or "comfyui")
+                for kind, view in zip(turnaround.VIEW_KINDS, views)
+            ]
+            design_row = insert(
+                design_id, design_path, "Composed: master, profile, back and close-up",
+                "character_sheet", design_size[0], design_size[1], master_row["id"])
+            split_row = insert(
+                split_id, split_path, "Deterministic frame: full-body master alone",
+                "turnaround_start", frame_size[0], frame_size[1], master_row["id"])
+            sheet_row = insert(
+                sheet_id, sheet_path, "Composed: front, profile, back and close-up",
+                "reference_sheet", cell[0] * 2, cell[1] * 2, master_row["id"])
             clip = None
             if clip_meta is not None:
-                clip = db.insert_image(
-                    conn, adventure_id=job["adventure_id"], action_seq=-1,
-                    file_path=clip_meta["file_path"], prompt=prompts["clip"],
-                    provider=clip_meta["provider"],
-                    width=clip_meta["width"], height=clip_meta["height"],
-                    image_id=clip_id, kind="turnaround_clip", ref_id=card_id,
-                    job_id=job["id"], media_type="video/mp4",
-                    duration_ms=clip_meta["duration_ms"],
-                    source_image_id=rows["design_sheet"]["id"],
-                )
-            views = [
-                db.insert_image(
-                    conn, adventure_id=job["adventure_id"], action_seq=-1,
-                    file_path=str(path), prompt=prompts["design_sheet"],
-                    provider="pillow",
-                    width=width, height=height, image_id=image_id,
-                    kind="reference_view", ref_id=card_id, job_id=job["id"],
-                    source_image_id=rows["design_sheet"]["id"],
-                )
-                for image_id, path in zip(view_ids, view_paths)
-            ]
-            sheet = db.insert_image(
-                conn, adventure_id=job["adventure_id"], action_seq=-1,
-                file_path=str(sheet_path), prompt=prompts["design_sheet"],
-                provider="pillow",
-                width=width * 2, height=height * 2, image_id=sheet_id,
-                kind="reference_sheet", ref_id=card_id, job_id=job["id"],
-                source_image_id=rows["design_sheet"]["id"],
-            )
+                clip = insert(
+                    clip_id, clip_path, prompts["clip"], "turnaround_clip",
+                    clip_meta["width"], clip_meta["height"], master_row["id"],
+                    media_type="video/mp4", duration_ms=clip_meta["duration_ms"])
             reference = {
                 "source_image_id": source["id"],
-                "master_image_id": rows["master"]["id"],
-                "design_sheet_image_id": rows["design_sheet"]["id"],
-                "split_image_id": rows["split"]["id"],
-                "sheet_image_id": sheet["id"],
+                "master_image_id": master_row["id"],
+                "design_sheet_image_id": design_row["id"],
+                "split_image_id": split_row["id"],
+                "sheet_image_id": sheet_row["id"],
                 "clip_image_id": clip["id"] if clip else "",
-                "view_image_ids": [view["id"] for view in views],
+                "view_image_ids": [row["id"] for row in view_rows],
             }
             likeness.set_turnaround(conn, card, reference, job_id=job["id"])
             video = image_client.turnaround_video_settings(img_cfg)
@@ -2395,8 +2447,8 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                     conn, "turnaround_clip", job["adventure_id"], card_id,
                     {
                         "card_id": card_id,
-                        "source_image_id": rows["split"]["id"],
-                        "design_sheet_image_id": rows["design_sheet"]["id"],
+                        "source_image_id": split_row["id"],
+                        "design_sheet_image_id": design_row["id"],
                         "prompt": prompts["clip"],
                         "automatic": True,
                     },
@@ -2406,28 +2458,32 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     except sqlite3.IntegrityError:
         for path in created_paths:
             _discard_render(path)
-        _raise_if_gone(job["adventure_id"], str(split_path))
+        _raise_if_gone(job["adventure_id"],
+                       str(painted["master"]["meta"]["file_path"]) if painted else "")
         raise
     except Exception:
         for path in created_paths:
             _discard_render(path)
         raise
-    sheet_ref = db.image_ref(sheet)
+    sheet_ref = db.image_ref(sheet_row)
     return {
         "card_id": card_id,
         "image": sheet_ref,
-        "master": db.image_ref(rows["master"]),
-        "design_sheet": db.image_ref(rows["design_sheet"]),
-        "split": db.image_ref(rows["split"]),
+        "master": db.image_ref(master_row),
+        "design_sheet": db.image_ref(design_row),
+        "split": db.image_ref(split_row),
         "sheet": sheet_ref,
         "clip": db.image_ref(clip) if clip else None,
-        "views": [db.image_ref(view) for view in views],
+        "views": [db.image_ref(row) for row in view_rows],
+        "view_problems": {kind: painted[kind]["problems"]
+                          for kind in ("master", *turnaround.VIEW_KINDS)
+                          if painted[kind]["problems"]},
     }
 
 
-# Uma segunda semente quando o portão recusa o primeiro giro; mais que isso
-# custa minutos de GPU por um preview que a ficha já cobre.
-_TURNAROUND_CLIP_ATTEMPTS = 2
+# Até três sementes: com primeiro e último quadro fixos, 2 de 3 voltas na L4
+# saíram limpas e completas; a que falha costuma ir e voltar (wobble).
+_TURNAROUND_CLIP_ATTEMPTS = 3
 
 
 def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
@@ -2464,6 +2520,7 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
     progress = _generation_progress(job, transport, watch_cancel=True)
     accepted: dict | None = None
     image_id = ""
+    reports: list[dict] = []
     for attempt in range(_TURNAROUND_CLIP_ATTEMPTS):
         image_id = db.new_id()
         meta = image_client.generate_clip(
@@ -2472,18 +2529,30 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
             video_overrides=video, seed=random.randint(0, 2**31 - 1),
         )
         path = likeness.stored_image_path(meta["file_path"])
-        if turnaround.clip_is_clean(path):
-            accepted = meta
-            break
-        log.info("job %s: giro 360° recusado pelo portão (tentativa %d)",
-                 job["id"], attempt + 1)
+        try:
+            report = turnaround.analyze_clip(path)
+        except Exception as exc:  # análise quebrada = clipe recusado, nunca erro do job
+            report = {"clean": False, "problems": [f"analysis:{type(exc).__name__}"]}
+        reports.append(report)
+        if report.get("clean"):
+            try:
+                # Corta no quadro que volta à frente: o fim emenda no começo.
+                looped = path.with_name(f"{path.stem}.loop.mp4")
+                duration = turnaround.finalize_loop(path, looped, int(report["loop_end"]))
+                looped.replace(path)
+                accepted = {**meta, "duration_ms": duration}
+                break
+            except Exception as exc:
+                report = {"clean": False, "problems": [f"loop:{type(exc).__name__}"]}
+        log.info("job %s: giro 360° recusado pelo portão (tentativa %d): %s",
+                 job["id"], attempt + 1, ", ".join(report.get("problems") or []))
         _discard_render(meta["file_path"])
         with db.session() as conn:
             current = db.get_job(conn, job["id"])
         if not current or current.get("status") != "running":
             raise db.JobCanceled(job["id"])
     if accepted is None:
-        return {"card_id": card_id, "clip": None, "rejected": True}
+        return {"card_id": card_id, "clip": None, "rejected": True, "reports": reports}
     try:
         with db.session() as conn:
             card = db.get_card(conn, job["adventure_id"], card_id)
@@ -2511,7 +2580,8 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
         _discard_render(accepted["file_path"])
         _raise_if_gone(job["adventure_id"], accepted["file_path"])
         raise
-    return {"card_id": card_id, "clip": db.image_ref(clip), "image": db.image_ref(clip)}
+    return {"card_id": card_id, "clip": db.image_ref(clip), "image": db.image_ref(clip),
+            "reports": reports}
 
 
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {

@@ -98,8 +98,9 @@ def test_only_clothing_text_changes_the_lock(tmp_db, tmp_path):
 
 
 def test_every_turnaround_run_paints_the_same_outfit_verbatim(tmp_db, tmp_path, monkeypatch):
-    """Duas rodadas: mestre, ficha e giro levam a mesma frase de roupa, depois
-    da tradução (o LLM não reescreve a trava). A roupa do momento não entra."""
+    """Duas rodadas: mestre, as quatro vistas e o giro levam a mesma frase de
+    roupa, fora da tradução (o LLM não reescreve a trava). A roupa do momento
+    não entra."""
     use_tmp_storage(tmp_path)
     adv = make_adventure()
     card, anchor = _character(adv["id"], tmp_path)
@@ -114,13 +115,14 @@ def test_every_turnaround_run_paints_the_same_outfit_verbatim(tmp_db, tmp_path, 
         with db.session() as conn:
             jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"], force=True)
         jobs.process_pending(transport)
-        master, sheet = capture["image_calls"][2 * run:2 * run + 2]
-        for call in (master, sheet):
-            assert call["prompt"].endswith(sentence)
+        paints = capture["image_calls"][5 * run:5 * run + 5]
+        assert len(paints) == 5                             # mestre + 4 vistas
+        for call in paints:
+            assert sentence in call["prompt"]
             assert "swimsuit" not in call["prompt"]
-        assert capture["prompt"].endswith(sentence)        # giro do Wan
+        assert sentence in capture["prompt"]               # giro do Wan
     prompts = [call["prompt"] for call in capture["image_calls"]]
-    assert prompts[0] == prompts[2] and prompts[1] == prompts[3]
+    assert prompts[:5] == prompts[5:10]
 
 
 def test_default_portrait_wears_the_lock_but_story_outfit_wins(tmp_db, tmp_path, monkeypatch):

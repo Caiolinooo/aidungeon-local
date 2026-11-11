@@ -927,3 +927,35 @@ def test_turnaround_overrides_run_wan_on_an_ltxv_install(tmp_path):
     assert image_client.turnaround_video_settings(cfg)["engine"] == "none"
     cfg["comfyui_video"]["turnaround"] = {"steps": 24}
     assert image_client.turnaround_video_settings(cfg)["steps"] == 24
+
+
+def test_turnaround_loop_pins_the_first_frame_at_the_end(tmp_path):
+    """`loop` (padrão do giro 360°) põe o mesmo quadro no último latente e a
+    máscara de ruído zera o primeiro e o último: o giro tem de voltar."""
+    cfg = _cfg(tmp_path)
+    overrides = image_client.turnaround_video_settings(cfg)
+    assert overrides["loop"] is True
+    seen: dict = {}
+    image_client.generate_clip(
+        cfg, "turns around", adventure_id="adv", image_id="turn-loop",
+        source_png=_png(448, 768), transport=_transport(seen),
+        video_overrides=overrides, seed=5)
+    graph = seen["graph"]
+    sampler = next(node for node in graph.values() if node["class_type"] == "KSampler")
+    masked = graph[sampler["inputs"]["latent_image"][0]]
+    assert masked["class_type"] == "SetLatentNoiseMask"
+    replace = graph[masked["inputs"]["samples"][0]]
+    assert replace["class_type"] == "ReplaceVideoLatentFrames"
+    assert replace["inputs"]["index"] == -1
+    end_frame = graph[replace["inputs"]["source"][0]]
+    assert end_frame["class_type"] == "Wan22ImageToVideoLatent"
+    assert end_frame["inputs"]["length"] == 1
+    middle = [node for node in graph.values() if node["class_type"] == "EmptyImage"
+              and node["inputs"]["color"] == 0xFFFFFF]
+    assert middle[0]["inputs"]["batch_size"] == (121 - 1) // 4 + 1 - 2
+    plain: dict = {}
+    image_client.generate_clip(
+        cfg, "looks up", adventure_id="adv", image_id="scene",
+        source_png=_png(448, 768), transport=_transport(plain))
+    assert not any(node["class_type"] == "SetLatentNoiseMask"
+                   for node in plain["graph"].values())
