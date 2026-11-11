@@ -148,7 +148,7 @@ def _figure_png(size=(672, 1152), *, box=None, color=(20, 20, 20),
 
 
 def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
-    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "")
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0))
     assert turnaround_module.check_view(_figure_png(), "back") == []
     assert turnaround_module.check_view(_figure_png(), "profile") == []
     cut = _figure_png(box=(252, 96, 420, 1152))
@@ -162,18 +162,23 @@ def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
     assert "too_small" in turnaround_module.check_view(small, "back")
     # o rosto é do YuNet: de frente na frente e no close-up, nenhum nas costas
     assert "no_face" in turnaround_module.check_view(_figure_png(), "front")
-    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "frontal")
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.1))
     assert turnaround_module.check_view(_figure_png(), "front") == []
     assert "face_visible" in turnaround_module.check_view(_figure_png(), "back")
     assert "not_profile" in turnaround_module.check_view(_figure_png(), "profile")
     closeup = _figure_png((768, 1024), box=(160, 120, 610, 1024))
-    assert turnaround_module.check_view(closeup, "face") == []
+    # rosto pequeno (meio corpo, 0,1 da altura) não é close-up de cabeça e ombros
+    assert "not_closeup" in turnaround_module.check_view(closeup, "face")
     assert "not_closeup" in turnaround_module.check_view(_figure_png((768, 1024)), "face")
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.4))
+    assert turnaround_module.check_view(closeup, "face") == []
+    # rosto grande demais numa vista de corpo inteiro: veio um retrato
+    assert "not_full_body" in turnaround_module.check_view(_figure_png(), "front")
 
 
 def test_view_check_reads_a_gradient_floor_as_background(monkeypatch):
     """Chão de estúdio mais escuro embaixo não é figura nem corta os pés."""
-    monkeypatch.setattr(turnaround_module, "face_kind", lambda rgb, **kw: "")
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0))
     width, height = 672, 1152
     pixels = np.zeros((height, width, 3), np.uint8)
     for y in range(height):
@@ -309,7 +314,10 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert image_calls[4]["reference_images"] == [master_png, PNG_BYTES]
     assert (image_calls[4]["width"], image_calls[4]["height"]) == (768, 1024)
     assert "seen from directly behind" in image_calls[3]["prompt"]
-    assert "Head-and-shoulders close-up" in image_calls[4]["prompt"]
+    assert "Close-up headshot" in image_calls[4]["prompt"]
+    # o close-up leva só as peças visíveis da trava: calça e sapato puxavam o
+    # quadro para meio corpo
+    assert "footwear" not in image_calls[4]["prompt"]
     assert "soles of the shoes" in image_calls[1]["prompt"]
     # recusado pelo portão: até três sementes, nunca mais que isso
     clip_calls = capture["clip_calls"]
@@ -915,7 +923,7 @@ def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
 
 
 def _synthetic_clip(path: Path, *, stray: bool = False, panel: bool = False,
-                    frames: int = 40) -> None:
+                    smear: bool = False, frames: int = 40) -> None:
     """Figura que afina (de perfil) e volta; opcional mancha solta ou painel."""
     size = (448, 768)
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 24, size)
@@ -930,20 +938,28 @@ def _synthetic_clip(path: Path, *, stray: bool = False, panel: bool = False,
             frame[300:420, 20:90] = (200, 120, 60)
         if panel and index >= 12:
             frame[:, 400:] = 250
+        if smear and index >= 10:
+            frame = cv2.GaussianBlur(frame, (41, 41), 0)
+        else:
+            # textura fina na roupa: o detalhe que o fantasma apaga
+            frame[160:700:6, 224 - half + 4:224 + half - 4] = (90, 90, 90)
         writer.write(frame)
     writer.release()
 
 
 def test_clip_analysis_catches_stray_shapes_and_background_panels(tmp_path):
     good, stray, panel = tmp_path / "good.mp4", tmp_path / "stray.mp4", tmp_path / "panel.mp4"
+    smear = tmp_path / "smear.mp4"
     _synthetic_clip(good)
     _synthetic_clip(stray, stray=True)
     _synthetic_clip(panel, panel=True)
+    _synthetic_clip(smear, smear=True)
     report = turnaround_module.analyze_clip(good)
     assert report["clean"] is True, report
     assert 24 <= report["loop_end"] <= 36            # volta ao quadro 0 no fim do ciclo
     assert "stray_shapes" in turnaround_module.analyze_clip(stray)["problems"]
     assert "background_changes" in turnaround_module.analyze_clip(panel)["problems"]
+    assert "smeared" in turnaround_module.analyze_clip(smear)["problems"]
     assert turnaround_module.analyze_clip(tmp_path / "missing.mp4")["clean"] is False
 
 

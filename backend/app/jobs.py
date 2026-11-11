@@ -1738,10 +1738,15 @@ _TURNAROUND_VIEWS = {
         "back of the head, the back and the heels face the camera, the face is not "
         "visible, arms relaxed at the sides."
     ),
+    # "Head-and-shoulders portrait" com a roupa inteira no prompt saía de meio
+    # corpo (calça e tênis puxam o quadro para baixo): 6 de 6 na L4. Com o
+    # enquadramento pedido em centímetros de imagem e só as peças visíveis da
+    # trava, 4 de 4 saíram cabeça e ombros.
     "face": (
-        "Head-and-shoulders close-up portrait of this exact character facing the "
-        "camera straight on, calm neutral expression, the face large and sharp in the "
-        "centre, the top of the hair and both shoulders inside the frame."
+        "Close-up headshot photograph of this exact character looking straight at the "
+        "camera: only the head, the neck and the top of the shoulders, cropped at the "
+        "collarbones, with a little empty space above the hair; the face fills about "
+        "half of the image height. Calm neutral expression, sharp eyes."
     ),
 }
 
@@ -1770,10 +1775,18 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
             f"{_TURNAROUND_STUDIO}"
         ),
     }
+    visible = outfit_lock.visible_text(lock)
+    visible = f" {visible}." if visible else ""
     for kind, pose in _TURNAROUND_VIEWS.items():
-        framing = "" if kind == "face" else f" {_TURNAROUND_FULL_BODY}"
+        if kind == "face":
+            prompts[kind] = (
+                f"{pose} Keep {identity}, face, hair and accessories exactly identical to "
+                f"the references.{visible} {_TURNAROUND_SIDES} {_TURNAROUND_STUDIO}"
+            )
+            continue
         prompts[kind] = (
-            f"{pose} {keep}{outfit} {_TURNAROUND_SIDES}{framing} {_TURNAROUND_STUDIO}"
+            f"{pose} {keep}{outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
+            f"{_TURNAROUND_STUDIO}"
         )
     prompts["clip"] = (
         "Turntable shot of one person standing alone in a seamless grey studio. "

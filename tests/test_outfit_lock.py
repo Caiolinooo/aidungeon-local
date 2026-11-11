@@ -117,9 +117,12 @@ def test_every_turnaround_run_paints_the_same_outfit_verbatim(tmp_db, tmp_path, 
         jobs.process_pending(transport)
         paints = capture["image_calls"][5 * run:5 * run + 5]
         assert len(paints) == 5                             # mestre + 4 vistas
-        for call in paints:
+        for call in paints[:4]:                             # mestre, frente, perfil, costas
             assert sentence in call["prompt"]
             assert "swimsuit" not in call["prompt"]
+        # close-up: só o que o busto mostra, literal da trava
+        assert outfit_lock.visible_text(OUTFIT) in paints[4]["prompt"]
+        assert "swimsuit" not in paints[4]["prompt"]
         assert sentence in capture["prompt"]               # giro do Wan
     prompts = [call["prompt"] for call in capture["image_calls"]]
     assert prompts[:5] == prompts[5:10]

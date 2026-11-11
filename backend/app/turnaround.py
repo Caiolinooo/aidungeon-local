@@ -122,8 +122,9 @@ _FRONTAL_EYES = 0.3   # distância entre olhos / largura do rosto: acima disso, 
 _detectors: dict[tuple[int, int], Any] = {}
 
 
-def face_pose(rgb: np.ndarray) -> tuple[bool, float, float] | None:
-    """(tem rosto, olhos/largura, desvio do nariz) do rosto mais confiável.
+def face_pose(rgb: np.ndarray) -> tuple[bool, float, float, float] | None:
+    """(tem rosto, olhos/largura, desvio do nariz, altura do rosto/altura da
+    imagem) do rosto mais confiável.
 
     O desvio é (nariz − meio dos olhos) / largura do rosto: negativo com o
     rosto virado para a esquerda da imagem, positivo para a direita. YuNet,
@@ -143,23 +144,31 @@ def face_pose(rgb: np.ndarray) -> tuple[bool, float, float] | None:
     except cv2.error:
         return None
     if faces is None or not len(faces):
-        return False, 0.0, 0.0
+        return False, 0.0, 0.0, 0.0
     best = max(faces, key=lambda row: float(row[-1]))
     face_width = max(1.0, float(best[2]))
     eyes = abs(float(best[6]) - float(best[4])) / face_width
     yaw = (float(best[8]) - (float(best[4]) + float(best[6])) / 2) / face_width
-    return True, eyes, yaw
+    return True, eyes, yaw, float(best[3]) / max(1, height)
 
 
-def face_kind(rgb: np.ndarray, *, max_yaw: float = 0.12) -> str | None:
-    """`"frontal"`, `"turned"` (rosto de lado) ou `""` (nenhum rosto)."""
+# Altura do rosto (YuNet) sobre a da imagem, medida nas pinturas reais da L4:
+# corpo inteiro 0,09–0,11; meio corpo 0,12–0,22; close-up de cabeça e ombros
+# passa de 0,25.
+_CLOSEUP_FACE = 0.25
+_FULL_BODY_FACE = 0.16
+
+
+def face_info(rgb: np.ndarray, *, max_yaw: float = 0.12) -> tuple[str, float] | None:
+    """(`"frontal"`, `"turned"` ou `""` sem rosto; altura relativa do rosto)."""
     pose = face_pose(rgb)
     if pose is None:
         return None
-    found, eyes, yaw = pose
+    found, eyes, yaw, size = pose
     if not found:
-        return ""
-    return "frontal" if eyes > _FRONTAL_EYES and abs(yaw) <= max_yaw else "turned"
+        return "", 0.0
+    kind = "frontal" if eyes > _FRONTAL_EYES and abs(yaw) <= max_yaw else "turned"
+    return kind, size
 
 
 def check_view(png: bytes, kind: str) -> list[str]:
@@ -203,8 +212,13 @@ def check_view(png: bytes, kind: str) -> list[str]:
             problems.append("too_small")
         if main["w"] < 0.3 * width or main["h"] > 2.2 * main["w"]:
             problems.append("not_closeup")
-    face = face_kind(rgb)
-    if face is not None:
+    info = face_info(rgb)
+    if info is not None:
+        face, size = info
+        if kind == "face" and face and size < _CLOSEUP_FACE and "not_closeup" not in problems:
+            problems.append("not_closeup")
+        if kind in FULL_BODY_KINDS and size > _FULL_BODY_FACE:
+            problems.append("not_full_body")
         if kind in ("master", "front", "face") and face != "frontal":
             problems.append("no_face")
         elif kind == "back" and face:
@@ -364,22 +378,25 @@ def _descriptor(rgb: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray |
     return cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32) / 255.0
 
 
-# Calibrado em 17 clipes reais da L4 (11/11/2026). Bons: Wan livres que
-# voltam à frente e Wan com primeiro/último quadro fixos. Ruins: fundo em
-# painéis (s1234), arcos e barbatanas (lock2/wan2), manchas de 12 passos,
-# texto no chão (81/20), fantasmas do LTXV guiado e o meio giro do LTXV.
+# Calibrado em 20 clipes reais da L4 (11/11/2026). Bons: Wan livres que
+# voltam à frente, Wan com primeiro/último quadro fixos (Renata e Caio, com o
+# mestre ocupando a altura do quadro). Ruins: fundo em painéis (s1234),
+# arcos e barbatanas (lock2/wan2), quadros quebrados em faixas (101), manchas
+# de 12 passos, texto no chão (81/20), fantasmas do LTXV guiado, o meio giro
+# do LTXV, giros desfeitos (s7) e vai-e-volta (lock2/wan0, flf99).
 _ANALYSIS_SCALE = 4
 _TAIL_FRAMES = 4         # o último latente fixo sai escurecido no decode
 _SKIP_START = 8          # o quadro inicial ainda assenta
 _BACK_RUN = 8            # costas: ao menos 8 quadros seguidos sem rosto
 _FRONT_RUN = 3           # volta: 3 quadros seguidos de rosto de frente
-_BORDER_DELTA = 25       # bons ≤ 0,7 % das bordas mudadas; ruins ≥ 3 %
+_BORDER_DELTA = 25       # bons ≤ 0,8 % das bordas mudadas; ruins ≥ 2,6 %
 _BORDER_FRACTION = 0.015
 _FLOOR_DELTA = 60
 _FLOOR_FRACTION = 0.02
-_ZONE_WIDTH = 1.35       # faixa da figura: bons ≤ 0,41 % fora; ruins ≥ 1,5 %
-_OUTSIDE_FRACTION = 0.008
+_ZONE_WIDTH = 1.6        # faixa da figura (× meia largura mediana)
+_OUTSIDE_FRACTION = 0.008  # fora da faixa: bons ≤ 0,1 %; ruins ≥ 1,5 %
 _JUMP_RATIO = 2.0        # área da figura entre quadros: bons ≤ 1,63×; ruins ≥ 3,4×
+_SHARPNESS_RATIO = 0.4   # nitidez mediana da figura / início: bons ≥ 0,61; fantasma 0,23
 
 
 _LOOP_YAW = 0.06         # de frente no clipe: nariz no meio dos olhos
@@ -392,7 +409,7 @@ def _faces_timeline(frames: list[np.ndarray]) -> list[str] | None:
         pose = face_pose(frame)
         if pose is None:
             return None
-        found, eyes, yaw = pose
+        found, eyes, yaw, _size = pose
         if not found:
             timeline.append(".")
         elif eyes > _FRONTAL_EYES and abs(yaw) <= _LOOP_YAW:
@@ -514,46 +531,65 @@ def analyze_clip(video_path: str | Path) -> dict[str, Any]:
     kept_masks = masks[:loop_end]
     h, w = kept[0].shape[:2]
     side, top, bottom = max(2, w // 10), max(2, h // 20), max(2, h // 25)
-    blurred = [cv2.GaussianBlur(frame, (5, 5), 0).astype(np.int16) for frame in kept]
-
-    def border(frame):
-        return np.concatenate([
-            frame[:, :side].reshape(-1, 3), frame[:, w - side:].reshape(-1, 3),
-            frame[:top].reshape(-1, 3)])
-
-    borders = np.stack([border(frame) for frame in blurred])
-    floors = np.stack([frame[h - bottom:] for frame in blurred])
-    border_ref = np.median(borders, axis=0)
-    floor_ref = np.median(floors, axis=0)
     boxes = []
     for mask in kept_masks:
         figures = _components(mask)
         boxes.append(figures[0] if figures else None)
     present = [box for box in boxes if box]
     centre = float(np.median([box["x"] + box["w"] / 2 for box in present])) if present else w / 2
-    half = float(np.percentile([box["w"] / 2 for box in present], 95)) if present else w / 4
+    # Mediana, não máximo: mancha grudada na figura alarga a caixa e não pode
+    # alargar junto a faixa que a esconde.
+    half = float(np.median([box["w"] / 2 for box in present])) if present else w / 4
     top_line = min((box["y"] for box in present), default=0) - max(2, h // 33)
     zone = np.zeros((h, w), bool)
     zone[max(0, top_line):, int(max(0, centre - _ZONE_WIDTH * half)):
          int(min(w, centre + _ZONE_WIDTH * half + 1))] = True
+    # Bordas (laterais e topo) e chão, sempre fora da faixa da figura: com o
+    # mestre ocupando a altura do quadro, cabelo e pés entram nessas faixas
+    # quando ela gira, e isso não é defeito.
+    edges = np.zeros((h, w), bool)
+    edges[:, :side] = edges[:, w - side:] = edges[:top] = True
+    edges &= ~zone
+    floor_band = np.zeros((h, w), bool)
+    floor_band[h - bottom:] = True
+    floor_band &= ~zone
+    blurred = np.stack([cv2.GaussianBlur(frame, (5, 5), 0).astype(np.int16) for frame in kept])
+    reference = np.median(blurred, axis=0)
     worst_border = worst_floor = worst_outside = 0.0
     worst_jump = 1.0
     previous_area = 0
-    for index, (frame_border, frame_floor, mask, box) in enumerate(
-            zip(borders, floors, kept_masks, boxes)):
+    for index, (frame, mask, box) in enumerate(zip(blurred, kept_masks, boxes)):
         area = box["area"] if box else 0
         if previous_area and area:
             worst_jump = max(worst_jump, area / previous_area, previous_area / area)
         previous_area = area or previous_area
         if index < _SKIP_START:
             continue
-        delta = frame_border - border_ref
-        delta = delta - np.median(delta, axis=0)   # cintilação global de luz
-        worst_border = max(worst_border,
-                           float((np.abs(delta).max(axis=1) > _BORDER_DELTA).mean()))
-        floor = np.abs(frame_floor - floor_ref).max(axis=2) > _FLOOR_DELTA
-        worst_floor = max(worst_floor, float(floor.mean()))
+        delta = frame - reference
+        if edges.any():
+            delta = delta - np.median(delta[edges], axis=0)   # cintilação global de luz
+        change = np.abs(delta).max(axis=2)
+        if edges.any():
+            worst_border = max(worst_border, float((change[edges] > _BORDER_DELTA).mean()))
+        if floor_band.any():
+            worst_floor = max(worst_floor, float((change[floor_band] > _FLOOR_DELTA).mean()))
         worst_outside = max(worst_outside, float((mask & ~zone).mean()))
+    # Fantasma e borrão: a figura perde o detalhe (variância do Laplaciano)
+    # em relação aos primeiros quadros, que são o mestre nítido.
+    sharpness = []
+    for frame, box in zip(frames[:loop_end], boxes):
+        if not box:
+            sharpness.append(0.0)
+            continue
+        x, y = box["x"] * scale, box["y"] * scale
+        crop = cv2.cvtColor(frame[y:y + box["h"] * scale, x:x + box["w"] * scale],
+                            cv2.COLOR_RGB2GRAY)
+        sharpness.append(float(cv2.Laplacian(crop, cv2.CV_64F).var()) if crop.size else 0.0)
+    start_sharpness = float(np.median(sharpness[:_SKIP_START])) or 1.0
+    sharp_ratio = float(np.median(sharpness)) / start_sharpness
+    report["sharpness"] = round(sharp_ratio, 2)
+    if sharp_ratio < _SHARPNESS_RATIO:
+        problems.append("smeared")
     report.update({
         "border": round(worst_border, 4), "floor": round(worst_floor, 4),
         "outside": round(worst_outside, 4), "jump": round(worst_jump, 2),
