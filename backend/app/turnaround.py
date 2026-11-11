@@ -13,6 +13,31 @@ class TurnaroundExtractionError(RuntimeError):
     """O clipe não contém quatro frames legíveis para a folha de referência."""
 
 
+def reference_photo_png(photo: bytes, *, min_side: int = 512) -> bytes:
+    """Foto enviada como PNG RGB, com o lado menor em pelo menos `min_side`.
+
+    O grafo leva cada referência a uma contagem fixa de pixels com
+    `nearest-exact`. Uma foto pequena (miniatura de 150 px) chegava ao modelo
+    em blocos; aqui ela sobe com Lanczos antes do upload. Foto ilegível
+    devolve `b""`.
+    """
+    try:
+        with Image.open(BytesIO(photo)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except Exception:
+        return b""
+    short = min(image.size)
+    if 0 < short < min_side:
+        scale = min_side / short
+        image = image.resize(
+            (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    out = BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
 def build_split_frame(anchor_png: bytes, master_png: bytes,
                       output_path: str | Path, *, size: tuple[int, int] = (1344, 768)
                       ) -> tuple[int, int]:

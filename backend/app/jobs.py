@@ -2165,6 +2165,16 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         if not current or current.get("status") != "running":
             raise db.JobCanceled(job["id"])
 
+    # Foto enviada (ou a da pessoa do card) manda na identidade: entra em toda
+    # etapa, na frente da âncora e do mestre. Sem isso o turnaround nascia só
+    # do retrato gerado e a foto nunca chegava ao mestre nem à ficha.
+    photos: list[bytes] = []
+    if not likeness.is_minor(card):
+        for blob in likeness.portrait_pixels(card)[:1]:
+            png = turnaround.reference_photo_png(blob)
+            if png:
+                photos.append(png)
+
     try:
         reference = raw
         reference_id = source["id"]
@@ -2177,7 +2187,7 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
             meta = image_client.generate_image(
                 reference_cfg, prompts[key], adventure_id=job["adventure_id"],
                 image_id=image_id, transport=transport, width=width, height=height,
-                reference_images=[reference],
+                reference_images=[*photos, reference],
             )
             created_paths.append(str(meta["file_path"]))
             generated = likeness.read_stored_image_bytes(meta)

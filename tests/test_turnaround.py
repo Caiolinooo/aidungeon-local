@@ -217,6 +217,42 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert forced.json()["status"] == "pending"
 
 
+def test_uploaded_photo_leads_the_master_and_the_sheet(client, tmp_path, monkeypatch):
+    """Com foto enviada no card, ela é a primeira referência das duas etapas;
+    a âncora (e depois o mestre) vem em seguida. Miniatura sobe para 512 px."""
+    use_tmp_storage(tmp_path)
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(refs))
+    photo = refs / "npc-photo.jpg"
+    Image.new("RGB", (150, 150), (200, 120, 80)).save(photo, format="JPEG")
+    adv = make_adventure()
+    card, _anchor = _character(adv["id"], tmp_path)
+    with db.session() as conn:
+        conn.execute(
+            "UPDATE story_cards SET sheet=? WHERE id=?",
+            (json.dumps({"reference": {"image_path": str(photo), "source": "upload"}}),
+             card["id"]))
+    video = tmp_path / "source.mp4"
+    _write_video(video)
+    capture: dict = {}
+    _mock_generation(monkeypatch, tmp_path, video, capture)
+
+    response = client.post(f"/api/adventures/{adv['id']}/cards/{card['id']}/turnaround")
+    assert response.status_code == 202, response.text
+    assert jobs.process_pending(pipeline_transport()) == 1
+
+    master_call, sheet_call = capture["image_calls"][:2]
+    assert len(master_call["reference_images"]) == 2
+    assert len(sheet_call["reference_images"]) == 2
+    with Image.open(io.BytesIO(master_call["reference_images"][0])) as lead:
+        assert lead.format == "PNG"
+        assert lead.size == (512, 512)
+    assert master_call["reference_images"][0] == sheet_call["reference_images"][0]
+    assert master_call["reference_images"][1] == PNG_BYTES            # âncora
+    assert sheet_call["reference_images"][1] == master_call["content"]  # mestre
+
+
 def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(
         tmp_db, tmp_path, monkeypatch):
     use_tmp_storage(tmp_path)
