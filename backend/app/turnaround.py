@@ -10,6 +10,7 @@ montadas com Pillow numa grade que não muda.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -122,9 +123,9 @@ _FRONTAL_EYES = 0.3   # distância entre olhos / largura do rosto: acima disso, 
 _detectors: dict[tuple[int, int], Any] = {}
 
 
-def face_pose(rgb: np.ndarray) -> tuple[bool, float, float, float] | None:
+def face_pose(rgb: np.ndarray) -> tuple[bool, float, float, float, float] | None:
     """(tem rosto, olhos/largura, desvio do nariz, altura do rosto/altura da
-    imagem) do rosto mais confiável.
+    imagem, espaço abaixo do rosto em alturas de rosto) do rosto mais confiável.
 
     O desvio é (nariz − meio dos olhos) / largura do rosto: negativo com o
     rosto virado para a esquerda da imagem, positivo para a direita. YuNet,
@@ -144,31 +145,35 @@ def face_pose(rgb: np.ndarray) -> tuple[bool, float, float, float] | None:
     except cv2.error:
         return None
     if faces is None or not len(faces):
-        return False, 0.0, 0.0, 0.0
+        return False, 0.0, 0.0, 0.0, 0.0
     best = max(faces, key=lambda row: float(row[-1]))
     face_width = max(1.0, float(best[2]))
     eyes = abs(float(best[6]) - float(best[4])) / face_width
     yaw = (float(best[8]) - (float(best[4]) + float(best[6])) / 2) / face_width
-    return True, eyes, yaw, float(best[3]) / max(1, height)
+    face_height = max(1.0, float(best[3]))
+    below = (height - (float(best[1]) + face_height)) / face_height
+    return True, eyes, yaw, face_height / max(1, height), below
 
 
-# Altura do rosto (YuNet) sobre a da imagem, medida nas pinturas reais da L4:
-# corpo inteiro 0,09–0,11; meio corpo 0,12–0,22; close-up de cabeça e ombros
-# passa de 0,25.
-_CLOSEUP_FACE = 0.25
+# Medido nas pinturas reais da L4. Espaço abaixo do rosto, em alturas de
+# rosto: close-up de cabeça e ombros 0,6–2,4 (o do Caio, de chapéu, 2,4);
+# meio corpo 3,1–6,9. Altura do rosto num corpo inteiro: 0,09–0,11.
+_CLOSEUP_BELOW = 2.8
 _FULL_BODY_FACE = 0.16
 
 
-def face_info(rgb: np.ndarray, *, max_yaw: float = 0.12) -> tuple[str, float] | None:
-    """(`"frontal"`, `"turned"` ou `""` sem rosto; altura relativa do rosto)."""
+def face_info(rgb: np.ndarray, *,
+              max_yaw: float = 0.12) -> tuple[str, float, float] | None:
+    """(`"frontal"`, `"turned"` ou `""` sem rosto; altura relativa do rosto;
+    espaço abaixo dele em alturas de rosto)."""
     pose = face_pose(rgb)
     if pose is None:
         return None
-    found, eyes, yaw, size = pose
+    found, eyes, yaw, size, below = pose
     if not found:
-        return "", 0.0
+        return "", 0.0, 0.0
     kind = "frontal" if eyes > _FRONTAL_EYES and abs(yaw) <= max_yaw else "turned"
-    return kind, size
+    return kind, size, below
 
 
 def check_view(png: bytes, kind: str) -> list[str]:
@@ -214,8 +219,8 @@ def check_view(png: bytes, kind: str) -> list[str]:
             problems.append("not_closeup")
     info = face_info(rgb)
     if info is not None:
-        face, size = info
-        if kind == "face" and face and size < _CLOSEUP_FACE and "not_closeup" not in problems:
+        face, size, below = info
+        if kind == "face" and face and below > _CLOSEUP_BELOW and "not_closeup" not in problems:
             problems.append("not_closeup")
         if kind in FULL_BODY_KINDS and size > _FULL_BODY_FACE:
             problems.append("not_full_body")
@@ -400,6 +405,7 @@ _SHARPNESS_RATIO = 0.4   # nitidez mediana da figura / início: bons ≥ 0,61; f
 
 
 _LOOP_YAW = 0.06         # de frente no clipe: nariz no meio dos olhos
+_BLIP_FRAMES = 6         # rosto de lado por menos que isso, entre costas, é ruído
 
 
 def _faces_timeline(frames: list[np.ndarray]) -> list[str] | None:
@@ -409,7 +415,7 @@ def _faces_timeline(frames: list[np.ndarray]) -> list[str] | None:
         pose = face_pose(frame)
         if pose is None:
             return None
-        found, eyes, yaw, _size = pose
+        found, eyes, yaw, _size, _below = pose
         if not found:
             timeline.append(".")
         elif eyes > _FRONTAL_EYES and abs(yaw) <= _LOOP_YAW:
@@ -463,10 +469,13 @@ def _loop_from_faces(timeline: list[str], to_front: list[float],
             in_side = _side("".join(timeline[start:index]))
             if out_side and in_side and in_side == out_side:
                 return None, ["half_turn"]
-            # Duas costas antes de voltar: vai e volta (lock2/wan0, flf99).
-            backs = [len(chunk) for chunk in "".join(timeline[back_start:index]).split("F")
-                     for chunk in chunk.replace("<", " ").replace(">", " ").split()
-                     if len(chunk) >= _BACK_RUN]
+            # Duas costas antes de voltar: vai e volta (lock2/wan0, flf99). Um
+            # rosto de lado por poucos quadros no meio das costas (o YuNet às
+            # vezes acha um rosto no cabelo) não separa duas costas.
+            middle = re.sub(r"(?<=\.)[<>]{1,%d}(?=\.)" % (_BLIP_FRAMES - 1),
+                            lambda m: "." * len(m.group(0)),
+                            "".join(timeline[back_start:index]))
+            backs = [chunk for chunk in re.split(r"[F<>]+", middle) if len(chunk) >= _BACK_RUN]
             if len(backs) > 1:
                 return None, ["wobble"]
             best = min(range(index, stop + 1), key=lambda j: to_front[j])

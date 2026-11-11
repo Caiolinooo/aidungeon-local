@@ -148,7 +148,7 @@ def _figure_png(size=(672, 1152), *, box=None, color=(20, 20, 20),
 
 
 def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
-    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0))
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0, 0.0))
     assert turnaround_module.check_view(_figure_png(), "back") == []
     assert turnaround_module.check_view(_figure_png(), "profile") == []
     cut = _figure_png(box=(252, 96, 420, 1152))
@@ -162,15 +162,15 @@ def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
     assert "too_small" in turnaround_module.check_view(small, "back")
     # o rosto é do YuNet: de frente na frente e no close-up, nenhum nas costas
     assert "no_face" in turnaround_module.check_view(_figure_png(), "front")
-    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.1))
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.1, 4.5))
     assert turnaround_module.check_view(_figure_png(), "front") == []
     assert "face_visible" in turnaround_module.check_view(_figure_png(), "back")
     assert "not_profile" in turnaround_module.check_view(_figure_png(), "profile")
     closeup = _figure_png((768, 1024), box=(160, 120, 610, 1024))
-    # rosto pequeno (meio corpo, 0,1 da altura) não é close-up de cabeça e ombros
+    # rosto alto com muito corpo embaixo (meio corpo) não é close-up
     assert "not_closeup" in turnaround_module.check_view(closeup, "face")
     assert "not_closeup" in turnaround_module.check_view(_figure_png((768, 1024)), "face")
-    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.4))
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("frontal", 0.4, 0.7))
     assert turnaround_module.check_view(closeup, "face") == []
     # rosto grande demais numa vista de corpo inteiro: veio um retrato
     assert "not_full_body" in turnaround_module.check_view(_figure_png(), "front")
@@ -178,7 +178,7 @@ def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
 
 def test_view_check_reads_a_gradient_floor_as_background(monkeypatch):
     """Chão de estúdio mais escuro embaixo não é figura nem corta os pés."""
-    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0))
+    monkeypatch.setattr(turnaround_module, "face_info", lambda rgb, **kw: ("", 0.0, 0.0))
     width, height = 672, 1152
     pixels = np.zeros((height, width, 3), np.uint8)
     for y in range(height):
@@ -916,8 +916,12 @@ def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
     assert problems == [] and full[end] == "F" and end < full.index("FFFFFF") + 6
     assert run("FFFF>>>>" + "." * 20 + ">>>>FFFFFF") == (None, ["half_turn"])
     assert run("FFFF<<<<<<<<FFFF<<<<<FFFF") == (None, ["no_back_view"])
-    wobble = "FFFF>>>>" + "." * 12 + "<<<<" + "." * 12 + "<<<FFFFF"
+    wobble = "FFFF>>>>" + "." * 12 + "<<<<<<<<<<" + "." * 12 + "<<<FFFFF"
     assert run(wobble) == (None, ["wobble"])
+    # rosto de lado por 5 quadros no meio das costas (staging): ainda uma volta
+    blip = "FFFF>>>>" + "." * 20 + "<<<<<" + "." * 18 + "<<<<FFFFFF"
+    end, problems = run(blip)
+    assert problems == [] and blip[end] == "F"
     end, problems = run("FFFF>>>>" + "." * 20 + "<<<<<<")      # nunca volta à frente
     assert end is None and problems == []
 
