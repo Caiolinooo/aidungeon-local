@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app import (db, events, game_engine, image_client, image_english, likeness, llm_client,
-                    npc_assets, settings_store, turnaround)
+                    npc_assets, outfit_lock, settings_store, turnaround)
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -1341,6 +1341,14 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         else:
             final = f"{final}. Mandatory appearance, do not contradict: {look}"
     from app.scene import is_explicit as _scene_explicit
+    # Sem roupa do momento (`current_outfit`) e sem cena explícita, o retrato
+    # usa a mesma roupa travada do turnaround, só as peças que o busto mostra.
+    # Só lê a trava: o worker de retrato não chama o LLM (quem cria é o
+    # turnaround, que já traduz com ele).
+    if not _card_sheet(card).get("current_outfit") and not _scene_explicit(final):
+        visible = outfit_lock.visible_text(outfit_lock.current(card))
+        if visible:
+            final = f"{final}. {visible}"
     portrait_ban = ""
     if not _scene_explicit(final):
         kind = npc_assets.creature_kind(card)
@@ -1678,14 +1686,33 @@ _SCENE_CLIP_MOTION = (
     "Keep the same place, lighting and the identity of anyone already visible."
 )
 _PORTRAIT_CLIP_HOLD = "Preserve the same face, clothes and framing. Stable camera."
-def _turnaround_prompts(card: dict) -> dict[str, str]:
-    """Mestre, ficha e giro com a mesma identidade; o split é local."""
+def _default_look(card: dict) -> dict:
+    """O card sem a roupa do momento: o turnaround é a aparência padrão."""
+    sheet = _card_sheet(card)
+    if not sheet.get("current_outfit"):
+        return card
+    sheet = {key: value for key, value in sheet.items() if key != "current_outfit"}
+    return {**card, "sheet": json.dumps(sheet, ensure_ascii=False)}
+
+
+def _turnaround_prompts(card: dict, lock: dict | None = None, *,
+                        with_outfit: bool = True) -> dict[str, str]:
+    """Mestre, ficha e giro com a mesma identidade e a mesma roupa travada.
+
+    `with_outfit=False` deixa a roupa de fora: o executor traduz o resto e
+    acrescenta a frase da trava depois, literal, sem passar pelo LLM.
+    """
+    card = _default_look(card)
     identity = likeness.opening_clause([card])
     if not identity:
         bits = npc_assets.scene_bits(card)
         name = str(card.get("title") or "character").strip()
         identity = f"{name}: {'; '.join(bits)}" if bits else name
     identity = identity[:700]
+    if lock is None and with_outfit:
+        lock = outfit_lock.current(card)
+    outfit = outfit_lock.full_text(lock) if with_outfit else ""
+    outfit = f" {outfit}" if outfit else ""
     sides = (
         "Keep every distinctive and asymmetrical detail on the character's own "
         "LEFT or RIGHT side exactly as shown; never mirror or move it."
@@ -1694,14 +1721,14 @@ def _turnaround_prompts(card: dict) -> dict[str, str]:
         f"Create a full-body master portrait of this exact character. {identity}. "
         "Standing upright in a relaxed neutral pose, facing the camera, arms at the "
         "sides, feet slightly apart, entire body and shoes visible. Preserve the face, "
-        f"hair, body, outfit and accessories exactly. {sides} Clean seamless light grey "
+        f"hair, body, outfit and accessories exactly.{outfit} {sides} Clean seamless light grey "
         "studio background, soft even three-point lighting, sharp focus head to toe, "
         "85mm lens. No text, no labels, no logos."
     )
     sheet = (
         "Turn this exact character into a clean professional character reference sheet. "
-        f"Keep {identity}, body, outfit and accessories exactly identical to the reference. "
-        f"{sides} Two rows on a seamless light grey background. Top row: three full-body "
+        f"Keep {identity}, body, outfit and accessories exactly identical to the reference."
+        f"{outfit} {sides} Two rows on a seamless light grey background. Top row: three full-body "
         "views at the same scale and in the same neutral pose: front, RIGHT profile, back. "
         "Bottom row: three head-and-shoulders close-ups: front, three-quarter, side profile. "
         "Even studio lighting, aligned panels, consistent colour. No text, no labels, "
@@ -1709,7 +1736,7 @@ def _turnaround_prompts(card: dict) -> dict[str, str]:
     )
     clip = (
         "Turntable shot of one person standing alone in a seamless grey studio. "
-        f"Keep {identity}, body, outfit and accessories exactly unchanged. "
+        f"Keep {identity}, body, outfit and accessories exactly unchanged.{outfit} "
         "The person slowly turns the whole body in place clockwise through a full "
         "360 degree circle: front, the right side in profile, the back, the left side "
         "in profile, then front again. Feet stay planted on the floor, legs straight, "
@@ -2201,19 +2228,21 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         card = db.get_card(conn, job["adventure_id"], card_id)
         if card is None:
             raise GameError.not_found(f"card {card_id} not found")
-        prompts = (job.get("payload") or {}).get("reference_prompts")
-        if not isinstance(prompts, dict):
-            prompts = _turnaround_prompts(card)
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
+    # Roupa travada antes de qualquer pintura: os prompts do payload podem ser
+    # de antes da trava, por isso são refeitos aqui com ela.
+    with db.session() as conn:
+        lock = outfit_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
+    prompts = _turnaround_prompts(card, with_outfit=False)
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}
+    outfit = outfit_lock.full_text(lock)
     prompts = {
         **prompts,
         **{
-            key: image_english.render_english(
-                prompts[key], transport=transport, llm_cfg=llm_cfg)
+            key: f"{image_english.render_english(prompts[key], transport=transport, llm_cfg=llm_cfg)} {outfit}".strip()
             for key in ("master", "design_sheet", "clip")
         },
     }
