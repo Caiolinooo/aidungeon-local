@@ -329,6 +329,24 @@ automático prioridade 7, depois de lotes, vida dos NPCs e `card_assets`. Uma no
 clipes automáticos pendentes/ativos (`preempted for a new action`), preservando
 os manuais. Desligue as duas flags se o LTXV não estiver instalado.
 
+### Giro 360° do turnaround: Wan 2.2 em job próprio
+
+O LTXV 2B não dá a volta: vira até o perfil, volta à frente e derrete pés e
+pernas. O `character_turnaround` publica mestre, ficha, vistas e um giro
+imediato montado da ficha (frente, perfil, costas, perfil espelhado, com
+fusão, ffmpeg/libx264) e enfileira `turnaround_clip`. Esse job roda o Wan 2.2
+TI2V 5B Q8 (já instalado) em 448×768, 121 frames, 20 passos, CFG 5, a partir
+do quadro do mestre, e só troca `clip_image_id` se o clipe passar no portão de
+fundo (bordas iguais ao primeiro frame); senão tenta mais uma semente e, se
+falhar de novo, fica o giro da ficha. Qualquer imagem nova ou ação preempta o
+giro e ele volta ao fim da fila (no máximo 3 vezes).
+
+Medido na L4 com o narrador carregado (11/11/2026): Wan 121 frames/20 passos
+em 156–162 s quente (218 s com a carga dos pesos), pico de 21,1–21,8 GB na
+placa inteira. 12 passos ou 81 frames saíram com manchas, texto e giro
+incompleto. LTXV com keyframes da ficha (`LTXVAddGuide`) virou fantasmas.
+`video.turnaround` sobrescreve qualquer chave; `{"engine": "none"}` desliga.
+
 Smoke do executor, sem gerar uma imagem:
 
 ```bash

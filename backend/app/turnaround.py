@@ -1,12 +1,15 @@
-"""Split determinístico e extração das quatro vistas de um clipe 360°."""
+"""Quadros, vistas da ficha, giro de reserva e portão de qualidade do clipe 360°."""
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from io import BytesIO
 from pathlib import Path
 
 import cv2
-from PIL import Image, ImageOps
+import numpy as np
+from PIL import Image, ImageChops, ImageOps
 
 
 class TurnaroundExtractionError(RuntimeError):
@@ -189,3 +192,133 @@ def extract_turnaround(video_path: str | Path, view_paths: list[str | Path],
     destination.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(destination, format="PNG")
     return size
+
+
+# Portão do giro 360°: fundo cinza liso que muda nas bordas é o defeito típico
+# (painéis brancos, manchas coloridas, texto sob os pés). Medido em 8 clipes
+# reais do Wan/LTXV na L4: os bons ficaram em ≤0,7 % de pixels alterados nas
+# faixas laterais/topo e 0 % na faixa de baixo; os ruins em 3,3–33 %.
+_CLEAN_SIDE_FRACTION = 0.02
+_CLEAN_BOTTOM_FRACTION = 0.02
+
+
+def clip_is_clean(video_path: str | Path) -> bool:
+    """True quando o fundo das bordas fica parecido com o do primeiro frame."""
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        capture.release()
+        return False
+    frames = []
+    try:
+        index = 0
+        while True:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                break
+            if index % 2 == 0:
+                frames.append(frame)
+            index += 1
+    finally:
+        capture.release()
+    if len(frames) < 4:
+        return False
+    height, width = frames[0].shape[:2]
+    side, top, bottom = max(2, width // 10), max(2, height // 20), max(2, height // 25)
+
+    def border(frame):
+        return np.concatenate([
+            frame[:, :side].reshape(-1, 3), frame[:, width - side:].reshape(-1, 3),
+            frame[:top].reshape(-1, 3),
+        ]).astype(np.int16)
+
+    first_border = border(frames[0])
+    first_bottom = frames[0][height - bottom:].astype(np.int16)
+    for frame in frames[1:]:
+        if frame.shape[:2] != (height, width):
+            return False
+        changed = (np.abs(border(frame) - first_border).max(axis=1) > 40).mean()
+        if changed > _CLEAN_SIDE_FRACTION:
+            return False
+        floor = (np.abs(frame[height - bottom:].astype(np.int16) - first_bottom)
+                 .max(axis=2) > 60).mean()
+        if floor > _CLEAN_BOTTOM_FRACTION:
+            return False
+    return True
+
+
+def _figure_frame(panel: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Figura recortada do fundo do painel e centrada na altura do quadro."""
+    width, height = size
+    background = panel.getpixel((min(2, panel.width - 1), min(2, panel.height - 1)))
+    diff = ImageChops.difference(panel, Image.new("RGB", panel.size, background))
+    box = diff.convert("L").point(lambda value: 255 if value > 28 else 0).getbbox()
+    figure = panel.crop(box) if box else panel
+    margin = max(2, height // 64)
+    figure = ImageOps.contain(
+        figure, (max(1, width - 2 * margin), max(1, height - 2 * margin)),
+        Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", size, background)
+    canvas.paste(figure, ((width - figure.width) // 2, (height - figure.height) // 2))
+    return canvas
+
+
+CYCLE_SIZE = (448, 768)
+
+
+def build_view_cycle(sheet_png: bytes, output_path: str | Path, *,
+                     size: tuple[int, int] = CYCLE_SIZE, fps: int = 24,
+                     hold_s: float = 0.6, fade_s: float = 0.4) -> int:
+    """MP4 H.264 em loop: frente, perfil, costas, perfil espelhado, com fusão.
+
+    Sai da ficha, sem modelo de vídeo: é o giro imediato e o que fica quando o
+    clipe do Wan falha ou é recusado. Devolve a duração em ms.
+    """
+    try:
+        with Image.open(BytesIO(sheet_png)) as source:
+            sheet = source.convert("RGB")
+    except Exception as exc:
+        raise TurnaroundExtractionError("could not read the design sheet") from exc
+    cell_w, cell_h = sheet.width // 3, sheet.height // 2
+    if cell_w < 1 or cell_h < 1:
+        raise TurnaroundExtractionError("design sheet is too small")
+    front, profile, back = (
+        _figure_frame(sheet.crop((column * cell_w, 0, (column + 1) * cell_w, cell_h)), size)
+        for column in range(3)
+    )
+    keys = [front, profile, back, ImageOps.mirror(profile)]
+    hold = max(1, round(hold_s * fps))
+    fade = max(1, round(fade_s * fps))
+    width, height = size
+    command = [
+        shutil.which("ffmpeg") or "ffmpeg", "-v", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}",
+        "-r", str(fps), "-i", "-",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        str(output_path),
+    ]
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as exc:
+        raise TurnaroundExtractionError("ffmpeg is not available") from exc
+    try:
+        for index, key in enumerate(keys):
+            following = keys[(index + 1) % len(keys)]
+            for _ in range(hold):
+                process.stdin.write(key.tobytes())
+                count += 1
+            for step in range(1, fade + 1):
+                process.stdin.write(Image.blend(key, following, step / (fade + 1)).tobytes())
+                count += 1
+        process.stdin.close()
+        _out, error = process.communicate(timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        process.kill()
+        process.wait()
+        raise TurnaroundExtractionError("ffmpeg failed to encode the view cycle") from exc
+    if process.returncode != 0:
+        raise TurnaroundExtractionError(
+            f"ffmpeg failed: {(error or b'').decode(errors='replace')[:200]}")
+    return int(round(count * 1000 / fps))

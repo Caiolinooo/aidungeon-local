@@ -40,6 +40,7 @@ const TYPE_LABELS = {
   scene_backdrop: 'Fundo da cena',
   see_image: 'Imagem da cena',
   scene_clip: jobTypeLabel('scene_clip'),
+  turnaround_clip: jobTypeLabel('turnaround_clip'),
   npc_day_tick: 'Simulação do dia',
   card_assets: 'Assets do card',
 }

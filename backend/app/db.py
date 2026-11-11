@@ -1724,7 +1724,8 @@ class JobCanceled(Exception):
 
 # -------------------------------------------------------------------- jobs
 JOB_TYPES = ("character_portrait", "scene_backdrop", "see_image", "npc_day_tick",
-             "card_assets", "location_image", "scene_clip", "character_turnaround")
+             "card_assets", "location_image", "scene_clip", "character_turnaround",
+             "turnaround_clip")
 JOB_ACTIVE = ("preparing", "pending", "running")
 
 

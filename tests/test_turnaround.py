@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
 
 from app import db, events, image_client, jobs, likeness, scene
@@ -18,7 +19,10 @@ from test_scene import _face, _reference_image_nodes, pipeline_transport
 from test_v3 import PNG_BYTES, use_tmp_storage
 
 
-def _write_video(path: Path, *, frames: int = 8, size: tuple[int, int] = (12, 16)) -> None:
+def _write_video(path: Path, *, frames: int = 8, size: tuple[int, int] = (12, 16),
+                 clean: bool = False) -> None:
+    """Quatro cores chapadas (fundo que muda: o portão recusa) ou, com `clean`,
+    fundo cinza fixo e só um bloco central girando de cor (o portão aceita)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(
         str(path), cv2.VideoWriter_fourcc(*"mp4v"), 8, size)
@@ -26,7 +30,13 @@ def _write_video(path: Path, *, frames: int = 8, size: tuple[int, int] = (12, 16
     colors = ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255))
     for index in range(frames):
         color = colors[min(3, index * 4 // frames)]
-        frame = np.full((size[1], size[0], 3), color, dtype=np.uint8)
+        if clean:
+            frame = np.full((size[1], size[0], 3), 200, dtype=np.uint8)
+            x0, x1 = size[0] * 3 // 8, size[0] * 5 // 8
+            y0, y1 = size[1] // 4, size[1] * 3 // 4
+            frame[y0:y1, x0:x1] = color
+        else:
+            frame = np.full((size[1], size[0], 3), color, dtype=np.uint8)
         writer.write(frame)
     writer.release()
 
@@ -52,9 +62,17 @@ def _character(adventure_id: str, tmp_path: Path, title: str = "NPC") -> tuple[d
         return db.get_card(conn, adventure_id, card["id"]), anchor
 
 
+def _fake_view_cycle(sheet_png, output_path, **_kwargs):
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_bytes(b"\x00\x00\x00\x18ftypisom-cycle")
+    return 4000
+
+
 def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
-                     capture: dict | None = None, after_render=None) -> None:
+                     capture: dict | None = None, after_render=None,
+                     after_sheet=None) -> None:
     image_calls: list[dict] = []
+    clip_calls: list[dict] = []
     payloads = [
         _png_bytes((255, 0, 0)),
         _png_bytes((0, 255, 0)),
@@ -68,16 +86,22 @@ def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
         target = tmp_path / "imgs" / adventure_id / f"{image_id}.png"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
+        if after_sheet is not None and index == 1:
+            after_sheet()
+        if capture is not None:
+            capture["image_calls"] = image_calls
         return {
             "file_path": str(target), "provider": "comfyui",
             "width": kwargs.get("width") or 8, "height": kwargs.get("height") or 8,
         }
 
-    def generate_clip(cfg, prompt, *, adventure_id, image_id, source_png, transport):
+    def generate_clip(cfg, prompt, *, adventure_id, image_id, source_png, transport,
+                      **kwargs):
+        clip_calls.append({"prompt": prompt, "source_png": source_png, **kwargs})
         if capture is not None:
             capture["prompt"] = prompt
             capture["source_png"] = source_png
-            capture["image_calls"] = image_calls
+            capture["clip_calls"] = clip_calls
         target = tmp_path / "imgs" / adventure_id / f"{image_id}.mp4"
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_video, target)
@@ -91,6 +115,7 @@ def _mock_generation(monkeypatch, tmp_path: Path, source_video: Path,
 
     monkeypatch.setattr(image_client, "generate_image", generate_image)
     monkeypatch.setattr(image_client, "generate_clip", generate_clip)
+    monkeypatch.setattr(turnaround_module, "build_view_cycle", _fake_view_cycle)
 
 
 def test_extracts_quarter_frames_and_builds_2x2_sheet(tmp_path):
@@ -143,7 +168,8 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert queued["payload"]["source_image_id"] == anchor["id"]
 
     with events.subscribe(adv["id"]) as subscription:
-        assert jobs.process_pending(pipeline_transport()) == 1
+        # turnaround + giro do Wan; o vídeo do mock troca o fundo e é recusado
+        assert jobs.process_pending(pipeline_transport()) == 2
         terminal = []
         while (event := subscription.get(0.05)) is not None:
             if event.type == "turnaround_ready":
@@ -181,7 +207,14 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
         assert split["source_image_id"] == master["id"]
         assert clip["kind"] == "turnaround_clip"
         assert clip["media_type"] == "video/mp4"
-        assert clip["source_image_id"] == split["id"]
+        assert clip["provider"] == "pillow"           # giro da ficha, sem modelo
+        assert clip["source_image_id"] == design_sheet["id"]
+        assert clip["duration_ms"] == 4000
+        clip_job = [job for job in db.list_jobs(conn, adv["id"])
+                    if job["type"] == "turnaround_clip"]
+        assert len(clip_job) == 1 and clip_job[0]["status"] == "done"
+        assert clip_job[0]["result"]["rejected"] is True
+        assert clip_job[0]["payload"]["source_image_id"] == split["id"]
         assert sheet["kind"] == "reference_sheet"
         # folha 2×2 com células de 1/3 × 1/2 da ficha (8×8 no mock)
         assert (sheet["width"], sheet["height"]) == (4, 8)
@@ -197,6 +230,16 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert len(image_calls) == 2
     assert image_calls[0]["reference_images"] == [PNG_BYTES]
     assert image_calls[1]["reference_images"] == [image_calls[0]["content"]]
+    # recusado pelo portão: uma segunda semente, nunca mais que isso
+    clip_calls = capture["clip_calls"]
+    assert len(clip_calls) == 2
+    assert all(isinstance(call["seed"], int) for call in clip_calls)
+    assert all(call["video_overrides"]["engine"] == "wan" for call in clip_calls)
+    assert clip_calls[0]["video_overrides"]["steps"] == 20
+    assert clip_calls[0]["video_overrides"]["frames"] == 121
+    assert "360 degree" in capture["prompt"]
+    assert not list((tmp_path / "imgs").rglob("*.mp4")) or all(
+        path.read_bytes().endswith(b"cycle") for path in (tmp_path / "imgs").rglob("*.mp4"))
     with Image.open(io.BytesIO(capture["source_png"])) as frame:
         # o vídeo parte só do mestre (vermelho no mock), num quadro vertical
         assert frame.size == (448, 768)
@@ -240,7 +283,7 @@ def test_uploaded_photo_leads_the_master_and_the_sheet(client, tmp_path, monkeyp
 
     response = client.post(f"/api/adventures/{adv['id']}/cards/{card['id']}/turnaround")
     assert response.status_code == 202, response.text
-    assert jobs.process_pending(pipeline_transport()) == 1
+    assert jobs.process_pending(pipeline_transport()) == 2   # + giro do Wan
 
     master_call, sheet_call = capture["image_calls"][:2]
     assert len(master_call["reference_images"]) == 2
@@ -267,7 +310,7 @@ def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(
         with db.session() as conn:
             jobs.cancel(conn, queued["id"])
 
-    _mock_generation(monkeypatch, tmp_path, video, after_render=cancel_after_render)
+    _mock_generation(monkeypatch, tmp_path, video, after_sheet=cancel_after_render)
     assert jobs.process_pending(pipeline_transport()) == 1
 
     with db.session() as conn:
@@ -279,6 +322,8 @@ def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(
         ).fetchone()[0] == 0
         updated = db.get_card(conn, adv["id"], card["id"])
         assert "turnaround" not in json.loads(updated["sheet"] or "{}").get("reference", {})
+        assert not [job for job in db.list_jobs(conn, adv["id"])
+                    if job["type"] == "turnaround_clip"]
     assert list((tmp_path / "imgs").rglob("*.mp4")) == []
     assert list((tmp_path / "imgs").rglob("*.png")) == []
 
@@ -538,14 +583,15 @@ def test_portrait_schedules_complete_reference_only_once(tmp_db, tmp_path, monke
         db.update_card(conn, adv["id"], card["id"], {"portrait_prompt": "brown-haired traveller"})
         portrait = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
 
-    assert jobs.process_pending(pipeline_transport()) == 2
+    # retrato, turnaround e o giro do Wan
+    assert jobs.process_pending(pipeline_transport()) == 3
     with db.session() as conn:
         turnarounds = [job for job in db.list_jobs(conn, adv["id"])
                        if job["type"] == "character_turnaround"]
         assert len(turnarounds) == 1
         assert turnarounds[0]["status"] == "done"
         jobs._schedule_turnaround_followup(portrait)
-        assert len(db.list_jobs(conn, adv["id"])) == 2
+        assert len(db.list_jobs(conn, adv["id"])) == 3
 
 
 def test_upload_preserves_and_clear_removes_turnaround(tmp_db, tmp_path, monkeypatch):
@@ -583,3 +629,129 @@ def test_sheet_views_come_from_the_design_sheet_cells(tmp_path):
     assert got == [colors[0], colors[1], colors[2], colors[3]]
     with Image.open(out) as grid:
         assert grid.size == (20, 20)
+
+
+def _published_turnaround(adv_id: str, card_id: str) -> dict:
+    with db.session() as conn:
+        card = db.get_card(conn, adv_id, card_id)
+        return json.loads(card["sheet"])["reference"]["turnaround"]
+
+
+def test_clean_wan_clip_replaces_the_sheet_cycle(tmp_db, tmp_path, monkeypatch):
+    """O turnaround publica na hora com o giro da ficha; o Wan chega depois e
+    troca só `clip_image_id`, com evento próprio, quando passa no portão."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "clean.mp4"
+    _write_video(video, frames=16, size=(48, 80), clean=True)
+    capture: dict = {}
+    _mock_generation(monkeypatch, tmp_path, video, capture)
+    with db.session() as conn:
+        queued = jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
+
+    with events.subscribe(adv["id"]) as subscription:
+        assert jobs.process_pending(pipeline_transport()) == 2
+        ready = []
+        while (event := subscription.get(0.05)) is not None:
+            if event.type == "turnaround_ready":
+                ready.append(event.data)
+
+    with db.session() as conn:
+        result = db.get_job(conn, queued["id"])["result"]
+        saved = _published_turnaround(adv["id"], card["id"])
+        clip = db.get_image(conn, saved["clip_image_id"])
+        assert saved["clip_image_id"] != result["clip"]["id"]
+        assert saved["view_image_ids"] == [view["id"] for view in result["views"]]
+        assert clip["kind"] == "turnaround_clip"
+        assert clip["provider"] == "comfyui"
+        assert clip["source_image_id"] == result["split"]["id"]
+    assert len(capture["clip_calls"]) == 1
+    assert [bool(item.get("views")) for item in ready] == [True, False]
+    assert ready[1]["clip"]["id"] == saved["clip_image_id"]
+
+
+def test_wan_clip_for_an_older_turnaround_is_discarded(tmp_db, tmp_path, monkeypatch):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "clean.mp4"
+    _write_video(video, frames=16, size=(48, 80), clean=True)
+    capture: dict = {}
+    _mock_generation(monkeypatch, tmp_path, video, capture)
+    with db.session() as conn:
+        jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
+    with db.session() as conn:
+        first = db.claim_next_job(conn)
+    jobs._run_job(first, pipeline_transport())
+    before = _published_turnaround(adv["id"], card["id"])
+    with db.session() as conn:
+        stale = db.claim_next_job(conn)
+        assert stale["type"] == "turnaround_clip"
+        sheet = json.loads(db.get_card(conn, adv["id"], card["id"])["sheet"])
+        sheet["reference"]["turnaround"]["split_image_id"] = "newer"
+        db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+    jobs._run_job(stale, pipeline_transport())
+    with db.session() as conn:
+        assert db.get_job(conn, stale["id"])["result"]["stale"] is True
+    assert _published_turnaround(adv["id"], card["id"])["clip_image_id"] == before["clip_image_id"]
+    assert "clip_calls" not in capture
+
+
+def test_new_image_preempts_the_wan_clip_and_requeues_it(tmp_db, tmp_path):
+    adv = make_adventure()
+    payload = {"card_id": "c1", "source_image_id": "s1", "prompt": "turn", "automatic": True}
+    with db.session() as conn:
+        clip = jobs.enqueue(conn, "turnaround_clip", adv["id"], "c1", payload,
+                            priority=jobs.PRIORITY_PORTRAIT_CLIP,
+                            supersede_key=f"turnaround_clip:{adv['id']}:c1")
+        assert db.claim_next_job(conn)["id"] == clip["id"]
+    for round_ in range(1, jobs._TURNAROUND_CLIP_MAX_REQUEUES + 2):
+        with db.session() as conn:
+            jobs.enqueue(conn, "location_image", adv["id"], f"loc{round_}", {"prompt": "x"})
+            assert db.get_job(conn, clip["id"])["status"] == "canceled"
+            again = [job for job in db.list_jobs(conn, adv["id"])
+                     if job["type"] == "turnaround_clip" and job["status"] == "pending"]
+            if round_ > jobs._TURNAROUND_CLIP_MAX_REQUEUES:
+                assert again == []
+                break
+            assert len(again) == 1
+            assert again[0]["payload"]["requeues"] == round_
+            conn.execute("UPDATE jobs SET status='canceled' WHERE type='location_image'")
+            conn.execute("UPDATE jobs SET status='running' WHERE id=?", (again[0]["id"],))
+            clip = again[0]
+
+
+def test_quality_gate_rejects_a_changing_background(tmp_path):
+    clean, dirty = tmp_path / "clean.mp4", tmp_path / "dirty.mp4"
+    _write_video(clean, frames=16, size=(48, 80), clean=True)
+    _write_video(dirty, frames=16, size=(48, 80))
+    assert turnaround_module.clip_is_clean(clean) is True
+    assert turnaround_module.clip_is_clean(dirty) is False
+    assert turnaround_module.clip_is_clean(tmp_path / "missing.mp4") is False
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg não instalado")
+def test_view_cycle_is_a_browser_mp4_through_four_views(tmp_path):
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    sheet = Image.new("RGB", (90, 80), (224, 224, 224))
+    for column, color in enumerate(colors):
+        sheet.paste(Image.new("RGB", (10, 30), color), (column * 30 + 10, 5))
+    raw = io.BytesIO(); sheet.save(raw, format="PNG")
+    out = tmp_path / "cycle.mp4"
+    duration = turnaround_module.build_view_cycle(raw.getvalue(), out, size=(48, 80), fps=10)
+    assert duration == 4000                       # 4 vistas × (6 + 4 frames) a 10 fps
+    capture = cv2.VideoCapture(str(out))
+    try:
+        assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 40
+        firsts = []
+        for index in (0, 10, 20, 30):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, frame = capture.read()
+            assert ok
+            b, g, r = frame[40, 24]
+            firsts.append(max(range(3), key=lambda i: (r, g, b)[i]))
+    finally:
+        capture.release()
+    assert firsts == [0, 1, 2, 1]                 # frente, perfil, costas, perfil espelhado
+    assert out.read_bytes()[4:8] == b"ftyp"

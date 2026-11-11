@@ -15,6 +15,7 @@ const MOTION = 'câmera estável, gestos sutis e ambiente vivo por 5 segundos, p
 
 export function jobTypeLabel(type) {
   if (type === 'scene_clip') return SCENE_CLIP_LABEL
+  if (type === 'turnaround_clip') return 'Vídeo 360°'
   return ''
 }
 

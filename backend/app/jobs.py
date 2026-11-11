@@ -62,6 +62,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -189,6 +190,12 @@ def _terminal_event(job: dict, status: str, result: dict | None,
             "sheet": result["sheet"],
             "clip": result["clip"],
             "views": result["views"],
+        })
+    if job["type"] == "turnaround_clip":
+        if not result.get("clip"):
+            return None
+        return ("turnaround_ready", {
+            "job_id": job["id"], "card_id": result["card_id"], "clip": result["clip"],
         })
     if job["type"] == "scene_clip":
         image = result.get("image") or {}
@@ -812,25 +819,69 @@ def cancel(conn, job_id: str, *, reason: str | None = None) -> dict | None:
 
 
 def _cancel_running_automatic_clips(conn) -> list[dict]:
-    """Cancela clipes automáticos running. O interrupt espera o commit."""
+    """Cancela clipes automáticos running. O interrupt espera o commit.
+
+    O giro 360° (minutos no Wan) cede a GPU do mesmo jeito, mas volta para a
+    fila no fim dela: as vistas já estão publicadas e o clipe só melhora o
+    preview.
+    """
     rows = conn.execute(
-        "SELECT id FROM jobs WHERE type='scene_clip' AND status='running'"
-        " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1",
+        "SELECT id FROM jobs WHERE status='running' AND ("
+        "type='turnaround_clip' OR (type='scene_clip'"
+        " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1))",
     ).fetchall()
     canceled = []
     for row in rows:
         job = cancel(conn, row["id"], reason=_PREEMPT_IMAGE_REASON)
         if job is not None:
             canceled.append(job)
+            if job["type"] == "turnaround_clip":
+                _requeue_turnaround_clip(conn, job)
+    return canceled
+
+
+# Um turno novo pode interromper o mesmo giro várias vezes; depois disso ele
+# desiste e fica o giro da ficha.
+_TURNAROUND_CLIP_MAX_REQUEUES = 3
+
+
+def _requeue_turnaround_clip(conn, job: dict) -> dict | None:
+    payload = dict(job.get("payload") or {})
+    payload.pop("heartbeat_at", None)
+    requeues = int(payload.get("requeues") or 0) + 1
+    if requeues > _TURNAROUND_CLIP_MAX_REQUEUES:
+        log.info("job %s: giro 360° desistiu depois de %d interrupções",
+                 job["id"], requeues - 1)
+        return None
+    payload["requeues"] = requeues
+    return enqueue(
+        conn, "turnaround_clip", job["adventure_id"], job.get("ref_id") or "",
+        payload, priority=PRIORITY_PORTRAIT_CLIP,
+        supersede_key=job.get("supersede_key") or None,
+    )
+
+
+def _cancel_running_turnaround_clips(conn) -> list[dict]:
+    """Giro 360° running cede a GPU a qualquer ação nova e volta para a fila."""
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE type='turnaround_clip' AND status='running'",
+    ).fetchall()
+    canceled = []
+    for row in rows:
+        job = cancel(conn, row["id"], reason="preempted for a new action")
+        if job is not None:
+            canceled.append(job)
+            _requeue_turnaround_clip(conn, job)
     return canceled
 
 
 def interrupt_image(job: dict, transport: Any = None) -> bool:
     """Melhor esforço para interromper o render de um job running cancelado."""
     if job["type"] not in ("character_portrait", "scene_backdrop", "see_image",
-                           "location_image", "scene_clip", "character_turnaround"):
+                           "location_image", "scene_clip", "character_turnaround",
+                           "turnaround_clip"):
         return False
-    is_clip = job["type"] == "scene_clip"
+    is_clip = job["type"] in ("scene_clip", "turnaround_clip")
     if is_clip:
         with _heartbeat_lock:
             if job["id"] in _clip_interrupted:
@@ -840,7 +891,7 @@ def interrupt_image(job: dict, transport: Any = None) -> bool:
     try:
         with db.session() as conn:
             cfg = image_client.effective_settings(conn)
-        if job["type"] in ("scene_clip", "character_turnaround"):
+        if job["type"] in ("scene_clip", "character_turnaround", "turnaround_clip"):
             image_client.interrupt_comfy(cfg, transport)
         else:
             if (cfg.get("provider") or "sdwebui") not in ("sdwebui", "comfyui"):
@@ -935,6 +986,9 @@ def preempt_automatic_clips(adventure_id: str, transport: Any = None) -> int:
     running: list[dict] = []
     canceled_count = 0
     with db.session() as conn:
+        for job in _cancel_running_turnaround_clips(conn):
+            canceled_count += 1
+            running.append(job)
         rows = conn.execute(
             "SELECT id FROM jobs WHERE adventure_id=? AND type='scene_clip'"
             " AND status IN ('preparing','pending','running')",
@@ -1656,10 +1710,11 @@ def _turnaround_prompts(card: dict) -> dict[str, str]:
     clip = (
         "Turntable shot of one person standing alone in a seamless grey studio. "
         f"Keep {identity}, body, outfit and accessories exactly unchanged. "
-        "The person slowly turns the whole body in place, rotating clockwise: first "
-        "facing the camera, then the right side in profile, then the back, then the "
-        "left side, then facing the camera again. Static camera, smooth constant "
-        f"rotation, calm neutral expression, no talking. {sides} No extra people, no text."
+        "The person slowly turns the whole body in place clockwise through a full "
+        "360 degree circle: front, the right side in profile, the back, the left side "
+        "in profile, then front again. Feet stay planted on the floor, legs straight, "
+        "smooth constant rotation, static locked-off camera, calm neutral expression, "
+        f"no talking. {sides} No extra people, no text."
     )
     return {"master": master, "design_sheet": sheet, "clip": clip}
 
@@ -2221,24 +2276,32 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
             "prompt": "Deterministic frame: full-body master alone",
             "source_image_id": assets["master"]["id"],
         }
-        split_raw = likeness.read_stored_image_bytes(assets["split"]["meta"])
         ensure_running()
 
-        clip_id = db.new_id()
-        clip_meta = image_client.generate_clip(
-            img_cfg, prompts["clip"], adventure_id=job["adventure_id"],
-            image_id=clip_id, source_png=split_raw, transport=transport,
-        )
-        created_paths.append(str(clip_meta["file_path"]))
-        ensure_running()
-        clip_path = likeness.stored_image_path(clip_meta["file_path"])
         view_ids = [db.new_id() for _ in range(4)]
         sheet_id = db.new_id()
-        view_paths = [clip_path.parent / f"{image_id}.png" for image_id in view_ids]
-        sheet_path = clip_path.parent / f"{sheet_id}.png"
+        view_paths = [split_path.parent / f"{image_id}.png" for image_id in view_ids]
+        sheet_path = split_path.parent / f"{sheet_id}.png"
         created_paths.extend(str(path) for path in (*view_paths, sheet_path))
         design_raw = likeness.read_stored_image_bytes(assets["design_sheet"]["meta"])
         width, height = turnaround.extract_sheet_views(design_raw, view_paths, sheet_path)
+        # Giro imediato a partir da ficha. O vídeo gerado sai depois, em
+        # `turnaround_clip`, e só substitui este se passar no portão.
+        clip_id = db.new_id()
+        clip_path = split_path.parent / f"{clip_id}.mp4"
+        clip_meta: dict | None = None
+        try:
+            created_paths.append(str(clip_path))
+            duration_ms = turnaround.build_view_cycle(design_raw, clip_path)
+            clip_meta = {
+                "file_path": str(clip_path), "provider": "pillow",
+                "width": turnaround.CYCLE_SIZE[0], "height": turnaround.CYCLE_SIZE[1],
+                "duration_ms": duration_ms,
+            }
+        except turnaround.TurnaroundExtractionError as exc:
+            log.warning("job %s: giro da ficha indisponível: %s", job["id"], exc)
+            _discard_render(str(clip_path))
+        ensure_running()
         with db.session() as conn:
             card = db.get_card(conn, job["adventure_id"], card_id)
             if card is None:
@@ -2255,33 +2318,36 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                     image_id=asset["id"], kind=asset["kind"], ref_id=card_id,
                     job_id=job["id"], source_image_id=asset["source_image_id"],
                 )
-            clip = db.insert_image(
-                conn, adventure_id=job["adventure_id"], action_seq=-1,
-                file_path=clip_meta["file_path"], prompt=prompts["clip"],
-                provider=clip_meta.get("provider") or "comfyui",
-                width=clip_meta.get("width"), height=clip_meta.get("height"),
-                image_id=clip_id, kind="turnaround_clip", ref_id=card_id,
-                job_id=job["id"], media_type="video/mp4",
-                duration_ms=clip_meta.get("duration_ms"), source_image_id=assets["split"]["id"],
-            )
+            clip = None
+            if clip_meta is not None:
+                clip = db.insert_image(
+                    conn, adventure_id=job["adventure_id"], action_seq=-1,
+                    file_path=clip_meta["file_path"], prompt=prompts["clip"],
+                    provider=clip_meta["provider"],
+                    width=clip_meta["width"], height=clip_meta["height"],
+                    image_id=clip_id, kind="turnaround_clip", ref_id=card_id,
+                    job_id=job["id"], media_type="video/mp4",
+                    duration_ms=clip_meta["duration_ms"],
+                    source_image_id=rows["design_sheet"]["id"],
+                )
             views = [
                 db.insert_image(
                     conn, adventure_id=job["adventure_id"], action_seq=-1,
-                    file_path=str(path), prompt=prompts["clip"],
-                    provider=clip_meta.get("provider") or "comfyui",
+                    file_path=str(path), prompt=prompts["design_sheet"],
+                    provider="pillow",
                     width=width, height=height, image_id=image_id,
                     kind="reference_view", ref_id=card_id, job_id=job["id"],
-                    source_image_id=clip_id,
+                    source_image_id=rows["design_sheet"]["id"],
                 )
                 for image_id, path in zip(view_ids, view_paths)
             ]
             sheet = db.insert_image(
                 conn, adventure_id=job["adventure_id"], action_seq=-1,
-                file_path=str(sheet_path), prompt=prompts["clip"],
-                provider=clip_meta.get("provider") or "comfyui",
+                file_path=str(sheet_path), prompt=prompts["design_sheet"],
+                provider="pillow",
                 width=width * 2, height=height * 2, image_id=sheet_id,
                 kind="reference_sheet", ref_id=card_id, job_id=job["id"],
-                source_image_id=clip_id,
+                source_image_id=rows["design_sheet"]["id"],
             )
             reference = {
                 "source_image_id": source["id"],
@@ -2289,14 +2355,28 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                 "design_sheet_image_id": rows["design_sheet"]["id"],
                 "split_image_id": rows["split"]["id"],
                 "sheet_image_id": sheet["id"],
-                "clip_image_id": clip["id"],
+                "clip_image_id": clip["id"] if clip else "",
                 "view_image_ids": [view["id"] for view in views],
             }
             likeness.set_turnaround(conn, card, reference, job_id=job["id"])
+            video = image_client.turnaround_video_settings(img_cfg)
+            if video["engine"] != "none":
+                enqueue(
+                    conn, "turnaround_clip", job["adventure_id"], card_id,
+                    {
+                        "card_id": card_id,
+                        "source_image_id": rows["split"]["id"],
+                        "design_sheet_image_id": rows["design_sheet"]["id"],
+                        "prompt": prompts["clip"],
+                        "automatic": True,
+                    },
+                    priority=PRIORITY_PORTRAIT_CLIP,
+                    supersede_key=f"turnaround_clip:{job['adventure_id']}:{card_id}",
+                )
     except sqlite3.IntegrityError:
         for path in created_paths:
             _discard_render(path)
-        _raise_if_gone(job["adventure_id"], clip_meta["file_path"])
+        _raise_if_gone(job["adventure_id"], str(split_path))
         raise
     except Exception:
         for path in created_paths:
@@ -2310,9 +2390,98 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         "design_sheet": db.image_ref(rows["design_sheet"]),
         "split": db.image_ref(rows["split"]),
         "sheet": sheet_ref,
-        "clip": db.image_ref(clip),
+        "clip": db.image_ref(clip) if clip else None,
         "views": [db.image_ref(view) for view in views],
     }
+
+
+# Uma segunda semente quando o portão recusa o primeiro giro; mais que isso
+# custa minutos de GPU por um preview que a ficha já cobre.
+_TURNAROUND_CLIP_ATTEMPTS = 2
+
+
+def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
+    """Giro 360° no Wan a partir do quadro do mestre; troca o giro da ficha
+    só se o clipe passar no portão e o turnaround ainda for o mesmo."""
+    payload = job.get("payload") or {}
+    card_id = str(payload.get("card_id") or job.get("ref_id") or "")
+    split_id = str(payload.get("source_image_id") or "")
+    prompt = " ".join(str(payload.get("prompt") or "").split())
+    if not prompt:
+        raise GameError(500, "generation_failed", "turnaround clip job has no prompt")
+
+    def current_turnaround() -> tuple[dict | None, dict]:
+        with db.session() as conn:
+            card = db.get_card(conn, job["adventure_id"], card_id)
+        sheet = _card_sheet(card) if card else {}
+        reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+        saved = reference.get("turnaround")
+        return card, saved if isinstance(saved, dict) else {}
+
+    card, saved = current_turnaround()
+    if card is None or str(saved.get("split_image_id") or "") != split_id:
+        return {"card_id": card_id, "clip": None, "stale": True}
+    with db.session() as conn:
+        img_cfg = image_client.effective_settings(conn)
+    if not img_cfg["enabled"]:
+        raise GameError(503, "image_disabled",
+                        "image generation is disabled (settings.image.enabled)")
+    video = image_client.turnaround_video_settings(img_cfg)
+    if video["engine"] == "none":
+        return {"card_id": card_id, "clip": None, "disabled": True}
+    _source, raw = _clip_source_png(job)
+    # O prompt já chega em inglês: o turnaround traduziu antes de enfileirar.
+    progress = _generation_progress(job, transport, watch_cancel=True)
+    accepted: dict | None = None
+    image_id = ""
+    for attempt in range(_TURNAROUND_CLIP_ATTEMPTS):
+        image_id = db.new_id()
+        meta = image_client.generate_clip(
+            img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
+            source_png=raw, transport=transport, progress=progress,
+            video_overrides=video, seed=random.randint(0, 2**31 - 1),
+        )
+        path = likeness.stored_image_path(meta["file_path"])
+        if turnaround.clip_is_clean(path):
+            accepted = meta
+            break
+        log.info("job %s: giro 360° recusado pelo portão (tentativa %d)",
+                 job["id"], attempt + 1)
+        _discard_render(meta["file_path"])
+        with db.session() as conn:
+            current = db.get_job(conn, job["id"])
+        if not current or current.get("status") != "running":
+            raise db.JobCanceled(job["id"])
+    if accepted is None:
+        return {"card_id": card_id, "clip": None, "rejected": True}
+    try:
+        with db.session() as conn:
+            card = db.get_card(conn, job["adventure_id"], card_id)
+            sheet = _card_sheet(card) if card else {}
+            reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
+            saved = reference.get("turnaround") if isinstance(reference.get("turnaround"), dict) else {}
+            if card is None or str(saved.get("split_image_id") or "") != split_id:
+                _discard_render(accepted["file_path"])
+                return {"card_id": card_id, "clip": None, "stale": True}
+            clip = db.insert_image(
+                conn, adventure_id=job["adventure_id"], action_seq=-1,
+                file_path=accepted["file_path"], prompt=prompt,
+                provider=accepted.get("provider") or "comfyui",
+                width=accepted.get("width"), height=accepted.get("height"),
+                image_id=image_id, kind="turnaround_clip", ref_id=card_id,
+                job_id=job["id"], media_type="video/mp4",
+                duration_ms=accepted.get("duration_ms"), source_image_id=split_id,
+            )
+            likeness.set_turnaround(
+                conn, card, {**saved, "clip_image_id": clip["id"]}, job_id=job["id"])
+    except db.JobCanceled:
+        _discard_render(accepted["file_path"])
+        raise
+    except sqlite3.IntegrityError:
+        _discard_render(accepted["file_path"])
+        _raise_if_gone(job["adventure_id"], accepted["file_path"])
+        raise
+    return {"card_id": card_id, "clip": db.image_ref(clip), "image": db.image_ref(clip)}
 
 
 _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
@@ -2324,6 +2493,7 @@ _EXECUTORS: dict[str, Callable[[dict, Any], dict]] = {
     "location_image": _execute_location_image,
     "scene_clip": _execute_scene_clip,
     "character_turnaround": _execute_turnaround,
+    "turnaround_clip": _execute_turnaround_clip,
 }
 
 
@@ -2461,7 +2631,7 @@ def _deadline_seconds(job_type: str, img_cfg: dict, llm_cfg: dict) -> float | No
     if job_type in _IMAGE_JOB_TYPES:
         timeout = _timeout_seconds(img_cfg.get("timeout_seconds"), 300.0)
         return max(360.0, timeout + 60.0)
-    if job_type == "scene_clip":
+    if job_type in ("scene_clip", "turnaround_clip"):
         video = image_client.video_settings(img_cfg)
         timeout = _timeout_seconds(video.get("timeout_seconds"), 1800.0)
         return max(1860.0, timeout + 60.0)

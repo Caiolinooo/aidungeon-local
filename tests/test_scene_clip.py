@@ -893,3 +893,37 @@ def test_clip_route_auth_ownership_raster_and_download(client, tmp_path):
         headers={"Authorization": f"Bearer {alice}"},
     )
     assert owned.status_code == 202, owned.text
+
+
+def test_turnaround_overrides_run_wan_on_an_ltxv_install(tmp_path):
+    """O clipe de cena segue no LTXV; o giro 360° pede o Wan 2.2 448x768 com
+    20 passos e CFG 5 só nesse pedido, com a semente dada pelo job."""
+    cfg = _cfg(tmp_path)
+    cfg["comfyui_video"] = {**cfg["comfyui_video"], "engine": "ltxv",
+                            "checkpoint": LTX_CKPT, "clip": LTX_CLIP,
+                            "steps": 8, "cfg": 1}
+    overrides = image_client.turnaround_video_settings(cfg)
+    assert overrides["engine"] == "wan"
+    assert image_client.video_settings(cfg)["engine"] == "ltxv"
+    seen: dict = {}
+    result = image_client.generate_clip(
+        cfg, "turns around", adventure_id="adv", image_id="turn-1",
+        source_png=_png(448, 768), transport=_transport(seen),
+        video_overrides=overrides, seed=1234)
+    graph = seen["graph"]
+    latent = next(node for node in graph.values()
+                  if node["class_type"] == "Wan22ImageToVideoLatent")
+    assert (latent["inputs"]["width"], latent["inputs"]["height"]) == (448, 768)
+    assert latent["inputs"]["length"] == 121
+    sampler = next(node for node in graph.values() if node["class_type"] == "KSampler")
+    assert (sampler["inputs"]["steps"], sampler["inputs"]["cfg"]) == (20, 5.0)
+    assert sampler["inputs"]["seed"] == 1234
+    clip = next(node for node in graph.values() if node["class_type"] == "CLIPLoader")
+    assert clip["inputs"]["clip_name"] == "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    assert (result["width"], result["height"]) == (448, 768)
+    assert image_client.video_settings(cfg)["steps"] == 8   # cfg intacto
+
+    cfg["comfyui_video"]["turnaround"] = {"engine": "none"}
+    assert image_client.turnaround_video_settings(cfg)["engine"] == "none"
+    cfg["comfyui_video"]["turnaround"] = {"steps": 24}
+    assert image_client.turnaround_video_settings(cfg)["steps"] == 24

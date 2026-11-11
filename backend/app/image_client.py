@@ -1171,6 +1171,48 @@ def video_settings(cfg: dict) -> dict:
     return merged
 
 
+# Giro 360° do turnaround. O LTXV 2B só virava até o perfil e derretia pés e
+# pernas; o Wan 2.2 TI2V 5B (já instalado para `engine=wan`) dá a volta inteira
+# com tênis e pernas legíveis em 448x768. 12 passos ou 81 frames saíram com
+# manchas e texto, por isso 121 frames, 20 passos e CFG 5. O bloco opcional
+# `video.turnaround` sobrescreve qualquer chave; `engine: "none"` desliga.
+_TURNAROUND_VIDEO_DEFAULTS = {
+    "engine": "wan",
+    "clip": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    "frames": 121,
+    "fps": 24.0,
+    "steps": 20,
+    "cfg": 5.0,
+    "shift": 8.0,
+    "width": 768,
+    "height": 448,
+    "vertical_width": 448,
+    "vertical_height": 768,
+}
+
+
+def turnaround_video_settings(cfg: dict) -> dict:
+    """Overrides do clipe 360° sobre `video_settings`; `engine` "none" desliga."""
+    raw = cfg.get("comfyui_video")
+    custom = raw.get("turnaround") if isinstance(raw, dict) else None
+    overrides = dict(_TURNAROUND_VIDEO_DEFAULTS)
+    if isinstance(custom, dict):
+        for key, value in custom.items():
+            if value is None:
+                continue
+            default = overrides.get(key, _VIDEO_DEFAULTS.get(key))
+            if isinstance(default, bool):
+                overrides[key] = bool(value)
+            elif isinstance(default, float):
+                overrides[key] = float(value)
+            elif isinstance(default, int):
+                overrides[key] = int(value)
+            else:
+                overrides[key] = str(value).strip()
+    overrides["engine"] = str(overrides.get("engine") or "none").strip().lower() or "none"
+    return overrides
+
+
 def _video_engine(video: dict) -> str:
     """`ltxv` é o default. `wan` e `h3` são opt-in."""
     engine = str(video.get("engine") or "ltxv").strip().lower() or "ltxv"
@@ -1528,7 +1570,9 @@ def _clip_seed(cfg: dict) -> int:
 def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                   source_png: bytes,
                   transport: httpx.BaseTransport | None = None,
-                  progress: Callable[[], None] | None = None) -> dict:
+                  progress: Callable[[], None] | None = None,
+                  video_overrides: dict | None = None,
+                  seed: int | None = None) -> dict:
     """Image-to-video no ComfyUI. Exige o PNG de origem, grava `.mp4` e
     devolve file_path, width, height, provider, media_type e duration_ms.
 
@@ -1539,6 +1583,9 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     /prompt, /history, /view, /free — o SDXL precisa da VRAM. Provider
     `comfyui`: sem /free. O Comfy troca o modelo e o clipe seguinte reusa
     o que ficou carregado.
+
+    `video_overrides` troca chaves do bloco só neste pedido (o giro 360° usa
+    o Wan). `seed` fixa a semente mesmo com `cfg.seed` negativo.
     """
     prompt = " ".join(str(prompt or "").split())
     if not prompt:
@@ -1547,7 +1594,7 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         raise ImageError("source image is required")
     if not source_png.startswith(_PNG_MAGIC):
         raise ImageError("source image must be a PNG")
-    video = video_settings(cfg)
+    video = {**video_settings(cfg), **(video_overrides or {})}
     frames = int(video["frames"])
     fps = float(video["fps"])
     if frames <= 0 or fps <= 0:
@@ -1585,7 +1632,7 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 client, base, source_png,
                 f"aidungeon-clip-{hashlib.sha256(source_png).hexdigest()[:16]}.png",
             )
-            seed = _clip_seed(cfg)
+            seed = _clip_seed(cfg) if seed is None else int(seed)
             if engine == "ltxv":
                 graph = _ltxv_i2v_graph(
                     video, prompt, name, width=frame_w, height=frame_h, seed=seed)
