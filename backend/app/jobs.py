@@ -2298,8 +2298,9 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                 "width": turnaround.CYCLE_SIZE[0], "height": turnaround.CYCLE_SIZE[1],
                 "duration_ms": duration_ms,
             }
-        except turnaround.TurnaroundExtractionError as exc:
-            log.warning("job %s: giro da ficha indisponível: %s", job["id"], exc)
+        except Exception as exc:  # o giro é só preview: nunca derruba o turnaround
+            log.warning("job %s: giro da ficha indisponível: %s: %s",
+                        job["id"], type(exc).__name__, exc)
             _discard_render(str(clip_path))
         ensure_running()
         with db.session() as conn:

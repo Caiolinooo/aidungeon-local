@@ -755,3 +755,55 @@ def test_view_cycle_is_a_browser_mp4_through_four_views(tmp_path):
         capture.release()
     assert firsts == [0, 1, 2, 1]                 # frente, perfil, costas, perfil espelhado
     assert out.read_bytes()[4:8] == b"ftyp"
+
+
+def test_broken_view_cycle_never_fails_the_turnaround(tmp_db, tmp_path, monkeypatch):
+    """Regressão do staging: o ffmpeg levantou ValueError no Python 3.12 e o
+    turnaround inteiro virou erro. Sem giro, as vistas publicam mesmo assim."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "source.mp4"
+    _write_video(video)
+    _mock_generation(monkeypatch, tmp_path, video)
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("flush of closed file")
+
+    monkeypatch.setattr(turnaround_module, "build_view_cycle", broken)
+    with db.session() as conn:
+        queued = jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
+    with db.session() as conn:
+        first = db.claim_next_job(conn)
+    jobs._run_job(first, pipeline_transport())
+    with db.session() as conn:
+        done = db.get_job(conn, queued["id"])
+        assert done["status"] == "done"
+        assert done["result"]["clip"] is None
+        assert len(done["result"]["views"]) == 4
+    saved = _published_turnaround(adv["id"], card["id"])
+    assert saved["clip_image_id"] == ""
+    assert saved["design_sheet_image_id"] == done["result"]["design_sheet"]["id"]
+    assert list((tmp_path / "imgs").rglob("*.mp4")) == []
+
+
+def test_sheet_views_keep_feet_that_cross_the_middle(tmp_path):
+    """Ficha real: os tênis da fileira de cima descem abaixo de h/2. O corte
+    vai para a faixa de fundo entre as fileiras e os pés ficam na vista."""
+    grey = (224, 224, 224)
+    sheet = Image.new("RGB", (300, 200), grey)
+    for column in range(3):                      # corpo + pés até y=115
+        sheet.paste(Image.new("RGB", (20, 105), (0, 0, 0)), (column * 100 + 40, 10))
+        sheet.paste(Image.new("RGB", (20, 5), (255, 255, 255)), (column * 100 + 40, 110))
+    sheet.paste(Image.new("RGB", (40, 40), (150, 90, 60)), (30, 140))   # close-up
+    raw = io.BytesIO(); sheet.save(raw, format="PNG")
+    views = [tmp_path / f"v{i}.png" for i in range(4)]
+    width, height = turnaround_module.extract_sheet_views(
+        raw.getvalue(), views, tmp_path / "grid.png")
+    assert width == 100 and height >= 115    # metade seria 100: pés fora
+    for path in views[:3]:
+        with Image.open(path) as view:
+            assert view.convert("RGB").getpixel((50, 112)) == (255, 255, 255)
+    with Image.open(views[3]) as face:
+        assert face.size == (width, height)
+        assert (150, 90, 60) in [face.convert("RGB").getpixel((50, y)) for y in range(0, 60)]

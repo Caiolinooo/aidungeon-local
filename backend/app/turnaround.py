@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -107,9 +108,47 @@ def build_master_frame(master_png: bytes, output_path: str | Path, *,
     return size
 
 
-# Células da ficha (3 colunas × 2 linhas): de cima, frente, perfil direito e
-# costas de corpo inteiro; embaixo, close-ups de frente, três-quartos e perfil.
-_SHEET_VIEW_CELLS = ((0, 0), (1, 0), (2, 0), (0, 1))
+# Ficha 3 colunas × 2 fileiras: em cima frente, perfil e costas de corpo
+# inteiro; embaixo close-ups de frente, três-quartos e perfil.
+def _sheet_row_split(sheet: Image.Image) -> int:
+    """Linha de fundo entre as duas fileiras da ficha.
+
+    O modelo não respeita a metade exata: na ficha real da Renata os tênis
+    desciam até ~54 % da altura e o corte em h/2 tirava os pés das vistas.
+    Procura, entre 35 % e 75 %, a linha com menos pixels de figura; sem faixa
+    de fundo limpa, volta à metade.
+    """
+    width, height = sheet.size
+    background = sheet.getpixel((min(2, width - 1), min(2, height - 1)))
+    diff = ImageChops.difference(sheet, Image.new("RGB", sheet.size, background))
+    mask = np.asarray(diff.convert("L")) > 28
+    counts = mask.sum(axis=1)
+    low, high = int(height * 0.35), max(int(height * 0.35) + 1, int(height * 0.75))
+    middle = height // 2
+    best = min(range(low, min(high, height)),
+               key=lambda y: (int(counts[y]), abs(y - middle)))
+    # Sem uma faixa de fundo de verdade (ficha sem respiro), fica a metade.
+    return best if counts[best] <= max(1, width // 50) else middle
+
+
+def _sheet_cells(sheet: Image.Image) -> list[Image.Image]:
+    """Frente, perfil e costas de corpo inteiro e o close-up de frente, todos
+    no mesmo tamanho (fundo da ficha completa a célula mais baixa)."""
+    cell_w = sheet.width // 3
+    split = _sheet_row_split(sheet)
+    if cell_w < 1 or split < 1 or split >= sheet.height:
+        raise TurnaroundExtractionError("design sheet is too small")
+    cells = [sheet.crop((column * cell_w, 0, (column + 1) * cell_w, split))
+             for column in range(3)]
+    cells.append(sheet.crop((0, split, cell_w, sheet.height)))
+    cell_h = max(cell.height for cell in cells)
+    background = sheet.getpixel((min(2, sheet.width - 1), min(2, sheet.height - 1)))
+    padded = []
+    for cell in cells:
+        canvas = Image.new("RGB", (cell_w, cell_h), background)
+        canvas.paste(cell, (0, 0))
+        padded.append(canvas)
+    return padded
 
 
 def extract_sheet_views(sheet_png: bytes, view_paths: list[str | Path],
@@ -126,19 +165,17 @@ def extract_sheet_views(sheet_png: bytes, view_paths: list[str | Path],
             sheet = source.convert("RGB")
     except Exception as exc:
         raise TurnaroundExtractionError("could not read the design sheet") from exc
-    cell_w, cell_h = sheet.width // 3, sheet.height // 2
-    if cell_w < 1 or cell_h < 1:
+    if sheet.width < 3 or sheet.height < 2:
         raise TurnaroundExtractionError("design sheet is too small")
-    for (column, row), output in zip(_SHEET_VIEW_CELLS, view_paths):
-        view = sheet.crop((column * cell_w, row * cell_h,
-                           (column + 1) * cell_w, (row + 1) * cell_h))
+    cells = _sheet_cells(sheet)
+    cell_w, cell_h = cells[0].size
+    for view, output in zip(cells, view_paths):
         destination = Path(output)
         destination.parent.mkdir(parents=True, exist_ok=True)
         view.save(destination, format="PNG")
     grid = Image.new("RGB", (cell_w * 2, cell_h * 2))
-    for index, output in enumerate(view_paths):
-        with Image.open(output) as view:
-            grid.paste(view.convert("RGB"), ((index % 2) * cell_w, (index // 2) * cell_h))
+    for index, view in enumerate(cells):
+        grid.paste(view, ((index % 2) * cell_w, (index // 2) * cell_h))
     destination = Path(sheet_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     grid.save(destination, format="PNG")
@@ -278,13 +315,9 @@ def build_view_cycle(sheet_png: bytes, output_path: str | Path, *,
             sheet = source.convert("RGB")
     except Exception as exc:
         raise TurnaroundExtractionError("could not read the design sheet") from exc
-    cell_w, cell_h = sheet.width // 3, sheet.height // 2
-    if cell_w < 1 or cell_h < 1:
+    if sheet.width < 3 or sheet.height < 2:
         raise TurnaroundExtractionError("design sheet is too small")
-    front, profile, back = (
-        _figure_frame(sheet.crop((column * cell_w, 0, (column + 1) * cell_w, cell_h)), size)
-        for column in range(3)
-    )
+    front, profile, back = (_figure_frame(cell, size) for cell in _sheet_cells(sheet)[:3])
     keys = [front, profile, back, ImageOps.mirror(profile)]
     hold = max(1, round(hold_s * fps))
     fade = max(1, round(fade_s * fps))
@@ -298,27 +331,33 @@ def build_view_cycle(sheet_png: bytes, output_path: str | Path, *,
     ]
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    try:
-        process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except OSError as exc:
-        raise TurnaroundExtractionError("ffmpeg is not available") from exc
-    try:
-        for index, key in enumerate(keys):
-            following = keys[(index + 1) % len(keys)]
-            for _ in range(hold):
-                process.stdin.write(key.tobytes())
-                count += 1
-            for step in range(1, fade + 1):
-                process.stdin.write(Image.blend(key, following, step / (fade + 1)).tobytes())
-                count += 1
-        process.stdin.close()
-        _out, error = process.communicate(timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        process.kill()
-        process.wait()
-        raise TurnaroundExtractionError("ffmpeg failed to encode the view cycle") from exc
-    if process.returncode != 0:
-        raise TurnaroundExtractionError(
-            f"ffmpeg failed: {(error or b'').decode(errors='replace')[:200]}")
+    # Sem communicate(): no Python 3.12 ele dá flush no stdin já fechado e
+    # levanta ValueError. stderr vai para um arquivo, sem risco de pipe cheio.
+    with tempfile.TemporaryFile() as error_log:
+        try:
+            process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                       stdout=subprocess.DEVNULL, stderr=error_log)
+        except OSError as exc:
+            raise TurnaroundExtractionError("ffmpeg is not available") from exc
+        try:
+            for index, key in enumerate(keys):
+                following = keys[(index + 1) % len(keys)]
+                for _ in range(hold):
+                    process.stdin.write(key.tobytes())
+                    count += 1
+                for step in range(1, fade + 1):
+                    process.stdin.write(
+                        Image.blend(key, following, step / (fade + 1)).tobytes())
+                    count += 1
+            process.stdin.close()
+            returncode = process.wait(timeout=120)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            process.kill()
+            process.wait()
+            raise TurnaroundExtractionError(
+                "ffmpeg failed to encode the view cycle") from exc
+        if returncode != 0:
+            error_log.seek(0)
+            raise TurnaroundExtractionError(
+                f"ffmpeg failed: {error_log.read(200).decode(errors='replace')}")
     return int(round(count * 1000 / fps))
