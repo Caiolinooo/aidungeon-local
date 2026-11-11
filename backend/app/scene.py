@@ -339,7 +339,7 @@ def _latest_words(text: str, limit: int) -> str:
     return tail[space + 1:] if 0 <= space < limit // 2 else tail
 
 
-_BEAT_FLOOR = 200
+_BEAT_FLOOR = 110
 _LOOK_FLOOR = 160
 
 
@@ -376,9 +376,8 @@ def _fit(required: list, beat: str, beat_at: int, optional: list,
 
     As partes obrigatórias entram inteiras; o momento narrado recebe o que
     sobrar (até `beat_limit`) e as opcionais só entram se couberem. Se as
-    obrigatórias não deixam `_BEAT_FLOOR` para o momento, quem encolhe é
-    `look` (o bloco de aparência): as fotos de referência já carregam o rosto,
-    e sem a ação a cena não diz o que está acontecendo.
+    obrigatórias não deixam `_BEAT_FLOOR` (uma frase de ação) para o momento,
+    quem encolhe é `look`, o bloco de aparência, um pouco de cada personagem.
     """
     from app.routes.images import clip_words
     required = list(required)
@@ -476,7 +475,9 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             f"{name} is {predicate}" for name, predicate in states)
         if beat and states:
             beat = _stateful_action(scrub_clothing_states(beat), states) or beat
-        composition = len(cast) > 1 and \
+        # A guarda de layout já diz que todos estão no mesmo lugar; repetir
+        # tirava espaço da aparência de cada personagem.
+        composition = len(cast) > 1 and not layout_guard and \
             "everyone together in one shared space, one single continuous image"
         full_body = "wide full-body composition, entire body visible, not a close-up portrait"
         single = f"{cast[0].get('title')} is the only person in the entire scene, no one else" if len(cast) == 1 else ""
