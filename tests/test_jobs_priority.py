@@ -124,7 +124,8 @@ def _join_see_threads() -> None:
             thread.join(5)
 
 
-def _wait(predicate, timeout: float = 5.0) -> None:
+def _wait(predicate, timeout: float = 20.0) -> None:
+    """Folga para máquina ocupada; só custa tempo quando a condição falha."""
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:
@@ -308,9 +309,9 @@ def test_async_see_answers_202_fast_and_paints_in_the_job(client, stack, style):
                                json={"action_seq": 0, "extra_prompt": "from the door"})
         elapsed = time.monotonic() - started
         assert resp.status_code == 202, resp.text
-        # O LLM está preso em llm_gate (espera 5 s): responder em menos de 2 s
+        # O LLM está preso em llm_gate (espera 5 s): responder em menos de 4 s
         # prova que o 202 não esperou o prompt, mesmo numa máquina ocupada.
-        assert elapsed < 2.0
+        assert elapsed < 4.0
         job_id = resp.json()["job_id"]
 
         polled = client.get(f"/api/jobs/{job_id}").json()

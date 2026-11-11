@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,20 @@ class FakeMain:
 
 def test_soak_waits_for_the_player_to_go_quiet(monkeypatch):
     sleeps: list[float] = []
-    monkeypatch.setattr(replay_turn.time, "sleep", sleeps.append)
+    # `replay_turn.time` é o módulo `time` global: trocar o sleep pega também
+    # threads de outros testes ainda vivas (o preparo de retrato dorme 0,02 s)
+    # e, em máquina ocupada, a lista ganhava sleeps alheios. Só conta o desta
+    # thread; as outras dormem de verdade.
+    caller = threading.current_thread()
+    real_sleep = time.sleep
+
+    def fake_sleep(seconds: float) -> None:
+        if threading.current_thread() is caller:
+            sleeps.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    monkeypatch.setattr(replay_turn.time, "sleep", fake_sleep)
     args = replay_turn.build_parser().parse_args(
         ["--adventure", "x", "--turn", "do:olho em volta", "--yield-to", "http://main", "--idle-s", "300"])
     main = FakeMain([None, 30.0, 120.0, 400.0])
