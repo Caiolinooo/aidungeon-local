@@ -601,30 +601,27 @@ def test_comfy_progress_error_aborts_before_the_next_poll(tmp_path):
     assert capture["polls"] == 0
 
 
-def test_zimage_graph_uses_the_gguf_and_ignores_references(tmp_path):
+_ZIMAGE_BLOCK = {
+    "unet": "z-image-turbo-Q4_K_M.gguf",
+    "clip": "qwen_3_4b_fp8_mixed.safetensors",
+    "clip_type": "lumina2",
+    "clip_device": "cpu",
+    "vae": "ae.safetensors",
+    "steps": 8,
+    "cfg": 1,
+    "shift": 3,
+    "sampler": "res_multistep",
+    "scheduler": "simple",
+}
+
+
+def test_zimage_graph_uses_the_gguf_for_text_only_requests(tmp_path):
     capture: dict = {}
     image_client.generate_image(
-        _cfg(
-            tmp_path,
-            comfyui_engine="z_image_turbo",
-            comfyui_zimage={
-                "unet": "z-image-turbo-Q4_K_M.gguf",
-                "clip": "qwen_3_4b_fp8_mixed.safetensors",
-                "clip_type": "lumina2",
-                "clip_device": "cpu",
-                "vae": "ae.safetensors",
-                "steps": 8,
-                "cfg": 1,
-                "shift": 3,
-                "sampler": "res_multistep",
-                "scheduler": "simple",
-            },
-        ),
-        "the same knight",
+        _cfg(tmp_path, comfyui_engine="z_image_turbo", comfyui_zimage=_ZIMAGE_BLOCK),
+        "a knight",
         adventure_id="adv-1",
         image_id="z-1",
-        init_image=b"anchor-png",
-        reference_images=[b"ref-a", b"ref-b"],
         transport=_transport(capture),
     )
     nodes = _nodes(capture["graph"])
@@ -637,6 +634,35 @@ def test_zimage_graph_uses_the_gguf_and_ignores_references(tmp_path):
     assert capture["uploads"] == []
     assert image_budget.preset_budget(
         "image", "z_image_turbo", width=1024, height=1024)["spill_mib"] == 0
+
+
+def test_zimage_request_with_references_is_painted_by_flux2(tmp_path):
+    """O Z-Image não tem entrada de imagem. Âncora e referências eram descartadas
+    em silêncio: o mestre do turnaround e as cenas saíam com outra pessoa."""
+    cfg = _cfg(tmp_path, comfyui_engine="z_image_turbo", comfyui_zimage=_ZIMAGE_BLOCK)
+    capture: dict = {}
+    image_client.generate_image(
+        cfg, "the same knight", adventure_id="adv-1", image_id="z-2",
+        width=768, height=1152,
+        init_image=b"anchor-png", reference_images=[b"ref-a", b"ref-b"],
+        transport=_transport(capture),
+    )
+    graph = capture["graph"]
+    classes = [node["class_type"] for node in graph.values()]
+    assert "UnetLoaderGGUF" not in classes
+    assert classes.count("ReferenceLatent") == 6      # 3 imagens, positivo e negativo
+    assert len(capture["uploads"]) == 3
+    # o pedido sem imagem e o pedido com imagem não dividem o cache
+    plain = image_client.request_key(cfg, "the same knight", width=768, height=1152)
+    with_refs = image_client.request_key(
+        cfg, "the same knight", width=768, height=1152,
+        init_image=b"anchor-png", reference_images=[b"ref-a", b"ref-b"])
+    as_flux = image_client.request_key(
+        {**cfg, "comfyui_engine": "flux2_klein"}, "the same knight",
+        width=768, height=1152,
+        init_image=b"anchor-png", reference_images=[b"ref-a", b"ref-b"])
+    assert plain != with_refs
+    assert with_refs == as_flux
 
 
 def _motion_transport(capture: dict, *, error: str | None = None) -> httpx.MockTransport:

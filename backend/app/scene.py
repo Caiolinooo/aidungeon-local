@@ -275,23 +275,28 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
         sheet = raw_sheet if isinstance(raw_sheet, dict) else npc_assets.parse_sheet(raw_sheet)
         reference = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
         if isinstance(reference.get("turnaround"), dict):
+            # Só em termos positivos. Citar "grey studio backgrounds, multi-panel
+            # layouts, split screens" aqui fazia o modelo pintar exatamente isso:
+            # com a guarda inteira no prompt, 3 de 3 fundos saíram como tríptico
+            # de estúdio; com este texto, 4 de 4 saíram como cena contínua.
+            together = (
+                "Everyone is together in the same place, in one single continuous "
+                "photograph of that place."
+                if len(cast) > 1 else
+                "The image is one single continuous photograph of that place."
+            )
             if explicit:
-                # Sem "ignore outfits only for X": a roupa da referência some
-                # pelo estado positivo abaixo, e a âncora explícita já é só o
-                # rosto. O guardião só separa identidade de composição.
+                # A roupa da referência some pelo estado positivo do prompt, e a
+                # âncora explícita já é só o rosto.
                 return (
                     "Use the reference images only for the named characters' identity, face, "
-                    "hair and distinctive facial details. The clothing state below is "
-                    "authoritative: follow it even when a reference image shows different "
-                    "clothing. Ignore grey studio backgrounds, multi-panel layouts, split "
-                    "screens, neutral poses and framing. Do not copy the reference "
-                    "composition; depict only the place and action below."
+                    "hair and distinctive facial details. The clothing state in this prompt "
+                    "is authoritative: follow it even when a reference image shows different "
+                    "clothing. " + together
                 )
             return (
                 "Use the reference images only for the named characters' identity, face, "
-                "hair, body, outfit and distinctive details. Ignore their grey studio "
-                "backgrounds, multi-panel layouts, split screens, neutral poses and framing. "
-                "Do not copy the reference composition; depict only the place and action below."
+                "hair, body, outfit and distinctive details. " + together
             )
     return ""
 
@@ -338,6 +343,33 @@ _BEAT_FLOOR = 200
 _LOOK_FLOOR = 160
 
 
+def _shrink_look(look: str, limit: int) -> str:
+    """Encolhe o bloco de aparência cortando um pouco de cada personagem.
+
+    Cortar pelo fim tirava a descrição inteira do último, e sem ela o modelo
+    lê só o nome: "Ladrão de Jibóia" saiu pintado como uma cobra.
+    """
+    from app.routes.images import clip_words
+    look = " ".join((look or "").split())
+    if limit <= 0 or len(look) <= limit:
+        return look
+    people = [part for part in re.split(r"(?<=[.!?])\s+", look) if part]
+    if len(people) <= 1:
+        return clip_words(look, limit)
+    each = max(60, (limit - len(people)) // len(people))
+    return _sentences([clip_words(person, each) for person in people])
+
+
+def _headcount(cast: list[dict]) -> str:
+    """Quantas pessoas, pelo nome. Sem isto o fundo repetia um rosto ou perdia alguém."""
+    names = [" ".join(str(card.get("title") or "").split()) for card in cast]
+    names = [name for name in names if name]
+    if len(names) < 2:
+        return ""
+    return (f"Exactly {len(names)} people in the frame, each one a different person: "
+            + ", ".join(names))
+
+
 def _fit(required: list, beat: str, beat_at: int, optional: list,
          *, beat_limit: int, look: str = "") -> str:
     """Monta o prompt dentro de `_PROMPT_LIMIT` sem cortar no meio.
@@ -356,7 +388,7 @@ def _fit(required: list, beat: str, beat_at: int, optional: list,
     if room < floor and look and look in required:
         at = required.index(look)
         target = max(_LOOK_FLOOR, len(look) - (floor - room) - 2)
-        required[at] = clip_words(look, target)
+        required[at] = _shrink_look(look, target)
         room = _PROMPT_LIMIT - len(_sentences(required)) - 2
     beat = clip_words(beat, max(0, min(beat_limit, room))) if room > 0 else ""
     parts = list(required)
@@ -392,7 +424,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     if clause:
         # images.py importa scene no topo; helpers ficam aqui por isso.
         from app.routes.images import clip_words, contradicting_looks
-        clause = clip_words(clause, 400)
+        clause = _shrink_look(clause, 400)
     reaction = clip_words(_reaction_clause(cast), 250) if clause else ""
     nude = npc_assets.nude_names(cast, moment) if clause and explicit else []
     layout_guard = _reference_layout_guard(cast, explicit=explicit, nude=nude) if clause else ""
@@ -444,12 +476,15 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             f"{name} is {predicate}" for name, predicate in states)
         if beat and states:
             beat = _stateful_action(scrub_clothing_states(beat), states) or beat
-        composition = len(cast) > 1 and "same shared space, no split screen, no collage"
+        composition = len(cast) > 1 and \
+            "everyone together in one shared space, one single continuous image"
         full_body = "wide full-body composition, entire body visible, not a close-up portrait"
         single = f"{cast[0].get('title')} is the only person in the entire scene, no one else" if len(cast) == 1 else ""
+        headcount = _headcount(cast)
         required = [
             sex_line,
             clause,
+            headcount,
             state_line,
             single,
             full_body,
@@ -462,15 +497,17 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             "detailed scene painting, no text, no watermark, no logo",
         ]
         required = [part for part in required if part and str(part).strip()]
-        beat_at = sum(1 for part in (sex_line, clause, state_line, single, full_body)
+        beat_at = sum(1 for part in (sex_line, clause, headcount, state_line, single, full_body)
                       if part and str(part).strip())
         text = _fit(required, beat, beat_at, [reaction, clip_words(entry or "", 400)],
                     beat_limit=400, look=clause)
         return text, True
     if clause:
+        headcount = _headcount(cast)
         required = [
             sex_line,
             clause,
+            headcount,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face, hair, age and clothing, no other people, no patrons",
             f"atmosphere: {atmosphere}",
@@ -481,7 +518,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             "detailed scene painting, no text, no watermark, no logo",
         ]
         required = [part for part in required if part and str(part).strip()]
-        beat_at = sum(1 for part in (sex_line, clause) if part and str(part).strip())
+        beat_at = sum(1 for part in (sex_line, clause, headcount)
+                      if part and str(part).strip())
         beat = _latest_words(beat, 280)
         text = _fit(required, beat, beat_at, [reaction, clip_words(entry or "", 400)],
                     beat_limit=280, look=clause)

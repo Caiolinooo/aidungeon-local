@@ -354,14 +354,14 @@ def test_complete_references_prioritize_master_sheet_and_distinct_angles(tmp_db,
             "First waits beside the exit.",
         )
         assert include_people
-        assert "Do not copy the reference composition" in prompt
+        assert "one single continuous photograph of that place" in prompt
         assert "First waits beside the exit" in prompt
         explicit_prompt, _ = scene._prompt(
             "Rainy alley", "wet stone and neon signs", "photorealistic", "rain",
             [{**first, "portrait_prompt": "short red hair, green eyes, leather coat"}],
             "First is naked beside the exit.",
         )
-        assert "the clothing state below is authoritative" in explicit_prompt.lower()
+        assert "the clothing state in this prompt is authoritative" in explicit_prompt.lower()
         assert "body, outfit" not in explicit_prompt
 
 

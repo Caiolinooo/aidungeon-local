@@ -454,6 +454,30 @@ def _comfy_image_engine(cfg: dict) -> str:
     return engine
 
 
+def reference_capable_cfg(cfg: dict, init_image: bytes | None = None,
+                          reference_images: list[bytes] | None = None) -> dict:
+    """Cfg do engine que vai de fato pintar este pedido.
+
+    O `z_image_turbo` é só texto→imagem: o grafo dele não tem entrada para a
+    âncora nem para as referências, e elas eram descartadas em silêncio. O
+    mestre e a ficha do turnaround saíam com uma pessoa genérica, e nas cenas
+    ninguém seguia o próprio retrato. Com imagem no pedido, pinta o
+    `flux2_klein` (ReferenceLatent) quando o bloco dele está preenchido. O hash
+    de cache usa o mesmo cfg, então o que foi pintado sem referência não é
+    reaproveitado.
+    """
+    if (cfg.get("provider") or "sdwebui") != "comfyui":
+        return cfg
+    if init_image is None and not any(reference_images or []):
+        return cfg
+    if _comfy_image_engine(cfg) != "z_image_turbo":
+        return cfg
+    flux = flux2_settings(cfg)
+    if not all(str(flux.get(label) or "").strip() for label in ("unet", "clip", "vae")):
+        return cfg
+    return {**cfg, "comfyui_engine": "flux2_klein"}
+
+
 def with_flux2_cfg(cfg: dict, value: float | None) -> dict:
     """Cópia do cfg com `comfyui_flux2.cfg` trocado para esta geração.
 
@@ -894,6 +918,7 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
                       reference_images: list[bytes] | None = None,
                       progress: Callable[[], None] | None = None,
                       ) -> tuple[bytes, int, int]:
+    cfg = reference_capable_cfg(cfg, init_image, reference_images)
     width, height = _flux2_canvas(width, height, cfg)
     engine = _comfy_image_engine(cfg)
     if engine == "z_image_turbo":
@@ -977,6 +1002,7 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
     elif provider == "comfyui":
+        cfg = reference_capable_cfg(cfg, init_image, reference_images)
         image_engine = _comfy_image_engine(cfg)
         if image_engine == "z_image_turbo":
             zimage = zimage_settings(cfg)
