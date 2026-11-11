@@ -568,7 +568,14 @@ _OUTFIT_WORDS = (
 # Enquadramento de retrato. Na cena ele puxa um busto e apaga o gesto.
 _FRAMING_WORDS = (
     "bust", "portrait", "headshot", "close-up", "closeup", "background",
-    "captured", "framing",
+    "captured", "framing", "body shot", "medium shot", "waist-up", "waist up",
+    "head and shoulders",
+)
+# O que sobra de "framed in a bust portrait against a neutral background"
+# depois de tirar o busto e o fundo: "framed in".
+_FRAMING_LEFTOVER = re.compile(
+    r"(?i)^(?:framed|shown|depicted|presented|pictured|composed|rendered|seen|set)"
+    r"(?:\s+(?:in|as|from|with|within|against|on))?(?:\s+(?:an?|the))?$"
 )
 
 # Negative quando o card já tem rosto. Não lista a roupa: cena nua pode trocá-la.
@@ -786,7 +793,7 @@ _PORTRAIT_OF = re.compile(
 _BACKGROUND_PHRASE = re.compile(
     r"(?i)\s+(?:against|on|over|with|in|before|behind)\s+(?:an?|the)\s+"
     r"[\w-]*(?:\s+[\w-]+){0,2}?\s*background\b"
-    r"|\s+(?:[\w-]+\s+){0,2}?background\b"
+    r"|(?:^|\s+)(?:[\w-]+\s+){0,2}?background\b"
 )
 
 
@@ -817,6 +824,8 @@ def without_framing(text: str) -> str:
             continue
         bit = _trim_part(part)
         if bit.casefold() in {"she", "he", "they", "it", "her", "his", "their"}:
+            continue
+        if _FRAMING_LEFTOVER.match(bit):
             continue
         if bit:
             kept.append(bit)
@@ -996,7 +1005,9 @@ def likeness_clause(cards: list[dict], *, explicit: bool = False) -> str:
         lines.append(line)
     if not any_bits or not lines:
         return ""
-    return "exact likeness, " + ", ".join(lines)
+    # Um personagem por frase: a descrição de cada um já tem vírgulas, e com
+    # vírgula também entre os nomes o rosto de um ia parar no outro.
+    return "exact likeness, " + ". ".join(lines)
 
 
 def current_visual(card: dict) -> list[str]:

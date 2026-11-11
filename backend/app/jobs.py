@@ -353,6 +353,40 @@ def cuda_oom_hold(conn, type_: str, ref_id: str, *, explicit: bool = False,
     return None
 
 
+AUTO_RETRY_BASE_S = 30.0
+AUTO_RETRY_MAX_S = 600.0
+_AUTO_RETRY_WINDOW = 6
+
+
+def auto_retry_hold(conn, type_: str, ref_id: str, *,
+                    now: datetime | None = None) -> str | None:
+    """Espera entre tentativas automáticas depois de erros seguidos no alvo.
+
+    A cena pede o retrato de quem não tem a cada leitura. Sem esta espera, um
+    erro que se repete (tradução do prompt, provider fora) virava um job novo
+    por leitura, cada um ocupando um slot do LLM. O primeiro erro tenta de novo
+    na hora; do segundo em diante espera 30 s, 60 s, ... até 10 min. Um job que
+    não é erro zera a sequência. O botão de regenerar não espera.
+    """
+    recent = _recent_jobs(conn, type_, ref_id, _AUTO_RETRY_WINDOW)
+    streak = 0
+    for job in recent:
+        if job["status"] != "error":
+            break
+        streak += 1
+    if streak < 2:
+        return None
+    wait = min(AUTO_RETRY_BASE_S * (2 ** (streak - 2)), AUTO_RETRY_MAX_S)
+    moment = now or datetime.now(timezone.utc)
+    finished = _utc_stamp(recent[0].get("finished_at") or recent[0].get("created_at"))
+    if finished is None:
+        return None
+    remaining = wait - (moment - finished).total_seconds()
+    if remaining > 0:
+        return f"{streak} failed attempts; automatic retry waits {max(1, int(remaining))}s"
+    return None
+
+
 def _portrait_request_state(conn, adventure_id: str, card: dict,
                             *, force_reference: bool = False) -> str:
     adventure = db.get_adventure(conn, adventure_id) or {}
@@ -374,9 +408,13 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
                      *, replace: bool = False,
                      priority: int = PRIORITY_PRESENT_PORTRAIT,
                      force_reference: bool = False,
-                     variant_key: str = "") -> dict | None:
+                     variant_key: str = "",
+                     automatic: bool | None = None) -> dict | None:
     """Enfileira retrato do card (dedupe: reaproveita job ativo, que passa à
     frente se o pedido novo for mais urgente).
+
+    `automatic` marca o pedido que ninguém clicou (a cena, o "gerar todos"):
+    ele respeita `auto_retry_hold`. Sem o argumento, vale `not replace`.
 
     Sem replace, um card que já tem foto oficial não entra na fila — a cena
     e o "gerar todos" não trocam o rosto. replace=True é o botão de regenerar:
@@ -401,6 +439,10 @@ def enqueue_portrait(conn, adventure_id: str, card_id: str,
     if held:
         if replace:
             raise GameError(429, "cuda_oom_backoff", held)
+        return None
+    if automatic is None:
+        automatic = not replace
+    if automatic and auto_retry_hold(conn, "character_portrait", card_id):
         return None
     payload: dict = {}
     if variant_key:
@@ -1547,14 +1589,12 @@ def store_see(adventure_id: str, caption: str, meta: dict, *, image_id: str,
     try:
         with game_engine.appending(adventure_id) as conn:
             if job_id:
+                # Undo e retry cancelam o job na própria transação
+                # (cancel_adventure_jobs); o status é a única prova de que o
+                # cânone ainda vale. `state_revision` sobe a cada evento,
+                # inclusive o job_progress deste job, e não serve de comparação.
                 job = db.get_job(conn, job_id)
-                counter = conn.execute(
-                    "SELECT state_revision FROM world_event_counters WHERE adventure_id=?",
-                    (adventure_id,)).fetchone()
                 if not job or job["status"] not in db.JOB_ACTIVE:
-                    raise db.JobCanceled(job_id)
-                if counter and job.get("source_revision") != int(counter["state_revision"]):
-                    db.cancel_job(conn, job_id, reason="superseded by adventure revision")
                     raise db.JobCanceled(job_id)
             action = game_engine.append_action(conn, adventure_id, "see", caption)
             db.insert_image(conn, adventure_id=adventure_id, action_seq=action["seq"],

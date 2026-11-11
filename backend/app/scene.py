@@ -296,6 +296,82 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
     return ""
 
 
+_PROMPT_LIMIT = 1400
+
+
+def _sentences(parts: list) -> str:
+    """Junta as partes como frases. Sem o ponto, "…masculine face exact likeness
+    of X, Y: …" virava uma frase só e o modelo trocava quem é quem."""
+    out: list[str] = []
+    for part in parts:
+        text = " ".join(str(part or "").split()).strip() if part else ""
+        if not text:
+            continue
+        if text[-1] not in ".!?":
+            text += "."
+        out.append(text)
+    return " ".join(out)
+
+
+def _latest_words(text: str, limit: int) -> str:
+    """As últimas frases que cabem no limite: o fundo pinta o fim da narração,
+    que é o agora, e não o começo do trecho anterior."""
+    text = " ".join((text or "").split())
+    if limit <= 0 or len(text) <= limit:
+        return text
+    kept: list[str] = []
+    size = 0
+    for sentence in reversed(re.split(r"(?<=[.!?…])\s+", text)):
+        extra = len(sentence) + (1 if kept else 0)
+        if size + extra > limit:
+            break
+        kept.append(sentence)
+        size += extra
+    if kept:
+        return " ".join(reversed(kept))
+    tail = text[-limit:]
+    space = tail.find(" ")
+    return tail[space + 1:] if 0 <= space < limit // 2 else tail
+
+
+_BEAT_FLOOR = 200
+_LOOK_FLOOR = 160
+
+
+def _fit(required: list, beat: str, beat_at: int, optional: list,
+         *, beat_limit: int, look: str = "") -> str:
+    """Monta o prompt dentro de `_PROMPT_LIMIT` sem cortar no meio.
+
+    As partes obrigatórias entram inteiras; o momento narrado recebe o que
+    sobrar (até `beat_limit`) e as opcionais só entram se couberem. Se as
+    obrigatórias não deixam `_BEAT_FLOOR` para o momento, quem encolhe é
+    `look` (o bloco de aparência): as fotos de referência já carregam o rosto,
+    e sem a ação a cena não diz o que está acontecendo.
+    """
+    from app.routes.images import clip_words
+    required = list(required)
+    beat = " ".join((beat or "").split())
+    floor = min(_BEAT_FLOOR, len(beat))
+    room = _PROMPT_LIMIT - len(_sentences(required)) - 2
+    if room < floor and look and look in required:
+        at = required.index(look)
+        target = max(_LOOK_FLOOR, len(look) - (floor - room) - 2)
+        required[at] = clip_words(look, target)
+        room = _PROMPT_LIMIT - len(_sentences(required)) - 2
+    beat = clip_words(beat, max(0, min(beat_limit, room))) if room > 0 else ""
+    parts = list(required)
+    if beat:
+        parts.insert(beat_at, beat)
+    text = _sentences(parts)
+    for extra in optional:
+        candidate = _sentences([text, extra])
+        if extra and len(candidate) <= _PROMPT_LIMIT:
+            text = candidate
+    if len(text) > _PROMPT_LIMIT:
+        text = clip_words(text, _PROMPT_LIMIT)
+    return text
+
+
 def _prompt(title: str, entry: str, style: str, atmosphere: str,
             cast: list[dict], moment: str = "") -> tuple[str, bool]:
     """Lugar, e as pessoas só quando o card já tem o rosto.
@@ -344,7 +420,9 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     lock = npc_assets.coverage_lock(*cast, explicit=explicit)
     if clause:
         beat, _banned = contradicting_looks(moment, clause)
-        beat = clip_words(" ".join(beat.split()), 400)
+        # O fim da narração é o agora; o corte antigo guardava o começo do
+        # trecho anterior (muitas vezes a descrição que o jogador escreveu).
+        beat = _latest_words(beat, 400)
     else:
         beat = ""
     if clause and explicit:
@@ -369,53 +447,54 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         composition = len(cast) > 1 and "same shared space, no split screen, no collage"
         full_body = "wide full-body composition, entire body visible, not a close-up portrait"
         single = f"{cast[0].get('title')} is the only person in the entire scene, no one else" if len(cast) == 1 else ""
-        parts = [
+        required = [
             sex_line,
             clause,
             state_line,
             single,
             full_body,
-            beat,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face and hair, no other people, no patrons, no bystanders",
             f"atmosphere: {atmosphere}",
-            reaction,
             layout_guard,
             composition,
             style_text,
-            (entry or "")[:400],
             "detailed scene painting, no text, no watermark, no logo",
         ]
-        text = " ".join(part.strip() for part in parts if part and part.strip())
-        return text[:1400], True
+        required = [part for part in required if part and str(part).strip()]
+        beat_at = sum(1 for part in (sex_line, clause, state_line, single, full_body)
+                      if part and str(part).strip())
+        text = _fit(required, beat, beat_at, [reaction, clip_words(entry or "", 400)],
+                    beat_limit=400, look=clause)
+        return text, True
     if clause:
-        beat = clip_words(beat, 280)
-        parts = [
+        required = [
             sex_line,
             clause,
-            beat,
             f"wide cinematic shot of {title}, only the characters named above, "
             "each with that exact face, hair, age and clothing, no other people, no patrons",
             f"atmosphere: {atmosphere}",
-            reaction,
             layout_guard,
             lock,
             style_text,
-            (entry or "")[:400],
             "what is happening now, same continuous scene, coherent bodies, "
             "detailed scene painting, no text, no watermark, no logo",
         ]
-        text = " ".join(part.strip() for part in parts if part and part.strip())
-        return text[:1400], True
+        required = [part for part in required if part and str(part).strip()]
+        beat_at = sum(1 for part in (sex_line, clause) if part and str(part).strip())
+        beat = _latest_words(beat, 280)
+        text = _fit(required, beat, beat_at, [reaction, clip_words(entry or "", 400)],
+                    beat_limit=280, look=clause)
+        return text, True
+    from app.routes.images import clip_words
     parts = [
         style,
         f"wide cinematic establishing shot of {title}, environment only, no people, no characters, no faces",
-        (entry or "")[:400],
+        clip_words(entry or "", 400),
         f"atmosphere: {atmosphere}",
         "detailed background painting, empty of people, no text, no watermark, no logo",
     ]
-    text = " ".join(part.strip() for part in parts if part and part.strip())
-    return text[:1400], False
+    return clip_words(_sentences(parts), _PROMPT_LIMIT), False
 
 
 def cast_reference_plan(conn, adventure_id: str, cast: list[dict], *,
@@ -459,13 +538,36 @@ def _queue_missing_portraits(conn, adventure_id: str, cast: list[dict]) -> None:
         try:
             likeness.load_reference_images(conn, adventure_id, [image_id])
         except GameError:
-            jobs.enqueue_portrait(conn, adventure_id, card_id, replace=True)
+            jobs.enqueue_portrait(conn, adventure_id, card_id, replace=True,
+                                  automatic=True)
 
 
 def queue_missing_portraits(adventure_id: str, cast: list[dict]) -> None:
     """Igual a `_queue_missing_portraits`, numa transação que commita."""
     with db.session() as conn:
         _queue_missing_portraits(conn, adventure_id, cast)
+
+
+def _finished_backdrop(conn, adventure_id: str, ref: str) -> dict | None:
+    """Imagem do último job concluído para este ref.
+
+    O executor traduz o prompt para inglês e grava a imagem sob a chave do texto
+    traduzido, não sob o `ref` do texto de origem que a cena pede. Sem este elo
+    a cena nunca achava o fundo pronto e enfileirava outro job a cada leitura.
+    """
+    previous = db.latest_job(conn, "scene_backdrop", ref)
+    if not previous or previous.get("status") != "done":
+        return None
+    result = previous.get("result")
+    image_ref = result.get("image") if isinstance(result, dict) else None
+    image_id = image_ref.get("id") if isinstance(image_ref, dict) else None
+    if not image_id:
+        return None
+    image = db.get_image(conn, str(image_id))
+    if not image or image.get("adventure_id") != adventure_id \
+            or image.get("kind") != "backdrop":
+        return None
+    return image
 
 
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
@@ -483,6 +585,8 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
             conn, adventure_id, kind="backdrop", ref_id=ref,
             cache_key=cache_key,
         )
+    if not current:
+        current = _finished_backdrop(conn, adventure_id, ref)
     fallback = current or db.latest_image(conn, adventure_id, "backdrop")
     image = db.image_ref(fallback) if fallback else None
 

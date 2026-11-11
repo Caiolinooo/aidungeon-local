@@ -212,7 +212,7 @@ def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
         return lead
     prefix = "exact likeness, "
     tail = rest[len(prefix):] if rest.startswith(prefix) else rest
-    return f"{lead}, {tail}"
+    return f"{lead}. {tail}"
 def real_person_prefix(card: dict) -> str:
     """Abre o retrato com o nome real. Vazio se não for pessoa real adulta."""
     if not is_real_person(card) or is_minor(card):

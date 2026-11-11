@@ -47,7 +47,8 @@ def test_create_update_delete_card_publish_card_changed(client):
         deleted = client.delete(f"/api/adventures/{adv['id']}/cards/{card_id}")
         assert deleted.status_code == 204, deleted.text
         got = _pull(sub)
-    actions = [(event.type, event.data) for event in got]
+    # card_created/updated/deleted são os eventos do mundo; card_changed é o da UI.
+    actions = [(event.type, event.data) for event in got if event.type == "card_changed"]
     assert actions == [
         ("card_changed", {"card_id": card_id, "action": "created"}),
         ("card_changed", {"card_id": card_id, "action": "updated"}),
