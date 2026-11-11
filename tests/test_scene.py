@@ -599,7 +599,9 @@ def test_a_nude_narration_paints_the_see_and_the_backdrop_nude(client, tmp_path,
     for prompt in (backdrop, seen):
         folded = prompt.lower()
         assert "completely naked" in folded
-        assert "nude" in folded
+        # Elara é "adult woman" pelo retrato ("her"): o predicado dela é o
+        # feminino ("whole body bare"), que não usa a palavra nude.
+        assert "nude" in folded or "whole body bare" in folded
         assert "translucent silk and crystal garments" not in folded
 
 

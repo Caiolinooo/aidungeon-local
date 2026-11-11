@@ -128,3 +128,15 @@ def test_portrait_framing_does_not_leak_into_the_scene_look():
         "A slender pirate with dark brown hair and tanned skin")
     assert npc_assets.without_framing(thief) == (
         "A stout pirate with a large belly, messy gray hair, and a scruffy beard")
+
+
+def test_possessive_pronoun_in_the_card_sets_the_sex():
+    """"his face" no retrato era o único sinal do sexo do protagonista; sem ele
+    o fundo pintava o pirata com corpo de mulher."""
+    card = {"title": "Caio Calça-Quadrada", "type": "character",
+            "portrait_prompt": "A slender pirate with dark brown hair, his face "
+                               "transformed into a skull"}
+    assert npc_assets.sex_label("Caio Calça-Quadrada", "", card=card) == "adult man"
+    card = {"title": "Mira", "type": "character",
+            "portrait_prompt": "A slender pirate, her hair tied back"}
+    assert npc_assets.sex_label("Mira", "", card=card) == "adult woman"

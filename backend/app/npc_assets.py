@@ -1742,12 +1742,12 @@ def image_canon_clause(cards: list[dict], text: str) -> str:
 
 
 _FEMALE_WORD = (
-    "woman", "women", "female", "girl", "lady", "she",
+    "woman", "women", "female", "girl", "lady", "she", "her", "hers", "herself",
     "mulher", "menina", "garota", "moça", "moca", "ela", "dela", "nela",
     "senhora", "esposa", "wife", "mother", "daughter", "feminina", "irmã", "irma",
 )
 _MALE_WORD = (
-    "man", "men", "male", "boy", "gentleman", "he",
+    "man", "men", "male", "boy", "gentleman", "he", "his", "him", "himself",
     "homem", "menino", "garoto", "rapaz", "ele", "dele", "nele", "handsome",
     "marido", "husband", "father", "son", "masculino", "irmão", "irmao",
 )
