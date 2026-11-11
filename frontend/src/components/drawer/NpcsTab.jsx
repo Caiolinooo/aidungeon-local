@@ -143,6 +143,9 @@ function TurnaroundPreview({ turnaround, title }) {
             src={urls.clip}
             controls
             playsInline
+            loop
+            muted
+            autoPlay
             preload="metadata"
             aria-label={`Vídeo de referências 360° de ${title || 'NPC'}`}
             className="w-full rounded-md border border-subtle bg-black"
