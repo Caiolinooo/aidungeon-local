@@ -672,7 +672,7 @@ def _reference_blobs(job: dict, *, people: bool, provider: str) -> list[bytes]:
                 raise likeness.portrait_required()
             plan = scene.cast_reference_plan(
                 conn, job["adventure_id"], cards,
-                provider=provider, explicit=bool(payload.get("explicit")),
+                provider=provider, explicit=_reference_faces(payload),
             )
         ids = list(plan["reference_image_ids"])
         blobs = list(plan["blobs"])
@@ -695,9 +695,17 @@ def _reference_blobs(job: dict, *, people: bool, provider: str) -> list[bytes]:
         found = likeness.reference_hashes(blobs)
         if "reference_hashes" in payload and list(payload.get("reference_hashes") or []) != found:
             raise likeness.portrait_required()
-    if payload.get("explicit"):
+    if _reference_faces(payload):
         return likeness.identity_face_pngs(blobs)
     return blobs
+
+
+def _reference_faces(payload: dict) -> bool:
+    """Referência só de rosto: cena explícita com alguém nu. Job antigo sem o
+    campo segue o `explicit`, como antes."""
+    if "reference_faces" in payload:
+        return bool(payload.get("reference_faces"))
+    return bool(payload.get("explicit"))
 
 
 def start_see(adventure_id: str, payload: dict, plan: Callable[[], dict]) -> dict:
@@ -1646,14 +1654,12 @@ def _turnaround_prompts(card: dict) -> dict[str, str]:
         "no arrows, no logos."
     )
     clip = (
-        "Locked-off static camera, no camera movement, no zoom, no cuts. Turntable character "
-        "reference. Both figures of the same character rotate in place through one complete, "
-        "smooth, constant-speed 360 degree turn, clockwise, in perfect sync. The full-body "
-        "figure on the left and the large close-up on the right show front, side, back, other "
-        "side and front again. Neutral standing pose and calm expression, no talking. Keep "
-        f"{identity}, body, outfit and accessories exactly unchanged throughout. {sides} "
-        "Even studio lighting and seamless grey background; both panels and the divider stay "
-        "fixed. No scene changes, no extra people, no text."
+        "Turntable shot of one person standing alone in a seamless grey studio. "
+        f"Keep {identity}, body, outfit and accessories exactly unchanged. "
+        "The person slowly turns the whole body in place, rotating clockwise: first "
+        "facing the camera, then the right side in profile, then the back, then the "
+        "left side, then facing the camera again. Static camera, smooth constant "
+        f"rotation, calm neutral expression, no talking. {sides} No extra people, no text."
     )
     return {"master": master, "design_sheet": sheet, "clip": clip}
 
@@ -2204,7 +2210,7 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         split_id = db.new_id()
         master_path = likeness.stored_image_path(assets["master"]["meta"]["file_path"])
         split_path = master_path.parent / f"{split_id}.png"
-        width, height = turnaround.build_split_frame(raw, master_raw, split_path)
+        width, height = turnaround.build_master_frame(master_raw, split_path)
         created_paths.append(str(split_path))
         assets["split"] = {
             "id": split_id, "kind": "turnaround_start",
@@ -2212,7 +2218,7 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
                 "file_path": str(split_path), "provider": "pillow",
                 "width": width, "height": height,
             },
-            "prompt": "Deterministic split: canonical anchor face and full-body master",
+            "prompt": "Deterministic frame: full-body master alone",
             "source_image_id": assets["master"]["id"],
         }
         split_raw = likeness.read_stored_image_bytes(assets["split"]["meta"])
@@ -2231,7 +2237,8 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         view_paths = [clip_path.parent / f"{image_id}.png" for image_id in view_ids]
         sheet_path = clip_path.parent / f"{sheet_id}.png"
         created_paths.extend(str(path) for path in (*view_paths, sheet_path))
-        width, height = turnaround.extract_turnaround(clip_path, view_paths, sheet_path)
+        design_raw = likeness.read_stored_image_bytes(assets["design_sheet"]["meta"])
+        width, height = turnaround.extract_sheet_views(design_raw, view_paths, sheet_path)
         with db.session() as conn:
             card = db.get_card(conn, job["adventure_id"], card_id)
             if card is None:

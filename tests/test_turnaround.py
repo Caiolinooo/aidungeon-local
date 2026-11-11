@@ -183,7 +183,8 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
         assert clip["media_type"] == "video/mp4"
         assert clip["source_image_id"] == split["id"]
         assert sheet["kind"] == "reference_sheet"
-        assert (sheet["width"], sheet["height"]) == (24, 32)
+        # folha 2×2 com células de 1/3 × 1/2 da ficha (8×8 no mock)
+        assert (sheet["width"], sheet["height"]) == (4, 8)
         assert [view["kind"] for view in views] == ["reference_view"] * 4
         assert all(view["ref_id"] == card["id"] for view in views)
         assert len(terminal) == 1
@@ -196,12 +197,11 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
     assert len(image_calls) == 2
     assert image_calls[0]["reference_images"] == [PNG_BYTES]
     assert image_calls[1]["reference_images"] == [image_calls[0]["content"]]
-    with Image.open(io.BytesIO(capture["source_png"])) as split:
-        assert split.size == (1344, 768)
-        assert split.getpixel((224, 384)) == (255, 0, 0)
-        with Image.open(io.BytesIO(PNG_BYTES)) as anchor_image:
-            expected_face = anchor_image.convert("RGB").getpixel((0, 0))
-        assert split.getpixel((896, 384)) == expected_face
+    with Image.open(io.BytesIO(capture["source_png"])) as frame:
+        # o vídeo parte só do mestre (vermelho no mock), num quadro vertical
+        assert frame.size == (448, 768)
+        assert frame.getpixel((224, 384)) == (255, 0, 0)
+        assert frame.getpixel((2, 2)) == (224, 224, 224)
 
     repeated = client.post(
         f"/api/adventures/{adv['id']}/cards/{card['id']}/turnaround")
@@ -563,3 +563,23 @@ def test_upload_preserves_and_clear_removes_turnaround(tmp_db, tmp_path, monkeyp
         assert json.loads(uploaded["sheet"])["reference"]["turnaround"] == turnaround
         cleared = likeness.clear_reference(conn, uploaded)
         assert json.loads(cleared["sheet"])["reference"] == {}
+
+
+def test_sheet_views_come_from_the_design_sheet_cells(tmp_path):
+    """Frente, perfil e costas da linha de cima e o close-up de frente."""
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+    sheet = Image.new("RGB", (30, 20))
+    for index, color in enumerate(colors):
+        column, row = index % 3, index // 3
+        sheet.paste(Image.new("RGB", (10, 10), color), (column * 10, row * 10))
+    raw = io.BytesIO(); sheet.save(raw, format="PNG")
+    views = [tmp_path / f"v{i}.png" for i in range(4)]
+    out = tmp_path / "grid.png"
+    assert turnaround_module.extract_sheet_views(raw.getvalue(), views, out) == (10, 10)
+    got = []
+    for path in views:
+        with Image.open(path) as view:
+            got.append(view.convert("RGB").getpixel((5, 5)))
+    assert got == [colors[0], colors[1], colors[2], colors[3]]
+    with Image.open(out) as grid:
+        assert grid.size == (20, 20)

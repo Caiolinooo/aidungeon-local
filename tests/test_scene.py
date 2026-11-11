@@ -1149,3 +1149,34 @@ def test_long_identity_prompt_preserves_action_location_and_per_person_clothing(
     for name in ("Elara", "Lexi", "Caio"):
         assert f"{name} is fully clothed" in prompt
 
+
+
+def test_explicit_word_with_everyone_clothed_keeps_identity_and_full_references(
+        client, tmp_path, monkeypatch):
+    """Uma palavra explícita na narração ("bunda") marca a cena, mas ninguém
+    fica nu. O See tem de descrever o rosto e o cabelo de quem aparece e usar
+    as referências inteiras, não só recortes do rosto: a personagem saía sem
+    óculos e com outro cabelo."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    _fairy(adv["id"])
+    add_action(adv["id"], 0, "continue",
+               "Elara, vestida de seda e cristal, tem a bunda avantajada e sorri na clareira.")
+    cropped: list[int] = []
+    real_crop = likeness.identity_face_pngs
+    monkeypatch.setattr(likeness, "identity_face_pngs",
+                        lambda blobs: cropped.append(len(blobs)) or real_crop(blobs))
+    client.post(f"/api/adventures/{adv['id']}/scene", json={})
+    backdrop = _backdrop_job(adv["id"])["payload"]
+    seen = _see(client, adv["id"], 0, monkeypatch, tmp_path).lower()
+    assert backdrop["explicit"] is True
+    assert backdrop["reference_faces"] is False
+    assert cropped == []
+    assert "amber eyes" in seen
+    assert "hair floats around her head like stars" in seen
+
+
+def test_old_jobs_without_the_flag_keep_face_only_references():
+    assert jobs._reference_faces({"explicit": True}) is True
+    assert jobs._reference_faces({"explicit": True, "reference_faces": False}) is False
+    assert jobs._reference_faces({}) is False

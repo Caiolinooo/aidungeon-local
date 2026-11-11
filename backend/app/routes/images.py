@@ -1145,6 +1145,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         ]
         for name, predicate in states:
             blocks.append(f"{name} is {predicate}.")
+        if clause:
+            # Rosto e cabelo de cada um (sem a roupa do card). Sem este bloco o
+            # See explícito só dizia quem estava vestido e pintava estranhos:
+            # a Renata saía sem óculos e com outro cabelo.
+            blocks.append(clip_words(clause, 420).rstrip(".") + ".")
         if len(names) == 1:
             blocks.append(
                 f"{names[0]} is the only person in the entire scene, no one else.")
@@ -1202,10 +1207,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         cast_locked = final_cast
     # Cena explícita usa o mestre de corpo inteiro + ficha, não só o busto:
     # o rosto continua travado, mas a pessoa tem corpo e ângulos coerentes.
+    # Só recorta o rosto quando alguém fica nu: aí a roupa da ficha atrapalha.
+    # Com todos vestidos ("bunda" na narração já marca explícito), mestre e
+    # ficha mantêm corpo, óculos, cabelo e roupa da pessoa.
+    face_refs = bool(explicit and nude)
     cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
-        cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=explicit)
+        cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=face_refs)
     return (prompt, negative, caption, frame, cast_card_ids,
-            reference_image_ids, len(names), explicit)
+            reference_image_ids, len(names), explicit, face_refs)
 
 
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
@@ -1245,7 +1254,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         llm_cfg = settings_store.effective_llm_settings(conn)
     try:
         (prompt, negative_extra, caption, frame, cast_card_ids,
-         reference_image_ids, expected_people, explicit) = _build_final_prompt(
+         reference_image_ids, expected_people, explicit, face_refs) = _build_final_prompt(
             adv, actions, body, img_cfg, llm_cfg, cards, transport)
     except image_client.ImageError as exc:
         raise GameError(503, "generation_failed", str(exc)) from exc
@@ -1268,7 +1277,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
                 adventure_id, frame[:likeness.CAST_REFERENCE_LIMIT])
         raise
     original_hashes = likeness.reference_hashes(references)
-    if explicit:
+    if face_refs:
         references = likeness.identity_face_pngs(references)
     if img_cfg.get("provider") not in ("comfyui", "sdwebui"):
         # OpenAI-compatible não tem âncoras visuais de identidade.
@@ -1292,6 +1301,7 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
         "reference_provider": str(img_cfg.get("provider") or "sdwebui"),
         "expected_people": expected_people,
         "explicit": explicit,
+        "reference_faces": face_refs,
         "flux2_cfg": flux2_cfg,
         "cache_key": image_client.request_key(
             {**img_cfg, "negative_prompt": base_negative}, prompt, negative_extra=negative_extra, variation=variation,
@@ -1355,7 +1365,7 @@ def post_see(adventure_id: str, body: SeeRequest,
             )
         if likeness.reference_hashes(references) != list(plan.get("reference_hashes") or []):
             raise likeness.portrait_required()
-        if plan.get("explicit"):
+        if jobs._reference_faces(plan):
             references = likeness.identity_face_pngs(references)
         cfg_for_plan = image_client.with_flux2_cfg(
             {**img_cfg, "negative_prompt": plan["base_negative"]},

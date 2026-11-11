@@ -612,6 +612,7 @@ def _finished_backdrop(conn, adventure_id: str, ref: str) -> dict | None:
 def _backdrop_state(conn, adventure_id: str, ref: str, *,
                     enabled: bool, retry: bool, prompt: str,
                     include_people: bool = False, explicit: bool = False,
+                    reference_faces: bool | None = None,
                     cache_key: str = "", expected_people: int = 0,
                     cast_card_ids: list[str] | None = None,
                     reference_image_ids: list[str] | None = None,
@@ -654,6 +655,7 @@ def _backdrop_state(conn, adventure_id: str, ref: str, *,
         "include_people": include_people,
         "cache_key": cache_key,
         "explicit": explicit,
+        "reference_faces": explicit if reference_faces is None else bool(reference_faces),
         "expected_people": expected_people,
         "cast_card_ids": list(cast_card_ids or []),
         "reference_image_ids": list(reference_image_ids or []),
@@ -714,6 +716,9 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
         paint_text,
     )
+    # Recorte só do rosto apenas com alguém nu; vestidos, mestre e ficha
+    # mantêm corpo, cabelo, óculos e roupa (mesma regra do See).
+    face_refs = bool(explicit and npc_assets.nude_names(paint_cast, paint_text))
     # ComfyUI usa âncoras regionais; SDWebUI faz passes InstantID mascarados.
     from app import consequences
     plan = {
@@ -728,7 +733,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         try:
             plan = cast_reference_plan(
                 conn, adventure_id, paint_cast,
-                provider=str(img_cfg.get("provider") or "sdwebui"), explicit=explicit,
+                provider=str(img_cfg.get("provider") or "sdwebui"), explicit=face_refs,
             )
         except GameError as exc:
             if exc.code != "portrait_required":
@@ -746,7 +751,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         backdrop = waiting
     else:
         reference_blobs = (
-            likeness.identity_face_pngs(plan["blobs"]) if explicit else plan["blobs"]
+            likeness.identity_face_pngs(plan["blobs"]) if face_refs else plan["blobs"]
         )
         cache_key = jobs.backdrop_cache_key(
             img_cfg, prompt, include_people=include_people, explicit=explicit,
@@ -756,7 +761,7 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             conn, adventure_id, ref,
             enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
             include_people=include_people,
-            explicit=explicit, cache_key=cache_key,
+            explicit=explicit, reference_faces=face_refs, cache_key=cache_key,
             expected_people=len(paint_cast) if include_people else 0,
             cast_card_ids=plan["cast_card_ids"],
             reference_image_ids=plan["reference_image_ids"],
