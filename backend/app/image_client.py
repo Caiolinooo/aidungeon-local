@@ -1014,14 +1014,16 @@ def _bystander_edit_prompt(expected: int) -> str:
         "distance, leaving the stalls, streets, doorways, tables and buildings behind "
         f"empty of people. Keep {who} in the foreground completely unchanged: same faces, "
         "hair, clothes, pose and the objects they hold. Add nothing to anyone. Keep the "
-        "same place, framing, lighting and colours.")
+        "same place, framing, lighting and colours. The first image is the photograph to "
+        "edit; the other images are only references for the faces, hair colour and "
+        "clothes of the people in the foreground, which must stay exactly like that.")
 
 
 _BYSTANDER_PASSES = 3
 
 
 def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int,
-                        content: bytes, expected: int,
+                        content: bytes, expected: int, references: list[bytes],
                         progress: Callable[[], None] | None) -> bytes:
     """Segunda passada que tira os figurantes do fundo.
 
@@ -1043,7 +1045,7 @@ def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int
         try:
             edited, _w, _h = _generate_comfyui(
                 edit_cfg, client, _bystander_edit_prompt(expected), width, height,
-                init_image=content, progress=progress)
+                init_image=content, reference_images=references, progress=progress)
         except ImageError as exc:
             log.warning("limpeza dos figurantes falhou: %s", exc)
             return content
@@ -1873,7 +1875,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                     cfg, client, prompt, width, height, content, int(expected_people),
                     refs, progress)
                 content = _without_bystanders(
-                    cfg, client, width, height, content, int(expected_people), progress)
+                    cfg, client, width, height, content, int(expected_people), refs,
+                    progress)
         elif init_image is not None:
             if provider == "sdwebui":
                 content, width, height = _generate_sdwebui_img2img(

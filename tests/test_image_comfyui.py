@@ -862,31 +862,32 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
     counts = {b"busy": (2, 6), b"edited": (2, 2)}
     monkeypatch.setattr(face_regions, "count_faces", lambda content, expected: counts[content])
-    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"edited"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"edited"
     assert calls[0]["init_image"] == b"busy"
+    assert calls[0]["reference_images"] == [b"ref"]   # o elenco segura a identidade
     assert "remove every other person in the background" in calls[0]["prompt"]
     assert "the 2 people in the foreground completely unchanged" in calls[0]["prompt"]
 
     calls.clear()
     counts[b"edited"] = (1, 1)                      # a edição apagou alguém do elenco
-    assert image_client._without_bystanders({"seed": 7}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    assert image_client._without_bystanders({"seed": 7}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
     assert len(calls) == 3                          # três tentativas, todas descartadas
     assert len({call["seed"] for call in calls}) == 3   # semente fixa muda a cada tentativa
     counts[b"edited"] = (2, 6)                      # não tirou ninguém
-    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
     # sobrou um rosto depois da primeira passada: a segunda termina o serviço
     passes = iter([b"half", b"done"])
     monkeypatch.setattr(image_client, "_generate_comfyui",
                         lambda cfg, client, prompt, width, height, **kw: (next(passes), width, height))
     counts.update({b"half": (2, 3), b"done": (2, 2)})
-    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"done"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"done"
     monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
 
     calls.clear()
     counts[b"clean"] = (2, 2)
-    assert image_client._without_bystanders({}, None, 1344, 768, b"clean", 2, None) == b"clean"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"clean", 2, [b"ref"], None) == b"clean"
     counts[b"short"] = (1, 4)                       # elenco incompleto: não mexe
-    assert image_client._without_bystanders({}, None, 1344, 768, b"short", 2, None) == b"short"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"short", 2, [b"ref"], None) == b"short"
     assert calls == []
     monkeypatch.setattr(face_regions, "count_faces", lambda content, expected: None)
-    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
