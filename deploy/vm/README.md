@@ -418,6 +418,43 @@ um vulto desfocado ao longe). Custo: 22–39 s por cena, contra 10 s.
 A conferência das vistas do turnaround não chama mais de `extra_figure` a
 pessoa partida em duas formas empilhadas (camiseta da cor do fundo).
 
+### O See obedece o pedido e as imagens seguem a história (12/11/2026)
+
+Medido com turnos reais no staging, só com os personagens sintéticos:
+
+- **Elenco pelo pedido.** Na cena comum, se o pedido do See nomeia alguém, a
+  pintura mostra quem foi nomeado (`images._painted_cast`); o protagonista
+  só entra se o pedido fala dele ("eu", "comigo", o nome). Sem nomes vale o
+  momento narrado e o corte guarda os citados por último. A recusa (menor,
+  pessoa real) continua decidida sobre o elenco inteiro da cena.
+- **Roupa e marcas do momento.** A crônica grava `current_outfit` em inglês e
+  as marcas visíveis; o See ainda lê a roupa de agora direto do trecho e do
+  pedido (`images._story_outfits`, só quando o texto fala de roupa), para a
+  imagem tirada segundos depois da narração já mostrar a roupa nova. O
+  estado vai na linha de cada pessoa, depois do primeiro traço, e uma frase
+  curta faz o texto vencer a roupa da referência. O fundo de cena usa o
+  mesmo estado gravado.
+- **Criaturas.** Elenco misto: gente vestida e só o bicho leva a pelagem.
+  "cobra um preço" não é cobra; lobo, urso, raposa etc. só contam quando o
+  retrato diz o animal ou o nome da criatura é o animal.
+- **Pós-turno.** A crônica tem 150 s (45 s não cabiam o JSON com a placa
+  pintando) e uma segunda tentativa depois da janela do disjuntor; a
+  avaliação de consequências aproveita a resposta cortada no teto de tokens;
+  as leituras de look usam a role `assets` e não ocupam mais o slot do juiz
+  do turno; o construtor do See tem 45 s e o juiz, 15 s.
+- **Giro 360° só com o jogo parado.** Com o Wan na placa o narrador caía de
+  60 para 8 tok/s e a crônica se perdia. O `turnaround_clip` só sai da fila
+  depois de `TURNAROUND_IDLE_S` (300 s) sem ação nem imagem pedida
+  (`AIDUNGEON_TURNAROUND_IDLE_S` troca o valor), cede a placa a fundo, See e
+  clipe de cena, e o `/interrupt` é repetido enquanto o prompt cancelado
+  ainda roda.
+- **Narrador.** `dry_penalty_last_n = -1` (gravado nas configurações) fazia
+  o llama.cpp upstream responder HTTP 400 e nenhum turno avançava; negativo
+  vira o tamanho do contexto.
+- **Edição dos figurantes.** Não nomeia mais coisas de cidade e é descartada
+  se mudar mais de 12% da imagem (`_EDIT_MAX_SHIFT`): uma delas tinha
+  trocado uma floresta por uma rua de lojas.
+
 Smoke do executor, sem gerar uma imagem:
 
 ```bash
