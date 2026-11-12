@@ -298,6 +298,26 @@ def _guard_post(label: str, fn) -> None:
 
 
 
+_CHRONICLE_RETRY_S = 65.0
+
+
+def _chronicle_with_retry(adventure_id: str, transport: Any, cancel: threading.Event) -> None:
+    """A crônica grava roupa, ferimentos, painel e cards do turno; sem ela o
+    jogo não acompanha a história. Prazo estourado ou disjuntor aberto (três
+    prazos seguidos fecham as auxiliares por 60 s) ganha uma segunda chance
+    depois da janela do disjuntor, a não ser que outro turno já tenha começado.
+    """
+    try:
+        npc_chronicle.update_from_turn(adventure_id, transport)
+        return
+    except llm_client.LlmError as exc:
+        log.warning("post-turn chronicle falhou (%s); nova tentativa em %.0f s",
+                    exc.code, _CHRONICLE_RETRY_S)
+    if cancel.wait(_CHRONICLE_RETRY_S):
+        return
+    npc_chronicle.update_from_turn(adventure_id, transport)
+
+
 def _maybe_auto_tick(adventure_id: str) -> None:
     from app import jobs
     life = settings_store.load_file_settings().get("life") or {}
@@ -330,7 +350,7 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
 
     def _bg() -> None:
         with _post_turn_lock_for(adventure_id):
-            _guard_post("chronicle", lambda: npc_chronicle.update_from_turn(adventure_id, transport))
+            _guard_post("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel))
             _guard_post("consequences", lambda: _evaluate_consequences(adventure_id, transport))
             _guard_post("progression", lambda: _apply_progression(adventure_id, user))
             _guard_post("mind", lambda: npc_life.run_mind(adventure_id, transport))

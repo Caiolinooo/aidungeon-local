@@ -40,6 +40,8 @@ def _clean_llm_state(monkeypatch):
     """Cache de descoberta limpo + api_key de ambiente neutralizada por teste."""
     llm_client.invalidate_discovery_cache()
     monkeypatch.setenv("AIDUNGEON_CHRONICLE", "0")
+    # O giro 360° espera o jogo ficar parado; nos testes ele roda na hora.
+    monkeypatch.setenv("AIDUNGEON_TURNAROUND_IDLE_S", "0")
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setenv("AIDUNGEON_ENV_PATH", str(Path("/nonexistent/.env")))
     yield

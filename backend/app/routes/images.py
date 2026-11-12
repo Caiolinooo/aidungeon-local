@@ -68,7 +68,8 @@ Output ONLY that sentence."""
 # narração via a roupa antiga. Só o que o trecho ou o pedido dizem.
 _WARDROBE_SYSTEM = """You report what named people are WEARING RIGHT NOW in a story passage.
 Reply with ONLY one JSON object. Keys are the exact names given. Each value is one short English clothing phrase, at most 14 words, e.g. "long yellow hooded raincoat over her clothes" or "white tank top and jeans, no shirt".
-Include a person ONLY when the passage states a clothing change (they put something on, took something off, changed, got a new garment) or the player's picture instruction asks for specific clothing; the instruction wins.
+Include a person ONLY when the passage names a garment that person puts on, takes off, changes into or receives, or when the player's picture instruction asks for specific clothing; the instruction wins.
+Sweat, rain, dirt or mood are not clothing: without a named garment, leave the person out.
 Leave everyone else out. Never invent clothing. Never describe hair, face or body.
 Never describe nudity, underwear or bare skin: leave that person out instead.
 Never copy a Portuguese word."""

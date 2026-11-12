@@ -138,3 +138,56 @@ def test_look_reads_stay_off_the_turn_slot(monkeypatch):
     look_lock._read_clothing(b"\x89PNG\r\n\x1a\n" + b"0" * 8, llm_cfg={}) if False else None
     look_lock._read_body_text("Tall and slender.", llm_cfg={})
     assert roles and set(roles) == {"assets"}
+
+
+def test_360_turn_waits_until_the_game_is_idle(tmp_db, monkeypatch):
+    """O giro 360° derruba o narrador para 8 tok/s. Só é pego da fila com o
+    jogo parado há cinco minutos: sem ação e sem imagem pedida."""
+    from datetime import datetime, timedelta, timezone
+
+    from app import db, jobs
+    from conftest import add_action, make_adventure
+
+    monkeypatch.setenv("AIDUNGEON_TURNAROUND_IDLE_S", "300")
+    adv = make_adventure()
+    old = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(
+        timespec="milliseconds").replace("+00:00", "Z")
+    with db.session() as conn:
+        turn = jobs.enqueue(conn, "turnaround_clip", adv["id"], "npc", {"prompt": "turn"},
+                            priority=jobs.PRIORITY_PORTRAIT_CLIP)
+        conn.execute("UPDATE actions SET created_at=?", (old,))
+        conn.execute("UPDATE jobs SET created_at=?", (old,))
+        assert db.claim_next_job(conn)["id"] == turn["id"]     # jogo parado: roda
+        conn.execute("UPDATE jobs SET status='pending', started_at=NULL WHERE id=?", (turn["id"],))
+    add_action(adv["id"], 5, "continue", "A chuva cai.")       # alguém jogou agora
+    with db.session() as conn:
+        assert db.claim_next_job(conn) is None
+        conn.execute("UPDATE actions SET created_at=?", (old,))
+        still = jobs.enqueue(conn, "scene_backdrop", adv["id"], "room", {"prompt": "hall"})
+        assert db.claim_next_job(conn)["id"] == still["id"]     # a imagem roda
+        assert db.claim_next_job(conn) is None                  # e o giro continua esperando
+        conn.execute("UPDATE jobs SET created_at=? WHERE id=?", (old, still["id"]))
+        assert db.claim_next_job(conn)["id"] == turn["id"]
+
+
+def test_chronicle_gets_a_second_chance_after_a_timeout(monkeypatch):
+    import threading
+
+    from app import game_engine, npc_chronicle
+
+    calls: list[int] = []
+
+    def flaky(adventure_id, transport):
+        calls.append(1)
+        if len(calls) == 1:
+            raise llm_client.LlmTimeout("llm call timed out")
+        return {"created": 0, "updated": 1}
+
+    monkeypatch.setattr(npc_chronicle, "update_from_turn", flaky)
+    monkeypatch.setattr(game_engine, "_CHRONICLE_RETRY_S", 0.01)
+    game_engine._chronicle_with_retry("adv", None, threading.Event())
+    assert len(calls) == 2
+    calls.clear()
+    stopped = threading.Event(); stopped.set()               # outro turno começou
+    game_engine._chronicle_with_retry("adv", None, stopped)
+    assert len(calls) == 1

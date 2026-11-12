@@ -277,9 +277,10 @@ def enqueue(conn, type_: str, adventure_id: str, ref_id: str | None = None,
     # automatic clip before that lookup; explicit turn actions preempt separately.
     if type_ in _IMAGE_JOB_TYPES and type_ != "scene_backdrop":
         _cancel_running_automatic_clips(conn)
-    elif type_ == "scene_clip":
-        # O clipe da cena é o que o jogador está vendo; um giro 360° em
-        # andamento (até 9 min, três sementes) cede a GPU e volta para a fila.
+    elif type_ in ("scene_clip", "scene_backdrop"):
+        # O fundo e o clipe da cena são o que o jogador está vendo; um giro
+        # 360° em andamento (até 9 min, três sementes) cede a GPU e volta para
+        # a fila. Clipe automático de cena não é interrompido por fundo novo.
         _cancel_running_turnaround_clips(conn)
     events.record(
         conn, adventure_id, "job_queued",

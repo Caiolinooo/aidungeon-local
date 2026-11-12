@@ -15,7 +15,7 @@ import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1835,6 +1835,24 @@ def find_active_job(conn: sqlite3.Connection, type: str, ref_id: str) -> dict | 
     return job_to_dict(row) if row else None
 
 
+TURNAROUND_IDLE_S = 300.0
+
+
+def turnaround_idle_s() -> float:
+    """Segundos de jogo parado antes de um giro 360° rodar.
+    `AIDUNGEON_TURNAROUND_IDLE_S` troca o padrão (os testes usam 0)."""
+    try:
+        return max(0.0, float(os.environ.get("AIDUNGEON_TURNAROUND_IDLE_S", TURNAROUND_IDLE_S)))
+    except ValueError:
+        return TURNAROUND_IDLE_S
+
+
+def _utc_offset(seconds: float) -> str:
+    """`utcnow()` deslocado, no mesmo formato das colunas de data."""
+    moment = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def claim_next_job(conn: sqlite3.Connection, *,
                    max_priority: int | None = None) -> dict | None:
     """pending → running do job de menor prioridade e, nela, do mais antigo.
@@ -1849,6 +1867,14 @@ def claim_next_job(conn: sqlite3.Connection, *,
         "SELECT id FROM jobs WHERE status='pending'"
         # `payload.not_before`: rodada adiada (giro 360° recusado); só depois.
         " AND COALESCE(json_extract(payload, '$.not_before'), '') <= ?"
+        # O giro 360° ocupa a placa por minutos e derruba o narrador de 60
+        # para 8 tok/s; as auxiliares estouram o prazo e a crônica do turno
+        # se perde. Só roda com o jogo parado: nenhuma ação e nenhuma imagem
+        # pedida nos últimos `TURNAROUND_IDLE_S` segundos, em aventura alguma.
+        " AND NOT (type='turnaround_clip' AND ("
+        " EXISTS (SELECT 1 FROM actions WHERE created_at > ?)"
+        " OR EXISTS (SELECT 1 FROM jobs AS busy WHERE busy.created_at > ?"
+        " AND busy.type IN ('see_image','scene_backdrop','scene_clip','location_image'))))"
         " AND NOT ("
         " type='scene_clip'"
         " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1"
@@ -1864,7 +1890,8 @@ def claim_next_job(conn: sqlite3.Connection, *,
         " )"
         " )"
     )
-    params: list = [utcnow()]
+    idle_since = _utc_offset(-turnaround_idle_s())
+    params: list = [utcnow(), idle_since, idle_since]
     if max_priority is not None:
         sql += " AND priority<=?"
         params.append(int(max_priority))

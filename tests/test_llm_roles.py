@@ -196,7 +196,7 @@ def test_role_timeouts_come_from_settings(tmp_db):
     assert llm_client.role_timeout(cfg, "choices") == 15.0
     assert llm_client.role_timeout(cfg, "chronicle") == 150.0
     assert llm_client.role_timeout(cfg, "summary") == 60.0
-    assert llm_client.role_timeout(cfg, "image_prompt") == 20.0
+    assert llm_client.role_timeout(cfg, "image_prompt") == 45.0
     assert llm_client.role_timeout(cfg, "meta") == 45.0
     assert llm_client.role_timeout(cfg, "sim_intent") == 20.0
     assert llm_client.role_timeout(cfg, "turn_check") == 12.0
