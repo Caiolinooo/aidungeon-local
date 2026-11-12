@@ -235,9 +235,22 @@ def identity_text(look: dict | None, *, compact: bool = False) -> str:
     elif glasses and not compact:
         bits.append("no glasses")
     facial = look.get("facial_hair") or ""
-    if facial and not _NONE.search(facial) and _visible(facial):
+    facial = facial if facial and not _NONE.search(facial) and _visible(facial) else ""
+    if compact:
+        # Cena com várias pessoas: o fundo corta cada uma pelo fim. Na frente o
+        # que mais identifica (óculos, máscara/marca do rosto, barba); o cabelo
+        # por último. A caveira do Caio sumia do fundo sem isso.
+        face = look.get("face") or ""
+        face = face if face and _visible(face) and not face.lower().startswith(
+            ("no distinctive", "full lips", "smooth")) else ""
+        hair_bit = next((bit for bit in bits if bit.endswith("hair") or " hair with " in bit), "")
+        head = [bit for bit in bits if bit.startswith("always wearing")]
+        ordered = head + ([f"face: {face}"] if face else []) + ([facial] if facial else []) \
+            + ([hair_bit] if hair_bit else [])
+        return "; ".join(bit for bit in ordered if bit)
+    if facial:
         bits.append(facial)
-    for key in (("face",) if compact else ("skin", "eyes", "face", "build")):
+    for key in ("skin", "eyes", "face", "build"):
         value = look.get(key) or ""
         if value and _visible(value) and not value.lower().startswith("no distinctive"):
             bits.append(f"{key}: {value}")
