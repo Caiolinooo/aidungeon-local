@@ -692,6 +692,8 @@ def visible_clothing(look: dict | None) -> dict[str, str]:
     found = {}
     for key in CLOTHING_KEYS:
         value = look.get(key) or ""
+        if key == "accessories":
+            value = no_eyewear(value)      # leituras antigas ainda listam os óculos
         if _visible(value):
             found[key] = value
     return found

@@ -307,6 +307,8 @@ def test_prints_lose_their_letters_and_hair_tint_stays_faint():
     assert look_lock.no_eyewear("silver watch, black-framed glasses and a leather belt") == \
         "silver watch, a leather belt"
     assert look_lock.no_eyewear("black wristband") == "black wristband"
+    assert look_lock.visible_clothing({"top": "white t-shirt", "accessories":
+                                       "round tortoiseshell eyeglasses"})["accessories"] == "none"
     plain = jobs._turnaround_prompts(card, {**lock, "top": "black t-shirt"},
                                      identity="exact likeness of Marina")
     assert "No text, no labels, no logos" in plain["master"]

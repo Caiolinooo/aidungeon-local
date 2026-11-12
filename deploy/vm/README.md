@@ -351,7 +351,10 @@ completa = o rosto some de um lado e volta do outro; meia-volta desfeita ou
 vai-e-volta são recusados. O clipe é cortado no primeiro retorno à frente
 (loop sem salto). Também recusa fundo que muda fora da faixa da figura,
 formas soltas, saltos de área e perda de nitidez (fantasma). Até 3 sementes;
-senão fica o giro das vistas. Qualquer imagem nova ou ação preempta o giro e
+senão fica o giro das vistas. Desde 12/11/2026 também recusa o giro que fica
+de costas em mais de 60% do loop (`_BACK_SHARE`) ou que volta à frente sem
+mostrar o outro perfil (`no_return_side`): em produção um clipe parou nas
+costas em 73 de 113 quadros e estalou de volta. Qualquer imagem nova ou ação preempta o giro e
 ele volta ao fim da fila (no máximo 3 vezes). Medido em 11/11/2026: 156–200 s
 por semente, pico de 21–22,5 GB na placa inteira com o narrador carregado.
 Personagem de máscara (caveira) tem a linha do tempo do rosto ruidosa: o
@@ -374,6 +377,19 @@ abertura do See e do fundo (para todo o elenco; o See lê quem ainda não tem
 look). A trava de roupa copia as peças visíveis e o LLM só completa as
 outras com cor/lavagem/corte exatos. As pinturas do turnaround usam semente
 fixa por card, vista e tentativa. Roupa de cena e nudez trocam só a roupa.
+
+Leitor v9 (12/11/2026), calibrado com personagens de teste 100% sintéticos
+(fotos geradas pelo próprio Flux, cards "Marina Teste" e "Bruno Teste" na
+aventura "A Floresta dos Espelhos" do staging): cada chave oferece uma
+escala em vez de um exemplo só, porque o leitor copiava o exemplo (chanel no
+queixo lido como "just past the shoulders"). Estampa com palavras legíveis
+vem entre aspas e o Flux a pinta certa; letras ilegíveis deixam a peça lisa;
+a vista de costas recebe a peça sem a estampa; óculos não entram nos
+acessórios. Na cena com várias pessoas a linha de cada uma encolhe por
+traços inteiros (`scene._shrink_look`), nunca no meio de um traço, e o
+worker do fundo lê o look que falta no elenco (`jobs._read_missing_looks`)
+para o próximo fundo: depois de um bump de `LOOK_VERSION` ninguém tem look
+até a primeira leitura.
 
 Smoke do executor, sem gerar uma imagem:
 
