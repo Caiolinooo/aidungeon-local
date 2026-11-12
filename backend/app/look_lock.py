@@ -39,7 +39,8 @@ _failures: dict[str, float] = {}
 # v5: tinta de verdade (dyed) separada do brilho natural, armação com
 # espessura, rosto com formato/sobrancelhas/lábios/bochechas, estampa sem
 # texto e as fotos de rosto escolhidas pela leitura entre até 12 fotos.
-LOOK_VERSION = 5
+# v6: estampa vira "forma abstrata" ("graphic print" ainda puxava letras).
+LOOK_VERSION = 6
 # Até 12 fotos (a principal primeiro); a leitura escolhe as de rosto.
 MAX_PHOTOS = 12
 IDENTITY_KEYS = ("hair_colour", "hair_dye", "hair_sheen", "hair_texture", "hair_length",
@@ -53,7 +54,7 @@ _TEXT_PRINT = re.compile(
     r"(?i)\b(?:(?:white|black|grey|gray|yellow|red|light|dark|bold|small|large|faded)\s+)*"
     r"(?:text|lettering|letters|words|writing|slogan|logo|typography|font|caption|quote)"
     r"(?:\s+(?:print|graphic|design))?\b")
-TEXT_PRINT_PHRASE = "small faded light-grey graphic"
+TEXT_PRINT_PHRASE = "small faded light-grey abstract shape"
 
 _SYSTEM = """You read reference images of one fictional RPG character and fix the character's canonical look.
 Reply with ONLY one JSON object with exactly these keys:
@@ -172,7 +173,7 @@ def no_text(value: str) -> str:
     head = re.split(r"(?i)\s+(?:with|featuring|showing|bearing|that has|having)\s+", value, maxsplit=1)[0]
     head = _PRINT_WORDS.sub("", head)
     head = " ".join(head.split()).strip(" ,;")
-    return f"{head} with a {TEXT_PRINT_PHRASE} print on the chest"
+    return f"{head} with a {TEXT_PRINT_PHRASE} on the chest"
 
 
 def _read(images: list[bytes], *, transport=None, llm_cfg: dict) -> dict | None:

@@ -2306,13 +2306,14 @@ def _turnaround_references(kind: str, *, faces: list[bytes], primary: list[bytes
                            photos: list[bytes], anchor: bytes, master: bytes) -> list[bytes]:
     """Referências de cada pintura do turnaround, na ordem (a primeira pesa mais).
 
-    Com foto: mestre = rostos + principal; close-up = rostos + mestre; vistas
-    de corpo inteiro = o primeiro rosto + o mestre (roupa e corpo do mestre).
-    Sem foto: o caminho antigo, com a âncora.
+    Com foto: mestre = recortes de rosto (a roupa vem do texto travado; a foto
+    principal só entra sem recorte, porque a estampa com letras dela voltava
+    como texto ilegível); close-up = rostos + mestre; vistas de corpo inteiro
+    = o primeiro rosto + o mestre. Sem foto: o caminho antigo, com a âncora.
     """
     if faces or primary:
         if kind == "master":
-            refs = [*faces, *primary]
+            refs = [*faces] if faces else [*primary]
         elif kind == "face":
             refs = [*faces, master]
         else:

@@ -130,7 +130,7 @@ def test_photo_pieces_override_card_text_and_the_llm_pins_the_rest(tmp_db, tmp_p
     with db.session() as conn:
         lock = outfit_lock.ensure(conn, card, transport=httpx.MockTransport(handler))
     # da foto, com a estampa normalizada (sem letras, sempre igual)
-    assert lock["top"] == "black t-shirt with a small faded light-grey graphic print on the chest"
+    assert lock["top"] == "black t-shirt with a small faded light-grey abstract shape on the chest"
     assert lock["accessories"] == "thin silver necklace"
     assert lock["bottom"] == "dark indigo wash straight-leg ankle-length jeans"
     assert lock["source"] == "llm+reference"
@@ -262,7 +262,8 @@ def test_turnaround_references_drop_the_anchor_when_there_is_a_photo():
     refs = jobs._turnaround_references
     faces, primary, master, anchor = [b"f1", b"f2"], [b"p"], b"m", b"a"
     assert refs("master", faces=faces, primary=primary, photos=[], anchor=anchor, master=b"") \
-        == [b"f1", b"f2", b"p"]
+        == [b"f1", b"f2"]
+    assert refs("master", faces=[], primary=primary, photos=[], anchor=anchor, master=b"") == [b"p"]
     assert refs("face", faces=faces, primary=primary, photos=[], anchor=anchor, master=master) \
         == [b"f1", b"f2", b"m"]
     assert refs("back", faces=faces, primary=primary, photos=[], anchor=anchor, master=master) \
@@ -274,9 +275,9 @@ def test_turnaround_references_drop_the_anchor_when_there_is_a_photo():
 
 def test_prints_lose_their_letters_and_hair_tint_stays_faint():
     assert look_lock.no_text("black t-shirt with white text print") == \
-        "black t-shirt with a small faded light-grey graphic print on the chest"
+        "black t-shirt with a small faded light-grey abstract shape on the chest"
     assert look_lock.no_text("black t-shirt with large white floral graphic") == \
-        "black t-shirt with a small faded light-grey graphic print on the chest"
+        "black t-shirt with a small faded light-grey abstract shape on the chest"
     assert look_lock.no_text("plain black crew-neck t-shirt") == "plain black crew-neck t-shirt"
     sheen = look_lock.identity_text({**LOOK, "hair_colour": "near-black",
                                      "hair_sheen": "faint warm reddish tint in bright light"})
@@ -299,7 +300,7 @@ def test_reader_labels_every_image_and_keeps_three_face_picks(tmp_db):
     look = look_lock._read([PNG_BYTES, PNG_BYTES], transport=_vision_transport(reply, calls),
                            llm_cfg=llm_cfg)
     assert look["face_images"] == [4, 2, 9]
-    assert "small faded light-grey graphic" in look["top"]
+    assert "small faded light-grey abstract shape" in look["top"]
     labels = [part["text"] for part in calls[0]["messages"][1]["content"] if part["type"] == "text"]
     assert labels[1:] == ["Image 1:", "Image 2:"]
 
