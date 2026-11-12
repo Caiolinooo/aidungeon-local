@@ -3,7 +3,7 @@
 # git (G9). Roda na VM, como caio, de dentro do checkout (/home/caio/aidungeon-git):
 #
 #   tools/deploy.sh --target staging --ref origin/<branch> [--frontend]
-#   tools/deploy.sh --target main --ref <commit> [--idle-min 10] [--force]
+#   tools/deploy.sh --target main --ref <commit>
 #   tools/deploy.sh --target main --rollback <dir de backup> [--with-db]
 #
 # Deploy:
@@ -18,7 +18,9 @@
 #      flag o dist do alvo fica como está (o fonte da v0.9.0 não está no repo, K0);
 #   6. restart do serviço (as migrations rodam no boot) e tools/smoke_check.py.
 #      Smoke falhou: volta o código do backup, reinicia e sai 1.
-# No app principal, recusa se o jogador mexeu nos últimos --idle-min minutos.
+# O deploy não espera o jogador parar: a trava de 10 min sem uso saiu em
+# 12/11/2026, a pedido do dono. --force e --idle-min ainda são aceitos, sem
+# efeito, para comandos antigos não quebrarem.
 #
 # Rollback: backup do estado atual, código do backup indicado e restart.
 # --with-db também copia o banco do backup por cima (perde o que foi gravado
@@ -31,12 +33,11 @@ CHECKOUT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUPS="${DEPLOY_BACKUPS:-/home/caio/aidungeon-backups}"
 ENV_FILE="${DEPLOY_ENV_FILE:-/home/caio/aidungeon/.env}"
 VENV="${DEPLOY_VENV:-/home/caio/aidungeon/backend/venv}"
-MAIN_DB="${DEPLOY_MAIN_DB:-/home/caio/aidungeon/data/aidungeon.db}"
 PY="${DEPLOY_PY:-python3}"
 CODE=(backend/app backend/memory backend/migrations backend/schema.sql
       backend/requirements.txt backend/exporter.py backend/importer.py config)
 
-TARGET="" REF="" ROLLBACK="" FRONTEND=0 WITH_DB=0 FORCE=0 IDLE_MIN=10
+TARGET="" REF="" ROLLBACK="" FRONTEND=0 WITH_DB=0
 PASS=()
 
 usage() {
@@ -55,8 +56,8 @@ while (($#)); do
         --rollback) ROLLBACK="$2"; PASS+=("$1" "$2"); shift 2 ;;
         --frontend) FRONTEND=1; PASS+=("$1"); shift ;;
         --with-db) WITH_DB=1; PASS+=("$1"); shift ;;
-        --idle-min) IDLE_MIN="$2"; PASS+=("$1" "$2"); shift 2 ;;
-        --force) FORCE=1; PASS+=("$1"); shift ;;
+        --idle-min) shift 2 ;;      # aceito e ignorado (trava removida)
+        --force) shift ;;           # idem
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -81,10 +82,6 @@ if [[ -n "$REF" ]]; then
 fi
 
 [[ -d "$APP/backend" && -f "$APP/data/aidungeon.db" ]] || die "$APP não parece um app instalado"
-if [[ "$TARGET" == main && $FORCE -eq 0 ]]; then
-    "$PY" "$CHECKOUT/tools/smoke_check.py" --player-idle-min "$IDLE_MIN" --idle-db "$MAIN_DB" \
-        || die "jogador ativo no app principal (--force ignora)"
-fi
 
 smoke() {
     "$PY" "$CHECKOUT/tools/smoke_check.py" --base "http://127.0.0.1:$PORT" \

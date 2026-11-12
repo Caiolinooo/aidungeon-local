@@ -94,8 +94,8 @@ O `deploy.sh`:
 
 1. com `--ref`, faz `fetch` e `checkout --detach` e reexecuta a versão nova
    de si mesmo (recusa checkout com mudança local);
-2. no app principal, recusa se o jogador mexeu nos últimos 10 min
-   (`--idle-min`, `--force` ignora);
+2. não espera o jogador parar: a trava de 10 min sem uso foi removida em
+   12/11/2026 (`--idle-min` e `--force` ainda são aceitos, sem efeito);
 3. faz backup do banco (API de backup do sqlite) e do código, com o `DEPLOYED`
    anterior, em `/home/caio/aidungeon-backups/deploy-<alvo>-<data>/`;
 4. copia o código, roda `pip install` se o `requirements.txt` mudou (o venv é o
