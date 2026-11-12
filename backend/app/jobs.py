@@ -1823,16 +1823,23 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
     }
     visible = outfit_lock.visible_text(lock)
     visible = f" {visible}." if visible else ""
+    studio = _TURNAROUND_STUDIO
+    if look_lock.has_lettering((lock or {}).get("top") or ""):
+        # "No text" apagava as palavras da estampa que a roupa travada pede.
+        studio = studio.replace(
+            "No text, no labels, no logos,",
+            "No captions, no labels, no watermark, no lettering other than the print on the top,")
+        prompts["master"] = prompts["master"].replace(_TURNAROUND_STUDIO, studio)
     for kind, pose in _TURNAROUND_VIEWS.items():
         if kind == "face":
             prompts[kind] = (
                 f"{pose} Keep {who('face')}, face, hair and accessories exactly identical to "
-                f"the references.{visible} {_TURNAROUND_SIDES} {_TURNAROUND_STUDIO}"
+                f"the references.{visible} {_TURNAROUND_SIDES} {studio}"
             )
             continue
         prompts[kind] = (
             f"{pose} {keep}{outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
-            f"{_TURNAROUND_STUDIO}"
+            f"{studio}"
         )
     prompts["clip"] = (
         "Turntable shot of one person standing alone in a seamless grey studio. "

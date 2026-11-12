@@ -45,7 +45,10 @@ _failures: dict[str, float] = {}
 # do card (a Renata saía mais larga que a foto do espelho).
 # v8: máscara/caveira é a regra número um (a v7 leu a caveira do Caio como
 # "no distinctive marks"), e corpo só de foto que mostra o corpo.
-LOOK_VERSION = 8
+# v9: escalas no lugar de um exemplo só (a v8 copiava "just past the shoulders" e
+# "petite" para um chanel no queixo de uma pessoa alta), estampa com as palavras
+# transcritas ou sem estampa, óculos fora dos acessórios.
+LOOK_VERSION = 9
 # Até 12 fotos (a principal primeiro); a leitura escolhe as de rosto.
 MAX_PHOTOS = 12
 HAIR_KEYS = ("hair_colour", "hair_dye", "hair_sheen", "hair_curl", "hair_volume",
@@ -60,12 +63,11 @@ IDENTITY_KEYS = (*HAIR_KEYS, "glasses", "facial_hair", *SKIN_KEYS, *FACE_KEYS,
 CLOTHING_KEYS = ("top", "bottom", "footwear", "accessories")
 _NOT_VISIBLE = re.compile(r"(?i)^\s*(not visible|unknown|n/?a|unclear|cannot|can't)\b")
 _NONE = re.compile(r"(?i)^\s*(none|no|nothing)\b")
-# Estampa com letras vira texto ilegível na pintura. A peça guarda só "grafismo".
-_TEXT_PRINT = re.compile(
-    r"(?i)\b(?:(?:white|black|grey|gray|yellow|red|light|dark|bold|small|large|faded)\s+)*"
-    r"(?:text|lettering|letters|words|writing|slogan|logo|typography|font|caption|quote)"
-    r"(?:\s+(?:print|graphic|design))?\b")
-TEXT_PRINT_PHRASE = "small faded light-grey abstract shape"
+# Palavras de uma estampa com letras. Com as palavras entre aspas o Flux as
+# pinta certas; sem elas (ilegível na foto) pintava texto falso.
+_LETTER_WORDS = re.compile(
+    r"(?i)\b(?:text|lettering|letters|words?|writing|slogan|typography|font|caption|quote|logo)\b")
+_QUOTED = re.compile(r'["“][^"”]{1,40}["”]')
 
 _SYSTEM = """You read reference images of one fictional RPG character and fix the character's canonical look.
 Reply with ONLY one JSON object with exactly these string keys:
@@ -83,12 +85,17 @@ Rules:
 - Hair, face, skin and expressions come from the photos ONLY, never from the card description. They describe
   what MOST images show; image 1 wins ties.
 Hair:
-- hair_colour: ONLY the base colour words, no undertones or strength words, e.g. "near-black", "dark brown". Black
-  with a slight warmth is "near-black"; any warmth belongs in hair_sheen. hair_dye: ONLY clearly dyed sections, e.g. "bright copper dyed ends"; otherwise "none".
+- The examples below are scales to choose from, not defaults: pick what THESE photos show, never the first example.
+- hair_colour: ONLY the base colour words, no undertones or strength words, e.g. "black", "near-black", "dark
+  brown", "chestnut", "auburn", "copper red", "blonde", "grey". Black with a slight warmth is "near-black"; any
+  warmth belongs in hair_sheen. hair_dye: ONLY clearly dyed sections, e.g. "bright copper dyed ends"; otherwise "none".
   hair_sheen: a natural tint visible only in light, e.g. "faint warm reddish tint in bright light"; otherwise "none".
-- hair_curl: pattern and curl size, e.g. "tight springy 3b ringlets, small to medium curls". hair_volume: e.g.
-  "very voluminous". hair_parting: e.g. "loose off-centre parting". hair_length: the body landmark where the hair
-  ends as it naturally falls in the full-body photos (curls are not stretched), e.g. "just past the shoulders".
+- hair_curl: pattern and curl size, from "straight" and "loose waves" to "tight springy ringlets, small curls".
+  hair_volume: "flat", "moderate volume" or "very voluminous". hair_parting: e.g. "centre parting", "full fringe",
+  "loose off-centre parting". hair_length: the body landmark where the hair ENDS as it naturally falls (curls are
+  not stretched), measured against the ears, chin and shoulders you can see: "cropped above the ears",
+  "ear-length", "chin-length", "shoulder-length", "just past the shoulders", "chest-length", "mid-back" or
+  "waist-length".
 - glasses: frames with thickness, shape, size and ONE colour, e.g. "thin round silver metal wire frames, medium
   size"; "none" if the character does not wear glasses in most images. Never just "yes".
 Skin:
@@ -106,10 +113,11 @@ Expressions:
 Body (from the photos only, judging proportions from photos that show the whole body and how the clothes sit;
 when no photo shows the waist, hips or legs write "not visible" for them; describe plainly and non-sexually):
 - Use absolute words compared with an average adult, because image models read "slim" as average:
-  build (thickness and frame, e.g. "very slim, petite, small narrow frame" or "curvy, average frame"), height
-  (impression, e.g. "short"), shoulders (e.g. "narrow shoulders"), waist (e.g. "very narrow waist, flat stomach"),
-  hips (absolute width AND relation, e.g. "narrow hips, only slightly wider than the waist"), limbs (thickness, e.g.
-  "thin arms and thin straight legs").
+  build (thickness and frame: "very slim, small narrow frame", "slim, long frame", "average frame", "stocky,
+  broad frame", "heavy, wide frame"), height (impression: "short", "average height", "tall"; never "petite" for a
+  tall person), shoulders ("narrow", "average", "broad"), waist (e.g. "very narrow waist, flat stomach", "straight
+  waist", "wide waist, round belly"), hips (absolute width AND relation, e.g. "narrow hips, only slightly wider than
+  the waist", "wide hips"), limbs (thickness, e.g. "thin arms and thin straight legs", "thick muscular arms").
 Face images:
 - face_images: up to 3 images, best first, where the whole face is clearly visible and frontal: no phone, hand or
   object covering ANY part of the face, natural colours (no strong colour filter, no bleached or warm tint, not
@@ -193,18 +201,28 @@ _PRINT_WORDS = re.compile(
 
 
 def no_text(value: str) -> str:
-    """Toda estampa vira o mesmo grafismo pequeno e apagado, sem letras.
+    """Estampa com letras só fica se a leitura transcreveu as palavras.
 
-    "white text print" pintava texto ilegível; "large white floral graphic"
-    pintava flores enormes que a foto não tem. Peça estampada passa a dizer
-    só onde a estampa fica, sempre igual de uma rodada para outra.
+    Palavras legíveis vêm entre aspas ('printed words "OCEAN CLUB"') e o Flux
+    as pinta certas. Letras que a foto não deixa ler ("white text print")
+    viravam texto falso; trocadas por uma "forma abstrata cinza", viraram uma
+    mancha no peito e, no giro, nas costas. Sem as palavras a peça fica lisa.
+    Estampa sem letras (flor, desenho) segue como foi lida.
     """
-    if not value or not _PRINT_WORDS.search(value):
+    if not value or _QUOTED.search(value) or not _LETTER_WORDS.search(value):
         return value
     head = re.split(r"(?i)\s+(?:with|featuring|showing|bearing|that has|having)\s+", value, maxsplit=1)[0]
     head = _PRINT_WORDS.sub("", head)
-    head = " ".join(head.split()).strip(" ,;")
-    return f"{head} with a {TEXT_PRINT_PHRASE} on the chest"
+    return " ".join(head.split()).strip(" ,;")
+
+
+def has_print(value: str) -> bool:
+    """A peça tem estampa (letras transcritas ou desenho)?"""
+    return bool(value and (_QUOTED.search(value) or _PRINT_WORDS.search(value)))
+
+
+def has_lettering(value: str) -> bool:
+    return bool(value and _QUOTED.search(value))
 
 
 _BODY_TEXT_SYSTEM = """You extract body proportions stated in a character description.
@@ -216,8 +234,12 @@ Reply with ONLY one JSON object with exactly these string keys: top, bottom, foo
 - Look at the whole photo, including legs and feet in a mirror or full-body shot, before writing "not visible".
 - Each with exact colour, garment type, cut and material, e.g. "black high-waisted skinny jeans",
   "light grey low-top canvas sneakers with white soles"; "not visible" only for a piece the photo does not show.
-- A print is described only as a graphic, its colour and size; never text, letters, words or logos.
+- A print: say its colour, size and where it sits. If it has clearly legible words, quote them exactly as printed,
+  e.g. 'white t-shirt with large black printed words "OCEAN CLUB" across the chest'. If the lettering is blurry,
+  mirrored or too small to read, describe the garment without the print. A picture print is a graphic, e.g.
+  "small white line-art flower graphic on the chest".
 - accessories: jewellery, watches, bracelets, belts, bags, headwear named exactly (a bandana is not a hat); "none".
+  Never list eyeglasses here: they are read elsewhere.
 - Never name or identify the person. No nudity."""
 
 

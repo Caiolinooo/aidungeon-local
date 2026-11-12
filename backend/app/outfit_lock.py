@@ -220,9 +220,14 @@ def full_text(lock: dict | None) -> str:
     """Frase para mestre, ficha e giro: as quatro peças, sempre iguais."""
     if not lock:
         return ""
+    from app import look_lock   # import tardio: look_lock importa este módulo
+
     pieces = "; ".join(f"{key}: {lock[key]}" for key in SLOTS)
+    # O giro do Wan pintava a estampa do peito também nas costas.
+    front_only = (" The print is only on the chest; the back of the top is plain."
+                  if look_lock.has_print(lock.get("top") or "") else "")
     return (f"Default outfit, always exactly this and nothing else: {pieces}. "
-            "Same garments, colours and footwear in every view.")
+            f"Same garments, colours and footwear in every view.{front_only}")
 
 
 def visible_text(lock: dict | None) -> str:

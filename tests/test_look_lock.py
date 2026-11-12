@@ -133,7 +133,7 @@ def test_photo_pieces_override_card_text_and_the_llm_pins_the_rest(tmp_db, tmp_p
     with db.session() as conn:
         lock = outfit_lock.ensure(conn, card, transport=httpx.MockTransport(handler))
     # da foto, com a estampa normalizada (sem letras, sempre igual)
-    assert lock["top"] == "black t-shirt with a small faded light-grey abstract shape on the chest"
+    assert lock["top"] == "black graphic t-shirt"      # estampa de desenho fica como lida
     assert lock["accessories"] == "thin silver necklace"
     assert lock["bottom"] == "dark indigo wash straight-leg ankle-length jeans"
     assert lock["source"] == "llm+reference"
@@ -277,11 +277,30 @@ def test_turnaround_references_drop_the_anchor_when_there_is_a_photo():
 
 
 def test_prints_lose_their_letters_and_hair_tint_stays_faint():
-    assert look_lock.no_text("black t-shirt with white text print") == \
-        "black t-shirt with a small faded light-grey abstract shape on the chest"
-    assert look_lock.no_text("black t-shirt with large white floral graphic") == \
-        "black t-shirt with a small faded light-grey abstract shape on the chest"
+    # letras que a foto não deixa ler: a peça fica lisa, sem mancha no lugar
+    assert look_lock.no_text("black t-shirt with white text print") == "black t-shirt"
+    assert look_lock.no_text("black t-shirt with small white lettering on the chest") == "black t-shirt"
+    # palavras transcritas e estampa de desenho ficam como foram lidas
+    quoted = 'white t-shirt with large black printed words "OCEAN CLUB" across the chest'
+    assert look_lock.no_text(quoted) == quoted
+    floral = "black t-shirt with small white line-art flower graphic on the chest"
+    assert look_lock.no_text(floral) == floral
     assert look_lock.no_text("plain black crew-neck t-shirt") == "plain black crew-neck t-shirt"
+    assert look_lock.has_lettering(quoted) and not look_lock.has_lettering(floral)
+    assert look_lock.has_print(floral) and not look_lock.has_print("black t-shirt")
+    lock = {"top": quoted, "bottom": "olive cargo trousers", "footwear": "tan boots",
+            "accessories": "none"}
+    assert "The print is only on the chest; the back of the top is plain." in \
+        outfit_lock.full_text(lock)
+    assert "back of the top" not in outfit_lock.full_text({**lock, "top": "black t-shirt"})
+    card = {"id": "c", "title": "Marina", "type": "character", "sheet": "{}"}
+    prompts = jobs._turnaround_prompts(card, lock, identity="exact likeness of Marina")
+    for kind in ("master", "front", "face"):
+        assert "no lettering other than the print on the top" in prompts[kind]
+        assert "No text, no labels" not in prompts[kind]
+    plain = jobs._turnaround_prompts(card, {**lock, "top": "black t-shirt"},
+                                     identity="exact likeness of Marina")
+    assert "No text, no labels, no logos" in plain["master"]
     sheen = look_lock.identity_text({**LOOK, "hair_colour": "near-black",
                                      "hair_sheen": "faint warm reddish tint in bright light"})
     assert "near-black hair, uniformly dark from roots to ends, only faint warm reddish tint" in sheen
@@ -304,7 +323,7 @@ def test_reader_labels_every_image_and_keeps_three_face_picks(tmp_db):
     look = look_lock._read([PNG_BYTES, PNG_BYTES], transport=_vision_transport(reply, calls),
                            llm_cfg=llm_cfg)
     assert look["face_images"] == [4, 2, 9]
-    assert "small faded light-grey abstract shape" in look["top"]
+    assert look["top"] == "black tee"                  # letras ilegíveis: peça lisa
     labels = [part["text"] for part in calls[0]["messages"][1]["content"] if part["type"] == "text"]
     assert labels[1:] == ["Image 1:", "Image 2:"]
 
