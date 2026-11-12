@@ -73,7 +73,9 @@ _AUX_SLOTS_4 = {"choices": 1, "chronicle": 2, "summary": 2, "assets": 2,
                 "image_prompt": 3, "assistant": 3, "meta": 3}
 _TURN_ROLES = ("sim_intent", "turn_check", "turn_gate")
 
-DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 45.0, "summary": 60.0,
+# chronicle: 45 s não cabiam 2100 tokens de JSON com a placa pintando ao mesmo
+# tempo (uns 28 tok/s); a crônica estourava o prazo e nada do turno era gravado.
+DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 150.0, "summary": 60.0,
                          "image_prompt": 20.0, "assistant": 90.0, "meta": 45.0,
                          "assets": 120.0, "sim_intent": 20.0,
                          "turn_check": 12.0, "turn_gate": 12.0}

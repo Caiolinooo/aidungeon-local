@@ -17,6 +17,7 @@ Não usa o lock de geração: o jogador segue agindo enquanto a imagem sai, e o
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -36,7 +37,7 @@ router = APIRouter()
 
 _PROMPT_BUILDER_SYSTEM = """You write one caption for a text-to-image model of the moment happening right now.
 One English sentence, present tense, under 40 words. Its main verb is the player order when one is given, otherwise what just happened.
-Keep the place. Do not paint an earlier scene and do not invent a new one.
+Keep the place. Do not paint an earlier scene and do not invent a new one. If the moment has just moved the people to a specific spot inside that place (a cabin, a boat, a room, a cave), say that spot.
 Name only the people listed. Include the player character when the text says "you".
 Do not describe hair, face, eyes, skin, age, or clothing.
 Do not add nudity, sex, or bare skin. If the moment does not undress anyone, they stay covered.
@@ -61,6 +62,85 @@ Do not add people who are not in the moment. Do not change the place.
 Do not sexualize a child.
 Never copy a Portuguese word. Translate the player order and the place into English.
 Output ONLY that sentence."""
+
+# Roupa do momento, lida na hora do See. A crônica grava a roupa atual depois
+# do turno, mas leva dezenas de segundos; quem aperta o See logo depois da
+# narração via a roupa antiga. Só o que o trecho ou o pedido dizem.
+_WARDROBE_SYSTEM = """You report what named people are WEARING RIGHT NOW in a story passage.
+Reply with ONLY one JSON object. Keys are the exact names given. Each value is one short English clothing phrase, at most 14 words, e.g. "long yellow hooded raincoat over her clothes" or "white tank top and jeans, no shirt".
+Include a person ONLY when the passage states a clothing change (they put something on, took something off, changed, got a new garment) or the player's picture instruction asks for specific clothing; the instruction wins.
+Leave everyone else out. Never invent clothing. Never describe hair, face or body.
+Never describe nudity, underwear or bare skin: leave that person out instead.
+Never copy a Portuguese word."""
+_WARDROBE_HINT = re.compile(
+    r"(?i)(?<!\w)(?:vest\w*|veste|usa(?:ndo)?|coloc\w+|p[õo]e|tir[ao]u?|tira|troc\w+|despe\w*|"
+    r"capa|casaco|jaqueta|camis\w+|regata|vestido|saia|cal[çc]a|bota|chap[ée]u|capuz|armadura|"
+    r"manto|uniforme|roupa\w*|encharcad\w+|molhad\w+|rasgad\w+|"
+    r"wear\w*|wore|puts? on|takes? off|took off|dress\w*|changes? into|coat|jacket|shirt|"
+    r"raincoat|cloak|hood|armou?r|uniform|outfit|soaked|drenched|torn)(?!\w)")
+
+
+def _story_outfits(names: list[str], passage: str, order: str, *,
+                   llm_cfg: dict, transport: Any) -> dict[str, str]:
+    """{nome: roupa de agora} para quem o trecho ou o pedido vestiu diferente.
+
+    Sem palavra de roupa no texto não gasta chamada. Falha ou resposta
+    estranha devolve vazio: a pintura segue com a roupa conhecida.
+    """
+    text = "\n".join(part for part in (passage, order) if part)
+    names = [name for name in names if name]
+    if not names or not _WARDROBE_HINT.search(text):
+        return {}
+    user = (
+        (f"Player instruction for the picture: {order}\n" if order else "")
+        + "People: " + "; ".join(names) + "\nPassage:\n" + (passage or "(none)")[-1400:]
+    )
+    try:
+        with image_english.IMAGE_LLM_LOCK:
+            reply = llm_client.chat_completion(
+                llm_cfg, [{"role": "system", "content": _WARDROBE_SYSTEM},
+                          {"role": "user", "content": user}],
+                role="image_prompt", temperature=0, max_tokens=160, transport=transport)
+        match = re.search(r"\{.*\}", reply or "", flags=re.S)
+        data = json.loads(match.group(0)) if match else {}
+    except (llm_client.LlmError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    worn: dict[str, str] = {}
+    for name in names:
+        aliases = {alias.casefold() for alias in (name, *npc_assets.title_aliases(name))}
+        value = next((raw for key, raw in data.items()
+                      if isinstance(key, str) and " ".join(key.split()).casefold() in aliases),
+                     None)
+        if not isinstance(value, str):
+            continue
+        outfit = " ".join(value.split()).strip(" .;,")
+        # Nudez não entra por aqui: resposta que fala de corpo nu é descartada
+        # inteira, não "limpa" (sobraria "completely" como roupa).
+        if (not outfit or _PT_MARK.search(outfit) or likeness.strip_explicit(outfit) != outfit
+                or re.search(r"(?i)\b(?:nude|naked|bare|underwear|lingerie|topless|undressed)\b",
+                             outfit)):
+            continue
+        worn[name] = clip_words(outfit, 110)
+    return worn
+
+
+def _with_story_outfits(cards: list[dict], worn: dict[str, str]) -> list[dict]:
+    """Cópia dos cards com a roupa lida agora por cima da roupa gravada."""
+    if not worn:
+        return cards
+    dressed = []
+    for card in cards:
+        outfit = worn.get(card.get("title") or "")
+        if not outfit:
+            dressed.append(card)
+            continue
+        sheet = dict(npc_assets.parse_sheet(card.get("sheet") or ""))
+        sheet["current_outfit"] = outfit
+        dressed.append({**card, "sheet": json.dumps(sheet, ensure_ascii=False)})
+    return dressed
+
 
 # Cena de dois (beijo, luta, abraço) não pode colapsar num busto.
 _PORTRAIT_NEGATIVE = "solo portrait, bust, headshot, close-up"
@@ -762,6 +842,41 @@ def _cards_in_frame(cards: list[dict], text: str, plot: str) -> list[dict]:
     return frame
 
 
+_ORDER_SELF = re.compile(
+    r"(?i)(?<!\w)(?:eu|me|mim|comigo|você|voce|you|myself|ao meu lado|do meu lado)(?!\w)")
+
+
+def _painted_cast(cast: list[dict], order: str, plot: str) -> list[dict]:
+    """Quem entra na pintura, dentre os já liberados por `decide_frame`.
+
+    O pedido do jogador manda no elenco. Se ele nomeia alguém ("Marina
+    sentada, Bruno de joelhos"), a pintura mostra quem foi nomeado, e o
+    protagonista só entra se o pedido fala dele ("eu", "comigo", o nome). Sem
+    isso o corte em `CAST_REFERENCE_LIMIT` tirava justamente o último citado:
+    o See pedido sobre o Bruno saiu sem o Bruno e com dois personagens que o
+    pedido não citava. Sem nomes no pedido vale o momento narrado, e o corte
+    guarda o protagonista e os citados por último.
+
+    A recusa (menor, pessoa real) já foi decidida sobre o elenco inteiro da
+    cena; aqui só se escolhe quem aparece.
+    """
+    limit = likeness.CAST_REFERENCE_LIMIT
+    player = _player_card(cast, _protagonist_name(plot))
+    asked = list(scene._cast(cast, order)) if (order or "").strip() else []
+    if asked:
+        frame = asked[-limit:]
+        if (player is not None and _ORDER_SELF.search(order) and len(frame) < limit
+                and all(player.get("id") != card.get("id") for card in frame)):
+            frame.insert(0, player)
+        return frame
+    if len(cast) <= limit:
+        return list(cast)
+    others = [card for card in cast if player is None or card.get("id") != player.get("id")]
+    if player is not None:
+        return [player, *others[-(limit - 1):]]
+    return others[-limit:]
+
+
 def _look_clause(frame: list[dict], *, explicit: bool = False) -> str:
     """Rosto travado no começo do prompt. Sem isso o CLIP pinta um estranho.
 
@@ -844,9 +959,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         frame, explicit=scene.is_explicit(raw_moment) or scene.is_explicit(order))
     if decision.refusal:
         raise GameError(422, decision.refusal, decision.message)
-    frame = list(decision.cast)[:likeness.CAST_REFERENCE_LIMIT]
-    cast_locked = list(frame)
-    _require_cast(adv["id"], cast_locked)
     # A pintura segue a narracao: um pedido do jogador nao veste a cena.
     # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
     explicit = decision.allow_explicit and (
@@ -856,6 +968,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if world_facts.REFUSAL_IMAGE in assessment.image_directive:
         # Apenas uma recusa estabelecida rebaixa a instrução explícita.
         explicit = explicit and scene.is_explicit(assessment.safe_excerpt)
+    # O pedido escolhe o elenco só na cena comum; a cena explícita segue com
+    # o elenco do momento, como antes.
+    frame = list(decision.cast)[:likeness.CAST_REFERENCE_LIMIT] if explicit else \
+        _painted_cast(list(decision.cast), order, adv.get("plot_essentials") or "")
+    cast_locked = list(frame)
+    _require_cast(adv["id"], cast_locked)
     if not explicit:
         order = likeness.strip_explicit(order)
     clause = _look_clause(frame, explicit=explicit) or (
@@ -866,6 +984,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         names = [card.get("title") for card in scene._cast(cards, raw_moment) if card.get("title")]
     player_name = _protagonist_name(adv.get("plot_essentials") or "") or "the player character"
     you = re.search(r"(?<!\w)you(?!\w)", raw_moment or "", re.IGNORECASE)
+    # Pedido que nomeia quem aparece e não fala do jogador: ele fica de fora.
+    order_names_cast = bool(not explicit and order and scene._cast(cast_locked, order))
+    if order_names_cast and not _ORDER_SELF.search(order):
+        you = None
     if you and not any(_same_person(player_name, name) for name in names):
         names.insert(0, player_name)
     story_blob = "\n".join(
@@ -1078,6 +1200,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         context=f"{sentence}. Place: {location}.",
     ) if order else ""
     order_lock = _explicit_order_lock(order_en) if explicit else ""
+    worn = {} if explicit else _story_outfits(
+        [card.get("title") or "" for card in locked], moment, order,
+        llm_cfg=llm_cfg, transport=transport)
     lead_bits = [order_lock] if order_lock else []
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
@@ -1093,11 +1218,17 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if refusal:
         lead_bits.append(sentence)
     if clause:
-        # 700: com os traços de três pessoas, 420 cortava o fim (óculos da Renata).
-        lead_bits.append(clip_words(clause, _CLAUSE_CHARS))
+        # Traços inteiros de cada pessoa (scene._shrink_look): o corte por
+        # caracteres deixava as duas últimas de quatro sem linha nenhuma.
+        lead_bits.append(scene._shrink_look(clause, _CLAUSE_CHARS))
     if not explicit:
         # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
-        lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
+        lead_bits.append(npc_assets.coverage_lock(*locked) if locked else (
+            npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK))
+        # Roupa do momento e marcas visíveis que a história estabeleceu.
+        state_line = npc_assets.story_state_line(_with_story_outfits(locked, worn))
+        if state_line:
+            lead_bits.append(state_line)
     # A instrução do jogador não engole mais a ação: antes o order_lock
     # omitia a frase do momento, e "donzela sem roupa" virava só um retrato.
     if sentence and not refusal:
@@ -1121,10 +1252,14 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                 "no collage, no duplicate faces: " + ", ".join(card.get("title") or "person" for card in locked)
             )
         else:
-            positions = ["left", "right", "top left", "top right", "bottom left", "bottom right"]
+            # Em fila, da esquerda para a direita. "top left"/"top right" para
+            # o terceiro e o quarto empilhava gente numa cena larga.
+            rows = {2: ["left", "right"], 3: ["left", "centre", "right"],
+                    4: ["far left", "centre left", "centre right", "far right"]}
+            positions = rows.get(len(locked)) or [
+                f"position {index + 1} from the left" for index in range(len(locked))]
             assignments = ", ".join(
-                f"{card.get('title') or 'person'} on the "
-                f"{positions[index] if index < len(positions) else 'center'}"
+                f"{card.get('title') or 'person'} on the {positions[index]}"
                 for index, card in enumerate(locked)
             )
             lead_bits.append(
@@ -1159,7 +1294,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             # Rosto e cabelo de cada um (sem a roupa do card). Sem este bloco o
             # See explícito só dizia quem estava vestido e pintava estranhos:
             # a Renata saía sem óculos e com outro cabelo.
-            blocks.append(clip_words(clause, _CLAUSE_CHARS).rstrip(".") + ".")
+            blocks.append(scene._shrink_look(clause, _CLAUSE_CHARS).rstrip(".") + ".")
         if len(names) == 1:
             blocks.append(
                 f"{names[0]} is the only person in the entire scene, no one else.")

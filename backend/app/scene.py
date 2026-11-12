@@ -578,12 +578,17 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         return text, True
     if clause:
         headcount = _headcount(cast)
+        # Roupa do momento e marcas visíveis que a história gravou: sem isto o
+        # fundo pintava sempre a roupa padrão das referências.
+        state_line = npc_assets.story_state_line(cast, limit=90)
         required = [
             sex_line,
             clause,
             headcount,
+            state_line,
             f"wide cinematic shot of {title}, only the characters named above, "
-            f"each with that exact face, hair, age and clothing. {_alone_there(len(cast))}",
+            f"each with that exact face, hair and age{'' if state_line else ' and clothing'}. "
+            f"{_alone_there(len(cast))}",
             f"atmosphere: {atmosphere}",
             layout_guard,
             lock,
@@ -592,7 +597,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             "detailed scene painting, no text, no watermark, no logo",
         ]
         required = [part for part in required if part and str(part).strip()]
-        beat_at = sum(1 for part in (sex_line, clause, headcount)
+        beat_at = sum(1 for part in (sex_line, clause, headcount, state_line)
                       if part and str(part).strip())
         beat = _latest_words(beat, 280)
         text = _fit(required, beat, beat_at,

@@ -76,7 +76,7 @@
   "scheduler": {
     "timeouts": {
       "choices": 15,
-      "chronicle": 45,
+      "chronicle": 150,
       "summary": 60,
       "image_prompt": 20,
       "assistant": 180,

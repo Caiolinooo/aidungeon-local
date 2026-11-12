@@ -1,0 +1,140 @@
+"""O See obedece o pedido e as imagens acompanham o que a história mudou."""
+
+from __future__ import annotations
+
+import json
+
+from app import llm_client, look_lock, npc_assets, scene
+from app.routes import images
+
+
+def _card(title: str, **extra) -> dict:
+    sheet = extra.pop("sheet", None)
+    return {"id": title.lower().replace(" ", "-"), "title": title, "type": "character",
+            "entry": extra.pop("entry", ""), "triggers": [],
+            "sheet": json.dumps(sheet) if sheet else "", **extra}
+
+
+CAST = [_card("Dick Vigarista", use_for_character_creation=1), _card("Lobo de Fogo"),
+        _card("Fada dos Espelhos"), _card("Marina Teste"), _card("Bruno Teste")]
+PLOT = "[Name: Dick Vigarista; Role: Protagonista]"
+
+
+def test_the_order_decides_who_is_painted():
+    """Pedido "Marina sentada, Bruno de joelhos" com cinco na cena: pintava o
+    protagonista, o lobo, a fada e a Marina, e deixava o Bruno de fora."""
+    asked = images._painted_cast(CAST, "Marina sentada num banco, Bruno de joelhos", PLOT)
+    assert [card["title"] for card in asked] == ["Marina Teste", "Bruno Teste"]
+    with_me = images._painted_cast(CAST, "Marina sentada comigo no banco", PLOT)
+    assert [card["title"] for card in with_me] == ["Dick Vigarista", "Marina Teste"]
+    # sem nomes no pedido: protagonista e os três citados por último
+    plain = images._painted_cast(CAST, "todos olhando para o céu", PLOT)
+    assert [card["title"] for card in plain] == [
+        "Dick Vigarista", "Fada dos Espelhos", "Marina Teste", "Bruno Teste"]
+    assert images._painted_cast(CAST[:3], "", PLOT) == CAST[:3]
+
+
+def test_creatures_are_told_apart_from_people_and_from_verbs():
+    fada = _card("Fada dos Espelhos", entry="Uma criatura mágica. Ajuda os visitantes, mas "
+                 "cobra um preço por isso.", portrait_prompt="A delicate fairy with silver hair")
+    lobo = _card("Lobo de Fogo", entry="O Lobo de Fogo é uma criatura mágica.",
+                 portrait_prompt="A majestic fiery wolf with thick reddish fur")
+    capitao = _card("Lobo do Mar", entry="Capitão velho e ranzinza.",
+                    portrait_prompt="An old sea captain with a grey beard")
+    ladrao = _card("Ladrão de Jibóia", entry="Um pirata gordo que rouba cobras.",
+                   portrait_prompt="A stout pirate with a large belly")
+    naja = _card("Naja", entry="Uma cobra enorme que guarda o templo.")
+    assert npc_assets.creature_kind(fada) == ""            # "cobra um preço" é verbo
+    assert npc_assets.creature_kind(lobo) == "wolf"
+    assert npc_assets.creature_kind(capitao) == ""         # apelido não é bicho
+    assert npc_assets.creature_kind(ladrao) == ""
+    assert npc_assets.creature_kind(naja) == "snake"
+    marina = _card("Marina Teste")
+    mixed = npc_assets.coverage_lock(marina, lobo)
+    assert mixed == ("Marina Teste: fully clothed, wearing clothes, covered torso. "
+                     "Lobo de Fogo: natural hide covering the body, not bare human skin")
+    assert npc_assets.coverage_lock(marina) == npc_assets.CLOTHED_LOCK
+    assert npc_assets.coverage_lock(lobo) == npc_assets.CREATURE_LOCK
+    assert npc_assets.coverage_lock(marina, lobo, explicit=True) == ""
+
+
+def test_story_state_line_carries_the_outfit_and_marks_of_the_moment():
+    marina = _card("Marina Teste", sheet={
+        "current_outfit": "long yellow hooded raincoat over her clothes",
+        "body_state": {"v": 1, "pain": 2, "conditions": [
+            {"id": "c1", "active": True, "scene_visible": True, "portrait_visible": False,
+             "visual_en": "bandaged right forearm"}]}})
+    bruno = _card("Bruno Teste", sheet={"current_outfit": "regata branca e jeans"})
+    quiet = _card("Dick Vigarista")
+    line = npc_assets.story_state_line([marina, bruno, quiet])
+    assert line.startswith("Right now in the story. Marina Teste: now wearing long yellow "
+                           "hooded raincoat over her clothes, bandaged right forearm.")
+    assert "Bruno" not in line                 # roupa gravada em português não vai ao pintor
+    assert "even where a reference image shows the usual outfit" in line
+    assert npc_assets.story_state_line([quiet]) == ""
+
+
+def test_backdrop_paints_the_outfit_the_story_gave(monkeypatch):
+    marina = _card("Marina Teste", portrait_image_id="m-img", sheet={
+        "reference": {"turnaround": {}},
+        "current_outfit": "long yellow hooded raincoat over her clothes"})
+    bruno = _card("Bruno Teste", portrait_image_id="b-img",
+                  portrait_prompt="A stocky bearded man", sheet={"reference": {"turnaround": {}}})
+    prompt, people = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
+                                   [marina, bruno], "Marina and Bruno wait by the fire.")
+    assert people is True
+    assert "Marina Teste: now wearing long yellow hooded raincoat over her clothes" in prompt
+    assert "each with that exact face, hair and age." in prompt
+    assert "hair, age and clothing" not in prompt
+    usual = _card("Marina Teste", portrait_image_id="m-img",
+                  portrait_prompt="A woman with an auburn bob and round glasses",
+                  sheet={"reference": {"turnaround": {}}})
+    plain, _ = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
+                             [usual, bruno], "Marina and Bruno wait by the fire.")
+    assert "Right now in the story" not in plain
+    assert "each with that exact face, hair and age and clothing." in plain
+
+
+def test_see_reads_the_clothing_of_the_moment_only_when_the_text_talks_about_it(monkeypatch):
+    calls: list[str] = []
+
+    def fake(cfg, messages, **kwargs):
+        calls.append(messages[1]["content"])
+        return json.dumps({"Marina": "long yellow hooded raincoat over her clothes",
+                           "Bruno Teste": "white tank top and jeans",
+                           "Dick Vigarista": "completely naked",
+                           "Fada dos Espelhos": "vestido de pétalas"})
+
+    monkeypatch.setattr(llm_client, "chat_completion", fake)
+    names = ["Marina Teste", "Bruno Teste", "Dick Vigarista", "Fada dos Espelhos"]
+    quiet = images._story_outfits(names, "Eles caminham pela floresta em silêncio.", "",
+                                  llm_cfg={}, transport=None)
+    assert quiet == {} and calls == []         # sem palavra de roupa: nenhuma chamada
+    worn = images._story_outfits(
+        names, "Começa a chover. Marina veste uma capa amarela; Bruno tira a camisa.", "",
+        llm_cfg={}, transport=None)
+    assert worn == {"Marina Teste": "long yellow hooded raincoat over her clothes",
+                    "Bruno Teste": "white tank top and jeans"}
+    assert len(calls) == 1 and "People: Marina Teste; Bruno Teste" in calls[0]
+    dressed = images._with_story_outfits([_card("Marina Teste"), _card("Bruno Teste")], worn)
+    assert json.loads(dressed[0]["sheet"])["current_outfit"].startswith("long yellow")
+
+    def broken(cfg, messages, **kwargs):
+        raise llm_client.LlmError("timeout")
+    monkeypatch.setattr(llm_client, "chat_completion", broken)
+    assert images._story_outfits(names, "Marina veste a capa.", "", llm_cfg={}, transport=None) == {}
+
+
+def test_look_reads_stay_off_the_turn_slot(monkeypatch):
+    """Na role `assistant` a leitura ocupava o slot do juiz do turno, que tem
+    12 s de prazo: o turno seguia sem adjudicação."""
+    roles: list[str] = []
+
+    def fake(cfg, messages, **kwargs):
+        roles.append(kwargs.get("role"))
+        return "{}"
+
+    monkeypatch.setattr(llm_client, "chat_completion", fake)
+    look_lock._read_clothing(b"\x89PNG\r\n\x1a\n" + b"0" * 8, llm_cfg={}) if False else None
+    look_lock._read_body_text("Tall and slender.", llm_cfg={})
+    assert roles and set(roles) == {"assets"}

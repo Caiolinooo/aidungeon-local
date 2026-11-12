@@ -281,6 +281,9 @@ def description(card: dict | None) -> str:
     return " | ".join(part for part in parts if part)[:1500]
 
 
+# As leituras usam a role `assets` (slot 2, com crônica e resumo). Na role
+# `assistant` elas ocupavam o slot 3 por dezenas de segundos e o juiz do turno
+# (turn_gate, 12 s de prazo) estourava: "adjudicador indisponível".
 def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = "") -> dict | None:
     # A descrição do card não entra nesta leitura: com ela no contexto o modelo
     # copiava "cabelo até as costas" e "quadril pronunciado" do texto por cima
@@ -298,7 +301,7 @@ def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = ""
         reply = llm_client.chat_completion(
             llm_cfg, [{"role": "system", "content": _SYSTEM},
                       {"role": "user", "content": content}],
-            role="assistant", temperature=0, max_tokens=1100, timeout_s=240,
+            role="assets", temperature=0, max_tokens=1100, timeout_s=240,
             transport=transport,
         )
     except Exception as exc:  # visão fora do ar não derruba quem pinta
@@ -342,7 +345,7 @@ def _read_body_text(about: str, *, transport=None, llm_cfg: dict) -> dict:
         reply = llm_client.chat_completion(
             llm_cfg, [{"role": "system", "content": _BODY_TEXT_SYSTEM},
                       {"role": "user", "content": about}],
-            role="assistant", temperature=0, max_tokens=200, timeout_s=60, transport=transport)
+            role="assets", temperature=0, max_tokens=200, timeout_s=60, transport=transport)
     except Exception as exc:
         log.warning("look: corpo da descrição sem leitura: %s", type(exc).__name__)
         return {}
@@ -363,7 +366,7 @@ def _read_clothing(image: bytes, *, transport=None, llm_cfg: dict) -> dict:
                       {"role": "user", "content": [
                           {"type": "text", "text": "Fill the JSON for this photo."},
                           {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}]}],
-            role="assistant", temperature=0, max_tokens=300, timeout_s=120, transport=transport)
+            role="assets", temperature=0, max_tokens=300, timeout_s=120, transport=transport)
     except Exception as exc:
         log.warning("look: roupa sem leitura: %s", type(exc).__name__)
         return {}

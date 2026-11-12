@@ -1460,9 +1460,33 @@ _CREATURE_KINDS = (
     ("dragão", "dragon"),
     ("dragao", "dragon"),
     ("dragon", "dragon"),
-    ("cobra", "snake"),
+    ("serpente", "snake"),
     ("snake", "snake"),
+    ("serpent", "snake"),
 )
+# "cobra" também é verbo ("cobra um preço"): a Fada dos Espelhos virou cobra.
+# Só vale como bicho depois de artigo ou preposição ("uma cobra", "da cobra").
+_COBRA_NOUN = re.compile(
+    r"(?i)(?<!\w)(?:uma|a|as|da|das|de|à|na|nas|pela|pelas|como|essa|esta|aquela|"
+    r"grande|enorme|gigante)\s+cobras?(?!\w)")
+# Bichos que também são apelido de gente ("Lobo do Mar", "Ladrão de Jibóia"):
+# só contam quando a descrição visual do retrato, em inglês, diz o animal, ou
+# quando o texto do card diz que é criatura/animal.
+_VISUAL_CREATURES = (
+    (("wolf", "lobo", "loba"), "wolf"),
+    (("bear", "urso", "ursa"), "bear"),
+    (("fox", "raposa"), "fox"),
+    (("tiger", "tigre"), "tiger"),
+    (("lion", "leão", "leao"), "lion"),
+    (("horse", "cavalo", "égua", "egua"), "horse"),
+    (("dog", "hound", "cão", "cao", "cachorro"), "dog"),
+    (("cat", "gato", "gata"), "cat"),
+    (("bird", "pássaro", "passaro", "ave", "corvo", "raven", "crow", "owl", "coruja"), "bird"),
+    (("spider", "aranha"), "spider"),
+    (("jibóia", "jiboia", "boa constrictor", "python"), "snake"),
+)
+_CREATURE_WORD = re.compile(
+    r"(?i)(?<!\w)(?:criatura|animal|besta|fera|bicho|creature|beast|monster|monstro)(?!\w)")
 CLOTHED_LOCK = "fully clothed, wearing clothes, covered torso"
 CREATURE_LOCK = "natural hide covering the body, not bare human skin"
 NUDITY_BAN = (
@@ -1516,16 +1540,68 @@ def creature_kind(card: dict | None = None, name: str = "") -> str:
     for needle, kind in _CREATURE_KINDS:
         if re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", blob, re.IGNORECASE):
             return kind
+    if _COBRA_NOUN.search(blob):
+        return "snake"
+    visual = (card or {}).get("portrait_prompt") or ""
+    described = " ".join(str(part) for part in parts[1:] if part)      # sem o título
+    is_creature = bool(_CREATURE_WORD.search(described))
+    for needles, kind in _VISUAL_CREATURES:
+        pattern = r"(?i)(?<!\w)(?:" + "|".join(re.escape(n) for n in needles) + r")(?!\w)"
+        if re.search(pattern, visual) or (is_creature and re.search(pattern, blob)):
+            return kind
     return ""
 
 
 def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
-    """Trava de corpo coberto. Cena nua de propósito não leva isto."""
+    """Trava de corpo coberto. Cena nua de propósito não leva isto.
+
+    Elenco misto: gente continua vestida e só o bicho leva a pelagem. Com uma
+    criatura na cena a trava inteira virava "natural hide covering the body",
+    também para as pessoas.
+    """
     if explicit:
         return ""
-    if any(creature_kind(card) for card in cards if card):
+    present = [card for card in cards if card]
+    creatures = [card for card in present if creature_kind(card)]
+    if not creatures:
+        return CLOTHED_LOCK
+    people = [card for card in present if card not in creatures]
+    if not people:
         return CREATURE_LOCK
-    return CLOTHED_LOCK
+    def names(group: list[dict]) -> str:
+        return ", ".join(" ".join(str(card.get("title") or "").split()) or "character"
+                         for card in group)
+    return (f"{names(people)}: {CLOTHED_LOCK}. "
+            f"{names(creatures)}: {CREATURE_LOCK}")
+
+
+def story_state_line(cards: list[dict], *, limit: int = 110) -> str:
+    """O que mudou na história e a pintura tem de mostrar: roupa do momento e
+    marcas visíveis de cada um. Vazio quando ninguém mudou.
+
+    Só entra texto em inglês (o estado gravado em português não serve ao
+    renderizador); cada pessoa ocupa no máximo `limit` caracteres.
+    """
+    lines = []
+    for card in cards:
+        if not card or creature_kind(card):
+            continue
+        sheet = parse_sheet(card.get("sheet") or "")
+        bits = []
+        outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
+        if outfit and not _looks_portuguese(outfit):
+            bits.append("now wearing " + outfit)
+        wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=False)
+        if wounds and not _looks_portuguese(wounds):
+            bits.append(wounds)
+        name = " ".join(str(card.get("title") or "").split())
+        if bits and name:
+            lines.append(_clip(f"{name}: " + ", ".join(bits), limit + len(name)))
+    if not lines:
+        return ""
+    return ("Right now in the story. " + ". ".join(lines)
+            + ". Paint this clothing and these marks even where a reference image "
+              "shows the usual outfit")
 
 
 _TITLE_STOP = {

@@ -50,7 +50,7 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
       "card_id": "exact id when known, else empty",
       "pain": 0,
       "expression": "short English expression, or empty",
-      "current_outfit": "what they are wearing now, or empty",
+      "current_outfit": "what they are wearing now, in English, or empty",
       "conditions": [
         {"op": "add|update|heal|remove", "id": "existing condition id, or empty for new",
          "kind": "wound|cut|bruise|burn|fracture|scar|amputation|tattoo|mark|illness|other",
@@ -110,7 +110,9 @@ Rules:
 - expression is a short English phrase for the face, e.g. "guarded", "furious",
   "relieved"; use it only when the passage justifies it.
 - current_outfit is what they are wearing NOW after the passage, only if it
-  changed. Otherwise empty; the sheet keeps the previous outfit.
+  changed. Write it in English as a short clothing phrase for the image model
+  (e.g. "long yellow hooded raincoat over her clothes"). Otherwise empty; the
+  sheet keeps the previous outfit.
 - If nobody's body/expression/outfit changed, return an empty bodies array.
 - ui is the live game panel. Use the "Game UI" block to get exact widget ids,
   stat/field names, limits and current values. Never invent a widget.
