@@ -1007,12 +1007,17 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
 
 def _bystander_edit_prompt(expected: int) -> str:
     who = "the one person" if expected == 1 else f"the {expected} people"
+    # "leaving the place behind empty" deixava feirantes de costas; nomear o
+    # que fica vazio (bancas, ruas, portas, prédios) limpou 4 de 4 cenas.
     return (
         "Edit this photograph: remove every other person in the background and in the "
-        "distance, leaving the place behind empty of people. Keep "
-        f"{who} in the foreground completely unchanged: same faces, hair, clothes, pose "
-        "and the objects they hold. Add nothing to anyone. Keep the same place, framing, "
-        "lighting and colours.")
+        "distance, leaving the stalls, streets, doorways, tables and buildings behind "
+        f"empty of people. Keep {who} in the foreground completely unchanged: same faces, "
+        "hair, clothes, pose and the objects they hold. Add nothing to anyone. Keep the "
+        "same place, framing, lighting and colours.")
+
+
+_BYSTANDER_PASSES = 2
 
 
 def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int,
@@ -1028,21 +1033,23 @@ def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int
     """
     from app import face_regions
 
-    before = face_regions.count_faces(content, expected)
-    if before is None or before[1] <= expected or before[0] < expected:
-        return content
-    try:
-        edited, _w, _h = _generate_comfyui(
-            cfg, client, _bystander_edit_prompt(expected), width, height,
-            init_image=content, progress=progress)
-    except ImageError as exc:
-        log.warning("limpeza dos figurantes falhou: %s", exc)
-        return content
-    after = face_regions.count_faces(edited, expected)
-    if after is None or after[0] != before[0] or after[1] >= before[1]:
-        return content
-    log.info("figurantes removidos do fundo: %d -> %d rostos", before[1], after[1])
-    return edited
+    for _ in range(_BYSTANDER_PASSES):
+        before = face_regions.count_faces(content, expected)
+        if before is None or before[1] <= expected or before[0] < expected:
+            return content
+        try:
+            edited, _w, _h = _generate_comfyui(
+                cfg, client, _bystander_edit_prompt(expected), width, height,
+                init_image=content, progress=progress)
+        except ImageError as exc:
+            log.warning("limpeza dos figurantes falhou: %s", exc)
+            return content
+        after = face_regions.count_faces(edited, expected)
+        if after is None or after[0] != before[0] or after[1] >= before[1]:
+            return content
+        log.info("figurantes removidos do fundo: %d -> %d rostos", before[1], after[1])
+        content = edited
+    return content
 
 
 def request_key(cfg: dict, prompt: str, *, width: int | None = None,

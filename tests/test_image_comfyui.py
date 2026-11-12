@@ -871,6 +871,13 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
     counts[b"edited"] = (2, 6)                      # não tirou ninguém
     assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    # sobrou um rosto depois da primeira passada: a segunda termina o serviço
+    passes = iter([b"half", b"done"])
+    monkeypatch.setattr(image_client, "_generate_comfyui",
+                        lambda cfg, client, prompt, width, height, **kw: (next(passes), width, height))
+    counts.update({b"half": (2, 3), b"done": (2, 2)})
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"done"
+    monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
 
     calls.clear()
     counts[b"clean"] = (2, 2)
