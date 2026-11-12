@@ -226,3 +226,24 @@ def test_turnaround_uses_the_primary_and_the_clearest_face_photo(tmp_db, tmp_pat
     with db.session() as conn:
         card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
     assert len(look_lock.reference_photos(card)) == 1
+
+
+def test_a_new_reading_of_the_same_photo_rebuilds_the_outfit(tmp_db, tmp_path, monkeypatch):
+    """Staging: o look v3 releu a mesma foto (outra estampa e outro acessório)
+    e a trava de roupa, presa só ao hash das imagens, ficou com a leitura velha."""
+    adv = make_adventure()
+    card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10))
+    sheet = json.loads(card["sheet"])
+    sheet["look_lock"] = {**LOOK, "version": look_lock.LOOK_VERSION, "basis_hash": "same"}
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+        first = outfit_lock.ensure(conn, card)
+        card = db.get_card(conn, adv["id"], card["id"])
+    assert outfit_lock.current(card)["top"] == "black graphic t-shirt"
+    sheet = json.loads(card["sheet"])
+    sheet["look_lock"]["top"] = "black t-shirt with white text print"
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+        assert outfit_lock.current(card) is None
+        second = outfit_lock.ensure(conn, card)
+    assert first["top"] != second["top"] == "black t-shirt with white text print"

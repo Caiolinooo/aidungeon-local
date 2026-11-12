@@ -71,7 +71,10 @@ def basis(card: dict) -> str:
     parts: list[str] = []
     look = sheet.get("look_lock")
     if isinstance(look, dict) and look.get("basis_hash"):
-        parts.append(f"look:{look['basis_hash']}")
+        # Imagens e o que a leitura achou: uma releitura (versão nova do look)
+        # com outra peça visível também refaz a trava.
+        seen = json.dumps({key: look.get(key) for key in SLOTS}, sort_keys=True)
+        parts.append(f"look:{look['basis_hash']}:{_basis_hash(seen)}")
     clothing = sheet.get("clothing")
     if isinstance(clothing, str) and clothing.strip():
         parts.append(" ".join(clothing.split()))
