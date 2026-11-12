@@ -765,7 +765,7 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
         "dry_multiplier": sampler.get("dry_multiplier", 0.8),
         "dry_base": sampler.get("dry_base", 1.75),
         "dry_allowed_length": int(sampler.get("dry_allowed_length", 2)),
-        "dry_penalty_last_n": int(sampler.get("dry_penalty_last_n", -1)),
+        "dry_penalty_last_n": _dry_window(cfg, sampler),
         "dry_sequence_breakers": list(sampler.get("dry_sequence_breakers", ["\n", ":", "\"", "*"])),
         "max_tokens": int(sampler.get("max_tokens", 300)),
         "stop": list(stop),
@@ -777,6 +777,25 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
     if cfg.get("disable_thinking", True):
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
+
+
+def _dry_window(cfg: dict, sampler: dict) -> int:
+    """`dry_penalty_last_n` que o servidor aceita.
+
+    -1 queria dizer "o contexto inteiro", mas o llama.cpp upstream (b12296)
+    recusa valor negativo com HTTP 400 e o turno inteiro falhava: produção
+    tinha -1 gravado nas configurações. Negativo vira o tamanho do contexto.
+    """
+    try:
+        value = int(sampler.get("dry_penalty_last_n", -1))
+    except (TypeError, ValueError):
+        value = -1
+    if value >= 0:
+        return value
+    try:
+        return max(0, int(cfg.get("context_size") or 0)) or 4096
+    except (TypeError, ValueError):
+        return 4096
 
 
 def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | None,

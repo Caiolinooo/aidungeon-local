@@ -560,3 +560,22 @@ def test_sanitizer_cuts_the_unfinished_sentence():
     assert output_sanitizer.clean_narration("She ran. And then", True) == "She ran."
     assert output_sanitizer.clean_narration("She ran. And then", False) == "She ran. And then"
     assert output_sanitizer.cut_incomplete_sentence("apesar") == "apesar"
+
+
+def test_negative_dry_window_is_sent_as_the_context_size():
+    """O llama.cpp upstream recusa `dry_penalty_last_n: -1` com HTTP 400 e o
+    turno inteiro falhava (produção tinha -1 gravado). -1 era "o contexto
+    inteiro": vai o tamanho do contexto. Valor válido segue como está."""
+    from app import llm_client
+
+    cfg = {"base_url": "http://x/v1", "context_size": 106496, "disable_thinking": True}
+    messages = [{"role": "user", "content": "oi"}]
+    sent = llm_client.build_chat_payload(cfg, messages, sampler={"dry_penalty_last_n": -1},
+                                         stop=[], model="m")
+    assert sent["dry_penalty_last_n"] == 106496
+    kept = llm_client.build_chat_payload(cfg, messages, sampler={"dry_penalty_last_n": 512},
+                                         stop=[], model="m")
+    assert kept["dry_penalty_last_n"] == 512
+    bare = llm_client.build_chat_payload({"base_url": "http://x/v1"}, messages, sampler={},
+                                         stop=[], model="m")
+    assert bare["dry_penalty_last_n"] == 4096
