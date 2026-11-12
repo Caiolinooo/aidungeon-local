@@ -26,27 +26,35 @@ from app import db, likeness, llm_client, npc_assets, settings_store
 
 log = logging.getLogger("aidungeon.look_lock")
 
-LOOK_VERSION = 1
+# v2: "dark brown with reddish highlights" virava cabelo vinho no Flux, e
+# "black graphic t-shirt" ganhava estampa inventada. Cor dominante simples,
+# estampa descrita, e o índice da foto com o rosto mais nítido. v3: reflexo
+# em campo próprio ("reddish highlights" junto da cor ainda pintava vinho).
+LOOK_VERSION = 3
 # Até cinco fotos (a principal primeiro). Mais que isso só gasta tokens de
 # imagem no narrador sem mudar a maioria.
 MAX_PHOTOS = 5
-IDENTITY_KEYS = ("hair_colour", "hair_texture", "hair_length", "hairstyle",
+IDENTITY_KEYS = ("hair_colour", "hair_highlights", "hair_texture", "hair_length", "hairstyle",
                  "glasses", "facial_hair", "skin", "eyes", "face", "build")
 CLOTHING_KEYS = ("top", "bottom", "footwear", "accessories")
 _NOT_VISIBLE = re.compile(r"(?i)^\s*(not visible|unknown|n/?a|unclear|cannot|can't)\b")
 _NONE = re.compile(r"(?i)^\s*(none|no|nothing)\b")
 
 _SYSTEM = """You read reference images of one fictional RPG character and fix the character's canonical look.
-Reply with ONLY one JSON object with exactly these string keys:
-"hair_colour", "hair_texture", "hair_length", "hairstyle", "glasses", "facial_hair", "skin", "eyes", "face", "build",
-"top", "bottom", "footwear", "accessories".
+Reply with ONLY one JSON object with exactly these keys:
+"hair_colour", "hair_highlights", "hair_texture", "hair_length", "hairstyle", "glasses", "facial_hair", "skin",
+"eyes", "face", "build", "top", "bottom", "footwear", "accessories" (strings) and "clearest_face_image" (integer).
 Rules:
 - English, concrete and precise, 2 to 14 words per key. Exact colours (e.g. "jet black", "dark indigo wash").
+- hair_colour: only the base natural colour of most of the hair, plainly ("jet black", "dark brown").
+- hair_highlights: dyed tips or highlights if most images show them, e.g. "reddish-brown tips"; otherwise "none".
 - hair_length must name a body landmark the hair reaches, e.g. "chin length", "just past the shoulders", "mid-back".
 - glasses: if the character wears glasses in most images, describe the frames exactly, e.g. "large round thin
   gold-rimmed glasses"; otherwise "none". Never answer just "yes".
 - Identity keys (hair, glasses, facial hair, skin, eyes, face, build) describe what MOST images show; image 1 wins ties.
 - Clothing keys describe only what IMAGE 1 shows; write "not visible" for a piece image 1 does not show.
+  Describe any print exactly (e.g. "black crew-neck t-shirt with a small white text print on the chest") or say "plain".
+- clearest_face_image: the number (1 = first) of the image that shows the face most clearly and frontally.
 - face: distinctive features or a mask/prosthetic if there is one; otherwise "no distinctive marks".
 - Never name or identify the person. No nudity. No guessing of age, ethnicity or biography."""
 
@@ -99,9 +107,13 @@ def _parse(reply: str) -> dict | None:
         return None
     if not isinstance(data, dict):
         return None
-    look = {key: _clean(data.get(key)) for key in (*IDENTITY_KEYS, *CLOTHING_KEYS)}
+    look: dict[str, Any] = {key: _clean(data.get(key)) for key in (*IDENTITY_KEYS, *CLOTHING_KEYS)}
     if not look["hair_colour"] or not look["hair_length"] or not look["glasses"]:
         return None
+    try:
+        look["clearest_face_image"] = max(1, int(data.get("clearest_face_image") or 1))
+    except (TypeError, ValueError):
+        look["clearest_face_image"] = 1
     return look
 
 
@@ -162,6 +174,24 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
     return look
 
 
+def reference_photos(card: dict) -> list[bytes]:
+    """Fotos que entram como referência visual: a principal e, se for outra,
+    a do rosto mais nítido segundo a leitura (a principal da Renata é um
+    espelho com filtro, sem óculos e sem rosto nítido)."""
+    if likeness.is_minor(card):
+        return []
+    photos = likeness.visual_reference_images(card)[:MAX_PHOTOS]
+    if not photos:
+        return []
+    chosen = [photos[0]]
+    look = current(card)
+    if look and look.get("source") == "photo":
+        index = int(look.get("clearest_face_image") or 1) - 1
+        if 0 < index < len(photos):
+            chosen.append(photos[index])
+    return chosen
+
+
 def _visible(value: str) -> bool:
     return bool(value) and not _NOT_VISIBLE.search(value)
 
@@ -173,6 +203,10 @@ def identity_text(look: dict | None) -> str:
     hair = ", ".join(part for part in (
         look.get("hair_length"), look.get("hair_texture"), look.get("hair_colour")) if part)
     bits = [f"{hair} hair" if hair else ""]
+    highlights = look.get("hair_highlights") or ""
+    if hair and highlights and not _NONE.search(highlights) and _visible(highlights):
+        # "Sutis": dito como cor principal, o Flux pintava o cabelo inteiro.
+        bits[0] += f" with only subtle {highlights}"
     if look.get("hairstyle") and _visible(look["hairstyle"]):
         bits.append(f"hairstyle: {look['hairstyle']}")
     glasses = look.get("glasses") or ""

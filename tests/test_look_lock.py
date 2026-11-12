@@ -208,3 +208,21 @@ def test_portrait_carries_the_reference_identity_in_any_story_state(tmp_db, tmp_
     prompt = seen[-1]["prompt"]
     assert "Identity from the reference, keep exactly:" in prompt
     assert "always wearing large round thin gold-rimmed glasses" in prompt
+
+
+def test_turnaround_uses_the_primary_and_the_clearest_face_photo(tmp_db, tmp_path, monkeypatch):
+    adv = make_adventure()
+    card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10), (200, 150, 120), (0, 0, 200))
+    sheet = json.loads(card["sheet"])
+    sheet["look_lock"] = {**LOOK, "clearest_face_image": 3, "source": "photo",
+                          "version": look_lock.LOOK_VERSION, "basis_hash": "x"}
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+    photos = look_lock.reference_photos(card)
+    colors = [Image.open(io.BytesIO(blob)).convert("RGB").getpixel((5, 5)) for blob in photos]
+    assert len(photos) == 2
+    assert colors[0][2] < 40 and colors[1][2] > 150      # principal, depois a do rosto
+    sheet["look_lock"]["clearest_face_image"] = 1
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+    assert len(look_lock.reference_photos(card)) == 1

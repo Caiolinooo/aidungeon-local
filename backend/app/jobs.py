@@ -2343,11 +2343,13 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     # Foto enviada (ou a da pessoa do card) manda na identidade: vem primeiro
     # em toda pintura, antes da âncora e do mestre.
     photos: list[bytes] = []
-    if not likeness.is_minor(card):
-        for blob in likeness.portrait_pixels(card)[:1]:
-            png = turnaround.reference_photo_png(blob)
-            if png:
-                photos.append(png)
+    # A principal e a do rosto mais nítido (lida no look); sem look, só a principal.
+    chosen = [] if likeness.is_minor(card) else (
+        look_lock.reference_photos(card) or likeness.portrait_pixels(card)[:1])
+    for blob in chosen:
+        png = turnaround.reference_photo_png(blob)
+        if png:
+            photos.append(png)
 
     def paint(kind: str, size: tuple[int, int], references: list[bytes]) -> dict:
         """Pinta, confere e, se a vista falhar, tenta mais uma semente.
