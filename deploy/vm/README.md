@@ -391,6 +391,30 @@ worker do fundo lê o look que falta no elenco (`jobs._read_missing_looks`)
 para o próximo fundo: depois de um bump de `LOOK_VERSION` ninguém tem look
 até a primeira leitura.
 
+Cena com elenco no ComfyUI (12/11/2026). O Flux2 roda em CFG 1, ignora o
+negativo e pinta o que o texto do lugar descreve, então "no other people"
+não bastava. Três camadas, todas em `image_client.generate_image` quando o
+pedido traz `expected_people` e referências:
+
+1. O texto do lugar perde a multidão (`scene.uncrowded`: "busy", "full of
+   patrons", "where merchants shout…") e o prompt diz em termos positivos
+   que o elenco está sozinho ali (`scene._alone_there`).
+2. `_without_extra_people`: se sobram rostos do tamanho do elenco (um See
+   de produção saiu com 4 pessoas para 3), pinta de novo com outra semente,
+   até 2 vezes, e fica a pintura com menos gente a mais.
+3. `_without_bystanders`: se ainda há mais rostos que o elenco (o detector
+   também olha a imagem ampliada 2x, para achar rosto de ~15 px), a própria
+   imagem volta como primeira referência, com as referências do elenco
+   depois, e o pedido de tirar quem está ao fundo. Até 3 tentativas; a
+   edição só vale se o elenco continua inteiro e os rostos a mais diminuem.
+
+Medido no staging com o elenco sintético numa "feira movimentada": antes,
+6 de 6 cenas com feirantes ao fundo; depois, 6 de 6 só com o elenco (uma com
+um vulto desfocado ao longe). Custo: 22–39 s por cena, contra 10 s.
+
+A conferência das vistas do turnaround não chama mais de `extra_figure` a
+pessoa partida em duas formas empilhadas (camiseta da cor do fundo).
+
 Smoke do executor, sem gerar uma imagem:
 
 ```bash
