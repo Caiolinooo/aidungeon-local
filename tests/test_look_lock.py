@@ -189,7 +189,7 @@ def test_see_of_three_people_carries_everyones_look(client, tmp_path, monkeypatc
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = seen[-1]["prompt"]
-    assert "Renata Lemos: always wearing large round thin gold-rimmed glasses" in prompt
+    assert "Renata Lemos: glasses: large round thin gold-rimmed glasses" in prompt
     assert "just past the shoulders, tight voluminous curls, jet black hair" in prompt
     with db.session() as conn:
         renata = db.get_card(conn, adv["id"], cards[0]["id"])
@@ -368,7 +368,7 @@ def test_multi_person_clause_keeps_everyones_glasses_within_the_see_budget(tmp_d
                 entry="A stout pirate with a large belly, messy gray hair and a dirty torn shirt.",
                 sheet=json.dumps(sheet)))
     clause = clip_words(likeness.opening_clause(cards), _CLAUSE_CHARS)
-    assert "Renata Lemos: always wearing large round thin gold-rimmed glasses" in clause
+    assert "Renata Lemos: glasses: large round thin gold-rimmed glasses" in clause
     assert "face: skull mask" in clause
     assert "Caio Calça-Quadrada: no glasses; face: skull mask" in clause   # óculos não vazam
     assert "stout pirate" not in clause                    # o look manda sobre o texto
@@ -414,7 +414,7 @@ def test_levels_budget_the_detail_for_each_render():
     assert "body: petite and slim build" in full and "body:" not in face
     assert "very narrow waist" in views and "mole" not in views
     assert "when smiling: cheeks lift into round apples" in scene
-    assert compact.startswith("always wearing") and "very narrow waist" in compact
+    assert compact.startswith("glasses: large round thin gold-rimmed glasses") and "very narrow" in compact
     assert len(full) > len(face) and len(full) > len(views) > len(compact)
     # sem look nada entra (card sem foto e sem âncora lida)
     assert look_lock.identity_text(None, level="scene") == ""
@@ -455,3 +455,15 @@ def test_glasses_wearers_get_the_best_face_and_the_glasses_photo(tmp_db, tmp_pat
         card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
     colors = [Image.open(io.BytesIO(p)).convert("RGB").getpixel((5, 5)) for p in look_lock.face_photos(card)]
     assert colors[1][0] > 150                                       # sem óculos: as duas melhores
+
+
+def test_masked_faces_keep_the_mask_and_drop_invented_features():
+    caio = {**LOOK, "glasses": "none", "face": "bone-white skull mask covering the whole face",
+            "lips": "full lips", "face_shape": "square jaw", "eyebrows": "thick dark brows",
+            "smile": "wide grin", "build": "athletic", "waist": "narrow"}
+    for level in ("compact", "scene", "views", "face", "full"):
+        text = look_lock.identity_text(caio, level=level)
+        assert "bone-white skull mask" in text
+        assert "full lips" not in text and "square jaw" not in text and "grin" not in text
+    assert look_lock.identity_text(caio, level="compact").startswith(
+        "no glasses; face: bone-white skull mask")

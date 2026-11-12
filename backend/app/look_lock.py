@@ -43,7 +43,9 @@ _failures: dict[str, float] = {}
 # v7: detalhe fino com intensidade (pele, estrutura do rosto, sobrancelhas,
 # cachos, expressões) e corpo pela foto de corpo inteiro junto da descrição
 # do card (a Renata saía mais larga que a foto do espelho).
-LOOK_VERSION = 7
+# v8: máscara/caveira é a regra número um (a v7 leu a caveira do Caio como
+# "no distinctive marks"), e corpo só de foto que mostra o corpo.
+LOOK_VERSION = 8
 # Até 12 fotos (a principal primeiro); a leitura escolhe as de rosto.
 MAX_PHOTOS = 12
 HAIR_KEYS = ("hair_colour", "hair_dye", "hair_sheen", "hair_curl", "hair_volume",
@@ -72,6 +74,9 @@ skin_tone, skin_texture, skin_marks, freckles, skin_shine, face_shape, cheeks, j
 lids_lashes, eyebrows, face, smile, neutral, build, height, shoulders, waist, hips, limbs; plus "face_images"
 (array of up to 3 integers, best first) and "glasses_image" (integer, 0 if none).
 Rules:
+- MOST IMPORTANT: if the face is covered or replaced by a mask, a skull, a prosthetic, face paint or anything not a
+  bare human face, say so in "face" (e.g. "bone-white skull mask covering the whole face"), and write "hidden by
+  mask" for the features it hides. Never write "no distinctive marks" for a masked or non-human face.
 - English, concrete, 2 to 16 words per key. Say HOW STRONG each trait is ("very", "strongly", "slightly",
   "moderately"), not only whether it is there. Never name or identify the person; no age, ethnicity or biography.
 - Photos may have colour filters, warm lamps or black-and-white: judge colours from the images with neutral light.
@@ -98,8 +103,8 @@ Face structure:
 Expressions:
 - smile: how smiling reshapes the face in the photos, e.g. "cheeks lift into round apples, eyes narrow to crescents,
   wide full-lipped smile". neutral: e.g. "soft heavy-lidded gaze, closed full lips".
-Body (from the photos only, judging proportions from full-body photos and how the clothes sit; write "not
-visible" for anything no photo shows; describe plainly and non-sexually):
+Body (from the photos only, judging proportions from photos that show the whole body and how the clothes sit;
+when no photo shows the waist, hips or legs write "not visible" for them; describe plainly and non-sexually):
 - Use absolute words compared with an average adult, because image models read "slim" as average:
   build (thickness and frame, e.g. "very slim, petite, small narrow frame" or "curvy, average frame"), height
   (impression, e.g. "short"), shoulders (e.g. "narrow shoulders"), waist (e.g. "very narrow waist, flat stomach"),
@@ -585,19 +590,32 @@ def identity_text(look: dict | None, *, compact: bool = False, level: str = "") 
     glasses = _glasses(look)
     facial = _value(look, "facial_hair")
     mask = _value(look, "face")
-    brows = _labelled(look, "eyebrows")
+    # Rosto coberto (a caveira do Caio): formato, lábios, sobrancelhas e
+    # sorriso que a leitura inventou por trás da máscara ficam de fora.
+    masked = bool(re.search(r"(?i)mask|skull|prosthetic|helmet|visor|veil|face paint", mask))
+    brows = "" if masked else _labelled(look, "eyebrows")
     if level == "compact":
-        # O fundo corta cada pessoa pelo fim: o que mais identifica vem antes
-        # (óculos, barba, máscara/marca, sobrancelhas), corpo e cabelo depois.
-        bits = [glasses, facial, f"face: {mask}" if mask else "",
-                brows, _body(look, detail=False), _hair(look, detail=False)]
+        # O fundo corta cada pessoa pelo fim (uns 60 caracteres cada): o que
+        # mais identifica vem antes; armação curta, cabelo e corpo resumidos.
+        short_glasses = glasses
+        if glasses.startswith("always wearing"):
+            frames = (look.get("glasses") or "").split(",")[0].strip()
+            short_glasses = f"glasses: {frames}" if frames else glasses
+        build = _value(look, "build")
+        waist = _value(look, "waist")
+        body = ", ".join(bit for bit in (build, waist) if bit)
+        # Barba antes do rosto: "clean-shaven except for beard" cortado no fim
+        # virava "clean-shaven" e o Caio de produção saiu sem barba.
+        bits = [short_glasses, facial, f"face: {mask}" if mask else "",
+                _hair(look, detail=False), f"body: {body}" if body else "", brows]
         return "; ".join(bit for bit in bits if bit)
-    face_bits = [_labelled(look, key) for key in ("face_shape", "cheeks")]
+    face_bits = [] if masked else [_labelled(look, key) for key in ("face_shape", "cheeks")]
     if level == "views":
         bits = [glasses, facial, f"face: {mask}" if mask else "", *face_bits, brows,
                 _labelled(look, "skin_tone"), _hair(look, detail=False), _body(look, detail=True)]
         return "; ".join(bit for bit in bits if bit)
-    detail_bits = [_labelled(look, key) for key in ("jawline", "chin", "nose", "lips", "eyes", "lids_lashes")]
+    detail_bits = [] if masked else [
+        _labelled(look, key) for key in ("jawline", "chin", "nose", "lips", "eyes", "lids_lashes")]
     skin = "; ".join(bit for bit in (
         _value(look, "skin_tone"), _value(look, "skin_texture"),
         f"marks: {look['skin_marks']}" if _value(look, "skin_marks") else "",
@@ -605,8 +623,9 @@ def identity_text(look: dict | None, *, compact: bool = False, level: str = "") 
         _value(look, "skin_shine")) if bit)
     if level == "scene":
         bits = [glasses, facial, f"face: {mask}" if mask else "", *face_bits, brows,
-                _labelled(look, "lips"), _hair(look, detail=False), _body(look, detail=False),
-                f"when smiling: {look['smile']}" if _value(look, "smile") else ""]
+                "" if masked else _labelled(look, "lips"), _hair(look, detail=False),
+                _body(look, detail=False),
+                f"when smiling: {look['smile']}" if _value(look, "smile") and not masked else ""]
         return "; ".join(bit for bit in bits if bit)
     bits = [glasses, _hair(look, detail=True), facial, f"face: {mask}" if mask else "",
             *face_bits, *detail_bits, brows, f"skin: {skin}" if skin else "",
