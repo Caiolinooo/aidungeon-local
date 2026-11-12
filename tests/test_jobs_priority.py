@@ -673,6 +673,25 @@ def test_automatic_clip_waits_for_stills_and_manual_does_not(tmp_db):
             conn, alone["id"], "only", "breeze", automatic=True)
         assert db.claim_next_job(conn)["id"] == auto["id"]
 
+    # Giro 360° pendente (o menos urgente, às vezes adiado por meia hora) não
+    # segura o clipe automático da cena; em andamento, cede a GPU e volta à fila.
+    turning = make_adventure()
+    with db.session() as conn:
+        waiting = jobs.enqueue(
+            conn, "turnaround_clip", turning["id"], "npc", {"prompt": "turn"},
+            priority=jobs.PRIORITY_PORTRAIT_CLIP)
+        auto = jobs.enqueue_scene_clip(
+            conn, turning["id"], "scene", "waves", automatic=True)
+        assert db.claim_next_job(conn)["id"] == auto["id"]
+        assert db.claim_next_job(conn)["id"] == waiting["id"]     # agora running
+        later = jobs.enqueue_scene_clip(
+            conn, turning["id"], "scene2", "storm", automatic=True)
+        assert db.get_job(conn, waiting["id"])["status"] == "canceled"
+        requeued = [job for job in db.list_jobs(conn, turning["id"])
+                    if job["type"] == "turnaround_clip" and job["status"] == "pending"]
+        assert len(requeued) == 1 and requeued[0]["payload"]["requeues"] == 1
+        assert db.claim_next_job(conn)["id"] == later["id"]
+
 
 def test_heartbeat_is_written_for_running_jobs_and_hidden_after(tmp_db, monkeypatch):
     assert jobs._HEARTBEAT_INTERVAL_S == 5.0
@@ -806,3 +825,21 @@ def test_portrait_prepare_is_single_and_waits_out_the_narrative(tmp_db, monkeypa
             jobs._prepare_queued.clear()
             jobs._prepare_inflight.clear()
             jobs._prepare_running = False
+
+
+def test_running_video_can_be_canceled_by_request_and_a_running_still_cannot(client):
+    """O giro 360° roda até 9 minutos: o DELETE tem de parar o que já começou.
+    Imagem parada em andamento segue como antes (termina em segundos)."""
+    adv = make_adventure()
+    with db.session() as conn:
+        turn = jobs.enqueue(conn, "turnaround_clip", adv["id"], "npc", {"prompt": "turn"},
+                            priority=jobs.PRIORITY_PORTRAIT_CLIP)
+        assert db.claim_next_job(conn)["id"] == turn["id"]
+    resp = client.delete(f"/api/adventures/{adv['id']}/jobs/{turn['id']}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "canceled"
+    with db.session() as conn:
+        still = jobs.enqueue(conn, "scene_backdrop", adv["id"], "room", {"prompt": "hall"})
+        assert db.claim_next_job(conn)["id"] == still["id"]
+    resp = client.delete(f"/api/adventures/{adv['id']}/jobs/{still['id']}")
+    assert resp.status_code == 200 and resp.json()["status"] == "running"

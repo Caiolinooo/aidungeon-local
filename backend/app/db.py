@@ -1841,8 +1841,9 @@ def claim_next_job(conn: sqlite3.Connection, *,
 
     O worker é único por processo. `max_priority` deixa de fora os menos
     urgentes. Clipe com `payload.automatic` espera enquanto existir outro job
-    pending ou preparing que não seja clipe automático. Se só restarem clipes
-    automáticos, eles seguem a ordem normal. Clipe manual não entra no gate.
+    pending ou preparing que não seja clipe automático nem giro 360°. Se só
+    restarem clipes automáticos, eles seguem a ordem normal. Clipe manual não
+    entra no gate.
     """
     sql = (
         "SELECT id FROM jobs WHERE status='pending'"
@@ -1854,6 +1855,10 @@ def claim_next_job(conn: sqlite3.Connection, *,
         " AND EXISTS ("
         " SELECT 1 FROM jobs AS other"
         " WHERE other.status IN ('pending', 'preparing')"
+        # O giro 360° é o job menos urgente da fila e pode ficar pendente por
+        # 10 a 30 min (rodadas adiadas): não segura o clipe da cena. Em
+        # produção um clipe automático esperou 15 min atrás de dois giros.
+        " AND other.type != 'turnaround_clip'"
         " AND NOT (other.type='scene_clip'"
         " AND COALESCE(json_extract(other.payload, '$.automatic'), 0) = 1)"
         " )"

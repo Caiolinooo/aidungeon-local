@@ -106,7 +106,13 @@ def cancel_job(adventure_id: str, job_id: str) -> dict:
         elif job["status"] in ("done", "error", "canceled"):
             raise GameError(409, "job_not_cancelable",
                             f"job already finished with status '{job['status']}'")
-        # running: devolve como está (cancelamento cooperativo — v1)
+        elif job["type"] in ("turnaround_clip", "scene_clip"):
+            # Vídeo em andamento leva minutos (o giro 360°, até 9): o pedido
+            # cancela de verdade. O worker vê o status entre os polls e
+            # interrompe o ComfyUI; nada é publicado depois disso.
+            job = jobs.cancel(conn, job_id, reason="canceled by request") \
+                or db.get_job(conn, job_id)
+        # demais running: devolve como está (cancelamento cooperativo — v1)
         return job
 
 
