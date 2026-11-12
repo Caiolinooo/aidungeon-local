@@ -1837,9 +1837,17 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
                 f"the references.{visible} {_TURNAROUND_SIDES} {studio}"
             )
             continue
+        view_outfit, view_studio = outfit, studio
+        top = (lock or {}).get("top") or ""
+        if kind == "back" and look_lock.has_print(top):
+            # De costas a estampa do peito não aparece: com a peça descrita
+            # inteira, a vista de costas saía com "OCEAN CLUB" nas costas.
+            plain = {**lock, "top": f"{look_lock.without_print(top)}, plain back with no print"}
+            view_outfit = " " + outfit_lock.full_text(plain, front_note=False)
+            view_studio = _TURNAROUND_STUDIO
         prompts[kind] = (
-            f"{pose} {keep}{outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
-            f"{studio}"
+            f"{pose} {keep}{view_outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
+            f"{view_studio}"
         )
     prompts["clip"] = (
         "Turntable shot of one person standing alone in a seamless grey studio. "

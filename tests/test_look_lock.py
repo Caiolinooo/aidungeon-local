@@ -298,6 +298,15 @@ def test_prints_lose_their_letters_and_hair_tint_stays_faint():
     for kind in ("master", "front", "face"):
         assert "no lettering other than the print on the top" in prompts[kind]
         assert "No text, no labels" not in prompts[kind]
+    # de costas a estampa não aparece, e os óculos não entram nos acessórios
+    assert '"OCEAN CLUB"' in prompts["front"] and '"OCEAN CLUB"' in prompts["profile"]
+    assert '"OCEAN CLUB"' not in prompts["back"]
+    assert "top: white t-shirt, plain back with no print" in prompts["back"]
+    assert "No text, no labels, no logos" in prompts["back"]
+    assert look_lock.no_eyewear("round tortoiseshell eyeglasses") == "none"
+    assert look_lock.no_eyewear("silver watch, black-framed glasses and a leather belt") == \
+        "silver watch, a leather belt"
+    assert look_lock.no_eyewear("black wristband") == "black wristband"
     plain = jobs._turnaround_prompts(card, {**lock, "top": "black t-shirt"},
                                      identity="exact likeness of Marina")
     assert "No text, no labels, no logos" in plain["master"]

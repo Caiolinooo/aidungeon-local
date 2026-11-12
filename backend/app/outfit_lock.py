@@ -216,7 +216,7 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
     return lock
 
 
-def full_text(lock: dict | None) -> str:
+def full_text(lock: dict | None, *, front_note: bool = True) -> str:
     """Frase para mestre, ficha e giro: as quatro peças, sempre iguais."""
     if not lock:
         return ""
@@ -225,7 +225,7 @@ def full_text(lock: dict | None) -> str:
     pieces = "; ".join(f"{key}: {lock[key]}" for key in SLOTS)
     # O giro do Wan pintava a estampa do peito também nas costas.
     front_only = (" The print is only on the chest; the back of the top is plain."
-                  if look_lock.has_print(lock.get("top") or "") else "")
+                  if front_note and look_lock.has_print(lock.get("top") or "") else "")
     return (f"Default outfit, always exactly this and nothing else: {pieces}. "
             f"Same garments, colours and footwear in every view.{front_only}")
 

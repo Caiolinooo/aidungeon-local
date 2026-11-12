@@ -219,6 +219,28 @@ def no_text(value: str) -> str:
     return " ".join(head.split()).strip(" ,;")
 
 
+def without_print(value: str) -> str:
+    """A peça sem a estampa: é o que se vê de costas."""
+    if not has_print(value):
+        return value
+    head = re.split(r"(?i)\s+(?:with|featuring|showing|bearing|that has|having)\s+", value, maxsplit=1)[0]
+    head = _PRINT_WORDS.sub("", _QUOTED.sub("", head))
+    return " ".join(head.split()).strip(" ,;") or value
+
+
+_EYEWEAR = re.compile(r"(?i)\b(?:eye)?glasses\b|\bspectacles\b|\bsunglasses\b")
+
+
+def no_eyewear(value: str) -> str:
+    """Acessórios sem os óculos: eles têm chave própria, e repetidos aqui
+    voltavam com outra cor ("black-framed" para uma armação tartaruga)."""
+    if not value or not _EYEWEAR.search(value):
+        return value
+    items = [item.strip() for item in re.split(r",|;|\band\b", value) if item.strip()]
+    kept = [item for item in items if not _EYEWEAR.search(item)]
+    return ", ".join(kept) if kept else "none"
+
+
 def has_print(value: str) -> bool:
     """A peça tem estampa (letras transcritas ou desenho)?"""
     return bool(value and (_QUOTED.search(value) or _PRINT_WORDS.search(value)))
@@ -350,8 +372,11 @@ def _read_clothing(image: bytes, *, transport=None, llm_cfg: dict) -> dict:
         data = json.loads(match.group(0)) if match else {}
     except ValueError:
         return {}
-    return {key: _clean(data.get(key)) for key in CLOTHING_KEYS
-            if isinstance(data, dict) and _clean(data.get(key))}
+    found = {key: _clean(data.get(key)) for key in CLOTHING_KEYS
+             if isinstance(data, dict) and _clean(data.get(key))}
+    if found.get("accessories"):
+        found["accessories"] = no_eyewear(found["accessories"])
+    return found
 
 
 def current(card: dict | None) -> dict | None:
