@@ -580,7 +580,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         headcount = _headcount(cast)
         # Roupa do momento e marcas visíveis que a história gravou: sem isto o
         # fundo pintava sempre a roupa padrão das referências.
-        state_line = npc_assets.story_state_line(cast, limit=90)
+        state_line = npc_assets.story_state_note(cast)
         required = [
             sex_line,
             clause,

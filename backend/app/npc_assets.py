@@ -1575,33 +1575,32 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
             f"{names(creatures)}: {CREATURE_LOCK}")
 
 
-def story_state_line(cards: list[dict], *, limit: int = 110) -> str:
-    """O que mudou na história e a pintura tem de mostrar: roupa do momento e
-    marcas visíveis de cada um. Vazio quando ninguém mudou.
-
-    Só entra texto em inglês (o estado gravado em português não serve ao
-    renderizador); cada pessoa ocupa no máximo `limit` caracteres.
+def story_state_bits(card: dict | None, *, limit: int = 110) -> list[str]:
+    """O que a história mudou nesta pessoa e a pintura tem de mostrar: roupa
+    do momento e marcas visíveis. Só texto em inglês (o estado gravado em
+    português não serve ao renderizador). Criatura não leva roupa.
     """
-    lines = []
-    for card in cards:
-        if not card or creature_kind(card):
-            continue
-        sheet = parse_sheet(card.get("sheet") or "")
-        bits = []
-        outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
-        if outfit and not _looks_portuguese(outfit):
-            bits.append("now wearing " + outfit)
-        wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=False)
-        if wounds and not _looks_portuguese(wounds):
-            bits.append(wounds)
-        name = " ".join(str(card.get("title") or "").split())
-        if bits and name:
-            lines.append(_clip(f"{name}: " + ", ".join(bits), limit + len(name)))
-    if not lines:
-        return ""
-    return ("Right now in the story. " + ". ".join(lines)
-            + ". Paint this clothing and these marks even where a reference image "
-              "shows the usual outfit")
+    if not card or creature_kind(card):
+        return []
+    sheet = parse_sheet(card.get("sheet") or "")
+    bits = []
+    outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
+    if outfit and not _looks_portuguese(outfit):
+        bits.append(_clip("now wearing " + outfit, limit))
+    wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=False)
+    if wounds and not _looks_portuguese(wounds):
+        bits.append(_clip(wounds, limit))
+    return bits
+
+
+STORY_STATE_NOTE = (
+    "Where a person's line says what they are now wearing or a mark they have, paint "
+    "that on that person only, instead of the outfit in their reference image")
+
+
+def story_state_note(cards: list[dict]) -> str:
+    """Frase curta que faz a roupa do momento vencer a da referência."""
+    return STORY_STATE_NOTE if any(story_state_bits(card) for card in cards) else ""
 
 
 _TITLE_STOP = {

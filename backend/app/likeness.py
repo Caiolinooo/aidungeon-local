@@ -195,7 +195,11 @@ def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
     looked = {str(card.get("id")) for card in cards if _has_look(card)}
     clause = _opening_clause(cards, explicit=explicit, name_only=looked)
     # Uma pessoa: âncora de identidade com o sorriso; várias: o mínimo de cada.
-    looks = _look_bits(cards, level="compact" if len(cards) > 1 else "scene")
+    # Na cena comum a roupa do momento e as marcas visíveis vão na linha da
+    # própria pessoa: numa frase à parte o vestido da Marina foi pintado na
+    # fada e no lobo.
+    looks = _look_bits(cards, level="compact" if len(cards) > 1 else "scene",
+                       state=not explicit)
     if not looks:
         return clause
     return f"{clause}. {looks}" if clause else looks
@@ -208,7 +212,8 @@ def _has_look(card: dict) -> bool:
             and bool(look_lock.identity_text(look_lock.current(card))))
 
 
-def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "") -> str:
+def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
+               state: bool = False) -> str:
     from app import look_lock
 
     lines = []
@@ -218,7 +223,10 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "") -> 
         text = look_lock.identity_text(look_lock.current(card), compact=compact, level=level)
         name = display_name(card) or str(card.get("title") or "").strip()
         if text and name:
-            lines.append(f"{name}: {text}")
+            # O estado da história abre a linha: é o que o corte por traços
+            # guarda por último, e fica colado ao nome de quem o veste.
+            now = npc_assets.story_state_bits(card) if state else []
+            lines.append(f"{name}: " + "; ".join([*now, text]))
     return ". ".join(lines)
 
 

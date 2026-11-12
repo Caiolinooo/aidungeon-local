@@ -977,6 +977,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     _require_cast(adv["id"], cast_locked)
     if not explicit:
         order = likeness.strip_explicit(order)
+    # Roupa do momento lida agora (cena comum): entra nos cards antes de montar
+    # a linha de cada pessoa, para o vestido novo ficar colado ao nome dela.
+    worn = {} if explicit else _story_outfits(
+        [card.get("title") or "" for card in frame], moment, order,
+        llm_cfg=llm_cfg, transport=transport)
+    frame = _with_story_outfits(frame, worn)
+    cast_locked = list(frame)
     clause = _look_clause(frame, explicit=explicit) or (
         "" if explicit else npc_assets.image_canon_clause(frame, moment)
     )
@@ -1201,9 +1208,6 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         context=f"{sentence}. Place: {location}.",
     ) if order else ""
     order_lock = _explicit_order_lock(order_en) if explicit else ""
-    worn = {} if explicit else _story_outfits(
-        [card.get("title") or "" for card in locked], moment, order,
-        llm_cfg=llm_cfg, transport=transport)
     lead_bits = [order_lock] if order_lock else []
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso
@@ -1226,8 +1230,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
         lead_bits.append(npc_assets.coverage_lock(*locked) if locked else (
             npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK))
-        # Roupa do momento e marcas visíveis que a história estabeleceu.
-        state_line = npc_assets.story_state_line(_with_story_outfits(locked, worn))
+        # Roupa do momento e marcas já estão na linha de cada pessoa; esta
+        # frase só faz o texto vencer a roupa da referência.
+        state_line = npc_assets.story_state_note(frame)
         if state_line:
             lead_bits.append(state_line)
     # A instrução do jogador não engole mais a ação: antes o order_lock

@@ -58,41 +58,52 @@ def test_creatures_are_told_apart_from_people_and_from_verbs():
     assert npc_assets.coverage_lock(marina, lobo, explicit=True) == ""
 
 
-def test_story_state_line_carries_the_outfit_and_marks_of_the_moment():
+def test_story_state_goes_on_each_persons_own_line():
+    """Roupa do momento e marcas visíveis ficam coladas ao nome de quem as
+    tem. Numa frase à parte, com quatro em cena, o vestido da Marina foi
+    pintado na fada e no lobo."""
     marina = _card("Marina Teste", sheet={
         "current_outfit": "long yellow hooded raincoat over her clothes",
         "body_state": {"v": 1, "pain": 2, "conditions": [
             {"id": "c1", "active": True, "scene_visible": True, "portrait_visible": False,
              "visual_en": "bandaged right forearm"}]}})
     bruno = _card("Bruno Teste", sheet={"current_outfit": "regata branca e jeans"})
-    quiet = _card("Dick Vigarista")
-    line = npc_assets.story_state_line([marina, bruno, quiet])
-    assert line.startswith("Right now in the story. Marina Teste: now wearing long yellow "
-                           "hooded raincoat over her clothes, bandaged right forearm.")
-    assert "Bruno" not in line                 # roupa gravada em português não vai ao pintor
-    assert "even where a reference image shows the usual outfit" in line
-    assert npc_assets.story_state_line([quiet]) == ""
+    lobo = _card("Lobo de Fogo", entry="criatura", portrait_prompt="A fiery wolf",
+                 sheet={"current_outfit": "red cape"})
+    assert npc_assets.story_state_bits(marina) == [
+        "now wearing long yellow hooded raincoat over her clothes", "bandaged right forearm"]
+    assert npc_assets.story_state_bits(bruno) == []     # português não vai ao pintor
+    assert npc_assets.story_state_bits(lobo) == []      # bicho não leva roupa
+    assert npc_assets.story_state_note([marina, bruno]) == npc_assets.STORY_STATE_NOTE
+    assert npc_assets.story_state_note([bruno]) == ""
 
 
-def test_backdrop_paints_the_outfit_the_story_gave(monkeypatch):
-    marina = _card("Marina Teste", portrait_image_id="m-img", sheet={
-        "reference": {"turnaround": {}},
-        "current_outfit": "long yellow hooded raincoat over her clothes"})
-    bruno = _card("Bruno Teste", portrait_image_id="b-img",
-                  portrait_prompt="A stocky bearded man", sheet={"reference": {"turnaround": {}}})
+def test_backdrop_paints_the_outfit_the_story_gave(tmp_db):
+    from app import look_lock as locks
+
+    def looked(title, **sheet):
+        look = {"hair_colour": "black", "hair_length": "chin-length", "glasses": "none",
+                "version": locks.LOOK_VERSION, "basis_hash": "x", "source": "photo"}
+        return _card(title, portrait_image_id=f"{title}-img",
+                     sheet={"reference": {"turnaround": {}}, "look_lock": look, **sheet})
+
+    marina = looked("Marina Teste", current_outfit="long red dress")
+    bruno = looked("Bruno Teste")
     prompt, people = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
                                    [marina, bruno], "Marina and Bruno wait by the fire.")
     assert people is True
-    assert "Marina Teste: now wearing long yellow hooded raincoat over her clothes" in prompt
+    assert "Marina Teste: now wearing long red dress; no glasses" in prompt
+    assert "Bruno Teste: no glasses" in prompt and "Bruno Teste: now wearing" not in prompt
+    assert npc_assets.STORY_STATE_NOTE in prompt
     assert "each with that exact face, hair and age." in prompt
-    assert "hair, age and clothing" not in prompt
-    usual = _card("Marina Teste", portrait_image_id="m-img",
-                  portrait_prompt="A woman with an auburn bob and round glasses",
-                  sheet={"reference": {"turnaround": {}}})
     plain, _ = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
-                             [usual, bruno], "Marina and Bruno wait by the fire.")
-    assert "Right now in the story" not in plain
+                             [looked("Marina Teste"), bruno], "Marina and Bruno wait.")
+    assert npc_assets.STORY_STATE_NOTE not in plain
     assert "each with that exact face, hair and age and clothing." in plain
+    # cena explícita não recebe a roupa do momento por este caminho
+    from app import likeness
+    assert "now wearing" not in likeness.opening_clause([marina, bruno], explicit=True)
+    assert "now wearing long red dress" in likeness.opening_clause([marina, bruno])
 
 
 def test_see_reads_the_clothing_of_the_moment_only_when_the_text_talks_about_it(monkeypatch):
