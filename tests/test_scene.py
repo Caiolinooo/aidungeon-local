@@ -1141,7 +1141,7 @@ def test_long_identity_prompt_preserves_action_location_and_per_person_clothing(
         "Ada is naked and dances on the central tavern table.",
     )
     assert people is True
-    assert len(prompt) <= scene._PROMPT_LIMIT == 1700
+    assert len(prompt) <= scene._PROMPT_LIMIT == 1900
     assert "dances on the central tavern table" in prompt
     assert "The Ancient Tavern" in prompt
     assert "use the reference images only for the named characters" in prompt.lower()

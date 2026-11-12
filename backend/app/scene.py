@@ -301,9 +301,9 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
     return ""
 
 
-# 1700 caracteres são uns 400 tokens, dentro dos 512 do encoder do Flux2. Com
+# 1900 caracteres são uns 450 tokens, dentro dos 512 do encoder do Flux2. Com
 # 1400 a roupa do momento de quatro pessoas não cabia junto dos traços.
-_PROMPT_LIMIT = 1700
+_PROMPT_LIMIT = 1900
 
 
 def _sentences(parts: list) -> str:
@@ -359,15 +359,23 @@ def _drop_traits(person: str, limit: int) -> str:
     traits = [bit.strip() for bit in tail.rstrip(".").split(";") if bit.strip()] if sep else []
     if len(traits) < 2:
         return clip_words(person, limit)
-    kept: list[str] = []
-    for trait in traits:
-        candidate = f"{head}: " + "; ".join([*kept, trait])
-        if len(candidate) > limit:
+    # Primeiro o traço que abre a linha (óculos), depois a roupa do momento
+    # ("now wearing …") e só então os outros, na ordem. Sem essa prioridade o
+    # segundo corte deixava a Marina só com os óculos, sem a capa amarela, e
+    # guardava o cabelo de quem não tinha mudado nada.
+    order = [0, *[i for i, trait in enumerate(traits) if i and trait.startswith("now wearing")],
+             *[i for i, trait in enumerate(traits) if i and not trait.startswith("now wearing")]]
+    chosen: list[int] = []
+    for index in order:
+        picked = sorted([*chosen, index])
+        if len(f"{head}: " + "; ".join(traits[i] for i in picked)) > limit:
+            if traits[index].startswith("now wearing") or not chosen:
+                continue          # tenta o próximo: um traço menor ainda pode caber
             break
-        kept.append(trait)
-    if not kept:
+        chosen = picked
+    if not chosen:
         return clip_words(f"{head}: {traits[0]}", limit)
-    return f"{head}: " + "; ".join(kept)
+    return f"{head}: " + "; ".join(traits[i] for i in chosen)
 
 
 def _shrink_look(look: str, limit: int) -> str:

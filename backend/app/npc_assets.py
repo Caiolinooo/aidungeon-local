@@ -1598,8 +1598,8 @@ def story_state_bits(card: dict | None, *, limit: int = 80) -> list[str]:
 
 
 STORY_STATE_NOTE = (
-    "Where a person's line says what they are now wearing or a mark they have, paint "
-    "that on that person only, instead of the outfit in their reference image")
+    "Paint each person's \"now wearing\" clothes and marks on that person only, "
+    "not the outfit in their reference image")
 
 
 def story_state_note(cards: list[dict]) -> str:

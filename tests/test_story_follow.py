@@ -241,3 +241,18 @@ def test_truncated_consequence_reply_keeps_what_came_complete():
     import pytest
     with pytest.raises(ValueError):
         consequences._extract_json("no json here")
+
+
+def test_trait_cut_keeps_the_outfit_of_the_moment_before_other_traits():
+    """No segundo corte a pessoa ficava só com os óculos; a roupa do momento
+    vem antes do cabelo e do corpo."""
+    line = ("Marina Teste: glasses: round tortoiseshell frames; now wearing yellow raincoat "
+            "over blue mechanic jumpsuit; chin-length, straight, reddish-brown hair; "
+            "body: slim, long frame")
+    cut = scene._drop_traits(line, 110)
+    assert cut == ("Marina Teste: glasses: round tortoiseshell frames; now wearing yellow "
+                   "raincoat over blue mechanic jumpsuit")
+    hair_first = ("Fada: no glasses; shoulder-length, loose waves, near-black hair; "
+                  "now wearing white dress")
+    assert scene._drop_traits(hair_first, 45) == "Fada: no glasses; now wearing white dress"
+    assert scene._drop_traits(line, 400) == line
