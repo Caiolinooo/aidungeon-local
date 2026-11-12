@@ -1577,6 +1577,27 @@ def backdrop_cache_key(img_cfg: dict, prompt: str, *, include_people: bool,
     )
 
 
+def _read_missing_looks(job: dict, transport: Any, llm_cfg: dict) -> None:
+    """Lê o look de quem está no fundo e ainda não tem um.
+
+    O prompt do fundo nasce no pedido da cena, que não chama o LLM. Depois de
+    uma versão nova do leitor ninguém tem look, e o fundo de produção saiu
+    sem a linha do Caio (sem barba, com os dentes do ladrão). Este fundo
+    ainda usa o prompt antigo; a leitura fica gravada e o próximo pedido da
+    cena já monta o prompt com os traços de cada um.
+    """
+    ids = [str(item) for item in (job.get("payload") or {}).get("cast_card_ids") or []]
+    if not ids:
+        return
+    try:
+        with db.session() as conn:
+            cards = [db.get_card(conn, job["adventure_id"], card_id) for card_id in ids]
+        look_lock.ensure_many(job["adventure_id"], [card for card in cards if card],
+                              transport=transport, llm_cfg=llm_cfg)
+    except Exception as exc:  # leitura é melhoria: nunca derruba o fundo
+        log.warning("job %s: look do elenco indisponível: %s", job["id"], type(exc).__name__)
+
+
 def _execute_backdrop(job: dict, transport: Any) -> dict:
     """Executa um job scene_backdrop; devolve o result (ou levanta)."""
     prompt = str((job.get("payload") or {}).get("prompt") or "").strip()
@@ -1589,6 +1610,7 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
     if not img_cfg["enabled"]:
         raise GameError(503, "image_generation_disabled",
                         "Image generation is disabled in settings")
+    _read_missing_looks(job, transport, llm_cfg)
     img_cfg = _backdrop_cfg(img_cfg, explicit=bool(payload.get("explicit")))
     ban = ""
     if payload.get("explicit"):

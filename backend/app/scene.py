@@ -343,21 +343,58 @@ _BEAT_FLOOR = 110
 _LOOK_FLOOR = 160
 
 
-def _shrink_look(look: str, limit: int) -> str:
-    """Encolhe o bloco de aparência cortando um pouco de cada personagem.
+def _drop_traits(person: str, limit: int) -> str:
+    """Encurta "Nome: traço; traço; traço" tirando traços inteiros do fim.
 
-    Cortar pelo fim tirava a descrição inteira do último, e sem ela o modelo
-    lê só o nome: "Ladrão de Jibóia" saiu pintado como uma cobra.
+    Os traços vêm em ordem de importância (óculos, barba, máscara, cabelo,
+    corpo). Cortar por caracteres deixava "…wire frames; just past." no fundo
+    de produção: meio traço que o modelo não entende.
     """
     from app.routes.images import clip_words
+    if len(person) <= limit:
+        return person
+    head, sep, tail = person.partition(": ")
+    traits = [bit.strip() for bit in tail.rstrip(".").split(";") if bit.strip()] if sep else []
+    if len(traits) < 2:
+        return clip_words(person, limit)
+    kept: list[str] = []
+    for trait in traits:
+        candidate = f"{head}: " + "; ".join([*kept, trait])
+        if len(candidate) > limit:
+            break
+        kept.append(trait)
+    if not kept:
+        return clip_words(f"{head}: {traits[0]}", limit)
+    return f"{head}: " + "; ".join(kept)
+
+
+def _shrink_look(look: str, limit: int) -> str:
+    """Encolhe o bloco de aparência tirando um pouco de cada personagem.
+
+    Cortar pelo fim tirava a descrição inteira do último, e sem ela o modelo
+    lê só o nome: "Ladrão de Jibóia" saiu pintado como uma cobra. A frase
+    "exact likeness of …" só tem nomes e fica inteira; quem já é curto cede o
+    que sobra para os outros.
+    """
     look = " ".join((look or "").split())
     if limit <= 0 or len(look) <= limit:
         return look
-    people = [part for part in re.split(r"(?<=[.!?])\s+", look) if part]
-    if len(people) <= 1:
+    parts = [part for part in re.split(r"(?<=[.!?])\s+", look) if part]
+    people = [part for part in parts
+              if ":" in part or not part.lower().startswith("exact likeness")]
+    if len(parts) <= 1 or not people:
+        from app.routes.images import clip_words
         return clip_words(look, limit)
-    each = max(60, (limit - len(people)) // len(people))
-    return _sentences([clip_words(person, each) for person in people])
+    budget = limit - sum(len(part) + 1 for part in parts if part not in people) - len(people)
+    share = {id(part): 0 for part in people}
+    waiting = sorted(people, key=len)
+    while waiting:
+        each = max(60, budget // len(waiting))
+        person = waiting.pop(0)
+        share[id(person)] = min(len(person), each)
+        budget -= share[id(person)]
+    return _sentences([
+        _drop_traits(part, share[id(part)]) if id(part) in share else part for part in parts])
 
 
 def _headcount(cast: list[dict]) -> str:

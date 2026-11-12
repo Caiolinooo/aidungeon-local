@@ -1061,7 +1061,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         staged = _staged_explicit_action(
             cleaned, nude, clothed, predicate_by_name, pronoun_by_name,
         ) if len(names) == 2 else ""
-        sentence = staged or _stateful_action(cleaned, states) or cleaned
+        # Todo mundo vestido (a cena só foi marcada pela palavra da narração):
+        # o estado já abre o prompt. Enfiado na frase, ela virava "Caio fully
+        # clothed in his blue shirt, Ladrão, fully clothed in his worn boots
+        # and you watch", e o modelo perdia a ação.
+        sentence = (staged or _stateful_action(cleaned, states) or cleaned) if nude else cleaned
     where: list[str] = []
     if location and location != "the current scene":
         where.append(location)
@@ -1163,8 +1167,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             blocks.append(sentence.rstrip(".") + ".")
         if order_en and not order_lock:
             blocks.append(order_en.rstrip(".") + ".")
-        for name, predicate in states:
-            blocks.append(f"{name} is {predicate}.")
+        if nude:
+            # Só com alguém nu o estado volta depois da ação; com todos
+            # vestidos era a mesma frase três vezes no prompt.
+            for name, predicate in states:
+                blocks.append(f"{name} is {predicate}.")
         if location and location != "the current scene":
             blocks.append(f"Place: {location}.")
         if names:

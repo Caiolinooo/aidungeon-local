@@ -406,6 +406,7 @@ _SHARPNESS_RATIO = 0.4   # nitidez mediana da figura / início: bons ≥ 0,61; f
 
 
 _LOOP_YAW = 0.06         # de frente no clipe: nariz no meio dos olhos
+_BACK_SHARE = 0.6        # costas em mais que isso da volta: giro parado, não uniforme
 _BLIP_FRAMES = 6         # rosto de lado por menos que isso, entre costas, é ruído
 
 
@@ -471,10 +472,19 @@ def _loop_from_faces(timeline: list[str], to_front: list[float],
     in_side = _side(arrival.group(0)) if arrival else 0
     if out_side and in_side and in_side == out_side:
         return None, ["half_turn"]
+    # Saiu de lado e voltou sem nunca mostrar o outro perfil: o Wan parou nas
+    # costas e estalou de volta à frente (produção: 73 de 113 quadros de
+    # costas, 3 de perfil na volta). Não é um giro, é um corte.
+    if out_side and not in_side:
+        return None, ["no_return_side"]
     again = max(_BACK_RUN, int(0.4 * (back_end - back_start)))
     if any(end - start >= again for start, end in runs if back_end <= start < index):
         return None, ["wobble"]
     best = min((j for j in range(index, stop) if text[j] == "F"), key=lambda j: to_front[j])
+    # Giro uniforme esconde o rosto em uns 45% da volta. Acima de
+    # `_BACK_SHARE` a figura ficou parada de costas quase o clipe inteiro.
+    if best and (back_end - back_start) / best > _BACK_SHARE:
+        return None, ["uneven_turn"]
     return best, []
 
 

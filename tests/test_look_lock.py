@@ -467,3 +467,26 @@ def test_masked_faces_keep_the_mask_and_drop_invented_features():
         assert "full lips" not in text and "square jaw" not in text and "grin" not in text
     assert look_lock.identity_text(caio, level="compact").startswith(
         "no glasses; face: bone-white skull mask")
+
+
+def test_backdrop_worker_reads_the_looks_its_cast_is_missing(tmp_db, monkeypatch):
+    """O prompt do fundo nasce sem LLM; quem pinta lê o look que falta para o
+    próximo fundo (produção, depois da v8: Caio sem linha e sem barba)."""
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], title="Bruno", type="character", entry="")
+    seen: list[list[str]] = []
+    monkeypatch.setattr(look_lock, "ensure_many",
+                        lambda adventure_id, cards, **kwargs: seen.append(
+                            [item["id"] for item in cards]) or cards)
+    job = {"id": "j1", "adventure_id": adv["id"],
+           "payload": {"cast_card_ids": [card["id"], "gone"]}}
+    jobs._read_missing_looks(job, None, {})
+    assert seen == [[card["id"]]]
+    jobs._read_missing_looks({"id": "j2", "adventure_id": adv["id"], "payload": {}}, None, {})
+    assert len(seen) == 1                       # fundo sem elenco não lê nada
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("vision offline")
+    monkeypatch.setattr(look_lock, "ensure_many", broken)
+    jobs._read_missing_looks(job, None, {})     # leitura quebrada não derruba o fundo

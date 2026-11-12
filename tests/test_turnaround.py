@@ -920,9 +920,9 @@ def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
         timeline = list(text)
         distances = [0.0 if mark == "F" else 0.1 for mark in timeline]
         return loop(timeline, distances, len(timeline))
-    full = "FFFF>>>>" + "." * 20 + "<<<<" + "FFFFFF" + ">>>" + "." * 10 + "<<FFFF"
+    full = "FFFFFF>>>>>>" + "." * 20 + "<<<<<<" + "FFFFFF" + ">>>" + "." * 10 + "<<FFFF"
     end, problems = run(full)
-    assert problems == [] and full[end] == "F" and end < full.index("FFFFFF") + 6
+    assert problems == [] and full[end] == "F" and end < full.index("FFFFFF", 12) + 6
     assert run("FFFF>>>>" + "." * 20 + ">>>>FFFFFF") == (None, ["half_turn"])
     assert run("FFFF<<<<<<<<FFFF<<<<<FFFF") == (None, ["no_back_view"])
     wobble = "FFFF>>>>" + "." * 12 + "<<<<<<<<<<" + "." * 12 + "<<<FFFFF"
@@ -934,11 +934,20 @@ def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
     end, problems = run(mask)
     assert problems == [] and mask[end] == "F"
     # rosto de lado por 5 quadros no meio das costas (staging): ainda uma volta
-    blip = "FFFF>>>>" + "." * 20 + "<<<<<" + "." * 18 + "<<<<FFFFFF"
+    blip = "F" * 14 + ">" * 10 + "." * 20 + "<<<<<" + "." * 18 + "<" * 12 + "FFFFFF"
     end, problems = run(blip)
     assert problems == [] and blip[end] == "F"
     end, problems = run("FFFF>>>>" + "." * 20 + "<<<<<<")      # nunca volta à frente
     assert end is None and problems == []
+    # produção: de costas em 65% do clipe e de volta à frente num estalo,
+    # sem mostrar o outro perfil. Não é giro uniforme.
+    snap = "F" * 17 + ">" * 8 + "." * 73 + ">......>>>...." + "F" * 9
+    assert run(snap) == (None, ["no_return_side"])
+    stalled = "F" * 10 + ">" * 6 + "." * 80 + "<" * 8 + "F" * 10
+    assert run(stalled) == (None, ["uneven_turn"])
+    even = "F" * 14 + ">" * 13 + "." * 50 + "<" * 24 + "F" * 15
+    end, problems = run(even)
+    assert problems == [] and even[end] == "F"
 
 
 def _synthetic_clip(path: Path, *, stray: bool = False, panel: bool = False,

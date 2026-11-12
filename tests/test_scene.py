@@ -1174,6 +1174,33 @@ def test_explicit_word_with_everyone_clothed_keeps_identity_and_full_references(
     assert cropped == []
     assert "amber eyes" in seen
     assert "hair floats around her head like stars" in seen
+    # todos vestidos: o estado de roupa aparece uma vez, não três, e não
+    # entra no meio da frase de ação
+    assert seen.count("elara is fully clothed") == 1
+    assert "elara, fully clothed" not in seen
+
+
+def test_look_block_shrinks_by_whole_traits_and_keeps_every_person():
+    """O fundo de produção saiu com "Renata Lemos: glasses: …; just past." e
+    sem a linha do Caio: o corte era por caracteres. Agora cai traço inteiro,
+    do menos importante para o mais, e a frase só de nomes fica como está."""
+    look = (
+        "exact likeness of Caio, Renata. Ladrão: A stout pirate with a large belly, messy gray hair. "
+        "Caio: no glasses; full dark beard and mustache; just past the ears, slightly wavy, "
+        "near-black hair; body: slim build, narrow waist; very thick dark brows. "
+        "Renata: glasses: thin round silver wire frames; just past the shoulders, tight "
+        "ringlets, near-black hair; body: slim, petite, small narrow frame; very thick dark brows."
+    )
+    short = scene._shrink_look(look, 330)
+    assert len(short) <= 330
+    assert short.startswith("exact likeness of Caio, Renata. ")
+    assert "Ladrão: A stout pirate with a large belly, messy gray hair." in short
+    assert "Caio: no glasses; full dark beard and mustache" in short
+    assert "Renata: glasses: thin round silver wire frames" in short
+    for person in short.split(". ")[1:]:
+        for trait in person.rstrip(".").split("; "):
+            assert trait in look                      # nenhum traço pela metade
+    assert scene._shrink_look(look, 2000) == look
 
 
 def test_old_jobs_without_the_flag_keep_face_only_references():
