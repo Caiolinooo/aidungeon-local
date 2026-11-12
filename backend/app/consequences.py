@@ -100,12 +100,52 @@ def visual_context(adventure: dict, *, target: str = "") -> str:
     return ", ".join(dict.fromkeys(bits))
 
 
+def _close_truncated(text: str) -> str:
+    """JSON cortado no teto de tokens: volta ao último valor fechado e fecha o
+    que ficou aberto. O que veio completo antes do corte é aproveitado."""
+    stack: list[str] = []
+    in_string = escaped = False
+    last_good: tuple[int, list[str]] | None = None
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not stack or stack.pop() != char:
+                break
+            last_good = (index, list(stack))
+    if not stack and not in_string:
+        return text
+    if last_good is None:
+        raise ValueError("resposta sem JSON completo")
+    index, open_stack = last_good
+    return text[:index + 1].rstrip().rstrip(",") + "".join(reversed(open_stack))
+
+
 def _extract_json(text: str) -> dict:
     cleaned = re.sub(r"```(?:json)?", "", text or "")
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start < 0 or end <= start:
+    start = cleaned.find("{")
+    if start < 0:
         raise ValueError("resposta sem JSON")
-    data = json.loads(cleaned[start:end + 1])
+    body = cleaned[start:]
+    end = body.rfind("}")
+    try:
+        data = json.loads(body[:end + 1]) if end > 0 else None
+    except ValueError:
+        data = None
+    if data is None:
+        # Com 500 tokens de teto a resposta vinha cortada no meio de um item e
+        # a avaliação do turno inteiro era descartada ("Expecting ',' delimiter").
+        data = json.loads(_close_truncated(body))
     return data if isinstance(data, dict) else {}
 
 
@@ -126,7 +166,8 @@ def evaluate_passage(llm_cfg: dict, passage: str, cards: list[dict],
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
-        role="chronicle", temperature=0.1, max_tokens=500, transport=transport,
+        role="chronicle", temperature=0.1, max_tokens=900, transport=transport,
+        response_format={"type": "json_object"},
     )
     return _extract_json(raw)
 

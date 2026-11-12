@@ -221,3 +221,19 @@ def test_a_cancelled_clip_is_interrupted_again_if_the_first_interrupt_came_too_e
     assert jobs.interrupt_image(job) is True           # o prompt ainda roda: manda de novo
     assert len(sent) == 2
     jobs._forget_job_runtime("clip-1")
+
+
+def test_truncated_consequence_reply_keeps_what_came_complete():
+    """Com o teto de tokens a resposta vinha cortada no meio de um item e a
+    avaliação do turno inteiro era descartada."""
+    from app import consequences
+
+    cut = ('{"effects": [{"target": "Bruno", "visual_en": "white bandage"}, '
+           '{"target": "Marina", "visual_en": "wet ha')
+    assert consequences._extract_json(cut) == {
+        "effects": [{"target": "Bruno", "visual_en": "white bandage"}]}
+    whole = '```json\n{"effects": [], "facts": ["a }, tricky"]}\n```'
+    assert consequences._extract_json(whole) == {"effects": [], "facts": ["a }, tricky"]}
+    import pytest
+    with pytest.raises(ValueError):
+        consequences._extract_json("no json here")
