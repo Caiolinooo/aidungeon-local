@@ -460,7 +460,12 @@ def _loop_from_faces(timeline: list[str], to_front: list[float],
     match = re.search(r"F{%d,}" % _FRONT_RUN, text[back_end:])
     if not match:
         return None, []
-    index, stop = back_end + match.start(), back_end + match.end()
+    index = back_end + match.start()
+    # O rosto volta de frente antes do corpo: o loop fecha no quadro mais
+    # parecido com o 0 entre todos os de frente até a próxima costas (ou o
+    # fim), não só no primeiro trecho F (staging: emendava num 3/4).
+    following = re.search(r"\.{%d,}" % _BACK_RUN, text[index:])
+    stop = index + following.start() if following else len(text)
     # lado de chegada: o trecho virado logo antes do F (furos de 1 quadro ok)
     arrival = re.search(r"[<>][<>.]*$", text[back_end:index].rstrip("."))
     in_side = _side(arrival.group(0)) if arrival else 0
@@ -469,7 +474,7 @@ def _loop_from_faces(timeline: list[str], to_front: list[float],
     again = max(_BACK_RUN, int(0.4 * (back_end - back_start)))
     if any(end - start >= again for start, end in runs if back_end <= start < index):
         return None, ["wobble"]
-    best = min(range(index, stop), key=lambda j: to_front[j])
+    best = min((j for j in range(index, stop) if text[j] == "F"), key=lambda j: to_front[j])
     return best, []
 
 

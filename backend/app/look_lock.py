@@ -35,7 +35,8 @@ _failures: dict[str, float] = {}
 # "black graphic t-shirt" ganhava estampa inventada. Cor dominante simples,
 # estampa descrita, e o índice da foto com o rosto mais nítido. v3: reflexo
 # em campo próprio ("reddish highlights" junto da cor ainda pintava vinho).
-LOOK_VERSION = 3
+# v4: a bandana do Caio virou "wide-brimmed hat": chapéu e lenço nomeados.
+LOOK_VERSION = 4
 # Até cinco fotos (a principal primeiro). Mais que isso só gasta tokens de
 # imagem no narrador sem mudar a maioria.
 MAX_PHOTOS = 5
@@ -60,6 +61,8 @@ Rules:
 - Clothing keys describe only what IMAGE 1 shows; write "not visible" for a piece image 1 does not show.
   Describe any print exactly (e.g. "black crew-neck t-shirt with a small white text print on the chest") or say "plain".
 - clearest_face_image: the number (1 = first) of the image that shows the face most clearly and frontally.
+- accessories: name headwear exactly as it looks (a bandana or headscarf is not a hat; say "tricorn hat",
+  "wide-brimmed hat", "bandana" only when that is what is there), plus belts, straps, jewellery, bags.
 - face: distinctive features or a mask/prosthetic if there is one; otherwise "no distinctive marks".
 - Never name or identify the person. No nudity. No guessing of age, ethnicity or biography."""
 
