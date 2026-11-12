@@ -87,12 +87,12 @@ def match_faces(content: bytes, *, width: int, height: int,
     ]
 
 
-def count_main_faces(content: bytes, expected: int) -> int | None:
-    """Quantos rostos do tamanho do elenco a imagem tem; None sem detector.
+def count_faces(content: bytes, expected: int) -> tuple[int, int] | None:
+    """(rostos do tamanho do elenco, todos os rostos); None sem detector.
 
-    Conta só rosto comparável aos `expected` maiores (pelo menos 45% da altura
-    mediana deles): uma quarta pessoa ao lado do elenco conta, um pedestre
-    minúsculo no fundo de uma feira não.
+    Do tamanho do elenco = pelo menos 45% da altura mediana dos `expected`
+    maiores: uma quarta pessoa ao lado do elenco conta, um pedestre minúsculo
+    no fundo de uma feira só entra no total.
     """
     try:
         import cv2
@@ -112,7 +112,12 @@ def count_main_faces(content: bytes, expected: int) -> int | None:
     faces = _deduplicate(list(detected) if detected is not None else [])
     heights = sorted((float(face[3]) for face in faces), reverse=True)
     if expected <= 0 or len(heights) <= expected:
-        return len(heights)
+        return len(heights), len(heights)
     cast = heights[:expected]
     reference = cast[len(cast) // 2]
-    return sum(1 for value in heights if value >= 0.45 * reference)
+    return sum(1 for value in heights if value >= 0.45 * reference), len(heights)
+
+
+def count_main_faces(content: bytes, expected: int) -> int | None:
+    found = count_faces(content, expected)
+    return None if found is None else found[0]

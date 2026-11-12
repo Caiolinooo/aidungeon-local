@@ -845,3 +845,38 @@ def test_main_face_count_ignores_tiny_background_faces(monkeypatch):
     monkeypatch.setattr(cv2.FaceDetectorYN, "create",
                         detector([(100, 90), (500, 80), (900, 85), (1200, 70)]))
     assert face_regions.count_main_faces(png, 3) == 4
+
+
+def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
+    """Feira com feirantes ao fundo: a imagem volta como referência com o
+    pedido de tirar quem não é do elenco. Se a edição perde alguém do elenco
+    ou não tira ninguém, fica a pintura original."""
+    from app import face_regions, image_client
+
+    calls: list[dict] = []
+
+    def fake_generate(cfg, client, prompt, width, height, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return b"edited", width, height
+
+    monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
+    counts = {b"busy": (2, 6), b"edited": (2, 2)}
+    monkeypatch.setattr(face_regions, "count_faces", lambda content, expected: counts[content])
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"edited"
+    assert calls[0]["init_image"] == b"busy"
+    assert "remove every other person in the background" in calls[0]["prompt"]
+    assert "the 2 people in the foreground completely unchanged" in calls[0]["prompt"]
+
+    counts[b"edited"] = (1, 1)                      # a edição apagou alguém do elenco
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    counts[b"edited"] = (2, 6)                      # não tirou ninguém
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+
+    calls.clear()
+    counts[b"clean"] = (2, 2)
+    assert image_client._without_bystanders({}, None, 1344, 768, b"clean", 2, None) == b"clean"
+    counts[b"short"] = (1, 4)                       # elenco incompleto: não mexe
+    assert image_client._without_bystanders({}, None, 1344, 768, b"short", 2, None) == b"short"
+    assert calls == []
+    monkeypatch.setattr(face_regions, "count_faces", lambda content, expected: None)
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"

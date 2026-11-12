@@ -1005,6 +1005,46 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
     return best
 
 
+def _bystander_edit_prompt(expected: int) -> str:
+    who = "the one person" if expected == 1 else f"the {expected} people"
+    return (
+        "Edit this photograph: remove every other person in the background and in the "
+        "distance, leaving the place behind empty of people. Keep "
+        f"{who} in the foreground completely unchanged: same faces, hair, clothes, pose "
+        "and the objects they hold. Add nothing to anyone. Keep the same place, framing, "
+        "lighting and colours.")
+
+
+def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int,
+                        content: bytes, expected: int,
+                        progress: Callable[[], None] | None) -> bytes:
+    """Segunda passada que tira os figurantes do fundo.
+
+    Numa feira o Flux pinta feirantes mesmo com o prompt dizendo que só o
+    elenco está ali. Quando o detector acha mais rostos que o elenco, a
+    própria imagem volta como referência com o pedido de remover quem está
+    ao fundo (uns 6 s). O resultado só vale se o elenco continua inteiro e os
+    rostos a mais diminuíram; senão fica a pintura original.
+    """
+    from app import face_regions
+
+    before = face_regions.count_faces(content, expected)
+    if before is None or before[1] <= expected or before[0] < expected:
+        return content
+    try:
+        edited, _w, _h = _generate_comfyui(
+            cfg, client, _bystander_edit_prompt(expected), width, height,
+            init_image=content, progress=progress)
+    except ImageError as exc:
+        log.warning("limpeza dos figurantes falhou: %s", exc)
+        return content
+    after = face_regions.count_faces(edited, expected)
+    if after is None or after[0] != before[0] or after[1] >= before[1]:
+        return content
+    log.info("figurantes removidos do fundo: %d -> %d rostos", before[1], after[1])
+    return edited
+
+
 def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 height: int | None = None, init_image: bytes | None = None,
                 denoising_strength: float | None = None,
@@ -1820,6 +1860,8 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 content = _without_extra_people(
                     cfg, client, prompt, width, height, content, int(expected_people),
                     refs, progress)
+                content = _without_bystanders(
+                    cfg, client, width, height, content, int(expected_people), progress)
         elif init_image is not None:
             if provider == "sdwebui":
                 content, width, height = _generate_sdwebui_img2img(
