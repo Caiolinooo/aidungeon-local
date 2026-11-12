@@ -117,7 +117,11 @@ _IMAGE_JOB_TYPES = (
 _heartbeat_lock = threading.Lock()
 _heartbeat_mono: dict[str, float] = {}
 _clip_watch_mono: dict[str, float] = {}
-_clip_interrupted: set[str] = set()
+# job_id -> instante (monotonic) do último /interrupt enviado. Era um conjunto
+# "já interrompi": o aviso chegava antes de o ComfyUI começar o prompt e o
+# clipe cancelado rodava até o fim (3 min de Wan com o narrador a 8 tok/s).
+_clip_interrupted: dict[str, float] = {}
+_REINTERRUPT_S = 8.0
 
 _PORTRAIT_SYSTEM = """You write image generation prompts for character portraits.
 Given the character description and the story context, output a single concise English
@@ -889,10 +893,12 @@ def interrupt_image(job: dict, transport: Any = None) -> bool:
         return False
     is_clip = job["type"] in ("scene_clip", "turnaround_clip")
     if is_clip:
+        now = time.monotonic()
         with _heartbeat_lock:
-            if job["id"] in _clip_interrupted:
+            last = _clip_interrupted.get(job["id"])
+            if last is not None and now - last < _REINTERRUPT_S:
                 return False
-            _clip_interrupted.add(job["id"])
+            _clip_interrupted[job["id"]] = now
     completed = False
     try:
         with db.session() as conn:
@@ -914,7 +920,7 @@ def interrupt_image(job: dict, transport: Any = None) -> bool:
     finally:
         if is_clip and not completed:
             with _heartbeat_lock:
-                _clip_interrupted.discard(job["id"])
+                _clip_interrupted.pop(job["id"], None)
     return True
 
 
@@ -937,7 +943,7 @@ def _forget_job_runtime(job_id: str) -> None:
     with _heartbeat_lock:
         _heartbeat_mono.pop(job_id, None)
         _clip_watch_mono.pop(job_id, None)
-        _clip_interrupted.discard(job_id)
+        _clip_interrupted.pop(job_id, None)
 
 
 def _write_heartbeat(job_id: str, *, force: bool = False) -> bool:
@@ -954,11 +960,13 @@ def _write_heartbeat(job_id: str, *, force: bool = False) -> bool:
 
 
 def _interrupt_clip_if_stopped(job: dict, transport: Any) -> None:
-    """Lê o status já commitado, no máximo a cada 5 s, e interrompe se parou."""
+    """Lê o status já commitado, no máximo a cada 5 s, e interrompe se parou.
+
+    Enquanto o job parado continuar no poll (o ComfyUI ainda executa o prompt
+    dele), o /interrupt é repetido a cada `_REINTERRUPT_S`: o primeiro pode
+    ter chegado antes de o prompt começar.
+    """
     job_id = job["id"]
-    with _heartbeat_lock:
-        if job_id in _clip_interrupted:
-            return
     if not _interval_open(_clip_watch_mono, job_id):
         return
     try:
@@ -969,9 +977,7 @@ def _interrupt_clip_if_stopped(job: dict, transport: Any) -> None:
         return
     if current is not None and current["status"] == "running":
         return
-    if interrupt_image(job, transport):
-        with _heartbeat_lock:
-            _clip_interrupted.add(job_id)
+    interrupt_image(job, transport)
 
 
 def _generation_progress(job: dict, transport: Any, *, watch_cancel: bool):
@@ -2674,6 +2680,11 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
     reports: list[dict] = []
     clip_round = int(payload.get("round") or 1)
     for attempt in range(_TURNAROUND_CLIP_ATTEMPTS):
+        # Cancelado entre o claim e o envio (um turno começou): não manda nada.
+        with db.session() as conn:
+            current = db.get_job(conn, job["id"])
+        if not current or current.get("status") != "running":
+            raise db.JobCanceled(job["id"])
         image_id = db.new_id()
         meta = image_client.generate_clip(
             img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,

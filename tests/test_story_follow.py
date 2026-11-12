@@ -191,3 +191,22 @@ def test_chronicle_gets_a_second_chance_after_a_timeout(monkeypatch):
     stopped = threading.Event(); stopped.set()               # outro turno começou
     game_engine._chronicle_with_retry("adv", None, stopped)
     assert len(calls) == 1
+
+
+def test_a_cancelled_clip_is_interrupted_again_if_the_first_interrupt_came_too_early(
+        tmp_db, monkeypatch):
+    """O /interrupt chegou antes de o ComfyUI começar o prompt e o giro
+    cancelado rodou 3 minutos. Enquanto o job parado seguir no poll, o aviso
+    é repetido a cada `_REINTERRUPT_S`."""
+    from app import image_client, jobs
+
+    sent: list[int] = []
+    monkeypatch.setattr(image_client, "interrupt_comfy", lambda cfg, transport=None: sent.append(1))
+    job = {"id": "clip-1", "type": "turnaround_clip", "adventure_id": "a"}
+    jobs._forget_job_runtime("clip-1")
+    assert jobs.interrupt_image(job) is True
+    assert jobs.interrupt_image(job) is False          # logo em seguida: não repete
+    jobs._clip_interrupted["clip-1"] -= jobs._REINTERRUPT_S + 1
+    assert jobs.interrupt_image(job) is True           # o prompt ainda roda: manda de novo
+    assert len(sent) == 2
+    jobs._forget_job_runtime("clip-1")
