@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app import access, auth, db, death_rules, image_budget, image_client, image_english, jobs, likeness, llm_client, npc_assets, scene, settings_store
+from app import look_lock, access, auth, db, death_rules, image_budget, image_client, image_english, jobs, likeness, llm_client, npc_assets, scene, settings_store
 from app import world_facts
 from app.deps import get_http_transport
 from app.errors import GameError
@@ -1252,6 +1252,9 @@ def _plan_see(adventure_id: str, body: SeeRequest, transport: Any,
                  for card in db.list_cards(conn, adventure_id)]
         img_cfg = image_client.effective_settings(conn)
         llm_cfg = settings_store.effective_llm_settings(conn)
+    # Todo mundo que pode entrar na cena leva os traços da própria referência.
+    # Quem ainda não tem look é lido aqui (uma vez por card), fora da fila.
+    cards = look_lock.ensure_many(adventure_id, cards, transport=transport, llm_cfg=llm_cfg)
     try:
         (prompt, negative_extra, caption, frame, cast_card_ids,
          reference_image_ids, expected_people, explicit, face_refs) = _build_final_prompt(

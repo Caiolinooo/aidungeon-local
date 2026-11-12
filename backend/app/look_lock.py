@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from io import BytesIO
 from typing import Any
 
@@ -25,6 +26,10 @@ from PIL import Image, ImageOps
 from app import db, likeness, llm_client, npc_assets, settings_store
 
 log = logging.getLogger("aidungeon.look_lock")
+# Leitura que falhou (visão fora do ar, resposta inválida) não é refeita a
+# cada See: espera uma hora por card.
+_FAILURE_PAUSE_S = 3600.0
+_failures: dict[str, float] = {}
 
 # v2: "dark brown with reddish highlights" virava cabelo vinho no Flux, e
 # "black graphic t-shirt" ganhava estampa inventada. Cor dominante simples,
@@ -161,7 +166,9 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
         llm_cfg = settings_store.effective_llm_settings(conn)
     look = _read(images, transport=transport, llm_cfg=llm_cfg)
     if look is None:
+        _failures[str(card.get("id"))] = time.monotonic()
         return stored
+    _failures.pop(str(card.get("id")), None)
     look.update({"version": LOOK_VERSION, "basis_hash": basis, "source": source,
                  "images": len(images), "created_at": db.utcnow()})
     fresh = db.get_card(conn, card["adventure_id"], card["id"]) or card
@@ -238,3 +245,29 @@ def visible_clothing(look: dict | None) -> dict[str, str]:
         if _visible(value):
             found[key] = value
     return found
+
+
+def ensure_many(adventure_id: str, cards: list[dict], *, transport=None,
+                llm_cfg: dict | None = None, limit: int = 6) -> list[dict]:
+    """Lê o look de quem tem referência e ainda não tem look; devolve os cards
+    atualizados. Teto por chamada: elenco grande não trava o See."""
+    now = time.monotonic()
+    pending = [card for card in cards
+               if card.get("type") == "character" and current(card) is None
+               and now - _failures.get(str(card.get("id")), -_FAILURE_PAUSE_S) >= _FAILURE_PAUSE_S
+               and not likeness.is_minor(card)
+               and (likeness.visual_reference_images(card)[:1]
+                    or card.get("portrait_anchor_id") or card.get("portrait_image_id"))]
+    if not pending:
+        return cards
+    updated: dict[str, dict] = {}
+    for card in pending[:limit]:
+        try:
+            with db.session() as conn:
+                if ensure(conn, card, transport=transport, llm_cfg=llm_cfg):
+                    fresh = db.get_card(conn, adventure_id, card["id"])
+                    if fresh:
+                        updated[card["id"]] = fresh
+        except Exception as exc:  # leitura falhou: o See segue com o que tem
+            log.warning("look: card %s sem leitura: %s", card.get("id"), type(exc).__name__)
+    return [updated.get(card.get("id"), card) for card in cards]

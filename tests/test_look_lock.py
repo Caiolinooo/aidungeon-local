@@ -247,3 +247,25 @@ def test_a_new_reading_of_the_same_photo_rebuilds_the_outfit(tmp_db, tmp_path, m
         assert outfit_lock.current(card) is None
         second = outfit_lock.ensure(conn, card)
     assert first["top"] != second["top"] == "black t-shirt with white text print"
+
+
+def test_see_reads_missing_looks_once_and_backs_off_after_a_failure(tmp_db, tmp_path, monkeypatch):
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], type="character", title="Caio", entry="A pirate")
+    _face(adv["id"], card["id"], PNG_BYTES)
+    look_lock._failures.clear()
+    calls: list = []
+    with db.session() as conn:
+        cards = db.list_cards(conn, adv["id"])
+    bad = _vision_transport("no idea", calls)
+    look_lock.ensure_many(adv["id"], cards, transport=bad, llm_cfg=None)
+    look_lock.ensure_many(adv["id"], cards, transport=bad, llm_cfg=None)
+    assert len(calls) == 1                           # falhou: espera antes de reler
+    look_lock._failures.clear()
+    good = _vision_transport(json.dumps(LOOK), calls)
+    updated = look_lock.ensure_many(adv["id"], cards, transport=good, llm_cfg=None)
+    assert look_lock.current(updated[0])["source"] == "anchor"
+    look_lock.ensure_many(adv["id"], updated, transport=good, llm_cfg=None)
+    assert len(calls) == 2                           # já gravado: não relê
