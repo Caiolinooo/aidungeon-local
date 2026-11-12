@@ -856,7 +856,7 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     calls: list[dict] = []
 
     def fake_generate(cfg, client, prompt, width, height, **kwargs):
-        calls.append({"prompt": prompt, **kwargs})
+        calls.append({"prompt": prompt, "seed": cfg.get("seed"), **kwargs})
         return b"edited", width, height
 
     monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
@@ -867,8 +867,11 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     assert "remove every other person in the background" in calls[0]["prompt"]
     assert "the 2 people in the foreground completely unchanged" in calls[0]["prompt"]
 
+    calls.clear()
     counts[b"edited"] = (1, 1)                      # a edição apagou alguém do elenco
-    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    assert image_client._without_bystanders({"seed": 7}, None, 1344, 768, b"busy", 2, None) == b"busy"
+    assert len(calls) == 3                          # três tentativas, todas descartadas
+    assert len({call["seed"] for call in calls}) == 3   # semente fixa muda a cada tentativa
     counts[b"edited"] = (2, 6)                      # não tirou ninguém
     assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, None) == b"busy"
     # sobrou um rosto depois da primeira passada: a segunda termina o serviço

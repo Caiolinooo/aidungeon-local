@@ -107,15 +107,25 @@ def count_faces(content: bytes, expected: int) -> tuple[int, int] | None:
             score_threshold=0.6, nms_threshold=0.3, top_k=5000,
         )
         _, detected = detector.detect(image)
+        # Rosto de figurante ao longe tem uns 15 px e escapa do detector; na
+        # imagem ampliada 2x ele aparece. O total é o maior dos dois.
+        large = cv2.resize(image, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        zoomed = cv2.FaceDetectorYN.create(
+            str(_MODEL), "", (width * 2, height * 2),
+            score_threshold=0.6, nms_threshold=0.3, top_k=5000,
+        )
+        _, detected_large = zoomed.detect(large)
     except Exception:
         return None
     faces = _deduplicate(list(detected) if detected is not None else [])
+    distant = len(_deduplicate(list(detected_large) if detected_large is not None else []))
     heights = sorted((float(face[3]) for face in faces), reverse=True)
+    total = max(len(heights), distant)
     if expected <= 0 or len(heights) <= expected:
-        return len(heights), len(heights)
+        return len(heights), total
     cast = heights[:expected]
     reference = cast[len(cast) // 2]
-    return sum(1 for value in heights if value >= 0.45 * reference), len(heights)
+    return sum(1 for value in heights if value >= 0.45 * reference), total
 
 
 def count_main_faces(content: bytes, expected: int) -> int | None:

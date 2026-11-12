@@ -1017,7 +1017,7 @@ def _bystander_edit_prompt(expected: int) -> str:
         "same place, framing, lighting and colours.")
 
 
-_BYSTANDER_PASSES = 2
+_BYSTANDER_PASSES = 3
 
 
 def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int,
@@ -1033,22 +1033,27 @@ def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int
     """
     from app import face_regions
 
-    for _ in range(_BYSTANDER_PASSES):
-        before = face_regions.count_faces(content, expected)
+    before = face_regions.count_faces(content, expected)
+    for attempt in range(_BYSTANDER_PASSES):
         if before is None or before[1] <= expected or before[0] < expected:
             return content
+        edit_cfg = dict(cfg)
+        if cfg.get("seed") is not None:      # semente fixa repetiria a mesma edição
+            edit_cfg["seed"] = (int(cfg["seed"]) + 104729 * (attempt + 1)) % (2 ** 31)
         try:
             edited, _w, _h = _generate_comfyui(
-                cfg, client, _bystander_edit_prompt(expected), width, height,
+                edit_cfg, client, _bystander_edit_prompt(expected), width, height,
                 init_image=content, progress=progress)
         except ImageError as exc:
             log.warning("limpeza dos figurantes falhou: %s", exc)
             return content
         after = face_regions.count_faces(edited, expected)
+        # Edição que perde alguém do elenco ou não tira ninguém é descartada;
+        # a próxima tentativa parte da melhor imagem até aqui.
         if after is None or after[0] != before[0] or after[1] >= before[1]:
-            return content
+            continue
         log.info("figurantes removidos do fundo: %d -> %d rostos", before[1], after[1])
-        content = edited
+        content, before = edited, after
     return content
 
 
