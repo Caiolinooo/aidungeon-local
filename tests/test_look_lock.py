@@ -37,7 +37,8 @@ def _vision_transport(reply: str, calls: list) -> httpx.MockTransport:
         if request.url.path.endswith("/chat/completions"):
             payload = json.loads(request.content.decode("utf-8"))
             system = payload["messages"][0]["content"]
-            if isinstance(system, str) and system.startswith("You read reference images"):
+            if isinstance(system, str) and system.startswith(("You read reference images",
+                                                              "You read the clothing")):
                 calls.append(payload)
                 return httpx.Response(200, json={"choices": [{"message": {"content": reply}}]})
         return base.handle_request(request)
@@ -76,11 +77,13 @@ def test_look_is_read_once_from_every_photo_and_follows_the_photo(tmp_db, tmp_pa
         again = look_lock.ensure(conn, stored, transport=transport, llm_cfg=None)
     assert first["hair_length"] == "just past the shoulders"
     assert first["source"] == "photo" and first["images"] == 2
-    assert again == first and len(calls) == 1                 # gravado; não relê
+    assert again == first and len(calls) == 2                 # traços + roupa; gravado, não relê
     request = calls[0]
     assert request["temperature"] == 0
     images = [part for part in request["messages"][1]["content"] if part["type"] == "image_url"]
     assert len(images) == 2                                    # todas as fotos, principal primeiro
+    clothing = calls[1]["messages"][1]["content"]
+    assert len([part for part in clothing if part["type"] == "image_url"]) == 1   # só a principal
     # foto nova = leitura nova
     sheet = json.loads(stored["sheet"])
     refs = Path(sheet["reference"]["image_path"]).parent
@@ -88,7 +91,7 @@ def test_look_is_read_once_from_every_photo_and_follows_the_photo(tmp_db, tmp_pa
     with db.session() as conn:
         changed = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
         look_lock.ensure(conn, changed, transport=transport, llm_cfg=None)
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_card_without_photo_reads_its_anchor_portrait(tmp_db, tmp_path):
@@ -286,7 +289,8 @@ def test_prints_lose_their_letters_and_hair_tint_stays_faint():
     dyed = look_lock.identity_text({**LOOK, "hair_dye": "bright copper dyed ends"})
     assert "jet black hair with bright copper dyed ends" in dyed
     full = look_lock.identity_text(LOOK)
-    assert "round face with full cheeks; thick dark arched eyebrows; full lips" in full
+    assert "round face with full cheeks" in full and "thick dark arched eyebrows" in full
+    assert "full lips" in full and "eyes: dark brown" in full
     from app import image_client
     assert "text, letters, words, writing" in image_client._STANDARD_NEGATIVE
 
@@ -344,7 +348,7 @@ def test_see_reads_missing_looks_once_and_backs_off_after_a_failure(tmp_db, tmp_
     updated = look_lock.ensure_many(adv["id"], cards, transport=good, llm_cfg=None)
     assert look_lock.current(updated[0])["source"] == "anchor"
     look_lock.ensure_many(adv["id"], updated, transport=good, llm_cfg=None)
-    assert len(calls) == 2                           # já gravado: não relê
+    assert len(calls) == 3                           # falha + traços + roupa; gravado: não relê
 
 
 def test_multi_person_clause_keeps_everyones_glasses_within_the_see_budget(tmp_db):
@@ -376,3 +380,78 @@ def test_short_look_puts_the_beard_before_the_face_text():
             "face": "clean-shaven except for beard, smiling"}
     text = look_lock.identity_text(caio, compact=True)
     assert text.startswith("no glasses; full dark beard and mustache; face:")
+
+
+def test_photo_wins_on_body_and_the_description_fills_the_rest():
+    photo = {**LOOK, "build": "petite and slim", "height": "not visible", "waist": "very narrow",
+             "hips": "slightly wider than the waist", "shoulders": "not visible", "limbs": "slender"}
+    stated = {"build": "slim", "height": "about 1.55 m", "waist": "narrow",
+              "hips": "pronounced hips", "shoulders": "narrow shoulders", "limbs": "not stated"}
+    merged = look_lock.merge_body(photo, stated)
+    assert merged["hips"] == "slightly wider than the waist"          # a foto vence
+    assert merged["height"] == "about 1.55 m"                          # altura: o texto
+    assert merged["shoulders"] == "narrow shoulders"                   # a foto não mostra
+    assert merged["limbs"] == "slender"
+    assert merged["body_sources"]["shoulders"] == "description"
+    # sem foto de corpo (só retrato de busto) o corpo vem todo da descrição
+    bust = {**LOOK, **{key: "not visible" for key in look_lock.BODY_KEYS}}
+    filled = look_lock.merge_body(bust, stated)
+    assert filled["build"] == "slim" and filled["hips"] == "pronounced hips"
+
+
+def test_levels_budget_the_detail_for_each_render():
+    look = {**LOOK, "hair_curl": "tight springy ringlets, small curls", "hair_volume": "very voluminous",
+            "skin_tone": "medium tan with warm undertone", "skin_marks": "small mole above the left lip",
+            "nose": "rounded tip", "smile": "cheeks lift into round apples",
+            "build": "petite and slim", "waist": "very narrow", "hips": "slightly wider than the waist",
+            "height": "about 1.55 m", "shoulders": "narrow", "limbs": "slender arms and legs"}
+    full = look_lock.identity_text(look, level="full")
+    face = look_lock.identity_text(look, level="face")
+    views = look_lock.identity_text(look, level="views")
+    scene = look_lock.identity_text(look, level="scene")
+    compact = look_lock.identity_text(look, level="compact")
+    assert "marks: small mole above the left lip" in full and "nose: rounded tip" in full
+    assert "body: petite and slim build" in full and "body:" not in face
+    assert "very narrow waist" in views and "mole" not in views
+    assert "when smiling: cheeks lift into round apples" in scene
+    assert compact.startswith("always wearing") and "very narrow waist" in compact
+    assert len(full) > len(face) and len(full) > len(views) > len(compact)
+    # sem look nada entra (card sem foto e sem âncora lida)
+    assert look_lock.identity_text(None, level="scene") == ""
+
+
+def test_turnaround_prompts_carry_full_detail_on_master_and_body_on_views(tmp_db):
+    adv = make_adventure()
+    look = {**LOOK, "nose": "rounded tip", "skin_marks": "small mole on the chin",
+            "build": "petite and slim", "waist": "very narrow",
+            "version": look_lock.LOOK_VERSION, "basis_hash": "x", "source": "photo"}
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], type="character", title="Renata Lemos",
+                              entry="Long hair reaching her back.",
+                              sheet=json.dumps({"look_lock": look}))
+    prompts = jobs._turnaround_prompts(card, {"top": "black tee", "bottom": "black jeans",
+                                              "footwear": "grey sneakers", "accessories": "none"},
+                                       identity="exact likeness of Renata Lemos")
+    assert "small mole on the chin" in prompts["master"] and "nose: rounded tip" in prompts["master"]
+    assert "small mole on the chin" in prompts["face"] and "body:" not in prompts["face"]
+    for kind in ("front", "profile", "back", "clip"):
+        assert "very narrow waist" in prompts[kind] and "mole" not in prompts[kind]
+    assert "reaching her back" not in prompts["master"]               # o texto do card não manda
+
+
+def test_glasses_wearers_get_the_best_face_and_the_glasses_photo(tmp_db, tmp_path, monkeypatch):
+    adv = make_adventure()
+    card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10), (200, 150, 120), (0, 0, 200))
+    sheet = json.loads(card["sheet"])
+    sheet["look_lock"] = {**LOOK, "face_images": [1, 2], "glasses_image": 3, "source": "photo",
+                          "version": look_lock.LOOK_VERSION, "basis_hash": "x"}
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+    monkeypatch.setattr(look_lock, "_frontal_face", lambda photo: True)
+    colors = [Image.open(io.BytesIO(p)).convert("RGB").getpixel((5, 5)) for p in look_lock.face_photos(card)]
+    assert colors[0][0] < 40 and colors[1][2] > 150                # rosto 1, depois a de óculos
+    sheet["look_lock"]["glasses"] = "none"
+    with db.session() as conn:
+        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+    colors = [Image.open(io.BytesIO(p)).convert("RGB").getpixel((5, 5)) for p in look_lock.face_photos(card)]
+    assert colors[1][0] > 150                                       # sem óculos: as duas melhores

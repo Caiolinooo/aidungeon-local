@@ -40,12 +40,21 @@ _failures: dict[str, float] = {}
 # espessura, rosto com formato/sobrancelhas/lábios/bochechas, estampa sem
 # texto e as fotos de rosto escolhidas pela leitura entre até 12 fotos.
 # v6: estampa vira "forma abstrata" ("graphic print" ainda puxava letras).
-LOOK_VERSION = 6
+# v7: detalhe fino com intensidade (pele, estrutura do rosto, sobrancelhas,
+# cachos, expressões) e corpo pela foto de corpo inteiro junto da descrição
+# do card (a Renata saía mais larga que a foto do espelho).
+LOOK_VERSION = 7
 # Até 12 fotos (a principal primeiro); a leitura escolhe as de rosto.
 MAX_PHOTOS = 12
-IDENTITY_KEYS = ("hair_colour", "hair_dye", "hair_sheen", "hair_texture", "hair_length",
-                 "hairstyle", "glasses", "facial_hair", "skin", "eyes", "face_shape",
-                 "eyebrows", "lips", "face", "build")
+HAIR_KEYS = ("hair_colour", "hair_dye", "hair_sheen", "hair_curl", "hair_volume",
+             "hair_parting", "hair_length", "hairstyle")
+SKIN_KEYS = ("skin_tone", "skin_texture", "skin_marks", "freckles", "skin_shine")
+FACE_KEYS = ("face_shape", "cheeks", "jawline", "chin", "nose", "lips", "eyes",
+             "lids_lashes", "eyebrows", "face")
+EXPRESSION_KEYS = ("smile", "neutral")
+BODY_KEYS = ("build", "height", "shoulders", "waist", "hips", "limbs")
+IDENTITY_KEYS = (*HAIR_KEYS, "glasses", "facial_hair", *SKIN_KEYS, *FACE_KEYS,
+                 *EXPRESSION_KEYS, *BODY_KEYS)
 CLOTHING_KEYS = ("top", "bottom", "footwear", "accessories")
 _NOT_VISIBLE = re.compile(r"(?i)^\s*(not visible|unknown|n/?a|unclear|cannot|can't)\b")
 _NONE = re.compile(r"(?i)^\s*(none|no|nothing)\b")
@@ -57,36 +66,49 @@ _TEXT_PRINT = re.compile(
 TEXT_PRINT_PHRASE = "small faded light-grey abstract shape"
 
 _SYSTEM = """You read reference images of one fictional RPG character and fix the character's canonical look.
-Reply with ONLY one JSON object with exactly these keys:
-"hair_colour", "hair_dye", "hair_sheen", "hair_texture", "hair_length", "hairstyle", "glasses", "facial_hair",
-"skin", "eyes", "face_shape", "eyebrows", "lips", "face", "build", "top", "bottom", "footwear", "accessories"
-(strings) and "face_images" (array of up to 3 integers, best first).
+Reply with ONLY one JSON object with exactly these string keys:
+hair_colour, hair_dye, hair_sheen, hair_curl, hair_volume, hair_parting, hair_length, hairstyle, glasses, facial_hair,
+skin_tone, skin_texture, skin_marks, freckles, skin_shine, face_shape, cheeks, jawline, chin, nose, lips, eyes,
+lids_lashes, eyebrows, face, smile, neutral, build, height, shoulders, waist, hips, limbs; plus "face_images"
+(array of up to 3 integers, best first) and "glasses_image" (integer, 0 if none).
 Rules:
-- English, concrete and precise, 2 to 14 words per key.
+- English, concrete, 2 to 16 words per key. Say HOW STRONG each trait is ("very", "strongly", "slightly",
+  "moderately"), not only whether it is there. Never name or identify the person; no age, ethnicity or biography.
 - Photos may have colour filters, warm lamps or black-and-white: judge colours from the images with neutral light.
-- hair_colour: the natural base colour of the hair as it looks in neutral light, plainly, e.g. "near-black",
-  "dark brown", "jet black". Hair that reads as black with only a slight warmth is "near-black".
-- hair_dye: ONLY clearly dyed sections that look dyed in most images, e.g. "bright copper dyed ends"; otherwise "none".
-  A natural warm or reddish tint that shows only in some light is NOT dye: write "none" and use hair_sheen.
-- hair_sheen: a natural tint visible only in light, e.g. "faint warm reddish tint in bright light"; otherwise "none".
-- hair_length must name a body landmark the hair reaches, e.g. "chin length", "just past the shoulders", "mid-back".
-- glasses: if the character wears glasses in most images, describe the frames exactly with thickness, shape, size and
-  ONE colour, e.g. "thin round silver metal wire frames, medium size"; otherwise "none". Never answer just "yes".
-- face_shape: e.g. "round face with full soft cheeks". eyebrows: e.g. "thick dark strongly arched eyebrows".
-  lips: e.g. "full lips". face: other distinctive features or a mask/prosthetic; otherwise "no distinctive marks".
-- Identity keys (hair, glasses, facial hair, skin, eyes, face shape, eyebrows, lips, face, build) describe what MOST
-  images show; image 1 wins ties.
-- Clothing keys describe only what IMAGE 1 shows, each with exact colour, garment type, cut and material, e.g.
-  "black high-waisted skinny jeans", "light grey low-top canvas sneakers with white soles"; write "not visible" for
-  a piece image 1 does not show.
-  A print on clothing is described only as a graphic, its colour and size, e.g. "small faded light-grey graphic on
-  the chest"; never mention text, letters, words or logos. Say "plain" when there is no print.
-- accessories: name headwear exactly as it looks (a bandana or headscarf is not a hat; say "tricorn hat",
-  "wide-brimmed hat", "bandana" only when that is what is there), plus belts, straps, jewellery, bags.
-- face_images: the numbers (1 = first) of up to 3 images, best first, where the whole face is clearly visible and
-  frontal: no phone, hand or object covering ANY part of the face, natural colours (no strong colour filter, not
-  black-and-white). Include one with glasses when the character wears glasses.
-- Never name or identify the person. No nudity. No guessing of age, ethnicity or biography."""
+- Hair, face, skin and expressions come from the photos ONLY, never from the card description. They describe
+  what MOST images show; image 1 wins ties.
+Hair:
+- hair_colour: ONLY the base colour words, no undertones or strength words, e.g. "near-black", "dark brown". Black
+  with a slight warmth is "near-black"; any warmth belongs in hair_sheen. hair_dye: ONLY clearly dyed sections, e.g. "bright copper dyed ends"; otherwise "none".
+  hair_sheen: a natural tint visible only in light, e.g. "faint warm reddish tint in bright light"; otherwise "none".
+- hair_curl: pattern and curl size, e.g. "tight springy 3b ringlets, small to medium curls". hair_volume: e.g.
+  "very voluminous". hair_parting: e.g. "loose off-centre parting". hair_length: the body landmark where the hair
+  ends as it naturally falls in the full-body photos (curls are not stretched), e.g. "just past the shoulders".
+- glasses: frames with thickness, shape, size and ONE colour, e.g. "thin round silver metal wire frames, medium
+  size"; "none" if the character does not wear glasses in most images. Never just "yes".
+Skin:
+- skin_tone: tone and undertone, e.g. "medium tan with warm golden undertone". skin_texture: e.g. "smooth, fine
+  pores". skin_marks: moles, scars or marks WITH their position, e.g. "small dark mole above the left lip"; "none".
+  freckles: density and where, or "none". skin_shine: e.g. "slight natural sheen on cheekbones".
+Face structure:
+- face_shape, cheeks (fullness), jawline, chin, nose (bridge, tip and width), lips (fullness, shape and colour), eyes
+  (shape and size), lids_lashes (eyelid type, lash length), eyebrows (thickness, arch, colour and grooming, e.g.
+  "very thick dark brown strongly arched groomed brows"). face: a mask, prosthetic or other distinctive feature,
+  otherwise "no distinctive marks".
+Expressions:
+- smile: how smiling reshapes the face in the photos, e.g. "cheeks lift into round apples, eyes narrow to crescents,
+  wide full-lipped smile". neutral: e.g. "soft heavy-lidded gaze, closed full lips".
+Body (from the photos only, judging proportions from full-body photos and how the clothes sit; write "not
+visible" for anything no photo shows; describe plainly and non-sexually):
+- Use absolute words compared with an average adult, because image models read "slim" as average:
+  build (thickness and frame, e.g. "very slim, petite, small narrow frame" or "curvy, average frame"), height
+  (impression, e.g. "short"), shoulders (e.g. "narrow shoulders"), waist (e.g. "very narrow waist, flat stomach"),
+  hips (absolute width AND relation, e.g. "narrow hips, only slightly wider than the waist"), limbs (thickness, e.g.
+  "thin arms and thin straight legs").
+Face images:
+- face_images: up to 3 images, best first, where the whole face is clearly visible and frontal: no phone, hand or
+  object covering ANY part of the face, natural colours (no strong colour filter, no bleached or warm tint, not
+  black-and-white). glasses_image: the single clearest such image where the glasses are worn; 0 if none."""
 
 
 def _png_small(blob: bytes, side: int = 768) -> bytes:
@@ -116,8 +138,8 @@ def reference_images(conn, card: dict) -> tuple[str, list[bytes]]:
     return "", []
 
 
-def _basis_hash(source: str, images: list[bytes]) -> str:
-    digest = hashlib.sha256(source.encode())
+def _basis_hash(source: str, images: list[bytes], about: str = "") -> str:
+    digest = hashlib.sha256(f"{source}|{about}".encode())
     for blob in images:
         digest.update(hashlib.sha256(blob).digest())
     return digest.hexdigest()[:16]
@@ -153,6 +175,10 @@ def _parse(reply: str) -> dict | None:
         if number >= 1 and number not in faces:
             faces.append(number)
     look["face_images"] = faces[:3] or [1]
+    try:
+        look["glasses_image"] = max(0, int(data.get("glasses_image") or 0))
+    except (TypeError, ValueError):
+        look["glasses_image"] = 0
     return look
 
 
@@ -176,7 +202,37 @@ def no_text(value: str) -> str:
     return f"{head} with a {TEXT_PRINT_PHRASE} on the chest"
 
 
-def _read(images: list[bytes], *, transport=None, llm_cfg: dict) -> dict | None:
+_BODY_TEXT_SYSTEM = """You extract body proportions stated in a character description.
+Reply with ONLY one JSON object with exactly these string keys: build, height, shoulders, waist, hips, limbs.
+Use only what the text states, plainly and non-sexually, 2 to 10 words each; "not stated" when it says nothing."""
+
+_CLOTHING_SYSTEM = """You read the clothing of one fictional character in ONE reference photo.
+Reply with ONLY one JSON object with exactly these string keys: top, bottom, footwear, accessories.
+- Look at the whole photo, including legs and feet in a mirror or full-body shot, before writing "not visible".
+- Each with exact colour, garment type, cut and material, e.g. "black high-waisted skinny jeans",
+  "light grey low-top canvas sneakers with white soles"; "not visible" only for a piece the photo does not show.
+- A print is described only as a graphic, its colour and size; never text, letters, words or logos.
+- accessories: jewellery, watches, bracelets, belts, bags, headwear named exactly (a bandana is not a hat); "none".
+- Never name or identify the person. No nudity."""
+
+
+def description(card: dict | None) -> str:
+    """Texto do card que completa o que a foto não mostra (corpo, altura)."""
+    if not card:
+        return ""
+    sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+    parts = [" ".join(str(card.get("entry") or "").split())]
+    for key in ("appearance", "body"):
+        value = sheet.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(" ".join(value.split()))
+    return " | ".join(part for part in parts if part)[:1500]
+
+
+def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = "") -> dict | None:
+    # A descrição do card não entra nesta leitura: com ela no contexto o modelo
+    # copiava "cabelo até as costas" e "quadril pronunciado" do texto por cima
+    # do que as fotos mostram. Ela só completa o corpo, depois, em separado.
     content: list[dict] = [{"type": "text", "text": (
         f"{len(images)} reference image(s) of the same character follow; image 1 is the "
         "primary reference. Fill the JSON.")}]
@@ -190,13 +246,82 @@ def _read(images: list[bytes], *, transport=None, llm_cfg: dict) -> dict | None:
         reply = llm_client.chat_completion(
             llm_cfg, [{"role": "system", "content": _SYSTEM},
                       {"role": "user", "content": content}],
-            role="assistant", temperature=0, max_tokens=500, timeout_s=180,
+            role="assistant", temperature=0, max_tokens=1100, timeout_s=240,
             transport=transport,
         )
     except Exception as exc:  # visão fora do ar não derruba quem pinta
         log.warning("look: visão indisponível: %s: %s", type(exc).__name__, exc)
         return None
-    return _parse(reply)
+    look = _parse(reply)
+    if look is None:
+        return None
+    # Roupa numa leitura própria só da foto principal: no meio dos traços do
+    # rosto e do corpo o modelo dizia "not visible" para a calça e o tênis que
+    # o espelho mostra inteiros.
+    clothing = _read_clothing(images[0], transport=transport, llm_cfg=llm_cfg)
+    for key in CLOTHING_KEYS:
+        look[key] = clothing.get(key, "not visible")
+    look["top"] = no_text(look["top"])
+    return merge_body(look, _read_body_text(about, transport=transport, llm_cfg=llm_cfg))
+
+
+def merge_body(look: dict, stated: dict) -> dict:
+    """A foto manda no que mostra; a descrição completa o resto. Altura a foto
+    não mede: a do texto vale quando existe."""
+    look = dict(look)
+    sources = {}
+    for key in BODY_KEYS:
+        said = stated.get(key, "")
+        said = said if said and not re.match(r"(?i)^\s*not stated", said) else ""
+        if key == "height" and said:
+            look[key], sources[key] = said, "description"
+        elif _value(look, key):
+            sources[key] = "photo"
+        elif said:
+            look[key], sources[key] = said, "description"
+    look["body_sources"] = sources
+    return look
+
+
+def _read_body_text(about: str, *, transport=None, llm_cfg: dict) -> dict:
+    if not about:
+        return {}
+    try:
+        reply = llm_client.chat_completion(
+            llm_cfg, [{"role": "system", "content": _BODY_TEXT_SYSTEM},
+                      {"role": "user", "content": about}],
+            role="assistant", temperature=0, max_tokens=200, timeout_s=60, transport=transport)
+    except Exception as exc:
+        log.warning("look: corpo da descrição sem leitura: %s", type(exc).__name__)
+        return {}
+    match = re.search(r"\{.*\}", reply or "", flags=re.S)
+    try:
+        data = json.loads(match.group(0)) if match else {}
+    except ValueError:
+        return {}
+    return {key: _clean(data.get(key)) for key in BODY_KEYS
+            if isinstance(data, dict) and _clean(data.get(key))}
+
+
+def _read_clothing(image: bytes, *, transport=None, llm_cfg: dict) -> dict:
+    encoded = base64.b64encode(_png_small(image)).decode("ascii")
+    try:
+        reply = llm_client.chat_completion(
+            llm_cfg, [{"role": "system", "content": _CLOTHING_SYSTEM},
+                      {"role": "user", "content": [
+                          {"type": "text", "text": "Fill the JSON for this photo."},
+                          {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}]}],
+            role="assistant", temperature=0, max_tokens=300, timeout_s=120, transport=transport)
+    except Exception as exc:
+        log.warning("look: roupa sem leitura: %s", type(exc).__name__)
+        return {}
+    match = re.search(r"\{.*\}", reply or "", flags=re.S)
+    try:
+        data = json.loads(match.group(0)) if match else {}
+    except ValueError:
+        return {}
+    return {key: _clean(data.get(key)) for key in CLOTHING_KEYS
+            if isinstance(data, dict) and _clean(data.get(key))}
 
 
 def current(card: dict | None) -> dict | None:
@@ -214,13 +339,14 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
     source, images = reference_images(conn, card)
     if not images:
         return current(card)
-    basis = _basis_hash(source, images)
+    about = description(card)
+    basis = _basis_hash(source, images, about)
     stored = current(card)
     if stored and stored.get("basis_hash") == basis:
         return stored
     if llm_cfg is None:
         llm_cfg = settings_store.effective_llm_settings(conn)
-    look = _read(images, transport=transport, llm_cfg=llm_cfg)
+    look = _read(images, transport=transport, llm_cfg=llm_cfg, about=about)
     if look is None:
         _failures[str(card.get("id"))] = time.monotonic()
         return stored
@@ -233,7 +359,7 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
     db.update_card(conn, card["adventure_id"], card["id"], {
         "sheet": json.dumps(sheet, ensure_ascii=False)})
     log.info("card %s: look da referência (%s, %d imagens): %s", card.get("id"), source,
-             len(images), identity_text(look))
+             len(images), identity_text(look, level="full"))
     return look
 
 
@@ -254,8 +380,12 @@ def face_photos(card: dict) -> list[bytes]:
     if not photos:
         return []
     look = current(card)
-    picks = look.get("face_images") if look and look.get("source") == "photo" else None
-    chosen = [photos[n - 1] for n in (picks or []) if isinstance(n, int) and 0 < n <= len(photos)]
+    picks = list(look.get("face_images") or []) if look and look.get("source") == "photo" else []
+    # Quem usa óculos: o melhor rosto e a melhor foto de óculos. Sem isso a
+    # segunda escolhida podia ser uma selfie com filtro que clareava o cabelo.
+    if picks and look and _glasses(look).startswith("always") and look.get("glasses_image"):
+        picks = [picks[0], int(look["glasses_image"]), *picks[1:]]
+    chosen = [photos[n - 1] for n in picks if isinstance(n, int) and 0 < n <= len(photos)]
     # A leitura às vezes escolhe uma selfie de espelho com o celular na frente
     # do rosto (tinha óculos). O detector confere: rosto de frente e grande.
     chosen = [_largest_copy(photo, photos) for photo in chosen]
@@ -364,65 +494,125 @@ def _visible(value: str) -> bool:
     return bool(value) and not _NOT_VISIBLE.search(value)
 
 
-def identity_text(look: dict | None, *, compact: bool = False) -> str:
-    """Rosto, cabelo, óculos, pele e porte: nunca mudam com a roupa da cena.
-
-    `compact` (cena com mais gente): cabelo, óculos, barba e o rosto (máscara,
-    marca); o resto fica para as referências visuais.
-    """
-    if not look:
+def _value(look: dict, key: str) -> str:
+    value = look.get(key) or ""
+    if not isinstance(value, str) or not _visible(value) or _NONE.search(value):
         return ""
-    hair = ", ".join(part for part in (
-        look.get("hair_length"), look.get("hair_texture"), look.get("hair_colour")) if part)
-    bits = [f"{hair} hair" if hair else ""]
-    dye = look.get("hair_dye") or ""
-    sheen = look.get("hair_sheen") or ""
-    if hair and dye and not _NONE.search(dye) and _visible(dye):
-        bits[0] += f" with {dye}"
-    elif hair and sheen and not _NONE.search(sheen) and _visible(sheen):
-        # Brilho natural, não tinta: dito como cor, o Flux pintava pontas vinho.
-        bits[0] += f", uniformly dark from roots to ends, only {sheen}"
-    if look.get("hairstyle") and _visible(look["hairstyle"]) and not compact:
-        bits.append(f"hairstyle: {look['hairstyle']}")
+    if value.lower().startswith(("no distinctive", "not visible")):
+        return ""
+    return value
+
+
+_LABELS = {"face_shape": "face", "cheeks": "cheeks", "jawline": "jaw", "chin": "chin",
+           "nose": "nose", "lips": "lips", "eyes": "eyes", "lids_lashes": "lids",
+           "eyebrows": "brows", "skin_tone": "skin"}
+
+
+def _labelled(look: dict, key: str) -> str:
+    """O valor com o nome do traço quando ele não aparece no texto
+    ("dark brown" sozinho não diz que são os olhos)."""
+    value = _value(look, key)
+    label = _LABELS.get(key, key)
+    if not value or label in value.lower() or label.rstrip("s") in value.lower():
+        return value
+    return f"{label}: {value}"
+
+
+def _glasses(look: dict) -> str:
     glasses = look.get("glasses") or ""
     if re.match(r"(?i)^\s*yes\b", glasses):
         glasses = "glasses"
     elif glasses and not re.search(r"(?i)glasses|spectacles|eyeglasses", glasses):
         glasses = f"{glasses} glasses"
-    # Óculos primeiro: o fundo corta um pouco de cada pessoa pelo fim, e os
-    # óculos da Renata eram justamente o que sumia.
     if glasses and not _NONE.search(glasses):
-        bits.insert(0, f"always wearing {glasses}")
-    elif glasses:
-        # Também na cena com várias pessoas: no fundo de produção os óculos da
-        # Renata passaram para o Caio, que não usa.
-        bits.insert(0, "no glasses")
-    facial = look.get("facial_hair") or ""
-    facial = facial if facial and not _NONE.search(facial) and _visible(facial) else ""
-    if compact:
-        # Cena com várias pessoas: o fundo corta cada uma pelo fim. Na frente o
-        # que mais identifica (óculos, máscara/marca do rosto, barba); o cabelo
-        # por último. A caveira do Caio sumia do fundo sem isso.
-        face = look.get("face") or ""
-        face = face if face and _visible(face) and not face.lower().startswith(
-            ("no distinctive", "full lips", "smooth")) else ""
-        hair_bit = next((bit for bit in bits if bit.endswith("hair") or " hair with " in bit), "")
-        head = [bit for bit in bits if bit.startswith(("always wearing", "no glasses"))]
-        # Barba antes do rosto: "clean-shaven except for beard" cortado no fim
-        # virava "clean-shaven" e o Caio de produção saiu sem barba.
-        ordered = head + ([facial] if facial else []) + ([f"face: {face}"] if face else []) \
-            + ([hair_bit] if hair_bit else [])
-        return "; ".join(bit for bit in ordered if bit)
-    if facial:
-        bits.append(facial)
-    for key in ("face_shape", "eyebrows", "lips"):
-        value = look.get(key) or ""
-        if value and _visible(value):
-            bits.append(value)
-    for key in ("skin", "eyes", "face", "build"):
-        value = look.get(key) or ""
-        if value and _visible(value) and not value.lower().startswith("no distinctive"):
-            bits.append(f"{key}: {value}")
+        return f"always wearing {glasses}"
+    return "no glasses" if glasses else ""
+
+
+def _hair(look: dict, *, detail: bool) -> str:
+    curl = _value(look, "hair_curl") or _value(look, "hair_texture")
+    parts = [_value(look, "hair_length"), curl if detail else (curl.split(",")[0] if curl else ""),
+             _value(look, "hair_colour")]
+    if detail:
+        parts.insert(2, _value(look, "hair_volume"))
+    hair = ", ".join(part for part in parts if part)
+    if not hair:
+        return ""
+    hair += " hair"
+    if _value(look, "hair_dye"):
+        hair += f" with {look['hair_dye']}"
+    elif _value(look, "hair_sheen") and detail:
+        # Brilho natural, não tinta: dito como cor, o Flux pintava pontas vinho.
+        hair += f", uniformly dark from roots to ends, only {look['hair_sheen']}"
+    if detail and _value(look, "hair_parting"):
+        hair += f", {look['hair_parting']}"
+    return hair
+
+
+def _body(look: dict, *, detail: bool) -> str:
+    keys = BODY_KEYS if detail else ("build", "waist", "hips")
+    text = []
+    for key in keys:
+        value = _value(look, key)
+        if not value:
+            continue
+        low = value.lower()
+        if key == "build":
+            text.append(value if "build" in low else f"{value} build")
+        elif key in ("height", "hips"):
+            text.append(value if key[:3] in low else f"{key} {value}")
+        elif key == "limbs":
+            text.append(value if re.search(r"arm|leg|limb", low) else f"{value} limbs")
+        else:
+            text.append(value if key.rstrip("s") in low else f"{value} {key}")
+    return ("body: " + ", ".join(text)) if text else ""
+
+
+# Quanto do look cada pintura leva. O close-up e o mestre levam tudo; as
+# vistas, o que distingue a pessoa de longe; a cena com uma pessoa, a âncora
+# de identidade com o sorriso; a cena com várias, o mínimo que separa cada uma.
+LEVELS = ("full", "face", "views", "scene", "compact")
+
+
+def identity_text(look: dict | None, *, compact: bool = False, level: str = "") -> str:
+    """Traços da referência no nível de detalhe pedido; nunca a roupa.
+
+    `compact=True` equivale a `level="compact"` (cena com várias pessoas).
+    """
+    if not look:
+        return ""
+    level = level or ("compact" if compact else "full")
+    glasses = _glasses(look)
+    facial = _value(look, "facial_hair")
+    mask = _value(look, "face")
+    brows = _labelled(look, "eyebrows")
+    if level == "compact":
+        # O fundo corta cada pessoa pelo fim: o que mais identifica vem antes
+        # (óculos, barba, máscara/marca, sobrancelhas), corpo e cabelo depois.
+        bits = [glasses, facial, f"face: {mask}" if mask else "",
+                brows, _body(look, detail=False), _hair(look, detail=False)]
+        return "; ".join(bit for bit in bits if bit)
+    face_bits = [_labelled(look, key) for key in ("face_shape", "cheeks")]
+    if level == "views":
+        bits = [glasses, facial, f"face: {mask}" if mask else "", *face_bits, brows,
+                _labelled(look, "skin_tone"), _hair(look, detail=False), _body(look, detail=True)]
+        return "; ".join(bit for bit in bits if bit)
+    detail_bits = [_labelled(look, key) for key in ("jawline", "chin", "nose", "lips", "eyes", "lids_lashes")]
+    skin = "; ".join(bit for bit in (
+        _value(look, "skin_tone"), _value(look, "skin_texture"),
+        f"marks: {look['skin_marks']}" if _value(look, "skin_marks") else "",
+        f"freckles: {look['freckles']}" if _value(look, "freckles") else "",
+        _value(look, "skin_shine")) if bit)
+    if level == "scene":
+        bits = [glasses, facial, f"face: {mask}" if mask else "", *face_bits, brows,
+                _labelled(look, "lips"), _hair(look, detail=False), _body(look, detail=False),
+                f"when smiling: {look['smile']}" if _value(look, "smile") else ""]
+        return "; ".join(bit for bit in bits if bit)
+    bits = [glasses, _hair(look, detail=True), facial, f"face: {mask}" if mask else "",
+            *face_bits, *detail_bits, brows, f"skin: {skin}" if skin else "",
+            f"neutral expression: {look['neutral']}" if _value(look, "neutral") else ""]
+    if level == "full":
+        bits.append(_body(look, detail=True))
     return "; ".join(bit for bit in bits if bit)
 
 

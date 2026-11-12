@@ -1344,7 +1344,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     from app.scene import is_explicit as _scene_explicit
     # Traços lidos da referência (cabelo, óculos, pele): valem em qualquer
     # estado da história, que só troca a roupa.
-    identity = look_lock.identity_text(look_lock.current(card))
+    identity = look_lock.identity_text(look_lock.current(card), level="face")
     if identity:
         final = f"{final}. Identity from the reference, keep exactly: {identity}"
     # Sem roupa do momento (`current_outfit`) e sem cena explícita, o retrato
@@ -1717,7 +1717,7 @@ def _turnaround_identity(card: dict, *, with_look: bool = True) -> str:
         identity = f"{name}: {'; '.join(bits)}" if bits else name
     identity = identity[:700]
     if with_look:
-        look = likeness._look_bits([card])
+        look = likeness._look_bits([card], level="full")
         if look:
             identity = f"{identity}. {look}"
     return identity
@@ -1773,19 +1773,26 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
     """Mestre, as quatro vistas e o giro, com a mesma identidade e a roupa
     travada repetida literalmente.
 
-    `identity` já traduzida vem do executor (uma chamada de LLM só); sem ela
-    a identidade sai do card, como no enqueue, que só guarda os textos.
+    `identity` (nome e texto do card, já traduzidos) vem do executor; sem ela
+    sai do card, como no enqueue. Os traços da referência entram por pintura:
+    tudo no mestre e no close-up, o que distingue de longe nas vistas e no giro.
     """
     if identity is None:
-        identity = _turnaround_identity(card)
+        identity = _turnaround_identity(card, with_look=False)
+    base = identity
+
+    def who(level: str) -> str:
+        look = likeness._look_bits([_default_look(card)], level=level)
+        return f"{base}. {look}" if look else base
+
     if lock is None:
         lock = outfit_lock.current(_default_look(card))
     outfit = outfit_lock.full_text(lock)
     outfit = f" {outfit}" if outfit else ""
-    keep = f"Keep {identity}, body, outfit and accessories exactly identical to the references."
+    keep = f"Keep {who('views')}, body, outfit and accessories exactly identical to the references."
     prompts = {
         "master": (
-            f"Create a full-body master portrait of this exact character. {identity}. "
+            f"Create a full-body master portrait of this exact character. {who('full')}. "
             "Standing upright in a relaxed neutral pose, facing the camera, arms at the "
             "sides, feet slightly apart. Preserve the face, hair, body, outfit and "
             f"accessories exactly.{outfit} {_TURNAROUND_SIDES} {_TURNAROUND_FULL_BODY} "
@@ -1797,7 +1804,7 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
     for kind, pose in _TURNAROUND_VIEWS.items():
         if kind == "face":
             prompts[kind] = (
-                f"{pose} Keep {identity}, face, hair and accessories exactly identical to "
+                f"{pose} Keep {who('face')}, face, hair and accessories exactly identical to "
                 f"the references.{visible} {_TURNAROUND_SIDES} {_TURNAROUND_STUDIO}"
             )
             continue
@@ -1807,7 +1814,7 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
         )
     prompts["clip"] = (
         "Turntable shot of one person standing alone in a seamless grey studio. "
-        f"Keep {identity}, body, outfit and accessories exactly unchanged.{outfit} "
+        f"Keep {who('views')}, body, outfit and accessories exactly unchanged.{outfit} "
         "The person slowly turns the whole body in place through exactly one full "
         "360 degree turn, always in the same direction: front, the right side in "
         "profile, the back, the left side in profile, then facing the camera again "
@@ -2356,9 +2363,6 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         card = db.get_card(conn, job["adventure_id"], card_id) or card
     identity = image_english.render_english(
         _turnaround_identity(card, with_look=False), transport=transport, llm_cfg=llm_cfg)
-    look_text = likeness._look_bits([card])
-    if look_text:
-        identity = f"{identity}. {look_text}"
     prompts = _turnaround_prompts(card, lock, identity=identity)
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}

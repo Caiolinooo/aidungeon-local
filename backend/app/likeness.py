@@ -194,7 +194,8 @@ def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
     # frente). Mais de uma pessoa: versão curta dos traços.
     looked = {str(card.get("id")) for card in cards if _has_look(card)}
     clause = _opening_clause(cards, explicit=explicit, name_only=looked)
-    looks = _look_bits(cards, compact=len(cards) > 1)
+    # Uma pessoa: âncora de identidade com o sorriso; várias: o mínimo de cada.
+    looks = _look_bits(cards, level="compact" if len(cards) > 1 else "scene")
     if not looks:
         return clause
     return f"{clause}. {looks}" if clause else looks
@@ -207,14 +208,14 @@ def _has_look(card: dict) -> bool:
             and bool(look_lock.identity_text(look_lock.current(card))))
 
 
-def _look_bits(cards: list[dict], *, compact: bool = False) -> str:
+def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "") -> str:
     from app import look_lock
 
     lines = []
     for card in cards:
         if not _has_look(card):
             continue
-        text = look_lock.identity_text(look_lock.current(card), compact=compact)
+        text = look_lock.identity_text(look_lock.current(card), compact=compact, level=level)
         name = display_name(card) or str(card.get("title") or "").strip()
         if text and name:
             lines.append(f"{name}: {text}")
