@@ -61,7 +61,8 @@ BODY_KEYS = ("build", "height", "shoulders", "waist", "hips", "limbs")
 IDENTITY_KEYS = (*HAIR_KEYS, "glasses", "facial_hair", *SKIN_KEYS, *FACE_KEYS,
                  *EXPRESSION_KEYS, *BODY_KEYS)
 CLOTHING_KEYS = ("top", "bottom", "footwear", "accessories")
-_NOT_VISIBLE = re.compile(r"(?i)^\s*(not visible|unknown|n/?a|unclear|cannot|can't)\b")
+_NOT_VISIBLE = re.compile(
+    r"(?i)^\s*(not visible|not shown|not stated|unknown|n/?a|unclear|cannot|can't)\b")
 _NONE = re.compile(r"(?i)^\s*(none|no|nothing)\b")
 # Palavras de uma estampa com letras. Com as palavras entre aspas o Flux as
 # pinta certas; sem elas (ilegível na foto) pintava texto falso.
@@ -99,17 +100,19 @@ Hair:
 - glasses: frames with thickness, shape, size and ONE colour, e.g. "thin round silver metal wire frames, medium
   size"; "none" if the character does not wear glasses in most images. Never just "yes".
 Skin:
-- skin_tone: tone and undertone, e.g. "medium tan with warm golden undertone". skin_texture: e.g. "smooth, fine
-  pores". skin_marks: moles, scars or marks WITH their position, e.g. "small dark mole above the left lip"; "none".
-  freckles: density and where, or "none". skin_shine: e.g. "slight natural sheen on cheekbones".
+- skin_tone: tone and undertone, from "very fair with pink undertone" through "medium tan with warm golden
+  undertone" to "deep brown with neutral undertone". skin_texture: e.g. "smooth, fine pores", "weathered, visible
+  pores". skin_marks: moles, scars or marks you can actually see, WITH their position; "none" when there are none.
+  freckles: density and where, or "none". skin_shine: "matte", "slight natural sheen" or "oily shine".
 Face structure:
 - face_shape, cheeks (fullness), jawline, chin, nose (bridge, tip and width), lips (fullness, shape and colour), eyes
-  (shape and size), lids_lashes (eyelid type, lash length), eyebrows (thickness, arch, colour and grooming, e.g.
-  "very thick dark brown strongly arched groomed brows"). face: a mask, prosthetic or other distinctive feature,
-  otherwise "no distinctive marks".
+  (shape, size and colour), lids_lashes (eyelid type, lash length), eyebrows (thickness "thin", "medium" or "very
+  thick"; arch "straight", "softly arched" or "strongly arched"; colour; "groomed" or "natural"). face: a mask,
+  prosthetic or other distinctive feature, otherwise "no distinctive marks".
 Expressions:
-- smile: how smiling reshapes the face in the photos, e.g. "cheeks lift into round apples, eyes narrow to crescents,
-  wide full-lipped smile". neutral: e.g. "soft heavy-lidded gaze, closed full lips".
+- smile: how smiling reshapes THIS face in a photo where the character smiles (cheeks, eyes, mouth, teeth shown
+  or not); "not shown" when no photo shows a smile. neutral: the resting look of the eyes and mouth in these photos,
+  in your own words.
 Body (from the photos only, judging proportions from photos that show the whole body and how the clothes sit;
 when no photo shows the waist, hips or legs write "not visible" for them; describe plainly and non-sexually):
 - Use absolute words compared with an average adult, because image models read "slim" as average:
