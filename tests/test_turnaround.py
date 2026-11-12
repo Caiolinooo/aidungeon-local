@@ -359,7 +359,7 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
 
 def test_uploaded_photo_leads_the_master_and_every_view(client, tmp_path, monkeypatch):
     """Com foto enviada no card, ela é a primeira referência de toda pintura;
-    depois vêm a âncora (mestre) ou o mestre (vistas). Miniatura sobe para 512 px."""
+    depois vem o mestre (vistas e close-up). Miniatura sobe para 512 px."""
     use_tmp_storage(tmp_path)
     refs = tmp_path / "refs"
     refs.mkdir()
@@ -388,11 +388,12 @@ def test_uploaded_photo_leads_the_master_and_every_view(client, tmp_path, monkey
         assert lead.format == "PNG"
         assert lead.size == (512, 512)
     photo_png = master_call["reference_images"][0]
-    assert master_call["reference_images"] == [photo_png, PNG_BYTES]        # foto, âncora
+    # Com foto, a âncora gerada sai: ela fazia o cabelo do mestre mudar entre
+    # staging e produção. Foto sem rosto detectável entra inteira.
+    assert master_call["reference_images"] == [photo_png]
     for call in view_calls[:3]:
         assert call["reference_images"] == [photo_png, master_call["content"]]
-    assert view_calls[3]["reference_images"] == [
-        photo_png, master_call["content"], PNG_BYTES]                        # close-up
+    assert view_calls[3]["reference_images"] == [photo_png, master_call["content"]]
 
 
 def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(

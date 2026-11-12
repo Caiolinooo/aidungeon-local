@@ -17,12 +17,15 @@ from test_v2 import PNG_BYTES, override_transport
 from test_v3 import use_tmp_storage
 
 LOOK = {
-    "hair_colour": "jet black", "hair_texture": "tight voluminous curls",
+    "hair_colour": "jet black", "hair_dye": "none", "hair_sheen": "none",
+    "hair_texture": "tight voluminous curls",
     "hair_length": "just past the shoulders", "hairstyle": "loose",
     "glasses": "large round thin gold-rimmed glasses", "facial_hair": "none",
-    "skin": "medium tan", "eyes": "dark brown", "face": "no distinctive marks",
+    "skin": "medium tan", "eyes": "dark brown", "face_shape": "round face with full cheeks",
+    "eyebrows": "thick dark arched eyebrows", "lips": "full lips", "face": "no distinctive marks",
     "build": "slim", "top": "black graphic t-shirt", "bottom": "black skinny jeans",
     "footwear": "light grey canvas sneakers", "accessories": "thin silver necklace",
+    "face_images": [1],
 }
 
 
@@ -126,7 +129,8 @@ def test_photo_pieces_override_card_text_and_the_llm_pins_the_rest(tmp_db, tmp_p
 
     with db.session() as conn:
         lock = outfit_lock.ensure(conn, card, transport=httpx.MockTransport(handler))
-    assert lock["top"] == "black graphic t-shirt"                       # da foto, literal
+    # da foto, com a estampa normalizada (sem letras, sempre igual)
+    assert lock["top"] == "black t-shirt with a small faded light-grey graphic print on the chest"
     assert lock["accessories"] == "thin silver necklace"
     assert lock["bottom"] == "dark indigo wash straight-leg ankle-length jeans"
     assert lock["source"] == "llm+reference"
@@ -210,23 +214,94 @@ def test_portrait_carries_the_reference_identity_in_any_story_state(tmp_db, tmp_
     assert "always wearing large round thin gold-rimmed glasses" in prompt
 
 
-def test_turnaround_uses_the_primary_and_the_clearest_face_photo(tmp_db, tmp_path, monkeypatch):
+def test_face_picks_are_checked_and_thumbnails_upgraded(tmp_db, tmp_path, monkeypatch):
+    """A leitura escolheu uma selfie com o celular na frente do rosto e uma
+    miniatura de 150 px. O detector descarta o rosto virado e a miniatura vira
+    a mesma foto em resolução maior."""
     adv = make_adventure()
     card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10), (200, 150, 120), (0, 0, 200))
     sheet = json.loads(card["sheet"])
-    sheet["look_lock"] = {**LOOK, "clearest_face_image": 3, "source": "photo",
+    refs = Path(sheet["reference"]["image_path"]).parent
+    big = refs / "big.jpg"
+    Image.new("RGB", (1000, 1000), (0, 0, 200)).save(big, format="JPEG")
+    sheet["reference"]["images"].append({"image_path": str(big)})
+    sheet["look_lock"] = {**LOOK, "face_images": [2, 3], "source": "photo",
                           "version": look_lock.LOOK_VERSION, "basis_hash": "x"}
     with db.session() as conn:
         card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
-    photos = look_lock.reference_photos(card)
-    colors = [Image.open(io.BytesIO(blob)).convert("RGB").getpixel((5, 5)) for blob in photos]
-    assert len(photos) == 2
-    assert colors[0][2] < 40 and colors[1][2] > 150      # principal, depois a do rosto
-    sheet["look_lock"]["clearest_face_image"] = 1
-    with db.session() as conn:
-        card = db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
-    assert len(look_lock.reference_photos(card)) == 1
+    frontal = {(200, 150, 120): False}
 
+    def fake_frontal(photo):
+        color = Image.open(io.BytesIO(photo)).convert("RGB").getpixel((5, 5))
+        return frontal.get(tuple(min(255, round(c / 10) * 10) for c in color), True)
+
+    monkeypatch.setattr(look_lock, "_frontal_face", fake_frontal)
+    picks = look_lock.face_photos(card)
+    assert len(picks) == 1
+    with Image.open(io.BytesIO(picks[0])) as chosen:
+        assert chosen.size == (1000, 1000)                  # a cópia grande da azul
+    assert look_lock.primary_photo(card) == likeness.visual_reference_images(card)[0]
+
+
+def test_face_crop_is_large_and_centred_on_the_face(monkeypatch):
+    from app import likeness as likeness_module
+
+    image = Image.new("RGB", (400, 600), (90, 90, 90))
+    image.paste(Image.new("RGB", (100, 120), (230, 180, 150)), (150, 100))
+    raw = io.BytesIO(); image.save(raw, format="PNG")
+    monkeypatch.setattr(likeness_module, "_largest_face_box", lambda img: (150, 100, 100, 120))
+    crop = Image.open(io.BytesIO(look_lock.face_crop(raw.getvalue())))
+    assert max(crop.size) == look_lock.FACE_CROP_SIDE
+    centre = crop.getpixel((crop.width // 2, crop.height // 2))
+    assert centre == (230, 180, 150)
+    monkeypatch.setattr(likeness_module, "_largest_face_box", lambda img: None)
+    assert look_lock.face_crop(raw.getvalue()) is None
+
+
+def test_turnaround_references_drop_the_anchor_when_there_is_a_photo():
+    refs = jobs._turnaround_references
+    faces, primary, master, anchor = [b"f1", b"f2"], [b"p"], b"m", b"a"
+    assert refs("master", faces=faces, primary=primary, photos=[], anchor=anchor, master=b"") \
+        == [b"f1", b"f2", b"p"]
+    assert refs("face", faces=faces, primary=primary, photos=[], anchor=anchor, master=master) \
+        == [b"f1", b"f2", b"m"]
+    assert refs("back", faces=faces, primary=primary, photos=[], anchor=anchor, master=master) \
+        == [b"f1", b"m"]
+    # sem foto: a âncora continua
+    assert refs("master", faces=[], primary=[], photos=[], anchor=anchor, master=b"") == [b"a"]
+    assert refs("face", faces=[], primary=[], photos=[], anchor=anchor, master=master) == [b"m", b"a"]
+
+
+def test_prints_lose_their_letters_and_hair_tint_stays_faint():
+    assert look_lock.no_text("black t-shirt with white text print") == \
+        "black t-shirt with a small faded light-grey graphic print on the chest"
+    assert look_lock.no_text("black t-shirt with large white floral graphic") == \
+        "black t-shirt with a small faded light-grey graphic print on the chest"
+    assert look_lock.no_text("plain black crew-neck t-shirt") == "plain black crew-neck t-shirt"
+    sheen = look_lock.identity_text({**LOOK, "hair_colour": "near-black",
+                                     "hair_sheen": "faint warm reddish tint in bright light"})
+    assert "near-black hair, uniformly dark from roots to ends, only faint warm reddish tint" in sheen
+    assert "highlights" not in sheen
+    dyed = look_lock.identity_text({**LOOK, "hair_dye": "bright copper dyed ends"})
+    assert "jet black hair with bright copper dyed ends" in dyed
+    full = look_lock.identity_text(LOOK)
+    assert "round face with full cheeks; thick dark arched eyebrows; full lips" in full
+    from app import image_client
+    assert "text, letters, words, writing" in image_client._STANDARD_NEGATIVE
+
+
+def test_reader_labels_every_image_and_keeps_three_face_picks(tmp_db):
+    calls: list = []
+    reply = json.dumps({**LOOK, "top": "black tee with white text print", "face_images": [4, "x", 2, 4, 9]})
+    from app import settings_store
+    with db.session() as conn:
+        llm_cfg = settings_store.effective_llm_settings(conn)
+    look = look_lock._read([PNG_BYTES, PNG_BYTES], transport=_vision_transport(reply, calls),
+                           llm_cfg=llm_cfg)
+    assert look["face_images"] == [4, 2, 9]
+    assert "small faded light-grey graphic" in look["top"]
+    labels = [part["text"] for part in calls[0]["messages"][1]["content"] if part["type"] == "text"]
+    assert labels[1:] == ["Image 1:", "Image 2:"]
 
 def test_a_new_reading_of_the_same_photo_rebuilds_the_outfit(tmp_db, tmp_path, monkeypatch):
     """Staging: o look v3 releu a mesma foto (outra estampa e outro acessório)

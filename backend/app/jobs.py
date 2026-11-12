@@ -2302,6 +2302,34 @@ _TURNAROUND_PAINTS = (
 )
 
 
+def _turnaround_references(kind: str, *, faces: list[bytes], primary: list[bytes],
+                           photos: list[bytes], anchor: bytes, master: bytes) -> list[bytes]:
+    """Referências de cada pintura do turnaround, na ordem (a primeira pesa mais).
+
+    Com foto: mestre = rostos + principal; close-up = rostos + mestre; vistas
+    de corpo inteiro = o primeiro rosto + o mestre (roupa e corpo do mestre).
+    Sem foto: o caminho antigo, com a âncora.
+    """
+    if faces or primary:
+        if kind == "master":
+            refs = [*faces, *primary]
+        elif kind == "face":
+            refs = [*faces, master]
+        else:
+            refs = [*faces[:1], master]
+    elif kind == "master":
+        refs = [*photos, anchor]
+    elif kind == "face":
+        refs = [*photos, master, anchor]
+    else:
+        refs = [*photos, master]
+    found: list[bytes] = []
+    for blob in refs:
+        if blob and blob not in found:
+            found.append(blob)
+    return found[:4]
+
+
 def _execute_turnaround(job: dict, transport: Any) -> dict:
     """Mestre → frente, perfil, costas e close-up, cada um pintado e conferido
     → ficha e folha 2×2 montadas em grade fixa → quadro do Wan e giro de
@@ -2342,16 +2370,26 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         if not current or current.get("status") != "running":
             raise db.JobCanceled(job["id"])
 
-    # Foto enviada (ou a da pessoa do card) manda na identidade: vem primeiro
-    # em toda pintura, antes da âncora e do mestre.
+    # A referência manda. Com foto enviada: recortes grandes do rosto das fotos
+    # de rosto escolhidas na leitura vêm primeiro, e a foto principal traz
+    # roupa e corpo; a âncora gerada fica de fora (era ela que fazia o cabelo
+    # do mestre mudar entre staging e produção). Sem foto: a âncora, como antes.
+    def as_png(blobs: list[bytes]) -> list[bytes]:
+        found = []
+        for blob in blobs:
+            png = turnaround.reference_photo_png(blob) if blob else b""
+            if png and png not in found:
+                found.append(png)
+        return found
+
+    faces: list[bytes] = []
+    primary: list[bytes] = []
     photos: list[bytes] = []
-    # A principal e a do rosto mais nítido (lida no look); sem look, só a principal.
-    chosen = [] if likeness.is_minor(card) else (
-        look_lock.reference_photos(card) or likeness.portrait_pixels(card)[:1])
-    for blob in chosen:
-        png = turnaround.reference_photo_png(blob)
-        if png:
-            photos.append(png)
+    if not likeness.is_minor(card):
+        faces = as_png(look_lock.face_references(card))
+        primary = as_png([look_lock.primary_photo(card) or b""])
+        if not faces and not primary:
+            photos = as_png(likeness.portrait_pixels(card)[:1])
 
     def paint(kind: str, size: tuple[int, int], references: list[bytes]) -> dict:
         """Pinta, confere e, se a vista falhar, tenta mais uma semente.
@@ -2392,12 +2430,9 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
 
     try:
         for kind, size in _TURNAROUND_PAINTS:
-            if kind == "master":
-                references = [*photos, raw]
-            elif kind == "face":
-                references = [*photos, painted["master"]["raw"], raw]
-            else:
-                references = [*photos, painted["master"]["raw"]]
+            references = _turnaround_references(
+                kind, faces=faces, primary=primary, photos=photos, anchor=raw,
+                master=painted["master"]["raw"] if "master" in painted else b"")
             painted[kind] = paint(kind, size, references)
         master = painted["master"]
         views = [painted[kind] for kind in turnaround.VIEW_KINDS]

@@ -199,6 +199,8 @@ def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> 
             source = "fallback"
         for key, value in visible.items():
             slots[key] = _clean(value)
+        # Estampa sempre igual e sem letras, venha da foto ou do LLM.
+        slots["top"] = look_lock.no_text(slots["top"])
         if visible:
             source += "+reference"
     lock = {**slots, "version": LOCK_VERSION, "basis_hash": _basis_hash(text), "source": source,

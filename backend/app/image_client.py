@@ -183,7 +183,10 @@ _STANDARD_NEGATIVE = (
     "bad anatomy, bad hands, extra fingers, missing fingers, fused fingers, "
     "extra limbs, extra arms, extra legs, malformed hands, deformed face, "
     "duplicate person, two heads, extra head, cropped, out of frame, "
-    "jpeg artifacts, blurry, lowres, plastic skin, doll"
+    "jpeg artifacts, blurry, lowres, plastic skin, doll, "
+    # Estampa com letras saía como texto ilegível na roupa (só vale com CFG > 1
+    # no Flux2; com CFG 1 quem resolve é a estampa descrita sem letras).
+    "text, letters, words, writing, lettering"
 )
 
 
