@@ -359,6 +359,22 @@ portão tende a recusar e fica o giro das vistas.
 
 `video.turnaround` sobrescreve qualquer chave; `{"engine": "none"}` desliga.
 
+Se as três sementes caem, o giro volta à fila em rodadas novas (10 e 30 min
+depois, no máximo 3 rodadas, sementes novas) por `payload.not_before`, que o
+worker respeita; continua preemptável e de prioridade mais baixa.
+
+### A referência manda (`look_lock`)
+
+O narrador (llama-server com `--mmproj`) lê uma vez, a temperatura 0, até 5
+fotos enviadas do card (sem foto, a âncora) e grava em `look_lock` cabelo
+(cor, reflexo, textura, comprimento por marco do corpo), óculos, pele, rosto,
+porte e as peças de roupa que a foto principal mostra, com a foto do rosto
+mais nítido. Os traços entram literais no turnaround, nos retratos e na
+abertura do See e do fundo (para todo o elenco; o See lê quem ainda não tem
+look). A trava de roupa copia as peças visíveis e o LLM só completa as
+outras com cor/lavagem/corte exatos. As pinturas do turnaround usam semente
+fixa por card, vista e tentativa. Roupa de cena e nudez trocam só a roupa.
+
 Smoke do executor, sem gerar uma imagem:
 
 ```bash
