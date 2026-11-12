@@ -329,22 +329,34 @@ automático prioridade 7, depois de lotes, vida dos NPCs e `card_assets`. Uma no
 clipes automáticos pendentes/ativos (`preempted for a new action`), preservando
 os manuais. Desligue as duas flags se o LTXV não estiver instalado.
 
-### Giro 360° do turnaround: Wan 2.2 em job próprio
+### Turnaround: vistas pintadas uma a uma e giro 360° do Wan 2.2
 
-O LTXV 2B não dá a volta: vira até o perfil, volta à frente e derrete pés e
-pernas. O `character_turnaround` publica mestre, ficha, vistas e um giro
-imediato montado da ficha (frente, perfil, costas, perfil espelhado, com
-fusão, ffmpeg/libx264) e enfileira `turnaround_clip`. Esse job roda o Wan 2.2
-TI2V 5B Q8 (já instalado) em 448×768, 121 frames, 20 passos, CFG 5, a partir
-do quadro do mestre, e só troca `clip_image_id` se o clipe passar no portão de
-fundo (bordas iguais ao primeiro frame); senão tenta mais uma semente e, se
-falhar de novo, fica o giro da ficha. Qualquer imagem nova ou ação preempta o
-giro e ele volta ao fim da fila (no máximo 3 vezes).
+O `character_turnaround` pinta, cada um com a foto do card primeiro e a roupa
+travada (`outfit_lock`) literal: o mestre (672×1152, referência = âncora) e,
+a partir dele, frente, perfil e costas de corpo inteiro (672×1152) e um
+close-up de cabeça e ombros (768×1024; só as peças visíveis da trava, senão
+o modelo abre o quadro para meio corpo). Cada pintura passa por uma checagem
+barata (figura sobre o fundo + YuNet): vazia, outra figura, pés/cabeça
+cortados, rosto onde não devia (costas) ou faltando (frente), close-up que
+virou meio corpo; falhou, mais uma semente. A ficha (mestre, perfil, costas,
+close-up, 1792×768) e a folha 2×2 (896×1536) são montadas com Pillow em grade
+fixa; o giro imediato (ffmpeg/libx264) cruza frente, perfil, costas e perfil
+espelhado. Cerca de 40–65 s na L4.
 
-Medido na L4 com o narrador carregado (11/11/2026): Wan 121 frames/20 passos
-em 156–162 s quente (218 s com a carga dos pesos), pico de 21,1–21,8 GB na
-placa inteira. 12 passos ou 81 frames saíram com manchas, texto e giro
-incompleto. LTXV com keyframes da ficha (`LTXVAddGuide`) virou fantasmas.
+Depois o `turnaround_clip` roda o Wan 2.2 TI2V 5B Q8 em 448×768, 121 frames,
+20 passos, CFG 5, com o mestre fixo no primeiro e no último latente (nodes do
+core: `ReplaceVideoLatentFrames` + máscara de ruído), então o giro tem de
+voltar à frente. O portão lê a linha do tempo do rosto (YuNet): volta
+completa = o rosto some de um lado e volta do outro; meia-volta desfeita ou
+vai-e-volta são recusados. O clipe é cortado no primeiro retorno à frente
+(loop sem salto). Também recusa fundo que muda fora da faixa da figura,
+formas soltas, saltos de área e perda de nitidez (fantasma). Até 3 sementes;
+senão fica o giro das vistas. Qualquer imagem nova ou ação preempta o giro e
+ele volta ao fim da fila (no máximo 3 vezes). Medido em 11/11/2026: 156–200 s
+por semente, pico de 21–22,5 GB na placa inteira com o narrador carregado.
+Personagem de máscara (caveira) tem a linha do tempo do rosto ruidosa: o
+portão tende a recusar e fica o giro das vistas.
+
 `video.turnaround` sobrescreve qualquer chave; `{"engine": "none"}` desliga.
 
 Smoke do executor, sem gerar uma imagem:
