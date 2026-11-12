@@ -967,6 +967,44 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
     return content, width, height
 
 
+_HEADCOUNT_RETRIES = 2
+
+
+def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: int,
+                          height: int, content: bytes, expected: int,
+                          references: list[bytes],
+                          progress: Callable[[], None] | None) -> bytes:
+    """Pinta de novo, com outra semente, a cena que saiu com gente a mais.
+
+    No Flux2 o negativo não vale (CFG 1) e "Exactly 3 people" às vezes vira
+    quatro: um See de produção duplicou uma personagem ao lado do elenco. O
+    detector conta os rostos do tamanho do elenco; sobrando, até
+    `_HEADCOUNT_RETRIES` novas sementes, e fica a pintura com menos gente a
+    mais (a primeira, no empate). Sem detector a primeira pintura vale.
+    """
+    from app import face_regions
+
+    best, best_extra = content, None
+    for attempt in range(_HEADCOUNT_RETRIES + 1):
+        if attempt:
+            retry_cfg = dict(cfg)
+            if cfg.get("seed") is not None:
+                retry_cfg["seed"] = (int(cfg["seed"]) + 7919 * attempt) % (2 ** 31)
+            content, _w, _h = _generate_comfyui(
+                retry_cfg, client, prompt, width, height,
+                reference_images=references, progress=progress)
+        found = face_regions.count_main_faces(content, expected)
+        if found is None:
+            return best
+        extra = max(0, found - expected)
+        if best_extra is None or extra < best_extra:
+            best, best_extra = content, extra
+        if not extra:
+            return content
+        log.info("imagem com %d pessoas, esperava %d (tentativa %d)", found, expected, attempt + 1)
+    return best
+
+
 def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 height: int | None = None, init_image: bytes | None = None,
                 denoising_strength: float | None = None,
@@ -1778,6 +1816,10 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 cfg, client, prompt, width, height,
                 init_image=init_image, reference_images=refs,
                 progress=progress)
+            if expected_people and refs and init_image is None:
+                content = _without_extra_people(
+                    cfg, client, prompt, width, height, content, int(expected_people),
+                    refs, progress)
         elif init_image is not None:
             if provider == "sdwebui":
                 content, width, height = _generate_sdwebui_img2img(

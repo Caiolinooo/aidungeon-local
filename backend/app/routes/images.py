@@ -1111,7 +1111,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(
             f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
         )
-        lead_bits.append("no other people in the background or elsewhere, no patrons, no bystanders")
+        lead_bits.append(
+            "no other people in the background or elsewhere, no patrons, no bystanders"
+            if explicit else scene._alone_there(len(names)))
     if len(locked) > 1:
         if explicit:
             lead_bits.append(

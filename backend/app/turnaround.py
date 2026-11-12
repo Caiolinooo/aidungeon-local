@@ -176,6 +176,19 @@ def face_info(rgb: np.ndarray, *,
     return kind, size, below
 
 
+def _beside(other: dict, main: dict) -> bool:
+    """A outra forma está ao lado da figura, e não em cima ou embaixo dela?
+
+    Camiseta branca no estúdio cinza-claro some na máscara e parte a pessoa em
+    cabeça e pernas: duas formas empilhadas na mesma coluna são uma pessoa só
+    (o perfil da personagem de teste era recusado e pintado de novo à toa).
+    Gente duplicada e grade de painéis ficam lado a lado.
+    """
+    left = max(other["x"], main["x"])
+    right = min(other["x"] + other["w"], main["x"] + main["w"])
+    return (right - left) < 0.5 * min(other["w"], main["w"])
+
+
 def check_view(png: bytes, kind: str) -> list[str]:
     """Problemas baratos de uma vista; lista vazia é vista aceita.
 
@@ -198,7 +211,8 @@ def check_view(png: bytes, kind: str) -> list[str]:
         return ["empty"]
     main = figures[0]
     problems: list[str] = []
-    if any(other["area"] >= 0.15 * main["area"] for other in figures[1:]):
+    if any(other["area"] >= 0.15 * main["area"] and _beside(other, main)
+           for other in figures[1:]):
         problems.append("extra_figure")
     top_margin = max(1, height // 200)
     if main["y"] <= top_margin:

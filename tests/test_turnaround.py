@@ -159,6 +159,10 @@ def test_view_check_flags_cut_feet_empty_and_extra_people(monkeypatch):
     assert turnaround_module.check_view(_figure_png(box=(300, 500, 310, 510)), "back") == ["empty"]
     twins = _figure_png(box=(60, 96, 230, 1050), extra_box=(440, 96, 610, 1050))
     assert "extra_figure" in turnaround_module.check_view(twins, "back")
+    # camiseta da cor do fundo parte a pessoa em cabeça e pernas, na mesma
+    # coluna: é uma pessoa só, não uma figura a mais
+    split = _figure_png(box=(252, 560, 420, 1050), extra_box=(262, 96, 410, 300))
+    assert "extra_figure" not in turnaround_module.check_view(split, "profile")
     small = _figure_png(box=(300, 600, 372, 1000))
     assert "too_small" in turnaround_module.check_view(small, "back")
     # o rosto é do YuNet: de frente na frente e no close-up, nenhum nas costas

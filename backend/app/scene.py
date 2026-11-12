@@ -397,6 +397,42 @@ def _shrink_look(look: str, limit: int) -> str:
         _drop_traits(part, share[id(part)]) if id(part) in share else part for part in parts])
 
 
+_CROWD_NOUN = (r"(?:crowds?|patrons|customers|onlookers|bystanders|passers-?by|pedestrians|"
+               r"shoppers|vendors|merchants|throngs?|people|sailors|drinkers|travellers|travelers)")
+_CROWD_FILL = re.compile(
+    r"(?i),?\s*\b(?:full of|packed with|crowded with|teeming with|bustling with|thronged with|"
+    r"filled with)\s+[^,.;]*")
+_CROWD_SUB = re.compile(r"(?i),?\s*\b(?:where|while|as)\b[^,.;]*\b" + _CROWD_NOUN + r"\b[^,.;]*,?")
+_CROWD_SENTENCE = re.compile(r"(?i)\b" + _CROWD_NOUN + r"\b")
+_CROWD_WORD = re.compile(r"(?i)\b(?:busy|bustling|crowded|packed|teeming|thronged|lively|noisy)\s+")
+
+
+def uncrowded(entry: str) -> str:
+    """O texto do lugar sem a multidão, para a cena que mostra só o elenco.
+
+    "A busy harbour market" enchia o fundo de feirantes mesmo com "no other
+    people" no prompt: o Flux pinta o que o texto descreve. Com o elenco no
+    quadro saem "full of patrons", a oração "where merchants shout…", a frase
+    que só fala de gente e o adjetivo de movimento; o lugar em si fica.
+    """
+    text = _CROWD_SUB.sub(" ", _CROWD_FILL.sub("", entry or ""))
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    quiet = [part for part in sentences if not _CROWD_SENTENCE.search(part)]
+    text = _CROWD_WORD.sub("", " ".join(quiet or sentences[:1]))
+    text = re.sub(r"\s+([,.;])", r"\1", " ".join(text.split()))
+    text = re.sub(r"\b([Aa])n (?=[^aeiouAEIOU\W])", r"\1 ", text)
+    text = re.sub(r"\b([Aa]) (?=[aeiouAEIOU])", r"\1n ", text)
+    return text.strip(" ,;")
+
+
+def _alone_there(count: int) -> str:
+    """Só o elenco no lugar, em termos positivos (negação o Flux ignora)."""
+    who = "This person is alone there" if count == 1 else \
+        f"These {count} are the only people there"
+    return (f"{who}: the place is quiet at this hour, and everything behind them is "
+            "unattended and empty of people")
+
+
 def _headcount(cast: list[dict]) -> str:
     """Quantas pessoas, pelo nome. Sem isto o fundo repetia um rosto ou perdia alguém."""
     names = [" ".join(str(card.get("title") or "").split()) for card in cast]
@@ -547,7 +583,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             clause,
             headcount,
             f"wide cinematic shot of {title}, only the characters named above, "
-            "each with that exact face, hair, age and clothing, no other people, no patrons",
+            f"each with that exact face, hair, age and clothing. {_alone_there(len(cast))}",
             f"atmosphere: {atmosphere}",
             layout_guard,
             lock,
@@ -559,7 +595,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         beat_at = sum(1 for part in (sex_line, clause, headcount)
                       if part and str(part).strip())
         beat = _latest_words(beat, 280)
-        text = _fit(required, beat, beat_at, [reaction, clip_words(entry or "", 400)],
+        text = _fit(required, beat, beat_at,
+                    [reaction, clip_words(uncrowded(entry or ""), 400)],
                     beat_limit=280, look=clause)
         return text, True
     from app.routes.images import clip_words

@@ -775,3 +775,73 @@ def test_flux2_health_reports_the_klein_unet(tmp_path):
     assert health["status"] == "ok"
     assert health["engine"] == "flux2_klein"
     assert health["unet"] == "flux-2-klein-4b-fp8.safetensors"
+
+
+def test_scene_with_an_extra_person_is_painted_again_and_the_best_one_stays(monkeypatch):
+    """Um See de produção saiu com quatro pessoas para um elenco de três. No
+    ComfyUI a pintura com gente a mais é refeita com outra semente (até duas
+    vezes) e fica a que tem menos gente sobrando."""
+    from app import face_regions, image_client
+
+    painted: list[int | None] = []
+
+    def fake_generate(cfg, client, prompt, width, height, **kwargs):
+        painted.append(cfg.get("seed"))
+        return f"img{len(painted) + 1}".encode(), width, height
+
+    monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
+    counts = {b"img1": 4, b"img2": 5, b"img3": 3}
+    monkeypatch.setattr(face_regions, "count_main_faces",
+                        lambda content, expected: counts[content])
+    kept = image_client._without_extra_people(
+        {"seed": 10}, None, "p", 1344, 768, b"img1", 3, [b"ref"], None)
+    assert kept == b"img3"                       # a terceira acertou a contagem
+    assert painted == [10 + 7919, 10 + 2 * 7919]  # sementes novas, derivadas da fixa
+
+    painted.clear()
+    monkeypatch.setattr(face_regions, "count_main_faces",
+                        lambda content, expected: {b"img1": 4, b"img2": 6}.get(content, 5))
+    monkeypatch.setattr(image_client, "_generate_comfyui",
+                        lambda cfg, client, prompt, width, height, **kw:
+                        (painted.append(1) or f"img{len(painted) + 1}".encode(), width, height))
+    kept = image_client._without_extra_people(
+        {}, None, "p", 1344, 768, b"img1", 3, [b"ref"], None)
+    assert kept == b"img1" and len(painted) == 2  # nenhuma acertou: fica a menos errada
+
+    painted.clear()
+    monkeypatch.setattr(face_regions, "count_main_faces", lambda content, expected: 3)
+    assert image_client._without_extra_people(
+        {}, None, "p", 1344, 768, b"ok", 3, [b"ref"], None) == b"ok"
+    assert painted == []                          # contagem certa: nada é refeito
+    monkeypatch.setattr(face_regions, "count_main_faces", lambda content, expected: None)
+    assert image_client._without_extra_people(
+        {}, None, "p", 1344, 768, b"ok", 3, [b"ref"], None) == b"ok"
+    assert painted == []                          # sem detector vale a primeira
+
+
+def test_main_face_count_ignores_tiny_background_faces(monkeypatch):
+    from app import face_regions
+    import cv2
+
+    class Detector:
+        def __init__(self, faces): self.faces = faces
+        def detect(self, image): return None, self.faces
+
+    def detector(faces):
+        import numpy as np
+        rows = np.array([[x, 100, h * 0.8, h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9]
+                         for x, h in faces], dtype=np.float32)
+        return lambda *args, **kwargs: Detector(rows)
+
+    import io
+    from PIL import Image
+    out = io.BytesIO(); Image.new("RGB", (1344, 768), (200, 200, 200)).save(out, "PNG")
+    png = out.getvalue()
+    # três do elenco e dois pedestres minúsculos ao fundo: são três
+    monkeypatch.setattr(cv2.FaceDetectorYN, "create",
+                        detector([(100, 90), (500, 80), (900, 85), (300, 14), (1200, 12)]))
+    assert face_regions.count_main_faces(png, 3) == 3
+    # uma quarta pessoa do tamanho do elenco conta
+    monkeypatch.setattr(cv2.FaceDetectorYN, "create",
+                        detector([(100, 90), (500, 80), (900, 85), (1200, 70)]))
+    assert face_regions.count_main_faces(png, 3) == 4

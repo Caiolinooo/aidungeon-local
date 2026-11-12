@@ -85,3 +85,34 @@ def match_faces(content: bytes, *, width: int, height: int,
         )
         for face_index in best
     ]
+
+
+def count_main_faces(content: bytes, expected: int) -> int | None:
+    """Quantos rostos do tamanho do elenco a imagem tem; None sem detector.
+
+    Conta só rosto comparável aos `expected` maiores (pelo menos 45% da altura
+    mediana deles): uma quarta pessoa ao lado do elenco conta, um pedestre
+    minúsculo no fundo de uma feira não.
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+        if image is None or not _MODEL.exists():
+            return None
+        height, width = image.shape[:2]
+        detector = cv2.FaceDetectorYN.create(
+            str(_MODEL), "", (width, height),
+            score_threshold=0.6, nms_threshold=0.3, top_k=5000,
+        )
+        _, detected = detector.detect(image)
+    except Exception:
+        return None
+    faces = _deduplicate(list(detected) if detected is not None else [])
+    heights = sorted((float(face[3]) for face in faces), reverse=True)
+    if expected <= 0 or len(heights) <= expected:
+        return len(heights)
+    cast = heights[:expected]
+    reference = cast[len(cast) // 2]
+    return sum(1 for value in heights if value >= 0.45 * reference)

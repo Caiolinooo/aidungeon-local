@@ -1207,3 +1207,20 @@ def test_old_jobs_without_the_flag_keep_face_only_references():
     assert jobs._reference_faces({"explicit": True}) is True
     assert jobs._reference_faces({"explicit": True, "reference_faces": False}) is False
     assert jobs._reference_faces({}) is False
+
+
+def test_cast_scene_drops_the_crowd_from_the_place_text():
+    """Com o elenco no quadro o lugar perde a multidão: "A busy harbour market"
+    enchia o fundo de feirantes. O lugar em si continua descrito."""
+    assert scene.uncrowded("A busy harbour market with crates and barrels.") == \
+        "A harbour market with crates and barrels."
+    assert scene.uncrowded("A crowded tavern full of patrons, smelling of rum. Lanterns hang.") == \
+        "A tavern, smelling of rum. Lanterns hang."
+    assert scene.uncrowded("The docks, where merchants shout over the gulls, lead to a pier.") == \
+        "The docks lead to a pier."
+    assert scene.uncrowded("Sailors drink at every table. The bar is made of driftwood.") == \
+        "The bar is made of driftwood."
+    assert scene.uncrowded("A bustling inn.") == "An inn."
+    assert scene.uncrowded("An old lighthouse on a cliff.") == "An old lighthouse on a cliff."
+    assert "These 3 are the only people there" in scene._alone_there(3)
+    assert scene._alone_there(1).startswith("This person is alone there")
