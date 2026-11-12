@@ -1058,3 +1058,15 @@ def test_turnaround_paints_use_fixed_seeds_per_card_and_view(tmp_db, tmp_path, m
     assert len(seeds) == 10 and seeds[:5] == seeds[5:]
     assert len(set(seeds[:5])) == 5
     assert seeds[0] == jobs.stable_seed(card["id"], "master", 0)
+
+
+def test_masked_face_starting_turned_still_gets_the_turn_check(tmp_path, monkeypatch):
+    """A caveira do Caio aparece como rosto virado (>) já no quadro 0. Antes
+    isso caía no caminho sem rosto, que aceitou um giro que volta de estalo
+    pelo mesmo lado; agora a linha do tempo do rosto vale e pega a meia volta."""
+    clip = tmp_path / "caio.mp4"
+    _synthetic_clip(clip, frames=40)
+    snap = list(">>>FFFF<<<<<" + "." * 16 + "><<<" + "F" * 8)
+    monkeypatch.setattr(turnaround_module, "_faces_timeline", lambda frames: snap[:len(frames)])
+    report = turnaround_module.analyze_clip(clip)
+    assert "half_turn" in report["problems"]

@@ -512,7 +512,10 @@ def analyze_clip(video_path: str | Path) -> dict[str, Any]:
     usable = len(frames) - _TAIL_FRAMES
     timeline = _faces_timeline(frames)
     report["faces"] = "".join(timeline) if timeline else None
-    if timeline and timeline[0] == "F":
+    # Começo com rosto (de frente ou de lado: a caveira do Caio oscila entre
+    # F e > já no quadro 0) usa a linha do tempo do rosto, que pega a meia
+    # volta desfeita no fim; o caminho da figura não pegava.
+    if timeline and sum(mark != "." for mark in timeline[:6]) >= 4:
         loop_end, turn_problems = _loop_from_faces(timeline, to_front, usable)
         problems.extend(turn_problems)
     else:
