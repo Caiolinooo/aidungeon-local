@@ -1708,7 +1708,9 @@ def _turnaround_identity(card: dict, *, with_look: bool = True) -> str:
     traços da referência (`look_lock`) já estão em inglês e entram literais.
     """
     card = _default_look(card)
-    identity = likeness._opening_clause([card])
+    # Com look, só o nome: os traços da referência mandam sobre o texto do card.
+    looked = {str(card.get("id"))} if likeness._has_look(card) else set()
+    identity = likeness._opening_clause([card], name_only=looked)
     if not identity:
         bits = npc_assets.scene_bits(card)
         name = str(card.get("title") or "character").strip()

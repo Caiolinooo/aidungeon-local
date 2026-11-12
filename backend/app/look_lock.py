@@ -206,8 +206,12 @@ def _visible(value: str) -> bool:
     return bool(value) and not _NOT_VISIBLE.search(value)
 
 
-def identity_text(look: dict | None) -> str:
-    """Rosto, cabelo, óculos, pele e porte: nunca mudam com a roupa da cena."""
+def identity_text(look: dict | None, *, compact: bool = False) -> str:
+    """Rosto, cabelo, óculos, pele e porte: nunca mudam com a roupa da cena.
+
+    `compact` (cena com mais gente): cabelo, óculos, barba e o rosto (máscara,
+    marca); o resto fica para as referências visuais.
+    """
     if not look:
         return ""
     hair = ", ".join(part for part in (
@@ -217,21 +221,23 @@ def identity_text(look: dict | None) -> str:
     if hair and highlights and not _NONE.search(highlights) and _visible(highlights):
         # "Sutis": dito como cor principal, o Flux pintava o cabelo inteiro.
         bits[0] += f" with only subtle {highlights}"
-    if look.get("hairstyle") and _visible(look["hairstyle"]):
+    if look.get("hairstyle") and _visible(look["hairstyle"]) and not compact:
         bits.append(f"hairstyle: {look['hairstyle']}")
     glasses = look.get("glasses") or ""
     if re.match(r"(?i)^\s*yes\b", glasses):
         glasses = "glasses"
     elif glasses and not re.search(r"(?i)glasses|spectacles|eyeglasses", glasses):
         glasses = f"{glasses} glasses"
+    # Óculos primeiro: o fundo corta um pouco de cada pessoa pelo fim, e os
+    # óculos da Renata eram justamente o que sumia.
     if glasses and not _NONE.search(glasses):
-        bits.append(f"always wearing {glasses}")
-    elif glasses:
+        bits.insert(0, f"always wearing {glasses}")
+    elif glasses and not compact:
         bits.append("no glasses")
     facial = look.get("facial_hair") or ""
     if facial and not _NONE.search(facial) and _visible(facial):
         bits.append(facial)
-    for key in ("skin", "eyes", "face", "build"):
+    for key in (("face",) if compact else ("skin", "eyes", "face", "build")):
         value = look.get(key) or ""
         if value and _visible(value) and not value.lower().startswith("no distinctive"):
             bits.append(f"{key}: {value}")

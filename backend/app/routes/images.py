@@ -502,6 +502,9 @@ def _staged_explicit_action(
     )
 
 
+_CLAUSE_CHARS = 700
+
+
 def clip_words(text: str, limit: int) -> str:
     """Corta no fim da frase ou na palavra. Nunca no meio de uma palavra."""
     text = " ".join((text or "").split())
@@ -1086,7 +1089,8 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if refusal:
         lead_bits.append(sentence)
     if clause:
-        lead_bits.append(clip_words(clause, 420))
+        # 700: com os traços de três pessoas, 420 cortava o fim (óculos da Renata).
+        lead_bits.append(clip_words(clause, _CLAUSE_CHARS))
     if not explicit:
         # Depois do rosto. Na frente, o CLIP larga a cara e pinta só a roupa.
         lead_bits.append(npc_assets.CREATURE_LOCK if creature else npc_assets.CLOTHED_LOCK)
@@ -1149,7 +1153,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             # Rosto e cabelo de cada um (sem a roupa do card). Sem este bloco o
             # See explícito só dizia quem estava vestido e pintava estranhos:
             # a Renata saía sem óculos e com outro cabelo.
-            blocks.append(clip_words(clause, 420).rstrip(".") + ".")
+            blocks.append(clip_words(clause, _CLAUSE_CHARS).rstrip(".") + ".")
         if len(names) == 1:
             blocks.append(
                 f"{names[0]} is the only person in the entire scene, no one else.")

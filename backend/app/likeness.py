@@ -188,37 +188,52 @@ def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
     mundo: no See de três pessoas a Renata perdia os óculos sem eles. Roupa
     de cena ou nudez nunca mexe nesses traços.
     """
-    clause = _opening_clause(cards, explicit=explicit)
-    looks = _look_bits(cards)
+    # Quem tem look perde a descrição livre do card: os traços lidos da
+    # referência mandam e cabem no limite de 420 caracteres do See, que antes
+    # cortava justamente os óculos da Renata (descrição longa do Ladrão na
+    # frente). Mais de uma pessoa: versão curta dos traços.
+    looked = {str(card.get("id")) for card in cards if _has_look(card)}
+    clause = _opening_clause(cards, explicit=explicit, name_only=looked)
+    looks = _look_bits(cards, compact=len(cards) > 1)
     if not looks:
         return clause
     return f"{clause}. {looks}" if clause else looks
 
 
-def _look_bits(cards: list[dict]) -> str:
+def _has_look(card: dict) -> bool:
+    from app import look_lock
+
+    return (not is_minor(card) and card.get("type") in (None, "", "character")
+            and bool(look_lock.identity_text(look_lock.current(card))))
+
+
+def _look_bits(cards: list[dict], *, compact: bool = False) -> str:
     from app import look_lock
 
     lines = []
     for card in cards:
-        if is_minor(card) or card.get("type") not in (None, "", "character"):
+        if not _has_look(card):
             continue
-        text = look_lock.identity_text(look_lock.current(card))
+        text = look_lock.identity_text(look_lock.current(card), compact=compact)
         name = display_name(card) or str(card.get("title") or "").strip()
         if text and name:
             lines.append(f"{name}: {text}")
     return ". ".join(lines)
 
 
-def _opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
+def _opening_clause(cards: list[dict], *, explicit: bool = False,
+                    name_only: set[str] | frozenset = frozenset()) -> str:
     reals = [card for card in cards if is_real_person(card) and not is_minor(card)]
     others = [card for card in cards if card not in reals]
     rest = npc_assets.likeness_clause(
-        [card for card in others if not has_reference_image(card)],
+        [card for card in others
+         if not has_reference_image(card) and str(card.get("id")) not in name_only],
         explicit=explicit,
     )
     photo_names = [
         (card.get("title") or "").strip()
-        for card in others if has_reference_image(card)
+        for card in others
+        if has_reference_image(card) or str(card.get("id")) in name_only
     ]
     if not reals and not photo_names:
         return rest

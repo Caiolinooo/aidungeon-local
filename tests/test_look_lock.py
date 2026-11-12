@@ -182,8 +182,8 @@ def test_see_of_three_people_carries_everyones_look(client, tmp_path, monkeypatc
         client.app.dependency_overrides.clear()
     assert resp.status_code == 200, resp.text
     prompt = seen[-1]["prompt"]
-    assert "Renata Lemos: just past the shoulders" in prompt
-    assert "always wearing large round thin gold-rimmed glasses" in prompt
+    assert "Renata Lemos: always wearing large round thin gold-rimmed glasses" in prompt
+    assert "just past the shoulders, tight voluminous curls, jet black hair" in prompt
     with db.session() as conn:
         renata = db.get_card(conn, adv["id"], cards[0]["id"])
     explicit = likeness.opening_clause([renata], explicit=True)
@@ -269,3 +269,26 @@ def test_see_reads_missing_looks_once_and_backs_off_after_a_failure(tmp_db, tmp_
     assert look_lock.current(updated[0])["source"] == "anchor"
     look_lock.ensure_many(adv["id"], updated, transport=good, llm_cfg=None)
     assert len(calls) == 2                           # já gravado: não relê
+
+
+def test_multi_person_clause_keeps_everyones_glasses_within_the_see_budget(tmp_db):
+    """Três pessoas com look: a descrição livre sai, os traços curtos (óculos
+    primeiro) entram e cabem nos 700 caracteres do See."""
+    from app.routes.images import _CLAUSE_CHARS, clip_words
+
+    adv = make_adventure()
+    cards = []
+    for name, extra in (("Renata Lemos", {}),
+                        ("Ladrão de Jibóia", {"glasses": "none", "facial_hair": "goatee"}),
+                        ("Caio Calça-Quadrada", {"glasses": "none", "face": "skull mask"})):
+        sheet = {"look_lock": {**LOOK, **extra, "version": look_lock.LOOK_VERSION, "basis_hash": "x"}}
+        with db.session() as conn:
+            cards.append(db.insert_card(
+                conn, adv["id"], type="character", title=name,
+                entry="A stout pirate with a large belly, messy gray hair and a dirty torn shirt.",
+                sheet=json.dumps(sheet)))
+    clause = clip_words(likeness.opening_clause(cards), _CLAUSE_CHARS)
+    assert "Renata Lemos: always wearing large round thin gold-rimmed glasses" in clause
+    assert "face: skull mask" in clause
+    assert "stout pirate" not in clause                    # o look manda sobre o texto
+    assert "skin:" not in clause                            # versão curta
