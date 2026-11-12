@@ -96,6 +96,9 @@ O `deploy.sh`:
    de si mesmo (recusa checkout com mudança local);
 2. não espera o jogador parar: a trava de 10 min sem uso foi removida em
    12/11/2026 (`--idle-min` e `--force` ainda são aceitos, sem efeito);
+   sem a senha do sudo, `DEPLOY_RESTART="tools/restart_service.sh <unit> <porta>"`
+   reinicia o serviço (SIGTERM, 15 s de espera e SIGKILL se o uvicorn ficar
+   preso esperando o stream de eventos do navegador fechar);
 3. faz backup do banco (API de backup do sqlite) e do código, com o `DEPLOYED`
    anterior, em `/home/caio/aidungeon-backups/deploy-<alvo>-<data>/`;
 4. copia o código, roda `pip install` se o `requirements.txt` mudou (o venv é o
