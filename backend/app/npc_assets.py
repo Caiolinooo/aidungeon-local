@@ -717,6 +717,12 @@ def current_outfit_text(card: dict | None) -> str:
     if not card:
         return ""
     sheet = parse_sheet(card.get("sheet") or "")
+    # Sem roupa da história, a roupa padrão travada (peças da referência).
+    lock = sheet.get("outfit_lock")
+    current = sheet.get("current_outfit")
+    if (not (isinstance(current, str) and current.strip()) and isinstance(lock, dict)
+            and isinstance(lock.get("top"), str) and lock["top"].strip()):
+        return _clip(" ".join(lock["top"].split()).strip(" ,.;"), 90)
     for key in ("current_outfit", "clothing"):
         value = sheet.get(key)
         if not isinstance(value, str) or not value.strip():

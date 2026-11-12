@@ -59,6 +59,7 @@ O prazo conta do mais recente entre `started_at` e `payload.heartbeat_at`.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -68,12 +69,12 @@ import sqlite3
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from app import (db, events, game_engine, image_client, image_english, likeness, llm_client,
-                    npc_assets, outfit_lock, settings_store, turnaround)
+                    look_lock, npc_assets, outfit_lock, settings_store, turnaround)
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -1341,6 +1342,11 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         else:
             final = f"{final}. Mandatory appearance, do not contradict: {look}"
     from app.scene import is_explicit as _scene_explicit
+    # Traços lidos da referência (cabelo, óculos, pele): valem em qualquer
+    # estado da história, que só troca a roupa.
+    identity = look_lock.identity_text(look_lock.current(card))
+    if identity:
+        final = f"{final}. Identity from the reference, keep exactly: {identity}"
     # Sem roupa do momento (`current_outfit`) e sem cena explícita, o retrato
     # usa a mesma roupa travada do turnaround, só as peças que o busto mostra.
     # Só lê a trava: o worker de retrato não chama o LLM (quem cria é o
@@ -1695,15 +1701,24 @@ def _default_look(card: dict) -> dict:
     return {**card, "sheet": json.dumps(sheet, ensure_ascii=False)}
 
 
-def _turnaround_identity(card: dict) -> str:
-    """Quem é a pessoa, para todo prompt do turnaround (aparência padrão)."""
+def _turnaround_identity(card: dict, *, with_look: bool = True) -> str:
+    """Quem é a pessoa, para todo prompt do turnaround (aparência padrão).
+
+    `with_look=False` devolve só o nome e o texto do card, para traduzir; os
+    traços da referência (`look_lock`) já estão em inglês e entram literais.
+    """
     card = _default_look(card)
-    identity = likeness.opening_clause([card])
+    identity = likeness._opening_clause([card])
     if not identity:
         bits = npc_assets.scene_bits(card)
         name = str(card.get("title") or "character").strip()
         identity = f"{name}: {'; '.join(bits)}" if bits else name
-    return identity[:700]
+    identity = identity[:700]
+    if with_look:
+        look = likeness._look_bits([card])
+        if look:
+            identity = f"{identity}. {look}"
+    return identity
 
 
 _TURNAROUND_SIDES = (
@@ -2299,12 +2314,20 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     if not img_cfg["enabled"]:
         raise GameError(503, "image_disabled",
                         "image generation is disabled (settings.image.enabled)")
-    # Roupa travada antes de qualquer pintura; a identidade é traduzida uma
-    # vez e a frase da roupa entra literal, sem passar pelo LLM.
+    # A referência manda: o look (cabelo, óculos, pele, roupa que aparece) é
+    # lido da foto (ou da âncora, sem foto) uma vez; a trava de roupa usa as
+    # peças visíveis literais e só completa as outras. A identidade é
+    # traduzida uma vez e as frases do look e da roupa entram literais.
     with db.session() as conn:
+        look_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
+        card = db.get_card(conn, job["adventure_id"], card_id) or card
         lock = outfit_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
+        card = db.get_card(conn, job["adventure_id"], card_id) or card
     identity = image_english.render_english(
-        _turnaround_identity(card), transport=transport, llm_cfg=llm_cfg)
+        _turnaround_identity(card, with_look=False), transport=transport, llm_cfg=llm_cfg)
+    look_text = likeness._look_bits([card])
+    if look_text:
+        identity = f"{identity}. {look_text}"
     prompts = _turnaround_prompts(card, lock, identity=identity)
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}
@@ -2334,8 +2357,9 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
         """
         attempts = []
         for attempt in range(2):
-            cfg = reference_cfg if attempt == 0 else {
-                **reference_cfg, "seed": random.randint(0, 2**31 - 1)}
+            # Semente fixa por card, vista e tentativa: refazer o turnaround
+            # repete o mesmo cabelo e o mesmo tom de jeans.
+            cfg = {**reference_cfg, "seed": stable_seed(card_id, kind, attempt)}
             image_id = db.new_id()
             meta = image_client.generate_image(
                 cfg, prompts[kind], adventure_id=job["adventure_id"],
@@ -2497,6 +2521,34 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
 # Até três sementes: com primeiro e último quadro fixos, 2 de 3 voltas na L4
 # saíram limpas e completas; a que falha costuma ir e voltar (wobble).
 _TURNAROUND_CLIP_ATTEMPTS = 3
+# Rodadas novas quando as três sementes caem no portão: o job volta à fila
+# com `not_before` (o worker só pega depois disso), prioridade mais baixa e
+# preemptável, então nunca segura o jogo. Sementes diferentes a cada rodada.
+_TURNAROUND_CLIP_ROUNDS = 3
+_TURNAROUND_CLIP_BACKOFF_S = (10 * 60, 30 * 60)
+
+
+def stable_seed(*parts: Any) -> int:
+    """Semente fixa por card e vista: refazer dá a mesma imagem."""
+    digest = hashlib.sha256(":".join(str(part) for part in parts).encode()).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
+
+
+def _schedule_clip_round(job: dict, payload: dict) -> dict | None:
+    """Próxima rodada do giro, com atraso crescente; None depois da última."""
+    current_round = int(payload.get("round") or 1)
+    if current_round >= _TURNAROUND_CLIP_ROUNDS:
+        return None
+    delay = _TURNAROUND_CLIP_BACKOFF_S[min(current_round - 1, len(_TURNAROUND_CLIP_BACKOFF_S) - 1)]
+    not_before = datetime.now(timezone.utc) + timedelta(seconds=delay)
+    retry = {key: value for key, value in payload.items()
+             if key not in ("heartbeat_at", "requeues")}
+    retry["round"] = current_round + 1
+    retry["not_before"] = not_before.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    with db.session() as conn:
+        return enqueue(conn, "turnaround_clip", job["adventure_id"], job.get("ref_id") or "",
+                       retry, priority=PRIORITY_PORTRAIT_CLIP,
+                       supersede_key=job.get("supersede_key") or None)
 
 
 def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
@@ -2534,12 +2586,14 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
     accepted: dict | None = None
     image_id = ""
     reports: list[dict] = []
+    clip_round = int(payload.get("round") or 1)
     for attempt in range(_TURNAROUND_CLIP_ATTEMPTS):
         image_id = db.new_id()
         meta = image_client.generate_clip(
             img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
             source_png=raw, transport=transport, progress=progress,
-            video_overrides=video, seed=random.randint(0, 2**31 - 1),
+            video_overrides=video,
+            seed=stable_seed(card_id, split_id, "clip", clip_round, attempt),
         )
         path = likeness.stored_image_path(meta["file_path"])
         try:
@@ -2565,7 +2619,12 @@ def _execute_turnaround_clip(job: dict, transport: Any) -> dict:
         if not current or current.get("status") != "running":
             raise db.JobCanceled(job["id"])
     if accepted is None:
-        return {"card_id": card_id, "clip": None, "rejected": True, "reports": reports}
+        retry = _schedule_clip_round(job, payload)
+        if retry:
+            log.info("job %s: giro 360° recusado na rodada %d; nova rodada %s depois de %s",
+                     job["id"], clip_round, retry["id"], retry["payload"]["not_before"])
+        return {"card_id": card_id, "clip": None, "rejected": True, "reports": reports,
+                "round": clip_round, "retry_job_id": retry["id"] if retry else None}
     try:
         with db.session() as conn:
             card = db.get_card(conn, job["adventure_id"], card_id)

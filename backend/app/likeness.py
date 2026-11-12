@@ -180,11 +180,36 @@ def english_descriptor(card: dict) -> str:
 
 
 def opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
-    """Nome e aparência na frente; foto enviada substitui descrição facial.
+    """Nome e aparência na frente, mais os traços lidos da referência.
 
-    Quando há foto de referência, o texto não descreve cabelo, olhos ou rosto:
-    esses traços vêm da imagem. Descrição concorrente fazia o SD trocar a pessoa.
+    O texto livre do card não descreve cabelo, olhos ou rosto de quem tem foto:
+    descrição concorrente fazia o SD trocar a pessoa. Os traços do `look_lock`
+    (lidos da própria foto, ou da âncora sem foto) vêm depois, para todo
+    mundo: no See de três pessoas a Renata perdia os óculos sem eles. Roupa
+    de cena ou nudez nunca mexe nesses traços.
     """
+    clause = _opening_clause(cards, explicit=explicit)
+    looks = _look_bits(cards)
+    if not looks:
+        return clause
+    return f"{clause}. {looks}" if clause else looks
+
+
+def _look_bits(cards: list[dict]) -> str:
+    from app import look_lock
+
+    lines = []
+    for card in cards:
+        if is_minor(card) or card.get("type") not in (None, "", "character"):
+            continue
+        text = look_lock.identity_text(look_lock.current(card))
+        name = display_name(card) or str(card.get("title") or "").strip()
+        if text and name:
+            lines.append(f"{name}: {text}")
+    return ". ".join(lines)
+
+
+def _opening_clause(cards: list[dict], *, explicit: bool = False) -> str:
     reals = [card for card in cards if is_real_person(card) and not is_minor(card)]
     others = [card for card in cards if card not in reals]
     rest = npc_assets.likeness_clause(

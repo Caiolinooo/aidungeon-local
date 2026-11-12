@@ -1846,6 +1846,8 @@ def claim_next_job(conn: sqlite3.Connection, *,
     """
     sql = (
         "SELECT id FROM jobs WHERE status='pending'"
+        # `payload.not_before`: rodada adiada (giro 360° recusado); só depois.
+        " AND COALESCE(json_extract(payload, '$.not_before'), '') <= ?"
         " AND NOT ("
         " type='scene_clip'"
         " AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1"
@@ -1857,7 +1859,7 @@ def claim_next_job(conn: sqlite3.Connection, *,
         " )"
         " )"
     )
-    params: list = []
+    params: list = [utcnow()]
     if max_priority is not None:
         sql += " AND priority<=?"
         params.append(int(max_priority))

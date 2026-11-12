@@ -399,7 +399,8 @@ _BORDER_FRACTION = 0.015
 _FLOOR_DELTA = 60
 _FLOOR_FRACTION = 0.02
 _ZONE_WIDTH = 1.6        # faixa da figura (× meia largura mediana)
-_OUTSIDE_FRACTION = 0.008  # fora da faixa: bons ≤ 0,1 %; ruins ≥ 1,5 %
+_OUTSIDE_FRACTION = 0.008  # forma solta fora da faixa: bons ≤ 0,1 %; ruins ≥ 1,5 %
+_ATTACHED_FRACTION = 0.03  # parte da própria figura fora da faixa (aba, casaco)
 _JUMP_RATIO = 2.0        # área da figura entre quadros: bons ≤ 1,63×; ruins ≥ 3,4×
 _SHARPNESS_RATIO = 0.4   # nitidez mediana da figura / início: bons ≥ 0,61; fantasma 0,23
 
@@ -434,54 +435,42 @@ def _loop_from_faces(timeline: list[str], to_front: list[float],
                      usable: int) -> tuple[int | None, list[str]]:
     """(loop_end, problemas) pela linha do tempo do rosto.
 
-    Costas = a primeira sequência de `_BACK_RUN` quadros sem rosto. Volta
-    completa = o rosto some virado para um lado e reaparece vindo do outro;
-    o mesmo lado na ida e na volta é meia-volta desfeita (o Wan s7 fazia
-    frente → perfil → costas → o mesmo perfil → frente). O primeiro trecho
-    de rosto de frente depois das costas fecha o loop no quadro mais parecido
-    com o 0; uma segunda volta, que o Wan às vezes dá para cair no último
-    quadro fixo, fica de fora.
+    Costas = a primeira sequência sem rosto com pelo menos metade da maior
+    (e `_BACK_RUN` quadros). Máscara e caveira (o Caio) perdem o rosto por uns
+    quadros já no perfil; esse buraco curto não é as costas. Volta completa =
+    o rosto some virado para um lado e reaparece vindo do outro; o mesmo lado
+    na ida e na volta é meia-volta desfeita (o Wan s7 fazia frente → perfil →
+    costas → o mesmo perfil → frente). O primeiro trecho de rosto de frente
+    depois das costas fecha o loop no quadro mais parecido com o 0; uma
+    segunda volta, que o Wan às vezes dá para cair no último quadro fixo,
+    fica de fora. Outra sequência longa sem rosto antes da volta é vai-e-volta.
     """
-    run = 0
-    back_start = back_end = None
-    for index in range(usable):
-        run = run + 1 if timeline[index] == "." else 0
-        if run >= _BACK_RUN:
-            back_start, back_end = index - run + 1, index
-            while back_end + 1 < usable and timeline[back_end + 1] == ".":
-                back_end += 1
-            break
-    if back_end is None:
+    text = "".join(timeline[:usable])
+    # Rosto de lado por poucos quadros no meio das costas (o YuNet às vezes
+    # acha um rosto no cabelo) não separa duas costas.
+    text = re.sub(r"(?<=\.)[<>]{1,%d}(?=\.)" % (_BLIP_FRAMES - 1),
+                  lambda m: "." * len(m.group(0)), text)
+    runs = [match.span() for match in re.finditer(r"\.+", text)]
+    longest = max((end - start for start, end in runs), default=0)
+    if longest < _BACK_RUN:
         return None, ["no_back_view"]
-    out_side = _side("".join(timeline[:back_start]))
-    index = back_end + 1
-    while index + _FRONT_RUN <= usable:
-        if all(timeline[j] == "F" for j in range(index, index + _FRONT_RUN)):
-            stop = index
-            while stop + 1 < usable and timeline[stop + 1] == "F":
-                stop += 1
-            # lado de chegada: o trecho virado logo antes do F (furos de 1 quadro ok)
-            start = index
-            while start > back_end + 1 and (timeline[start - 1] in "<>" or (
-                    timeline[start - 1] == "." and start - 2 > back_end
-                    and timeline[start - 2] in "<>")):
-                start -= 1
-            in_side = _side("".join(timeline[start:index]))
-            if out_side and in_side and in_side == out_side:
-                return None, ["half_turn"]
-            # Duas costas antes de voltar: vai e volta (lock2/wan0, flf99). Um
-            # rosto de lado por poucos quadros no meio das costas (o YuNet às
-            # vezes acha um rosto no cabelo) não separa duas costas.
-            middle = re.sub(r"(?<=\.)[<>]{1,%d}(?=\.)" % (_BLIP_FRAMES - 1),
-                            lambda m: "." * len(m.group(0)),
-                            "".join(timeline[back_start:index]))
-            backs = [chunk for chunk in re.split(r"[F<>]+", middle) if len(chunk) >= _BACK_RUN]
-            if len(backs) > 1:
-                return None, ["wobble"]
-            best = min(range(index, stop + 1), key=lambda j: to_front[j])
-            return best, []
-        index += 1
-    return None, []
+    need = max(_BACK_RUN, longest // 2)
+    back_start, back_end = next((start, end) for start, end in runs if end - start >= need)
+    out_side = _side(text[:back_start])
+    match = re.search(r"F{%d,}" % _FRONT_RUN, text[back_end:])
+    if not match:
+        return None, []
+    index, stop = back_end + match.start(), back_end + match.end()
+    # lado de chegada: o trecho virado logo antes do F (furos de 1 quadro ok)
+    arrival = re.search(r"[<>][<>.]*$", text[back_end:index].rstrip("."))
+    in_side = _side(arrival.group(0)) if arrival else 0
+    if out_side and in_side and in_side == out_side:
+        return None, ["half_turn"]
+    again = max(_BACK_RUN, int(0.4 * (back_end - back_start)))
+    if any(end - start >= again for start, end in runs if back_end <= start < index):
+        return None, ["wobble"]
+    best = min(range(index, stop), key=lambda j: to_front[j])
+    return best, []
 
 
 def analyze_clip(video_path: str | Path) -> dict[str, Any]:
@@ -567,6 +556,8 @@ def analyze_clip(video_path: str | Path) -> dict[str, Any]:
     worst_border = worst_floor = worst_outside = 0.0
     worst_jump = 1.0
     previous_area = 0
+    inner = np.zeros((h, w), bool)
+    inner[:, int(w * 0.08):w - int(w * 0.08)] = True
     for index, (frame, mask, box) in enumerate(zip(blurred, kept_masks, boxes)):
         area = box["area"] if box else 0
         if previous_area and area:
@@ -582,7 +573,21 @@ def analyze_clip(video_path: str | Path) -> dict[str, Any]:
             worst_border = max(worst_border, float((change[edges] > _BORDER_DELTA).mean()))
         if floor_band.any():
             worst_floor = max(worst_floor, float((change[floor_band] > _FLOOR_DELTA).mean()))
-        worst_outside = max(worst_outside, float((mask & ~zone).mean()))
+        # Forma solta fora da faixa (texto, painel, barbatana separada) conta
+        # cheia; o que sai da própria figura (aba do chapéu, casaco abrindo no
+        # giro do Caio) só conta acima de `_ATTACHED_FRACTION`.
+        labels_count, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
+        # As colunas da beira ficam com a métrica de borda (mediana no tempo):
+        # a vinheta do estúdio vira "figura" ali na máscara de um quadro só.
+        outside = mask & ~zone & inner
+        if box and labels_count > 1:
+            main_label = int(np.bincount(labels[mask].ravel()).argmax()) if mask.any() else 0
+            attached = outside & (labels == main_label)
+            detached = outside & (labels != main_label)
+        else:
+            attached, detached = np.zeros_like(outside), outside
+        worst_outside = max(worst_outside, float(detached.mean()),
+                            float(attached.mean()) * _OUTSIDE_FRACTION / _ATTACHED_FRACTION)
     # Fantasma e borrão: a figura perde o detalhe (variância do Laplaciano)
     # em relação aos primeiros quadros, que são o mestre nítido.
     sharpness = []

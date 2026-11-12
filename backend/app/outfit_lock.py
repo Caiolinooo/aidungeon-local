@@ -34,8 +34,10 @@ _FALLBACK = {
     "accessories": "none",
 }
 # v2: a v1 aceitava "bottom: none (one-piece)" para uma blusa e a ficha da
-# Renata saiu de short. Trava sem versão é refeita.
-LOCK_VERSION = 2
+# Renata saiu de short. v3: as peças que a referência mostra (look_lock)
+# mandam e o resto vem com cor e lavagem exatas ("blue denim jeans" saía
+# claro numa rodada e índigo escuro na outra). Trava de versão velha é refeita.
+LOCK_VERSION = 3
 _NONE = re.compile(r"(?i)^\s*(none|no|n/?a|nothing|-)\b")
 _ONE_PIECE = re.compile(r"(?i)\b(dress|gown|robe|jumpsuit|overalls?|romper|one-piece|kimono|habit|tunic)\b")
 _BAREFOOT = re.compile(r"(?i)\bbare ?foot\b|\bdescal")
@@ -52,7 +54,10 @@ Rules:
 - No nudity, no underwear-only outfits, no logos, no text, no armour or weapons unless the card states them.
 - "bottom" is always a real garment covering the legs or hips (trousers, jeans, skirt, shorts...). Only when the
   card states a dress, gown, robe or jumpsuit, "bottom" names that same one-piece garment again.
-- "footwear" is always real shoes, boots or sandals unless the card says barefoot."""
+- "footwear" is always real shoes, boots or sandals unless the card says barefoot.
+- Pin every piece precisely so it never drifts: exact colour and shade or wash, cut, length and material, e.g.
+  "dark indigo wash straight-leg ankle-length denim jeans", "white low-top canvas sneakers with white rubber soles".
+- Pieces listed as visible in the reference are authoritative: copy them verbatim, never change them."""
 
 
 def _sheet(card: dict) -> dict:
@@ -60,9 +65,13 @@ def _sheet(card: dict) -> dict:
 
 
 def basis(card: dict) -> str:
-    """Só o texto de roupa do card: editar outra coisa não troca o traje."""
+    """Texto de roupa do card e a leitura da referência: editar outra coisa
+    não troca o traje; foto nova troca."""
     sheet = _sheet(card)
     parts: list[str] = []
+    look = sheet.get("look_lock")
+    if isinstance(look, dict) and look.get("basis_hash"):
+        parts.append(f"look:{look['basis_hash']}")
     clothing = sheet.get("clothing")
     if isinstance(clothing, str) and clothing.strip():
         parts.append(" ".join(clothing.split()))
@@ -109,9 +118,13 @@ def _complete(slots: dict, text: str) -> dict:
     return slots
 
 
-def _ask_llm(card: dict, text: str, *, transport=None, llm_cfg: dict) -> dict | None:
+def _ask_llm(card: dict, text: str, *, transport=None, llm_cfg: dict,
+             visible: dict | None = None) -> dict | None:
     sheet = _sheet(card)
     lines = [f"Character: {card.get('title') or 'character'}"]
+    if visible:
+        lines.append("Visible in the reference image (authoritative, copy verbatim): "
+                     + "; ".join(f"{key}: {value}" for key, value in visible.items()))
     if text:
         lines.append(f"Clothing stated on the card: {text}")
     for key in ("appearance", "body", "class"):
@@ -155,24 +168,36 @@ def current(card: dict) -> dict | None:
 def ensure(conn, card: dict, *, transport=None, llm_cfg: dict | None = None) -> dict:
     """Devolve a trava do card, criando e gravando na primeira vez.
 
-    Mesmo sem LLM a trava é gravada (peças neutras): o que importa é o
-    traje ser igual em todas as rodadas, não ser o mais bonito.
+    As peças que a referência mostra (`look_lock`) entram literais e mandam;
+    o LLM só completa as que ela não mostra. Mesmo sem LLM a trava é gravada
+    (peças neutras): o que importa é o traje ser igual em todas as rodadas.
     """
     lock = current(card)
     if lock is not None:
         return lock
+    from app import look_lock
+
     text = basis(card)
+    clothing = " | ".join(part for part in text.split(" | ") if not part.startswith("look:"))
+    visible = look_lock.visible_clothing(look_lock.current(card))
     if llm_cfg is None:
         llm_cfg = settings_store.effective_llm_settings(conn)
-    slots = _ask_llm(card, text, transport=transport, llm_cfg=llm_cfg)
-    source = "llm"
-    if slots is not None:
-        slots = _complete(slots, text)
-    if slots is None:
-        slots = dict(_FALLBACK)
-        if text:
-            slots["top"] = _clean(text)
-        source = "fallback"
+    if all(key in visible for key in SLOTS):
+        slots, source = {key: _clean(visible[key]) for key in SLOTS}, "reference"
+    else:
+        slots = _ask_llm(card, clothing, transport=transport, llm_cfg=llm_cfg, visible=visible)
+        source = "llm"
+        if slots is not None:
+            slots = _complete(slots, clothing)
+        if slots is None:
+            slots = dict(_FALLBACK)
+            if clothing and "top" not in visible:
+                slots["top"] = _clean(clothing)
+            source = "fallback"
+        for key, value in visible.items():
+            slots[key] = _clean(value)
+        if visible:
+            source += "+reference"
     lock = {**slots, "version": LOCK_VERSION, "basis_hash": _basis_hash(text), "source": source,
             "created_at": db.utcnow()}
     fresh = db.get_card(conn, card["adventure_id"], card["id"]) or card

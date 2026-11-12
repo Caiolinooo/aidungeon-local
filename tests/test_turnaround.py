@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
@@ -281,9 +282,15 @@ def test_route_executor_result_event_and_card_reference(client, tmp_path, monkey
         assert (design_sheet["width"], design_sheet["height"]) == (1792, 768)
         clip_job = [job for job in db.list_jobs(conn, adv["id"])
                     if job["type"] == "turnaround_clip"]
-        assert len(clip_job) == 1 and clip_job[0]["status"] == "done"
-        assert clip_job[0]["result"]["rejected"] is True
-        assert clip_job[0]["payload"]["source_image_id"] == split["id"]
+        done_clip = [job for job in clip_job if job["status"] == "done"]
+        assert len(done_clip) == 1
+        assert done_clip[0]["result"]["rejected"] is True
+        assert done_clip[0]["payload"]["source_image_id"] == split["id"]
+        # três sementes recusadas: nova rodada adiada, ainda não pegável
+        retry = [job for job in clip_job if job["status"] == "pending"]
+        assert len(retry) == 1 and retry[0]["payload"]["round"] == 2
+        assert retry[0]["payload"]["not_before"] > db.utcnow()
+        assert done_clip[0]["result"]["retry_job_id"] == retry[0]["id"]
         assert sheet["kind"] == "reference_sheet"
         # folha 2×2 montada das quatro vistas pintadas, célula 448×768
         assert (sheet["width"], sheet["height"]) == (896, 1536)
@@ -683,7 +690,8 @@ def test_portrait_schedules_complete_reference_only_once(tmp_db, tmp_path, monke
         assert len(turnarounds) == 1
         assert turnarounds[0]["status"] == "done"
         jobs._schedule_turnaround_followup(portrait)
-        assert len(db.list_jobs(conn, adv["id"])) == 3
+        # retrato, turnaround, giro recusado e a rodada adiada do giro
+        assert len(db.list_jobs(conn, adv["id"])) == 4
 
 
 def test_upload_preserves_and_clear_removes_turnaround(tmp_db, tmp_path, monkeypatch):
@@ -918,6 +926,12 @@ def test_face_timeline_accepts_one_full_turn_and_cuts_a_second_spin():
     assert run("FFFF<<<<<<<<FFFF<<<<<FFFF") == (None, ["no_back_view"])
     wobble = "FFFF>>>>" + "." * 12 + "<<<<<<<<<<" + "." * 12 + "<<<FFFFF"
     assert run(wobble) == (None, ["wobble"])
+    # caveira do Caio: o rosto some por 8 quadros já no perfil, antes das
+    # costas de verdade (54 quadros). Isso não é vai-e-volta.
+    mask = ("FFF..FFF>FFF>>>>>FFFF" + "." * 8 + ">>>" + "." * 5 + ">" * 10 + "...>"
+            + "." * 54 + "<FFFFFFFFF")
+    end, problems = run(mask)
+    assert problems == [] and mask[end] == "F"
     # rosto de lado por 5 quadros no meio das costas (staging): ainda uma volta
     blip = "FFFF>>>>" + "." * 20 + "<<<<<" + "." * 18 + "<<<<FFFFFF"
     end, problems = run(blip)
@@ -978,3 +992,69 @@ def test_finalize_loop_keeps_frames_up_to_the_loop_point(tmp_path):
     finally:
         capture.release()
     assert output.read_bytes()[4:8] == b"ftyp"
+
+
+def test_rejected_turns_retry_later_with_new_seeds_up_to_three_rounds(
+        tmp_db, tmp_path, monkeypatch):
+    """Rodada 1 recusada → rodada 2 depois de 10 min → rodada 3 depois de 30
+    min → fim. Cada rodada usa sementes novas e fixas; a adiada não é pega
+    antes da hora e não segura outros jobs."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "source.mp4"
+    _write_video(video)
+    capture: dict = {}
+    _mock_generation(monkeypatch, tmp_path, video, capture)
+    with db.session() as conn:
+        jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"])
+    assert jobs.process_pending(pipeline_transport()) == 2
+    seeds = [call["seed"] for call in capture["clip_calls"]]
+    assert len(set(seeds)) == 3
+    for expected_round, delay in ((2, 600), (3, 1800)):
+        with db.session() as conn:
+            pending = [job for job in db.list_jobs(conn, adv["id"])
+                       if job["type"] == "turnaround_clip" and job["status"] == "pending"]
+            assert len(pending) == 1 and pending[0]["payload"]["round"] == expected_round
+            wait = (datetime.fromisoformat(pending[0]["payload"]["not_before"].replace("Z", "+00:00"))
+                    - datetime.now(timezone.utc)).total_seconds()
+            assert delay - 30 < wait <= delay
+            # outro job passa na frente; o adiado não é pego antes da hora
+            jobs.enqueue(conn, "location_image", adv["id"], "loc", {"prompt": "x"})
+            claimed = db.claim_next_job(conn)
+            assert claimed["type"] == "location_image"
+            db.finish_job(conn, claimed["id"], "done")
+            assert db.claim_next_job(conn) is None
+            conn.execute("UPDATE jobs SET payload=json_set(payload, '$.not_before', ?)"
+                         " WHERE id=?", ("2000-01-01T00:00:00.000Z", pending[0]["id"]))
+        assert jobs.process_pending(pipeline_transport()) == 1
+    new_seeds = [call["seed"] for call in capture["clip_calls"]][3:]
+    assert len(new_seeds) == 6 and not set(new_seeds) & set(seeds)
+    with db.session() as conn:
+        last = [job for job in db.list_jobs(conn, adv["id"]) if job["type"] == "turnaround_clip"]
+        assert all(job["status"] == "done" for job in last)          # sem rodada 4
+        assert max(job["payload"].get("round", 1) for job in last) == 3
+
+
+def test_turnaround_paints_use_fixed_seeds_per_card_and_view(tmp_db, tmp_path, monkeypatch):
+    """Refazer o turnaround repete a semente de cada vista: mesmo cabelo e
+    mesmo tom de jeans de uma rodada para outra."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card, anchor = _character(adv["id"], tmp_path)
+    video = tmp_path / "source.mp4"
+    _write_video(video)
+    capture: dict = {}
+    _mock_generation(monkeypatch, tmp_path, video, capture)
+    for _ in range(2):
+        with db.session() as conn:
+            jobs.enqueue_turnaround(conn, adv["id"], card["id"], anchor["id"], force=True)
+        with db.session() as conn:
+            job = db.claim_next_job(conn)
+        jobs._run_job(job, pipeline_transport())
+        with db.session() as conn:
+            conn.execute("UPDATE jobs SET status='canceled' WHERE type='turnaround_clip'")
+    seeds = [call["seed"] for call in capture["image_calls"]]
+    assert len(seeds) == 10 and seeds[:5] == seeds[5:]
+    assert len(set(seeds[:5])) == 5
+    assert seeds[0] == jobs.stable_seed(card["id"], "master", 0)
