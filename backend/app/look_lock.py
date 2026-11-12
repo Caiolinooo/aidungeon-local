@@ -247,7 +247,9 @@ def identity_text(look: dict | None, *, compact: bool = False) -> str:
             ("no distinctive", "full lips", "smooth")) else ""
         hair_bit = next((bit for bit in bits if bit.endswith("hair") or " hair with " in bit), "")
         head = [bit for bit in bits if bit.startswith(("always wearing", "no glasses"))]
-        ordered = head + ([f"face: {face}"] if face else []) + ([facial] if facial else []) \
+        # Barba antes do rosto: "clean-shaven except for beard" cortado no fim
+        # virava "clean-shaven" e o Caio de produção saiu sem barba.
+        ordered = head + ([facial] if facial else []) + ([f"face: {face}"] if face else []) \
             + ([hair_bit] if hair_bit else [])
         return "; ".join(bit for bit in ordered if bit)
     if facial:
