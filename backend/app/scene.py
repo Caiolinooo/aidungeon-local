@@ -301,7 +301,9 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
     return ""
 
 
-_PROMPT_LIMIT = 1400
+# 1700 caracteres são uns 400 tokens, dentro dos 512 do encoder do Flux2. Com
+# 1400 a roupa do momento de quatro pessoas não cabia junto dos traços.
+_PROMPT_LIMIT = 1700
 
 
 def _sentences(parts: list) -> str:
@@ -427,10 +429,11 @@ def uncrowded(entry: str) -> str:
 
 def _alone_there(count: int) -> str:
     """Só o elenco no lugar, em termos positivos (negação o Flux ignora)."""
+    # Sem palavras de cidade: "everything behind them is unattended" e a lista
+    # de "stalls, streets" da edição pintaram uma rua de lojas numa floresta.
     who = "This person is alone there" if count == 1 else \
         f"These {count} are the only people there"
-    return (f"{who}: the place is quiet at this hour, and everything behind them is "
-            "unattended and empty of people")
+    return f"{who}: nobody else is anywhere in the frame, near or far"
 
 
 def _headcount(cast: list[dict]) -> str:
@@ -496,7 +499,10 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     if clause:
         # images.py importa scene no topo; helpers ficam aqui por isso.
         from app.routes.images import clip_words, contradicting_looks
-        clause = _shrink_look(clause, 400)
+        # 400 para os traços; cada pessoa com roupa ou marca do momento ganha
+        # espaço para ela.
+        changed = sum(1 for card in cast if npc_assets.story_state_bits(card))
+        clause = _shrink_look(clause, 400 + (0 if explicit else 80 * changed))
     reaction = clip_words(_reaction_clause(cast), 250) if clause else ""
     nude = npc_assets.nude_names(cast, moment) if clause and explicit else []
     layout_guard = _reference_layout_guard(cast, explicit=explicit, nude=nude) if clause else ""

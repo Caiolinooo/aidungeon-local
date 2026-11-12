@@ -1007,19 +1007,22 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
 
 def _bystander_edit_prompt(expected: int) -> str:
     who = "the one person" if expected == 1 else f"the {expected} people"
-    # "leaving the place behind empty" deixava feirantes de costas; nomear o
-    # que fica vazio (bancas, ruas, portas, prédios) limpou 4 de 4 cenas.
+    # O lugar não é nomeado: com "stalls, streets, doorways and buildings" a
+    # edição trocou uma floresta por uma rua de lojas. Fica só "o que já está lá".
     return (
         "Edit this photograph: remove every other person in the background and in the "
-        "distance, leaving the stalls, streets, doorways, tables and buildings behind "
-        f"empty of people. Keep {who} in the foreground completely unchanged: same faces, "
-        "hair, clothes, pose and the objects they hold. Add nothing to anyone. Keep the "
-        "same place, framing, lighting and colours. The first image is the photograph to "
+        "distance. Everything else behind them stays exactly as it is in this photograph: "
+        "the same place, the same objects, trees, walls and ground, only without those "
+        f"people. Keep {who} in the foreground completely unchanged: same faces, "
+        "hair, clothes, pose and the objects they hold. Add nothing to anyone and add no "
+        "new buildings or objects. Keep the same framing, lighting and colours. "
+        "The first image is the photograph to "
         "edit; the other images are only references for the faces, hair colour and "
         "clothes of the people in the foreground, which must stay exactly like that.")
 
 
 _BYSTANDER_PASSES = 3
+_EDIT_MAX_SHIFT = 0.12
 
 
 def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int,
@@ -1053,6 +1056,12 @@ def _without_bystanders(cfg: dict, client: httpx.Client, width: int, height: int
         # Edição que perde alguém do elenco ou não tira ninguém é descartada;
         # a próxima tentativa parte da melhor imagem até aqui.
         if after is None or after[0] != before[0] or after[1] >= before[1]:
+            continue
+        # A edição só pode tirar gente. Uma delas trocou a floresta por uma
+        # rua de lojas: imagem que mudou mais que `_EDIT_MAX_SHIFT` é descartada.
+        shift = face_regions.scene_shift(content, edited)
+        if shift is not None and shift > _EDIT_MAX_SHIFT:
+            log.info("limpeza dos figurantes mudou o lugar (%.0f%%); descartada", shift * 100)
             continue
         log.info("figurantes removidos do fundo: %d -> %d rostos", before[1], after[1])
         content, before = edited, after

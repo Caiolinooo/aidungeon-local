@@ -1543,11 +1543,15 @@ def creature_kind(card: dict | None = None, name: str = "") -> str:
     if _COBRA_NOUN.search(blob):
         return "snake"
     visual = (card or {}).get("portrait_prompt") or ""
+    title = (card or {}).get("title") or name or ""
     described = " ".join(str(part) for part in parts[1:] if part)      # sem o título
     is_creature = bool(_CREATURE_WORD.search(described))
     for needles, kind in _VISUAL_CREATURES:
         pattern = r"(?i)(?<!\w)(?:" + "|".join(re.escape(n) for n in needles) + r")(?!\w)"
-        if re.search(pattern, visual) or (is_creature and re.search(pattern, blob)):
+        # O bicho tem de estar no retrato ou no próprio nome de uma criatura.
+        # Procurado no texto inteiro, a fada virou lobo porque o texto dela
+        # cita o Lobo de Fogo.
+        if re.search(pattern, visual) or (is_creature and re.search(pattern, title)):
             return kind
     return ""
 
@@ -1575,7 +1579,7 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
             f"{names(creatures)}: {CREATURE_LOCK}")
 
 
-def story_state_bits(card: dict | None, *, limit: int = 110) -> list[str]:
+def story_state_bits(card: dict | None, *, limit: int = 80) -> list[str]:
     """O que a história mudou nesta pessoa e a pintura tem de mostrar: roupa
     do momento e marcas visíveis. Só texto em inglês (o estado gravado em
     português não serve ao renderizador). Criatura não leva roupa.

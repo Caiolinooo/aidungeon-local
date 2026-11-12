@@ -131,3 +131,26 @@ def count_faces(content: bytes, expected: int) -> tuple[int, int] | None:
 def count_main_faces(content: bytes, expected: int) -> int | None:
     found = count_faces(content, expected)
     return None if found is None else found[0]
+
+
+def scene_shift(before: bytes, after: bytes) -> float | None:
+    """Quanto a imagem mudou entre duas versões, de 0 a 1 (None sem leitura).
+
+    As duas reduzidas a 96x54 e comparadas pixel a pixel. Tirar figurantes do
+    fundo mexe em 5 a 7% (medido em 4 edições boas); outra semente do mesmo
+    lugar dá 19% e um lugar diferente, 30%.
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        small = []
+        for content in (before, after):
+            image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                return None
+            small.append(cv2.resize(image, (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16))
+        return float(np.abs(small[0] - small[1]).mean()) / 255
+    except Exception:
+        return None
+

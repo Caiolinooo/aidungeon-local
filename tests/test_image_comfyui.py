@@ -875,6 +875,13 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     assert len({call["seed"] for call in calls}) == 3   # semente fixa muda a cada tentativa
     counts[b"edited"] = (2, 6)                      # não tirou ninguém
     assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
+    # tirou os figurantes mas trocou o lugar (floresta virou rua): descartada
+    counts[b"edited"] = (2, 2)
+    monkeypatch.setattr(face_regions, "scene_shift", lambda before, after: 0.30)
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
+    monkeypatch.setattr(face_regions, "scene_shift", lambda before, after: 0.06)
+    assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"edited"
+    counts[b"edited"] = (2, 6)
     # sobrou um rosto depois da primeira passada: a segunda termina o serviço
     passes = iter([b"half", b"done"])
     monkeypatch.setattr(image_client, "_generate_comfyui",

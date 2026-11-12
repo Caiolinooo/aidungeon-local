@@ -223,10 +223,14 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
         text = look_lock.identity_text(look_lock.current(card), compact=compact, level=level)
         name = display_name(card) or str(card.get("title") or "").strip()
         if text and name:
-            # O estado da história abre a linha: é o que o corte por traços
-            # guarda por último, e fica colado ao nome de quem o veste.
+            # O estado da história vai logo depois do primeiro traço (óculos
+            # ou "no glasses"), colado ao nome de quem o veste: o corte por
+            # traços guarda os dois e solta o resto. Na frente de tudo, a
+            # Marina ficou só com a capa amarela, sem óculos nem cabelo, e a
+            # pintura trocou de pessoa.
             now = npc_assets.story_state_bits(card) if state else []
-            lines.append(f"{name}: " + "; ".join([*now, text]))
+            first, _, rest = text.partition("; ")
+            lines.append(f"{name}: " + "; ".join(bit for bit in (first, *now, rest) if bit))
     return ". ".join(lines)
 
 

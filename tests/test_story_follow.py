@@ -49,6 +49,10 @@ def test_creatures_are_told_apart_from_people_and_from_verbs():
     assert npc_assets.creature_kind(capitao) == ""         # apelido não é bicho
     assert npc_assets.creature_kind(ladrao) == ""
     assert npc_assets.creature_kind(naja) == "snake"
+    # o texto da fada cita o lobo: ela continua não sendo lobo
+    citada = _card("Fada dos Espelhos", entry="Uma criatura mágica. Teme o Lobo de Fogo.",
+                   portrait_prompt="A delicate fairy with silver hair")
+    assert npc_assets.creature_kind(citada) == ""
     marina = _card("Marina Teste")
     mixed = npc_assets.coverage_lock(marina, lobo)
     assert mixed == ("Marina Teste: fully clothed, wearing clothes, covered torso. "
@@ -92,7 +96,7 @@ def test_backdrop_paints_the_outfit_the_story_gave(tmp_db):
     prompt, people = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
                                    [marina, bruno], "Marina and Bruno wait by the fire.")
     assert people is True
-    assert "Marina Teste: now wearing long red dress; no glasses" in prompt
+    assert "Marina Teste: no glasses; now wearing long red dress; chin-length" in prompt
     assert "Bruno Teste: no glasses" in prompt and "Bruno Teste: now wearing" not in prompt
     assert npc_assets.STORY_STATE_NOTE in prompt
     assert "each with that exact face, hair and age." in prompt
