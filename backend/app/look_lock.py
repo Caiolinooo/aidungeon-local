@@ -232,8 +232,10 @@ def identity_text(look: dict | None, *, compact: bool = False) -> str:
     # óculos da Renata eram justamente o que sumia.
     if glasses and not _NONE.search(glasses):
         bits.insert(0, f"always wearing {glasses}")
-    elif glasses and not compact:
-        bits.append("no glasses")
+    elif glasses:
+        # Também na cena com várias pessoas: no fundo de produção os óculos da
+        # Renata passaram para o Caio, que não usa.
+        bits.insert(0, "no glasses")
     facial = look.get("facial_hair") or ""
     facial = facial if facial and not _NONE.search(facial) and _visible(facial) else ""
     if compact:
@@ -244,7 +246,7 @@ def identity_text(look: dict | None, *, compact: bool = False) -> str:
         face = face if face and _visible(face) and not face.lower().startswith(
             ("no distinctive", "full lips", "smooth")) else ""
         hair_bit = next((bit for bit in bits if bit.endswith("hair") or " hair with " in bit), "")
-        head = [bit for bit in bits if bit.startswith("always wearing")]
+        head = [bit for bit in bits if bit.startswith(("always wearing", "no glasses"))]
         ordered = head + ([f"face: {face}"] if face else []) + ([facial] if facial else []) \
             + ([hair_bit] if hair_bit else [])
         return "; ".join(bit for bit in ordered if bit)

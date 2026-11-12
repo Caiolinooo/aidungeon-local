@@ -290,5 +290,6 @@ def test_multi_person_clause_keeps_everyones_glasses_within_the_see_budget(tmp_d
     clause = clip_words(likeness.opening_clause(cards), _CLAUSE_CHARS)
     assert "Renata Lemos: always wearing large round thin gold-rimmed glasses" in clause
     assert "face: skull mask" in clause
+    assert "Caio Calça-Quadrada: no glasses; face: skull mask" in clause   # óculos não vazam
     assert "stout pirate" not in clause                    # o look manda sobre o texto
     assert "skin:" not in clause                            # versão curta
