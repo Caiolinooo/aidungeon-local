@@ -126,11 +126,20 @@ def _last_mention(text: str, name: str) -> int:
     name = (name or "").strip()
     if len(name) < 3:
         return -1
-    pattern = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", re.IGNORECASE)
+    # Sem acento dos dois lados: o card "José" não entrava na cena quando a
+    # narração escrevia "Jose".
+    pattern = re.compile(r"(?<!\w)" + re.escape(_unaccent(name)) + r"(?!\w)", re.IGNORECASE)
     last = -1
-    for match in pattern.finditer(text):
+    for match in pattern.finditer(_unaccent(text or "")):
         last = match.start()
     return last
+
+
+def _unaccent(text: str) -> str:
+    """Tira os acentos mantendo um caractere por letra (os índices não mudam
+    em texto já composto)."""
+    plain = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in plain if not unicodedata.combining(ch))
 
 def _mention_names(card: dict) -> list[str]:
     """Título, gatilhos e o primeiro nome de um personagem com sobrenome.
@@ -439,23 +448,41 @@ def uncrowded(entry: str) -> str:
     return text.strip(" ,;")
 
 
-def _alone_there(count: int) -> str:
+def _alone_there(count: int, animals: int = 0) -> str:
     """Só o elenco no lugar, em termos positivos (negação o Flux ignora)."""
     # Sem palavras de cidade: "everything behind them is unattended" e a lista
     # de "stalls, streets" da edição pintaram uma rua de lojas numa floresta.
+    if animals:
+        people = count - animals
+        group = npc_assets.count_phrase(people, animals)
+        who = f"These {group} are the only ones there" if count > 1 else \
+            "This animal is alone there"
+        return f"{who}: no other person and no other animal anywhere in the frame, near or far"
     who = "This person is alone there" if count == 1 else \
         f"These {count} are the only people there"
     return f"{who}: nobody else is anywhere in the frame, near or far"
 
 
-def _headcount(cast: list[dict]) -> str:
-    """Quantas pessoas, pelo nome. Sem isto o fundo repetia um rosto ou perdia alguém."""
-    names = [" ".join(str(card.get("title") or "").split()) for card in cast]
-    names = [name for name in names if name]
+def _headcount(cast: list[dict], *, animals: bool = False) -> str:
+    """Quantas pessoas, pelo nome. Sem isto o fundo repetia um rosto ou perdia alguém.
+
+    Com `animals`, bicho é contado como bicho: "Exactly 4 people … Lobo de
+    Fogo" pintava quatro humanos mais o lobo.
+    """
+    def title(card: dict) -> str:
+        return " ".join(str(card.get("title") or "").split())
+
+    names = [title(card) for card in cast if title(card)]
     if len(names) < 2:
         return ""
-    return (f"Exactly {len(names)} people in the frame, each one a different person: "
-            + ", ".join(names))
+    people, beasts = npc_assets.split_cast(cast) if animals else (cast, [])
+    if not beasts:
+        return (f"Exactly {len(names)} people in the frame, each one a different person: "
+                + ", ".join(names))
+    listed = [title(card) for card in people if title(card)]
+    listed += [f"{title(card)} (the {npc_assets.animal_kind(card)})" for card in beasts if title(card)]
+    return (f"Exactly {npc_assets.count_phrase(len(people), len(beasts))} in the frame, "
+            "each one appearing once: " + ", ".join(listed))
 
 
 def _fit(required: list, beat: str, beat_at: int, optional: list,
@@ -595,18 +622,22 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
                     beat_limit=400, look=clause)
         return text, True
     if clause:
-        headcount = _headcount(cast)
+        headcount = _headcount(cast, animals=True)
+        beasts = len(npc_assets.split_cast(cast)[1])
         # Roupa do momento e marcas visíveis que a história gravou: sem isto o
         # fundo pintava sempre a roupa padrão das referências.
         state_line = npc_assets.story_state_note(cast)
+        animal_lock = "" if not beasts else (
+            "Every animal has the body of that animal, never a human body")
         required = [
             sex_line,
             clause,
             headcount,
+            animal_lock,
             state_line,
             f"wide cinematic shot of {title}, only the characters named above, "
             f"each with that exact face, hair and age{'' if state_line else ' and clothing'}. "
-            f"{_alone_there(len(cast))}",
+            f"{_alone_there(len(cast), beasts)}",
             f"atmosphere: {atmosphere}",
             layout_guard,
             lock,
@@ -615,8 +646,9 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             "detailed scene painting, no text, no watermark, no logo",
         ]
         required = [part for part in required if part and str(part).strip()]
-        beat_at = sum(1 for part in (sex_line, clause, headcount, state_line)
-                      if part and str(part).strip())
+        beat_at = sum(
+            1 for part in (sex_line, clause, headcount, animal_lock, state_line)
+            if part and str(part).strip())
         beat = _latest_words(beat, 280)
         text = _fit(required, beat, beat_at,
                     [reaction, clip_words(uncrowded(entry or ""), 400)],
@@ -865,7 +897,11 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
             enabled=bool(img_cfg.get("enabled")), retry=retry, prompt=prompt,
             include_people=include_people,
             explicit=explicit, reference_faces=face_refs, cache_key=cache_key,
-            expected_people=len(paint_cast) if include_people else 0,
+            # Rostos humanos esperados: o detector não vê o rosto do lobo, e
+            # contando o lobo ele aceitava um humano a mais.
+            expected_people=(len(paint_cast) if explicit
+                             else len(npc_assets.split_cast(paint_cast)[0]))
+            if include_people else 0,
             cast_card_ids=plan["cast_card_ids"],
             reference_image_ids=plan["reference_image_ids"],
             reference_hashes=plan["reference_hashes"],

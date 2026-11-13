@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any
 
-from app import db
+from app import db, text_facts
 
 EFFECT_KINDS = (
     "reality", "perception", "memory", "emotion", "social", "physical",
@@ -80,14 +80,32 @@ def effect_context(adventure: dict, *, target: str = "") -> str:
     if not effects:
         return ""
     lines = ["[Persistent consequences]"]
-    for item in effects[-8:]:
+    said: list[str] = []
+    for item in _latest_distinct([item for item in effects if item.get("summary")],
+                                 8, key=lambda item: str(item["summary"])):
         kind = item.get("kind") or "effect"
         who = item.get("target") or "world"
         lines.append(f"- {kind} / {who}: {item['summary']}")
+        said.append(str(item["summary"]))
     public = _ui_state(adventure).get("public_facts") or []
-    for fact in public[-4:]:
+    for fact in _latest_distinct([str(fact) for fact in public], 4, key=str):
+        # O que as testemunhas sabem costuma repetir o efeito com outras palavras.
+        if text_facts.known(fact, said):
+            continue
         lines.append(f"- Witnesses know: {fact}")
     return "\n".join(lines)
+
+
+def _latest_distinct(items: list, limit: int, *, key) -> list:
+    """Os `limit` mais recentes sem dois quase iguais, na ordem original."""
+    kept: list = []
+    for item in reversed(items):
+        if text_facts.known(key(item), [key(old) for old in kept]):
+            continue
+        kept.append(item)
+        if len(kept) >= limit:
+            break
+    return list(reversed(kept))
 
 
 def visual_context(adventure: dict, *, target: str = "") -> str:
@@ -188,10 +206,12 @@ def apply_evaluation(conn, adventure_id: str, evaluation: dict) -> dict:
         if kind not in EFFECT_KINDS or not summary:
             continue
         target = " ".join(str(item.get("target") or "world").split())
+        # Quase igual também conta: "…to illuminate the path." e "…the path
+        # ahead." ficavam os dois.
         if any(
             str(old.get("kind")) == kind
             and str(old.get("target") or "").casefold() == target.casefold()
-            and str(old.get("summary") or "").casefold() == summary.casefold()
+            and text_facts.same_fact(str(old.get("summary") or ""), summary)
             for old in effects
         ):
             continue
@@ -208,7 +228,7 @@ def apply_evaluation(conn, adventure_id: str, evaluation: dict) -> dict:
     public_added = 0
     for fact in evaluation.get("public_facts") or []:
         text = " ".join(str(fact).split())
-        if text and text.casefold() not in [old.casefold() for old in public]:
+        if text and not text_facts.known(text, public):
             public.append(text[:400])
             public_added += 1
     private = list(state.get("private_facts") or [])

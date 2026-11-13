@@ -219,10 +219,17 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
     lines = []
     states = npc_assets.cast_state_bits(cards) if state else {}
     for card in cards:
+        name = display_name(card) or str(card.get("title") or "").strip()
+        animal = npc_assets.animal_kind(card) if state else ""
+        if animal and name:
+            # A leitura de aparência usa a ficha de gente ("no glasses; face:
+            # wolf-like face with fur…") e o modelo pintava um lobisomem.
+            lines.append(f"{name}: a real {animal}, an animal with the body of a {animal}, "
+                         "never a person")
+            continue
         if not _has_look(card):
             continue
         text = look_lock.identity_text(look_lock.current(card), compact=compact, level=level)
-        name = display_name(card) or str(card.get("title") or "").strip()
         if text and name:
             # O estado da história vai logo depois do primeiro traço (óculos
             # ou "no glasses"), colado ao nome de quem o veste: o corte por

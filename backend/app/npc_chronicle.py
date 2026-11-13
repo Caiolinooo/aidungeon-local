@@ -18,7 +18,8 @@ import logging
 import re
 from typing import Any
 
-from app import body_state, canon, db, events, jobs, likeness, llm_client, npc_assets, settings_store, ui_runtime, world_facts
+from app import (body_state, canon, db, events, jobs, likeness, llm_client, npc_assets,
+                 settings_store, text_facts, ui_runtime, world_facts)
 
 log = logging.getLogger("aidungeon.npc_chronicle")
 
@@ -193,13 +194,11 @@ def _facts(item: dict) -> list[str]:
     return out
 
 
-def _append_unique(base: str, facts: list[str], limit: int = 1600) -> str:
-    out = (base or "").strip()
-    for fact in facts:
-        if fact.casefold() in out.casefold():
-            continue
-        out = f"{out} {fact}".strip()
-    return out[:limit]
+def _append_unique(base: str, facts: list[str], limit: int = 1600, *,
+                   keep: str = "head", skip_transient: bool = False) -> str:
+    """Fato novo no fim do texto, sem repetir e sem cortar no meio da frase.
+    `head` preserva o começo (o que o jogador escreveu no card)."""
+    return text_facts.append(base, facts, limit, keep=keep, skip_transient=skip_transient)
 
 
 _RETURN_WORDS = (
@@ -375,7 +374,10 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     if status and _status_allowed(sheet.get("status") or "", status, facts):
         sheet["status"] = status
     if facts:
-        sheet["notes"] = _append_unique(sheet.get("notes") or "", facts, 800)
+        # Roupa e postura do momento não são fato da ficha: a roupa tem o campo
+        # dela e a ficha ficava com "He is wearing…" de cinco turnos atrás.
+        sheet["notes"] = _append_unique(sheet.get("notes") or "", facts, 800,
+                                        keep="recent", skip_transient=True)
     stats = _apply_stats(sheet.get("stats") or {}, delta)
     if stats:
         sheet["stats"] = stats
@@ -383,7 +385,7 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     entry = card.get("entry") or ""
     if not entry and summary:
         entry = summary
-    entry = _append_unique(entry, facts)
+    entry = _append_unique(entry, facts, skip_transient=True)
     triggers = list(card.get("triggers") or [])
     for raw in (name, *(item.get("aliases") or [])):
         trigger = " ".join(str(raw).split()).strip()
@@ -419,6 +421,26 @@ def _world_triggers(item: dict, protagonists: set[str]) -> list[str]:
     return triggers[:8]
 
 
+def _names_a_character(conn, adventure_id: str, item: dict) -> bool:
+    labels = {text_facts.fold(label) for label in (item.get("name"), *(item.get("aliases") or []))
+              if isinstance(label, str)}
+    labels.discard("")
+    if not labels:
+        return False
+    for card in db.list_cards(conn, adventure_id):
+        if (card.get("type") or "character") != "character":
+            continue
+        title = str(card.get("title") or "")
+        names = {text_facts.fold(title), text_facts.fold(card.get("player_username") or "")}
+        # O primeiro nome sozinho só conta com 4+ letras ("Ana" bate em muita coisa).
+        names |= {text_facts.fold(alias) for alias in npc_assets.title_aliases(title)
+                  if len(alias) >= 4}
+        names.discard("")
+        if labels & names:
+            return True
+    return False
+
+
 def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
                 type_: str, protagonists: set[str]) -> str | None:
     """Card de lugar, facção ou item. Só título, gatilhos e entry — sem ficha inventada."""
@@ -432,6 +454,10 @@ def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
     card = _match_card(cards, item)
     if card is None:
         if not (summary or facts):
+            return None
+        # O registro já criou uma facção com o nome de um personagem: lugar,
+        # facção ou item novo não pode ter nome ou apelido de gente da história.
+        if _names_a_character(conn, adventure_id, item):
             return None
         created = db.insert_card(
             conn, adventure_id, title=name[:80], type=type_,

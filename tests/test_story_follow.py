@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app import llm_client, look_lock, npc_assets, scene
+from app import likeness, llm_client, look_lock, npc_assets, scene
 from app.routes import images
 
 
@@ -60,6 +60,46 @@ def test_creatures_are_told_apart_from_people_and_from_verbs():
     assert npc_assets.coverage_lock(marina) == npc_assets.CLOTHED_LOCK
     assert npc_assets.coverage_lock(lobo) == npc_assets.CREATURE_LOCK
     assert npc_assets.coverage_lock(marina, lobo, explicit=True) == ""
+
+
+def test_wolf_is_an_animal_in_the_frame_not_another_person():
+    """Quatro no elenco, um deles lobo: "Exactly 4 people" pintava quatro
+    humanos e o lobo, ou um lobisomem ao lado do lobo."""
+    marina = _card("Marina Teste", portrait_prompt="A woman with black hair")
+    bruno = _card("Bruno Teste", portrait_prompt="A man with a beard")
+    fada = _card("Fada dos Espelhos", portrait_prompt="A delicate fairy with silver hair")
+    lobo = _card("Lobo de Fogo", entry="O Lobo de Fogo é uma criatura mágica.",
+                 portrait_prompt="A majestic fiery wolf with thick reddish fur")
+    cast = [marina, bruno, fada, lobo]
+    people, beasts = npc_assets.split_cast(cast)
+    assert [card["title"] for card in people] == ["Marina Teste", "Bruno Teste", "Fada dos Espelhos"]
+    assert [card["title"] for card in beasts] == ["Lobo de Fogo"]
+    assert npc_assets.animal_kind(lobo) == "wolf"
+    capitao = _card("Lobo do Mar", entry="Capitão velho e ranzinza.",
+                    portrait_prompt="An old sea captain with a grey beard")
+    assert npc_assets.animal_kind(capitao) == ""
+    dragon = _card("Draco", entry="um dragão antigo de escamas negras")
+    assert npc_assets.creature_kind(dragon) == "dragon"
+    assert npc_assets.animal_kind(dragon) == ""
+    line = scene._headcount(cast, animals=True)
+    assert line.startswith("Exactly 3 people and 1 animal in the frame")
+    assert "Lobo de Fogo (the wolf)" in line
+    assert "Exactly 4 people" not in line
+    assert "Exactly 4 people" in scene._headcount([marina, bruno, fada, dragon], animals=True)
+    alone = scene._alone_there(4, 1)
+    assert "3 people and 1 animal" in alone
+    assert "no other animal" in alone
+    assert scene._alone_there(3) == "These 3 are the only people there: nobody else is anywhere in the frame, near or far"
+    clause = likeness.opening_clause(cast)
+    assert "Lobo de Fogo: a real wolf, an animal with the body of a wolf, never a person" in clause
+    prompt, painted = scene._prompt(
+        "the cabin", "A wooden cabin.", "cinematic", "night", cast,
+        "Marina, Bruno, the fairy and the wolf wait by the fire.")
+    assert painted is True
+    assert "Exactly 3 people and 1 animal" in prompt
+    assert "Every animal has the body of that animal, never a human body" in prompt
+    assert "Exactly 4 people" not in prompt
+    assert "Exactly 5 people" not in prompt
 
 
 def test_story_state_goes_on_each_persons_own_line():

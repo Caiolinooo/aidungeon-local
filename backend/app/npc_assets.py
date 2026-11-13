@@ -154,7 +154,11 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
         if previous.get("class") and "class" not in sheet:
             sheet["class"] = previous["class"]
         if previous.get("notes") and previous["notes"] not in sheet.get("notes", ""):
-            sheet["notes"] = (sheet.get("notes", "") + "\n" + previous["notes"]).strip()
+            # Frase a frase: o bloco antigo colado inteiro repetia o que a
+            # ficha nova já dizia com outras palavras.
+            from app import text_facts
+            sheet["notes"] = text_facts.append(
+                sheet.get("notes", ""), text_facts.sentences(previous["notes"]), 1200)
         if previous.get("stats") and "stats" not in sheet:
             sheet["stats"] = previous["stats"]
         # Vínculo vivo (npc_bonds). O enriquecimento não reinventa o número:
@@ -1554,6 +1558,36 @@ def creature_kind(card: dict | None = None, name: str = "") -> str:
         if re.search(pattern, visual) or (is_creature and re.search(pattern, title)):
             return kind
     return ""
+
+
+# Bichos de corpo de bicho. As outras espécies (salamandra, dragão, réptil)
+# podem ser personagens de corpo humano na história e seguem como estavam.
+_ANIMALS = frozenset(kind for _needles, kind in _VISUAL_CREATURES)
+
+
+def animal_kind(card: dict | None = None, name: str = "") -> str:
+    """Espécie quando o personagem é um animal (lobo, urso, cão, ave…)."""
+    kind = creature_kind(card, name)
+    return kind if kind in _ANIMALS else ""
+
+
+def split_cast(cards: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(pessoas, animais). Contado como "pessoa", o lobo virava uma quinta
+    figura: 4 de 4 fundos numa cabana saíram com quatro humanos e um lobo, ou
+    com um lobisomem sentado ao lado do lobo."""
+    people = [card for card in cards if not animal_kind(card)]
+    animals = [card for card in cards if animal_kind(card)]
+    return people, animals
+
+
+def count_phrase(people: int, animals: int) -> str:
+    """ "3 people and 1 animal" """
+    bits = []
+    if people:
+        bits.append(f"{people} {'person' if people == 1 else 'people'}")
+    if animals:
+        bits.append(f"{animals} {'animal' if animals == 1 else 'animals'}")
+    return " and ".join(bits)
 
 
 def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:

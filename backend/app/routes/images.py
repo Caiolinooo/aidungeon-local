@@ -104,7 +104,9 @@ def _story_outfits(names: list[str], passage: str, order: str, *,
                 role="image_prompt", temperature=0, max_tokens=160, transport=transport)
         match = re.search(r"\{.*\}", reply or "", flags=re.S)
         data = json.loads(match.group(0)) if match else {}
-    except (llm_client.LlmError, ValueError):
+    except (llm_client.LlmError, ValueError) as exc:
+        # Sem a leitura o See pinta a roupa antiga; antes isso não deixava rastro.
+        log.warning("see: roupa do momento não lida (%s)", type(exc).__name__)
         return {}
     if not isinstance(data, dict):
         return {}
@@ -1252,13 +1254,21 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     if where:
         lead_bits.append("Place: " + ", ".join(where))
     lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
+    # Bicho conta como bicho na cena comum: "Exactly 4 people" com um lobo no
+    # elenco pintava quatro humanos e o lobo.
+    beasts = 0 if explicit else sum(
+        1 for name in names
+        if npc_assets.animal_kind(
+            resolved.get(name) or by_name.get(name) or _card_named(cards, name), name))
     if names:
+        counted = npc_assets.count_phrase(len(names) - beasts, beasts) if beasts \
+            else f"{len(names)} people"
         lead_bits.append(
-            f"Exactly {len(names)} people, no more, no fewer: " + ", ".join(who_bits)
+            f"Exactly {counted}, no more, no fewer: " + ", ".join(who_bits)
         )
         lead_bits.append(
             "no other people in the background or elsewhere, no patrons, no bystanders"
-            if explicit else scene._alone_there(len(names)))
+            if explicit else scene._alone_there(len(names), beasts))
     if len(locked) > 1:
         if explicit:
             lead_bits.append(
@@ -1272,13 +1282,22 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                     4: ["far left", "centre left", "centre right", "far right"]}
             positions = rows.get(len(locked)) or [
                 f"position {index + 1} from the left" for index in range(len(locked))]
+            def placed(card: dict) -> str:
+                title = card.get("title") or "person"
+                kind = npc_assets.animal_kind(card, title)
+                return f"{title} (the {kind})" if kind else title
+
             assignments = ", ".join(
-                f"{card.get('title') or 'person'} on the {positions[index]}"
+                f"{placed(card)} on the {positions[index]}"
                 for index, card in enumerate(locked)
             )
-            lead_bits.append(
-                "distinct different people, not the same person, no duplicate faces: " + assignments
+            # "people" com o lobo no meio pedia mais um humano ao lado do bicho.
+            crowd = (
+                "distinct different subjects, each one once, no duplicate faces: "
+                if beasts else
+                "distinct different people, not the same person, no duplicate faces: "
             )
+            lead_bits.append(crowd + assignments)
     if _is_interaction(moment, names) and not explicit:
         lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
     suffix = re.sub(r"(?i)\b(?:nude|naked)\b", "", img_cfg["style_suffix"] or "")
@@ -1376,7 +1395,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     cast_card_ids, reference_image_ids = likeness.cast_reference_ids_for_provider(
         cast_locked, str(img_cfg.get("provider") or "sdwebui"), explicit=face_refs)
     return (prompt, negative, caption, frame, cast_card_ids,
-            reference_image_ids, len(names), explicit, face_refs)
+            reference_image_ids, len(names) - beasts, explicit, face_refs)
 
 
 def _refuse_known_frame(adventure_id: str, body: SeeRequest) -> None:
@@ -1535,9 +1554,15 @@ def post_see(adventure_id: str, body: SeeRequest,
         cfg_for_plan = image_client.with_flux2_cfg(
             {**img_cfg, "negative_prompt": plan["base_negative"]},
             plan.get("flux2_cfg"))
+        # O caminho assíncrono (o da interface) passa o prompt para inglês
+        # antes de pintar; aqui o título e os trechos em português iam crus.
+        with db.session() as conn:
+            llm_cfg = settings_store.effective_llm_settings(conn)
+        painted_prompt = image_english.render_english(
+            plan["prompt"], transport=transport, llm_cfg=llm_cfg)
         result = image_client.generate_image(
             cfg_for_plan,
-            plan["prompt"], adventure_id=adventure_id, image_id=image_id,
+            painted_prompt, adventure_id=adventure_id, image_id=image_id,
             transport=transport, negative_extra=plan["negative_extra"],
             reference_images=references or None,
             expected_people=plan.get("expected_people"))
