@@ -333,3 +333,17 @@ def test_another_character_is_not_a_body_mark():
     kept = npc_chronicle._without_people_as_marks(body, others)["conditions"]
     assert [item.get("visual_en") or item["op"] for item in kept] == [
         "fresh cut on the left cheek", "heal"]
+
+
+def test_the_see_outfit_must_name_a_garment(monkeypatch):
+    """Pedido "Bruno mostrando o braço enfaixado": o leitor devolveu "bandaged
+    arm" como roupa e o Bruno perdeu o casaco que a história tinha dado."""
+    assert not npc_assets.names_garment("bandaged arm")
+    assert npc_assets.names_garment("yellow hooded cloak over blue jumpsuit")
+    assert npc_assets.names_garment("brown leather hat and boots")
+    monkeypatch.setattr(llm_client, "chat_completion", lambda *a, **k: json.dumps(
+        {"Bruno Teste": "bandaged arm", "Marina Teste": "yellow hooded cloak over blue jumpsuit"}))
+    worn = images._story_outfits(
+        ["Bruno Teste", "Marina Teste"], "Marina veste a capa amarela.",
+        "Bruno mostrando o braço enfaixado", llm_cfg={}, transport=None)
+    assert worn == {"Marina Teste": "yellow hooded cloak over blue jumpsuit"}

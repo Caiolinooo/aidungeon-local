@@ -1657,6 +1657,20 @@ _GARMENT_NOUN = re.compile(
     r"jackets?|jumpsuits?|trousers|pants|jeans|skirts?|shorts|tunics?|armou?r|cloaks?|capes?|"
     r"hoodies?|sweaters?|vests?|suits?|uniforms?|overalls|leggings|kimonos?|raincoats?|"
     r"cardigans?|bodices?|corsets?|bikinis?|swimsuits?|aprons?|habits?|togas?)\b")
+# Peças que não fecham a frase de uma roupa mas provam que o texto é roupa.
+_WORN_NOUN = re.compile(
+    r"(?i)\b(?:hats?|caps?|hoods?|helmets?|boots?|shoes?|sandals?|sneakers?|gloves?|scar(?:f|ves)|"
+    r"shawls?|ponchos?|mantles?|blankets?|towels?|sheets?|pajamas?|pyjamas?|nightgowns?|"
+    r"sleepwear|clothes|clothing|outfits?|garments?|costumes?|disguises?|masks?|veils?|"
+    r"stockings?|socks?|belts?|ties?|waistcoats?|blazers?|parkas?|anoraks?|overcoats?|"
+    r"trench\s?coats?|dungarees|breeches|chainmail|plate|leathers?|furs?|wraps?|sarongs?|"
+    r"sar(?:i|ee)s?|tuxedos?|scrubs|rags)\b")
+
+
+def names_garment(text: str) -> bool:
+    """O texto cita uma peça de roupa. "bandaged arm" não cita: o See leu o
+    braço enfaixado do pedido como a roupa do Bruno e tirou o casaco dele."""
+    return bool(_GARMENT_NOUN.search(text or "") or _WORN_NOUN.search(text or ""))
 
 
 def _fit_garment(piece: str, room: int) -> str:
