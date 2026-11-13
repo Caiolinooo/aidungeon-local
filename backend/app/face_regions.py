@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from itertools import permutations
 from pathlib import Path
 
@@ -168,12 +169,31 @@ def _features(recognizer, image, *, largest: bool = False) -> list:
     return [recognizer.feature(recognizer.alignCrop(image, face)) for face in faces]
 
 
+_recognizer_lock = threading.Lock()
+_recognizer: tuple[str, object] | None = None
+
+
+def _recognizer_for(path: Path):
+    """O reconhecedor carrega 37 MB: um por processo, não um por pintura."""
+    global _recognizer
+    import cv2
+
+    if _recognizer is None or _recognizer[0] != str(path):
+        _recognizer = (str(path), cv2.FaceRecognizerSF.create(str(path), ""))
+    return _recognizer[1]
+
+
 def repeated_person(content: bytes, references: list[bytes]) -> bool | None:
     """Uma das referências aparece em dois rostos da pintura.
 
     Com quatro referências o Flux2 às vezes pinta a mesma pessoa duas vezes e
     deixa outra de fora: a contagem de rostos fecha e o elenco está errado.
     None sem o reconhecedor, sem rostos ou em erro: quem chama segue como antes.
+
+    Também None quando duas referências se parecem entre si: são duas imagens
+    da mesma pessoa (elenco de um ou dois leva mestre e ficha) ou dois
+    personagens parecidos, e aí "o mesmo rosto duas vezes" é o esperado. Sem
+    isso um par de gêmeos custaria duas pinturas a mais em toda cena.
     """
     path = recognizer_path()
     if path is None or not _MODEL.exists() or len(references) < 2:
@@ -184,31 +204,35 @@ def repeated_person(content: bytes, references: list[bytes]) -> bool | None:
         import cv2
         import numpy as np
 
-        recognizer = cv2.FaceRecognizerSF.create(str(path), "")
-        image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            return None
-        painted = _features(recognizer, image)
-        if len(painted) < 2:
-            return None
-        for blob in references:
-            key = hashlib.sha256(blob).hexdigest()
-            if key not in _reference_features:
-                if len(_reference_features) > 64:
-                    _reference_features.clear()
-                ref = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_COLOR)
-                found = _features(recognizer, ref, largest=True) if ref is not None else []
-                _reference_features[key] = found[0] if found else None
-            feature = _reference_features[key]
-            if feature is None:          # criatura ou referência sem rosto legível
-                continue
-            same = sum(
-                1 for face in painted
-                if recognizer.match(feature, face, cv2.FaceRecognizerSF_FR_COSINE) >= _SAME_PERSON
-            )
-            if same >= 2:
-                return True
-        return False
+        with _recognizer_lock:        # o objeto do OpenCV não é seguro entre threads
+            recognizer = _recognizer_for(path)
+            image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                return None
+            painted = _features(recognizer, image)
+            if len(painted) < 2:
+                return None
+            known = []
+            for blob in references:
+                key = hashlib.sha256(blob).hexdigest()
+                if key not in _reference_features:
+                    if len(_reference_features) > 64:
+                        _reference_features.clear()
+                    ref = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_COLOR)
+                    found = _features(recognizer, ref, largest=True) if ref is not None else []
+                    _reference_features[key] = found[0] if found else None
+                feature = _reference_features[key]
+                if feature is not None:      # criatura ou referência sem rosto legível fica fora
+                    known.append(feature)
+
+            def same(left, right) -> bool:
+                return recognizer.match(left, right, cv2.FaceRecognizerSF_FR_COSINE) >= _SAME_PERSON
+
+            if any(same(known[i], known[j])
+                   for i in range(len(known)) for j in range(i + 1, len(known))):
+                return None
+            return any(sum(1 for face in painted if same(feature, face)) >= 2
+                       for feature in known)
     except Exception:
         return None
 

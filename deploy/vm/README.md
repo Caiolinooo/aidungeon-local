@@ -461,6 +461,37 @@ Smoke do executor, sem gerar uma imagem:
 curl -fsS http://127.0.0.1:8188/system_stats
 ```
 
+## Juiz de NPCs, lugar sem cartão e elenco (13/11/2026)
+
+- **Juiz de NPCs (`turn_gate`).** Com quatro NPCs na cena levava 28 s (5,2 mil
+  tokens de entrada, 620 de resposta) contra 15 s de prazo, e o turno seguia sem
+  a decisão. Entrada cortada (fichas, memórias e consequências repetidas),
+  resposta limitada a duas reações e duas mudanças de relação: 8 a 13 s
+  sozinho, prazo de 25 s. O log só registra chamada auxiliar que falha.
+- **Lugar sem cartão (`scene_spot`).** A história entra numa cabana, caverna ou
+  barco que não tem cartão: o See e o fundo pintam esse ponto. O texto narrado
+  aceito é lido na hora (`detect`) e o registro pós-turno grava o ponto em
+  `ui_state["scene_spot"]`. Um lugar que tem cartão continua mandando.
+- **Roupa de cada um.** Quando a história troca a roupa de alguém, quem não
+  trocou também recebe a própria roupa por escrito: em 6 fundos de quatro
+  personagens, 3 saíram certos antes e 5 depois.
+- **Animal é animal.** Lobo, urso, cão, ave no elenco são contados e descritos
+  como animal ("3 people and 1 animal"); o contador de rostos espera só os
+  rostos humanos.
+- **Personagem repetido.** Com o reconhecedor SFace do OpenCV Zoo em
+  `<pasta do banco>/models/face_recognition_sface_2021dec.onnx` (37 MB, fora do
+  git), a pintura em que uma referência aparece em dois rostos é refeita com
+  outra semente. Sem o arquivo a conferência é pulada. Baixar com:
+  `curl -L -o data/models/face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx`
+- **Fatos repetidos (`text_facts`).** Fichas e consequências não guardam a mesma
+  frase duas vezes, nem roupa e postura do momento, e o corte é por frase.
+- **Limite conhecido.** Um curativo num braço coberto pela roupa ainda é pintado
+  no braço nu de quem está ao lado em parte das cenas (2 de 4 certas com o nome
+  do dono na marca; 0 de 4 sem).
+
+Testes: na VM, fora da rede dos serviços, com
+`~/aidungeon-wip/run_tests.sh ../tests` (`unshare -r -n`, `TMPDIR=/dev/shm`).
+
 ## A1111: memória
 
 Sem tcmalloc o A1111 crescia até ~20 GB de RSS e empurrava 11 GB para o swap.
