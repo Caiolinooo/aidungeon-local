@@ -1663,8 +1663,30 @@ def names_someone(text: str, names: list[str]) -> bool:
     return any(re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", low) for name in names)
 
 
+_DRESSING = re.compile(r"(?i)\b(?:bandage[sd]?|bandaging|sling|splint|cast|gauze|tourniquet)\b")
+_MARK_PLACE = re.compile(r"(?i)\s+on\s+(?:the\s+|his\s+|her\s+|their\s+)?")
+
+
+def owned_mark(mark: str, owner: str, *, dressed: bool) -> str:
+    """Marca com o nome do dono, para cena com mais gente.
+
+    "white bandage on right forearm" na linha do Bruno, de casaco, foi pintada
+    no braço nu da fada em 4 de 4 fundos. Com o nome no lugar do braço e o
+    curativo "por cima da roupa", ficou no Bruno em 2 de 4: melhora, não resolve.
+    """
+    owner = " ".join(str(owner or "").split())
+    if not owner or owner.casefold() in mark.casefold():
+        return mark
+    named, count = _MARK_PLACE.subn(f" on {owner}'s ", mark, count=1)
+    if not count:
+        named = f"{mark} on {owner}"
+    if dressed and _DRESSING.search(mark):
+        named += ", worn over the clothes"
+    return named
+
+
 def story_state_bits(card: dict | None, *, limit: int = 80,
-                     others: list[str] | None = None) -> list[str]:
+                     others: list[str] | None = None, owner: str = "") -> list[str]:
     """O que a história mudou nesta pessoa e a pintura tem de mostrar: roupa
     do momento e marcas visíveis. Só texto em inglês (o estado gravado em
     português não serve ao renderizador). Criatura não leva roupa.
@@ -1680,8 +1702,10 @@ def story_state_bits(card: dict | None, *, limit: int = 80,
         mark for mark in body_state.visual_marks(sheet.get("body_state"), portrait=False)
         if not _looks_portuguese(mark) and not names_someone(mark, others or [])
     ]
+    if owner:
+        marks = [owned_mark(mark, owner, dressed=bool(bits)) for mark in marks]
     if marks:
-        bits.append(_clip(", ".join(marks), limit))
+        bits.append(_clip(", ".join(marks), limit + (40 if owner else 0)))
     return bits
 
 
@@ -1768,8 +1792,10 @@ def cast_state_bits(cards: list[dict], *, limit: int = 80) -> dict[str, list[str
     macacão da Marina e uma vez virou um segundo homem de camisa xadrez. Com a
     roupa de cada um escrita, 6 de 6 saíram certos.
     """
-    bits = {str(card.get("id")): story_state_bits(card, limit=limit,
-                                                   others=other_names(card, cards))
+    several = len(cards) > 1
+    bits = {str(card.get("id")): story_state_bits(
+                card, limit=limit, others=other_names(card, cards),
+                owner=str(card.get("title") or "") if several else "")
             for card in cards}
     changed = any(bit.startswith("now wearing") for found in bits.values() for bit in found)
     if not changed or len(cards) < 2:

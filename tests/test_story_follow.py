@@ -387,3 +387,26 @@ def test_the_see_outfit_must_name_a_garment(monkeypatch):
         ["Bruno Teste", "Marina Teste"], "Marina veste a capa amarela.",
         "Bruno mostrando o braço enfaixado", llm_cfg={}, transport=None)
     assert worn == {"Marina Teste": "yellow hooded cloak over blue jumpsuit"}
+
+
+def test_a_mark_names_its_owner_in_a_group():
+    """A faixa do Bruno (de casaco) foi pintada no braço nu da fada em 4 de 4
+    fundos; com o nome do dono e "por cima da roupa" ficou nele em 2 de 4."""
+    assert npc_assets.owned_mark("white bandage on right forearm", "Bruno Teste", dressed=True) \
+        == "white bandage on Bruno Teste's right forearm, worn over the clothes"
+    assert npc_assets.owned_mark("small fresh cut on the left cheek", "Marina", dressed=True) \
+        == "small fresh cut on Marina's left cheek"
+    assert npc_assets.owned_mark("bruised knuckles", "Bruno", dressed=False) == "bruised knuckles on Bruno"
+    assert npc_assets.owned_mark("scar across Bruno's brow", "Bruno", dressed=False) \
+        == "scar across Bruno's brow"
+    marks = {"current_outfit": "grey wool coat", "body_state": {"conditions": [
+        {"id": "c2", "kind": "cut", "location": "right forearm",
+         "visual_en": "white bandage on right forearm", "active": True, "scene_visible": True,
+         "visibility": "scene"}]}}
+    bruno, marina = _card("Bruno Teste", sheet=marks), _card("Marina Teste")
+    group = npc_assets.cast_state_bits([bruno, marina])["bruno-teste"]
+    assert group == ["now wearing grey wool coat",
+                     "white bandage on Bruno Teste's right forearm, worn over the clothes"]
+    # sozinho na cena não há para quem a marca ir
+    assert npc_assets.cast_state_bits([bruno])["bruno-teste"] == [
+        "now wearing grey wool coat", "white bandage on right forearm"]
