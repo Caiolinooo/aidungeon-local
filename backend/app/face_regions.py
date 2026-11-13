@@ -204,7 +204,12 @@ def repeated_person(content: bytes, references: list[bytes]) -> bool | None:
         import cv2
         import numpy as np
 
-        with _recognizer_lock:        # o objeto do OpenCV não é seguro entre threads
+        # O objeto do OpenCV não é seguro entre threads. A conferência é
+        # opcional: com outra pintura usando o reconhecedor, pula em vez de
+        # segurar a fila de imagens.
+        if not _recognizer_lock.acquire(timeout=2.0):
+            return None
+        try:
             recognizer = _recognizer_for(path)
             image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
             if image is None:
@@ -233,6 +238,8 @@ def repeated_person(content: bytes, references: list[bytes]) -> bool | None:
                 return None
             return any(sum(1 for face in painted if same(feature, face)) >= 2
                        for feature in known)
+        finally:
+            _recognizer_lock.release()
     except Exception:
         return None
 

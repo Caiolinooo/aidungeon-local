@@ -100,12 +100,17 @@ def fit(text: str, limit: int, *, keep: str = "recent") -> str:
     if keep == "head":
         for part in parts:
             # A primeira frase vale até o limite inteiro: com a metade, um
-            # card de uma frase longa perdia o texto do jogador.
+            # card de uma frase longa perdia o texto do jogador. Maior que o
+            # limite, fica cortada: nunca é trocada por um fato novo.
+            if not head and len(part) >= limit:
+                cut = part[:limit]
+                space = cut.rfind(" ")
+                return (cut[:space] if space > 0 else cut).rstrip(" ,;:")
             room = limit if not head else limit // 2
-            if used + len(part) + 1 > room:
+            if used + len(part) + (1 if head else 0) > room:
                 break
             head.append(part)
-            used += len(part) + 1
+            used += len(part) + (1 if len(head) > 1 else 0)
     tail: list[str] = []
     for part in reversed(parts[len(head):]):
         if used + len(part) + 1 > limit:

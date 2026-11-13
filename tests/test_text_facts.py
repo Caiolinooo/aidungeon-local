@@ -172,3 +172,14 @@ def test_undo_stops_the_post_turn_chain_from_writing(monkeypatch):
     monkeypatch.setattr(consequences, "apply_evaluation", lambda *a, **k: applied.append(a))
     game_engine._evaluate_consequences("adv", None, stop)
     assert applied == []
+
+
+def test_a_long_player_sentence_is_never_replaced_by_a_new_fact():
+    """Revisão 9: primeira frase de 1600 caracteres + fato novo ficava só o fato novo."""
+    first = "She " + "remembers the long road " * 70 + "home."
+    assert len(first) > 1600
+    out = text_facts.append(first, ["She remembers the oath."], 1600, keep="head")
+    assert out.startswith("She remembers the long road") and "oath" not in out
+    assert len(out) <= 1600
+    exact = "x" * 59 + "."
+    assert text_facts.fit(exact + " New fact.", 60, keep="head") == exact
