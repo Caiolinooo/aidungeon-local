@@ -1597,6 +1597,89 @@ def story_state_bits(card: dict | None, *, limit: int = 80) -> list[str]:
     return bits
 
 
+_DANGLING = re.compile(r"(?i)(?:\s+(?:and|with|of|in|the|a|an|over|on))+$")
+_GARMENT_NOUN = re.compile(
+    r"(?i)\b(?:t-?shirts?|shirts?|tops?|camisoles?|blouses?|dress(?:es)?|gowns?|robes?|coats?|"
+    r"jackets?|jumpsuits?|trousers|pants|jeans|skirts?|shorts|tunics?|armou?r|cloaks?|capes?|"
+    r"hoodies?|sweaters?|vests?|suits?|uniforms?|overalls|leggings|kimonos?|raincoats?|"
+    r"cardigans?|bodices?|corsets?|bikinis?|swimsuits?|aprons?|habits?|togas?)\b")
+
+
+def _fit_garment(piece: str, room: int) -> str:
+    """Peça dentro de `room` sem perder a cor (no começo) nem o nome da peça.
+
+    "light blue sheer floral-embroidered camisole top" → "light blue camisole
+    top". Cortar no limite deixava "light blue sheer", sem dizer o que é.
+    """
+    nouns = list(_GARMENT_NOUN.finditer(piece))
+    if nouns:
+        piece = piece[:nouns[-1].end()]          # o que vem depois da peça é detalhe
+    if len(piece) <= room:
+        return piece
+    words = piece.split()
+    # "red and black plaid …": a cor composta fica inteira.
+    lead = 3 if len(words) > 3 and words[1].lower() in ("and", "&") else 2
+    for head, tail in ((lead, 2), (lead, 1), (1, 2), (1, 1), (0, 1)):
+        if head + tail >= len(words):
+            continue
+        short = " ".join([*words[:head], *words[-tail:]])
+        if len(short) <= room:
+            return short
+    return _DANGLING.sub("", _clip(piece, room)).strip()
+
+
+def _short_garment(text: str) -> str:
+    """ "camisole top with thin straps and floral embellishments" → "camisole top"."""
+    text = " ".join(str(text or "").split()).strip(" ,.;")
+    if not text or re.match(r"(?i)^(none|no|n/?a|nothing|bare ?foot)\b", text):
+        return ""
+    return re.split(r"(?i)\s+(?:with|featuring|that|which)\s+|,", text, maxsplit=1)[0].strip()
+
+
+def own_outfit_bit(card: dict | None, *, limit: int = 80) -> str:
+    """Roupa da própria referência, numa linha curta ("wearing …")."""
+    if not card or creature_kind(card):
+        return ""
+    from app import look_lock, outfit_lock
+    pieces = look_lock.visible_clothing(look_lock.current(card))
+    lock = outfit_lock.current(card) or {}
+    parts = []
+    for key in ("top", "bottom"):
+        piece = _short_garment(pieces.get(key) or lock.get(key) or "")
+        if piece and not _looks_portuguese(piece):
+            parts.append(piece)
+    if not parts:
+        return ""
+    # Cada peça recebe a sua parte do limite: o corte no fim da frase deixava
+    # "…camisole top and flowing petal and".
+    room = max(16, (limit - len("wearing ") - 5 * (len(parts) - 1)) // len(parts))
+    parts = [_fit_garment(piece, room) for piece in parts]
+    return "wearing " + " and ".join(piece for piece in parts if piece)
+
+
+def cast_state_bits(cards: list[dict], *, limit: int = 80) -> dict[str, list[str]]:
+    """Estado de cada pessoa do elenco, por id do cartão.
+
+    Quando a história trocou a roupa de alguém, quem não trocou também recebe
+    a própria roupa por escrito. Sem isso a pessoa sem linha de roupa pegava a
+    de outra: em 6 fundos de quatro personagens, a fada saiu duas vezes com o
+    macacão da Marina e uma vez virou um segundo homem de camisa xadrez. Com a
+    roupa de cada um escrita, 6 de 6 saíram certos.
+    """
+    bits = {str(card.get("id")): story_state_bits(card, limit=limit) for card in cards}
+    changed = any(bit.startswith("now wearing") for found in bits.values() for bit in found)
+    if not changed or len(cards) < 2:
+        return bits
+    for card in cards:
+        found = bits[str(card.get("id"))]
+        if any(bit.startswith("now wearing") for bit in found):
+            continue
+        own = own_outfit_bit(card, limit=limit)
+        if own:
+            bits[str(card.get("id"))] = [own, *found]
+    return bits
+
+
 STORY_STATE_NOTE = (
     "Paint each person's \"now wearing\" clothes and marks on that person only, "
     "not the outfit in their reference image")

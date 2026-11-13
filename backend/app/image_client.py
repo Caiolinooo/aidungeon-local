@@ -974,17 +974,21 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
                           height: int, content: bytes, expected: int,
                           references: list[bytes],
                           progress: Callable[[], None] | None) -> bytes:
-    """Pinta de novo, com outra semente, a cena que saiu com gente a mais.
+    """Pinta de novo, com outra semente, a cena que saiu com gente a mais ou
+    com a mesma pessoa duas vezes.
 
     No Flux2 o negativo não vale (CFG 1) e "Exactly 3 people" às vezes vira
     quatro: um See de produção duplicou uma personagem ao lado do elenco. O
-    detector conta os rostos do tamanho do elenco; sobrando, até
-    `_HEADCOUNT_RETRIES` novas sementes, e fica a pintura com menos gente a
-    mais (a primeira, no empate). Sem detector a primeira pintura vale.
+    detector conta os rostos do tamanho do elenco. Com quatro referências a
+    contagem pode fechar com o elenco errado (um personagem repetido no lugar
+    de outro: 1 em 6 fundos de teste); o reconhecedor compara os rostos com as
+    referências. Em qualquer dos dois casos, até `_HEADCOUNT_RETRIES` novas
+    sementes, e fica a pintura com menos erro (a primeira, no empate). Sem
+    detector a primeira pintura vale.
     """
     from app import face_regions
 
-    best, best_extra = content, None
+    best, best_score = content, None
     for attempt in range(_HEADCOUNT_RETRIES + 1):
         if attempt:
             retry_cfg = dict(cfg)
@@ -997,11 +1001,14 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
         if found is None:
             return best
         extra = max(0, found - expected)
-        if best_extra is None or extra < best_extra:
-            best, best_extra = content, extra
-        if not extra:
+        repeated = bool(face_regions.repeated_person(content, references)) if expected > 1 else False
+        score = extra + (1 if repeated else 0)
+        if best_score is None or score < best_score:
+            best, best_score = content, score
+        if not score:
             return content
-        log.info("imagem com %d pessoas, esperava %d (tentativa %d)", found, expected, attempt + 1)
+        log.info("imagem com %d pessoas (esperava %d)%s, tentativa %d", found, expected,
+                 " e um personagem repetido" if repeated else "", attempt + 1)
     return best
 
 

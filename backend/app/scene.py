@@ -345,6 +345,10 @@ _BEAT_FLOOR = 110
 _LOOK_FLOOR = 160
 
 
+# Roupa do momento ("now wearing …") e roupa da própria referência ("wearing …").
+_WORN = ("now wearing", "wearing ")
+
+
 def _drop_traits(person: str, limit: int) -> str:
     """Encurta "Nome: traço; traço; traço" tirando traços inteiros do fim.
 
@@ -363,13 +367,13 @@ def _drop_traits(person: str, limit: int) -> str:
     # ("now wearing …") e só então os outros, na ordem. Sem essa prioridade o
     # segundo corte deixava a Marina só com os óculos, sem a capa amarela, e
     # guardava o cabelo de quem não tinha mudado nada.
-    order = [0, *[i for i, trait in enumerate(traits) if i and trait.startswith("now wearing")],
-             *[i for i, trait in enumerate(traits) if i and not trait.startswith("now wearing")]]
+    order = [0, *[i for i, trait in enumerate(traits) if i and trait.startswith(_WORN)],
+             *[i for i, trait in enumerate(traits) if i and not trait.startswith(_WORN)]]
     chosen: list[int] = []
     for index in order:
         picked = sorted([*chosen, index])
         if len(f"{head}: " + "; ".join(traits[i] for i in picked)) > limit:
-            if traits[index].startswith("now wearing") or not chosen:
+            if traits[index].startswith(_WORN) or not chosen:
                 continue          # tenta o próximo: um traço menor ainda pode caber
             break
         chosen = picked
@@ -509,7 +513,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         from app.routes.images import clip_words, contradicting_looks
         # 400 para os traços; cada pessoa com roupa ou marca do momento ganha
         # espaço para ela.
-        changed = sum(1 for card in cast if npc_assets.story_state_bits(card))
+        changed = sum(1 for bits in npc_assets.cast_state_bits(cast).values() if bits)
         clause = _shrink_look(clause, 400 + (0 if explicit else 80 * changed))
     reaction = clip_words(_reaction_clause(cast), 250) if clause else ""
     nude = npc_assets.nude_names(cast, moment) if clause and explicit else []
@@ -805,9 +809,15 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
         decision.allow_explicit and is_explicit(moment)
     )
     img_cfg = settings_store.effective_image_settings(conn)
+    # A história pode ter entrado num ponto sem cartão (cabana, caverna, barco):
+    # o fundo pinta esse ponto, não o cartão do lugar.
+    from app import scene_spot
+    spot = scene_spot.current(adventure, actions, cards, location=title,
+                              assessment=assessment)
+    place_title, place_entry = scene_spot.place(title, entry, spot)
     prompt, include_people = _prompt(
-        title, entry, img_cfg.get("style_suffix") or "", atmosphere, paint_cast,
-        paint_text,
+        place_title, place_entry, img_cfg.get("style_suffix") or "", atmosphere,
+        paint_cast, paint_text,
     )
     # Recorte só do rosto apenas com alguém nu; vestidos, mestre e ficha
     # mantêm corpo, cabelo, óculos e roupa (mesma regra do See).

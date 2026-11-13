@@ -530,6 +530,9 @@ class Assessment:
     facts_line: str = ""
     player_notice: str = ""
     ban_room: bool = False
+    # Trechos narrados que entraram no cânone, na ordem (os que cumpriram um
+    # pedido bloqueado ficam de fora).
+    accepted: list[str] = field(default_factory=list)
 
     def image_moment(self, raw: str) -> str:
         if not self.image_directive:
@@ -866,6 +869,7 @@ def assess(adventure: dict, actions: list[dict], cards: list[dict],
             _unique([*judged["resisted"], *invented_people]),
         ),
         ban_room=ban_room,
+        accepted=list(accepted),
     )
 
 

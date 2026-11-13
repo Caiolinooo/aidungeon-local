@@ -491,7 +491,10 @@ def test_gate_payload_keeps_present_sheet_and_bounds_the_rest(tmp_db, monkeypatc
     assert present["present"] is True
     assert present["card_id"] == elara["id"]
     assert present["profile"]["class"] == "ranger"
-    assert present["profile"]["personality"] == personality
+    # A ficha entra cortada: 5 mil tokens de entrada não cabiam no prazo do juiz.
+    assert len(personality) > 260
+    assert len(present["profile"]["personality"]) <= 260
+    assert personality.startswith(present["profile"]["personality"])
     assert present["body"]["pain"] == 6
     assert present["bonds"]["trust"] == 12
     assert "progression" in present and "power" in present
@@ -511,3 +514,62 @@ def test_gate_payload_keeps_present_sheet_and_bounds_the_rest(tmp_db, monkeypatc
         assert set(person) == {"name", "status", "present"}
         assert person["status"] == "alive"
         assert person["present"] is False
+
+
+def test_gate_reply_is_short_enough_to_fit_the_deadline():
+    """O juiz levava 28 s contra 15 s de prazo e nunca respondeu em produção:
+    5,2 mil tokens de entrada e 620 de resposta. Duas reações, duas mudanças de
+    relação e fichas cortadas cabem."""
+    assert npc_gate.GATE_MAX_TOKENS <= 450
+    assert npc_gate._MAX_REACTIONS == 2 and npc_gate._MAX_RELATION_UPDATES == 2
+    long = "frase longa sobre a vida dela " * 60
+    assert len(npc_gate._profile_text("entry", long)) <= 360
+    assert len(npc_gate._profile_text("personality", long)) <= 260
+    assert npc_gate.llm_client.role_timeout({}, "turn_gate") == 25.0
+
+
+def test_gate_accepts_names_in_relation_updates():
+    """Sem o id nas reações o modelo escreve o nome em card_id e target."""
+    people = [{"name": "Marina Teste", "card_id": "m1", "aliases": ["Marina Teste", "Marina"]},
+              {"name": "Bruno Teste", "card_id": "b1", "aliases": ["Bruno Teste", "Bruno"]}]
+    player = {"name": "Dick Vigarista", "card_id": "p1"}
+    fixed = npc_gate._relation_ids([
+        {"card_id": "Marina Teste", "target": "player", "delta": {"trust": 2}},
+        {"card_id": "bruno", "target": "Marina", "delta": {"trust": -1}},
+        {"card_id": "Bruno Teste", "target": "Dick Vigarista", "delta": {"fear": 3}},
+        {"card_id": "b1", "target": "m1", "delta": {"trust": 1}},
+        {"card_id": "Ninguém", "target": "player", "delta": {"trust": 1}},
+    ], people, player)
+    assert [(item["card_id"], item["target"]) for item in fixed] == [
+        ("m1", "player"), ("b1", "m1"), ("b1", "player"), ("b1", "m1"), ("Ninguém", "player")]
+    assert npc_gate._relation_ids(None, people, player) == []
+
+
+def test_gate_context_drops_repeated_lines():
+    text = "[Persistent consequences]\n- a: one\n- a: one\n- b: two\n" + "\n".join(
+        f"- c: fact number {index} " + "x" * 80 for index in range(20))
+    kept = npc_gate._recent_lines(text, 400)
+    assert kept.startswith("[Persistent consequences]")
+    assert len(kept) <= 400
+    assert "fact number 19" in kept and "- a: one" not in kept
+    assert npc_gate._recent_lines("", 400) == ""
+
+
+def test_gate_payload_keeps_the_player_action(tmp_db, monkeypatch):
+    """A leitura das memórias não pode trocar a ação do jogador pelo texto de uma memória."""
+    adv = __import__("tests.conftest", fromlist=["make_adventure"]).make_adventure()
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], type="character", title="Elara",
+                              triggers=["Elara"], entry="Guarda da ponte.")
+        from app import npc_life
+        npc_life.add_memory(conn, adventure_id=adv["id"], card_id=card["id"],
+                            kind="event", text="Elara lembra da ponte.", mood="")
+        npc_life.add_memory(conn, adventure_id=adv["id"], card_id=card["id"],
+                            kind="event", text="Elara lembra da ponte.", mood="")
+    __import__("tests.conftest", fromlist=["add_action"]).add_action(
+        adv["id"], 0, "start", "Elara vigia a ponte.")
+    with db.session() as conn:
+        payload, roster = npc_gate._payload(conn, adv["id"], "Eu cumprimento Elara.", "")
+    assert payload["action"] == "Eu cumprimento Elara."
+    assert payload["language"].startswith("pt-BR")
+    assert [item["text"] for item in roster[0]["memories"]] == ["Elara lembra da ponte."]

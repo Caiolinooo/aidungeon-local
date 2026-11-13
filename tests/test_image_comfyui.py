@@ -898,3 +898,40 @@ def test_bystanders_are_edited_out_and_the_edit_must_keep_the_cast(monkeypatch):
     assert calls == []
     monkeypatch.setattr(face_regions, "count_faces", lambda content, expected: None)
     assert image_client._without_bystanders({}, None, 1344, 768, b"busy", 2, [b"ref"], None) == b"busy"
+
+
+def test_a_repeated_person_is_repainted(monkeypatch):
+    """Quatro referências: a contagem de rostos fechava com a mesma pessoa
+    duas vezes no lugar de outra (1 em 6 fundos de teste)."""
+    from app import face_regions
+
+    painted = []
+
+    def fake_generate(cfg, client, prompt, width, height, *, reference_images, progress):
+        painted.append(cfg.get("seed"))
+        return f"paint-{len(painted)}".encode(), width, height
+
+    monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
+    monkeypatch.setattr(face_regions, "count_main_faces", lambda content, expected: expected)
+    monkeypatch.setattr(face_regions, "repeated_person",
+                        lambda content, references: content == b"first")
+    out = image_client._without_extra_people(
+        {"seed": 44}, None, "prompt", 1344, 768, b"first", 4, [b"a", b"b", b"c", b"d"], None)
+    assert out == b"paint-1"
+    assert painted == [(44 + 7919) % (2 ** 31)]
+    # sem repetição e com a contagem certa a primeira pintura vale
+    painted.clear()
+    assert image_client._without_extra_people(
+        {"seed": 44}, None, "prompt", 1344, 768, b"good", 4, [b"a", b"b"], None) == b"good"
+    assert painted == []
+
+
+def test_identity_check_is_skipped_without_the_recognizer(monkeypatch, tmp_path):
+    from app import face_regions
+
+    monkeypatch.setenv("AIDUNGEON_DB_PATH", str(tmp_path / "aidungeon.db"))
+    monkeypatch.delenv("AIDUNGEON_FACE_MODEL", raising=False)
+    if face_regions.recognizer_path() is None:
+        assert face_regions.repeated_person(b"not an image", [b"a", b"b"]) is None
+    # uma referência só não tem com quem repetir
+    assert face_regions.repeated_person(b"x", [b"a"]) is None

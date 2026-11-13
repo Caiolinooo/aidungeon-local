@@ -217,6 +217,7 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
     from app import look_lock
 
     lines = []
+    states = npc_assets.cast_state_bits(cards) if state else {}
     for card in cards:
         if not _has_look(card):
             continue
@@ -228,7 +229,7 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
             # traços guarda os dois e solta o resto. Na frente de tudo, a
             # Marina ficou só com a capa amarela, sem óculos nem cabelo, e a
             # pintura trocou de pessoa.
-            now = npc_assets.story_state_bits(card) if state else []
+            now = states.get(str(card.get("id")), [])
             first, _, rest = text.partition("; ")
             lines.append(f"{name}: " + "; ".join(bit for bit in (first, *now, rest) if bit))
     return ". ".join(lines)

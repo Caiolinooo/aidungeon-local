@@ -78,12 +78,12 @@ _TURN_ROLES = ("sim_intent", "turn_check", "turn_gate")
 DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 150.0, "summary": 60.0,
                          "image_prompt": 45.0, "assistant": 90.0, "meta": 45.0,
                          "assets": 120.0, "sim_intent": 20.0,
-                         # turn_gate: sozinho leva uns 11,5 s (3,4 mil tokens de
-                         # prompt, até 400 de resposta) e estourava os 12 s por
-                         # pouco. Com a crônica do turno anterior ainda gerando
-                         # passa de 20 s; 15 s cobre o caso comum sem segurar o
-                         # turno quando ele não vai terminar.
-                         "turn_check": 12.0, "turn_gate": 15.0}
+                         # turn_gate: 3,5 mil tokens de entrada e uns 300 de
+                         # resposta levam de 9 a 12 s sozinho. Com a crônica
+                         # do turno anterior ainda gerando, a placa divide a
+                         # vazão e ele passa de 15 s; com 15 s de prazo o juiz
+                         # nunca respondeu em produção.
+                         "turn_check": 12.0, "turn_gate": 25.0}
 
 # Cache de descoberta: (base_url, model_alias) -> id do modelo (ou None)
 _discovery_cache: dict[tuple[str, str], str | None] = {}

@@ -256,3 +256,34 @@ def test_trait_cut_keeps_the_outfit_of_the_moment_before_other_traits():
                   "now wearing white dress")
     assert scene._drop_traits(hair_first, 45) == "Fada: no glasses; now wearing white dress"
     assert scene._drop_traits(line, 400) == line
+
+
+def test_everyone_gets_a_clothing_line_when_the_story_changed_an_outfit():
+    """Quatro personagens: quem não tinha linha de roupa pegava a de outro. Em
+    6 fundos a fada saiu duas vezes com o macacão da Marina e uma vez virou um
+    segundo homem; com a roupa de cada um escrita, 6 de 6 saíram certos."""
+    marina = _card("Marina Teste", sheet={"current_outfit": "yellow raincoat over blue jumpsuit"})
+    fada = _card("Fada dos Espelhos", sheet={"look_lock": {
+        "version": look_lock.LOOK_VERSION,
+        "top": "light blue sheer floral-embroidered camisole top with thin straps and floral embellishments",
+        "bottom": "flowing petal and leaf fabric dress changing colour with light"}})
+    lobo = _card("Lobo de Fogo", portrait_prompt="a wolf wreathed in fire")
+    bits = npc_assets.cast_state_bits([marina, fada, lobo])
+    assert bits["marina-teste"] == ["now wearing yellow raincoat over blue jumpsuit"]
+    own = bits["fada-dos-espelhos"]
+    # a cor e o nome da peça ficam; o detalhe do meio sai
+    assert own == ["wearing light blue camisole top and flowing petal fabric dress"]
+    assert bits["lobo-de-fogo"] == []                     # criatura não veste roupa
+    # ninguém trocou de roupa: a referência manda e o prompt não cresce
+    assert npc_assets.cast_state_bits([fada, lobo]) == {"fada-dos-espelhos": [], "lobo-de-fogo": []}
+    # sozinha na cena não há de quem pegar roupa
+    assert npc_assets.cast_state_bits([marina]) == {
+        "marina-teste": ["now wearing yellow raincoat over blue jumpsuit"]}
+
+
+def test_the_own_outfit_survives_the_trait_cut():
+    line = ("Fada dos Espelhos: no glasses; wearing light blue camisole top and petal dress; "
+            "shoulder-length, loose waves, near-black hair; body: slim, long frame")
+    cut = scene._drop_traits(line, 90)
+    assert "wearing light blue camisole top and petal dress" in cut
+    assert "hair" not in cut

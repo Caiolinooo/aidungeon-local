@@ -70,6 +70,7 @@ Read the recent passage and the existing cards. Return STRICT JSON only:
     "inventory": [{"widget": "widget id", "op": "add|remove|set", "name": "item", "qty": 1}],
     "fields": [{"widget": "widget id", "name": "exact field name", "value": "new value"}]
   },
+  "scene": {"spot_en": "", "indoors": false, "left_spot": false},
   "places": [{"name": "place", "aliases": ["short name"], "existing_title": "", "summary": "what the passage established", "facts": ["one new fact"]}],
   "factions": [{"name": "group", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}],
   "items": [{"name": "item", "aliases": [], "existing_title": "", "summary": "what the passage established", "facts": []}]
@@ -128,6 +129,14 @@ Rules:
 - fields: only values the passage established (objective, title, rank...).
   Use exact field names from the Game UI block; do not add new fields.
 - If the UI did not change, return empty arrays. Always include the ui object.
+- scene.spot_en is where the people physically are at the END of the canon
+  passage, only when the passage moved them to a specific spot that is not just
+  the known place: a short English noun phrase for the image model, e.g.
+  "the interior of a small wooden cabin lit by a fireplace", "a rowing boat on
+  a lake", "the interior of a narrow cave". Empty when the passage does not
+  move them. scene.indoors is true when that spot has walls and a roof.
+  scene.left_spot is true only when the passage shows them leaving such a spot
+  and returning to the open. Always include the scene object.
 Output ONLY the JSON object."""
 
 _WORLD_KEYS = (
@@ -599,6 +608,28 @@ def _turn_has_entity_signal(recent_text: str, cards: list[dict], plot: str) -> b
     return False
 
 
+def _store_scene_spot(conn, adventure_id: str, payload: dict, cards: list[dict],
+                      canon_text: str, seq: int | None, *, ban_room: bool = False) -> None:
+    """Ponto da cena que o trecho estabeleceu (cabana, caverna, barco) ou a
+    saída dele. O See e o fundo leem em `scene_spot.current`."""
+    info = payload.get("scene") if isinstance(payload, dict) else None
+    if not isinstance(info, dict):
+        return
+    from app import scene, scene_spot
+    try:
+        location, _entry = scene._location(cards, canon_text)
+        if info.get("left_spot") is True:
+            scene_spot.store(conn, adventure_id, None, seq=seq, location=location)
+            return
+        spot = scene_spot.clean(info.get("spot_en"), info.get("indoors"))
+        if spot and ban_room and scene_spot._PRIVATE_ROOM.search(spot["en"]):
+            return
+        if spot:
+            scene_spot.store(conn, adventure_id, spot, seq=seq, location=location)
+    except Exception:
+        log.warning("npc_chronicle: ponto da cena não gravado", exc_info=True)
+
+
 def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
     """Lê o trecho recente, pede o JSON e grava. Falha de JSON não propaga."""
     with db.session() as conn:
@@ -687,12 +718,13 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
             "name": "npc_chronicle", "strict": True,
             "schema": {
                 "type": "object",
-                "required": ["plot_essentials", "characters", "bodies", "ui", "places", "factions", "items"],
+                "required": ["plot_essentials", "characters", "bodies", "ui", "scene", "places", "factions", "items"],
                 "properties": {
                     "plot_essentials": {"type": "string"},
                     "characters": {"type": "array", "items": {"type": "object"}},
                     "bodies": {"type": "array", "items": {"type": "object"}},
                     "ui": {"type": "object"},
+                    "scene": {"type": "object"},
                     "places": {"type": "array", "items": {"type": "object"}},
                     "factions": {"type": "array", "items": {"type": "object"}},
                     "items": {"type": "array", "items": {"type": "object"}},
@@ -726,6 +758,9 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
             source_action_id=source_action_id,
             source_seq=(latest or {}).get("seq"),
         )
+        if not result.get("idempotent"):
+            _store_scene_spot(conn, adventure_id, payload, all_cards, text,
+                              (latest or {}).get("seq"), ban_room=assessment.ban_room)
         updated = db.get_adventure(conn, adventure_id) or {}
         ui_after = updated.get("ui_state") or {}
         if ui_profile is not None or ui_after:

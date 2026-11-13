@@ -128,6 +128,91 @@ def count_faces(content: bytes, expected: int) -> tuple[int, int] | None:
     return sum(1 for value in heights if value >= 0.45 * reference), total
 
 
+# Reconhecedor SFace do OpenCV Zoo (Apache-2.0, 37 MB). Não vai no git: fica em
+# `<pasta do banco>/models/` ou no caminho de `AIDUNGEON_FACE_MODEL`. Sem o
+# arquivo a conferência de identidade é pulada.
+_RECOGNIZER = "face_recognition_sface_2021dec.onnx"
+# Cosseno a partir do qual o SFace trata dois rostos como a mesma pessoa.
+_SAME_PERSON = 0.363
+_reference_features: dict[str, object] = {}
+
+
+def recognizer_path() -> Path | None:
+    import os
+
+    from app import db
+    candidates = [
+        os.environ.get("AIDUNGEON_FACE_MODEL") or "",
+        str(Path(db.db_path()).parent / "models" / _RECOGNIZER),
+        str(Path(__file__).with_name("models") / _RECOGNIZER),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
+def _features(recognizer, image, *, largest: bool = False) -> list:
+    import cv2
+
+    height, width = image.shape[:2]
+    detector = cv2.FaceDetectorYN.create(
+        str(_MODEL), "", (width, height),
+        score_threshold=0.6, nms_threshold=0.3, top_k=5000,
+    )
+    _, detected = detector.detect(image)
+    faces = sorted(_deduplicate(list(detected) if detected is not None else []),
+                   key=lambda face: -float(face[3]))
+    if largest:
+        faces = faces[:1]
+    return [recognizer.feature(recognizer.alignCrop(image, face)) for face in faces]
+
+
+def repeated_person(content: bytes, references: list[bytes]) -> bool | None:
+    """Uma das referências aparece em dois rostos da pintura.
+
+    Com quatro referências o Flux2 às vezes pinta a mesma pessoa duas vezes e
+    deixa outra de fora: a contagem de rostos fecha e o elenco está errado.
+    None sem o reconhecedor, sem rostos ou em erro: quem chama segue como antes.
+    """
+    path = recognizer_path()
+    if path is None or not _MODEL.exists() or len(references) < 2:
+        return None
+    try:
+        import hashlib
+
+        import cv2
+        import numpy as np
+
+        recognizer = cv2.FaceRecognizerSF.create(str(path), "")
+        image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return None
+        painted = _features(recognizer, image)
+        if len(painted) < 2:
+            return None
+        for blob in references:
+            key = hashlib.sha256(blob).hexdigest()
+            if key not in _reference_features:
+                if len(_reference_features) > 64:
+                    _reference_features.clear()
+                ref = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_COLOR)
+                found = _features(recognizer, ref, largest=True) if ref is not None else []
+                _reference_features[key] = found[0] if found else None
+            feature = _reference_features[key]
+            if feature is None:          # criatura ou referência sem rosto legível
+                continue
+            same = sum(
+                1 for face in painted
+                if recognizer.match(feature, face, cv2.FaceRecognizerSF_FR_COSINE) >= _SAME_PERSON
+            )
+            if same >= 2:
+                return True
+        return False
+    except Exception:
+        return None
+
+
 def count_main_faces(content: bytes, expected: int) -> int | None:
     found = count_faces(content, expected)
     return None if found is None else found[0]

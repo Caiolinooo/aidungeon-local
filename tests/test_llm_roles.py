@@ -200,7 +200,7 @@ def test_role_timeouts_come_from_settings(tmp_db):
     assert llm_client.role_timeout(cfg, "meta") == 45.0
     assert llm_client.role_timeout(cfg, "sim_intent") == 20.0
     assert llm_client.role_timeout(cfg, "turn_check") == 12.0
-    assert llm_client.role_timeout(cfg, "turn_gate") == 15.0
+    assert llm_client.role_timeout(cfg, "turn_gate") == 25.0
     assert llm_scheduler.PRIORITIES["sim_intent"] == 1
     assert llm_scheduler.PRIORITIES["turn_check"] == 1
     assert llm_scheduler.PRIORITIES["turn_gate"] == 1

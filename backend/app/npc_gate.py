@@ -84,9 +84,9 @@ RULES:
   tears = joy; smiling while grieving = sadness. A negated feeling is absent:
   "sem raiva" / "without anger" is not anger. Anxiety and nervousness are fear;
   relief is joy; grief and remorse are sadness; affection is tenderness.
-- relation_updates change how the NPC feels. card_id is a living NPC from
-  people. target is "player" or another living NPC card_id. Never use the
-  player card id. Never update the player as if they were an NPC.
+- relation_updates change how the NPC feels. card_id is the exact name of a
+  living NPC from people. target is "player" or another living NPC's exact
+  name. Never update the player as if they were an NPC.
 - Toward the player the delta keys are relationship, trust, distrust, fear,
   desire, boldness. Toward another NPC the keys are only trust, fear, affinity.
   Direction is card_id's feeling toward target. Keep each integer between -20
@@ -99,23 +99,23 @@ RULES:
 - reason and evidence state only what was observable. Never put hidden motives,
   private goals, secrets, or the cue into reason or evidence.
 
+- Be brief: the turn waits for this reply. Only the two people the action
+  touches most get a reaction; whoever only watches gets none. Two
+  relation_updates at most.
+- Write every text value in the language named in `language`.
+
 Reply STRICT JSON only:
-{
-  "decision": "allow|partial|refuse|own_beat",
-  "outcome": "1-2 sentences in the language of the action, concrete and specific",
-  "reactions": [
-    {"npc": "exact name", "card_id": "exact id", "reaction": "what they do/feel",
-     "line": "optional short spoken line, or empty",
-     "emotion": "optional canonical emotion, or empty",
-     "pose": "optional short visible pose, or empty"}
-  ],
-  "initiative": {"npc": "exact name", "card_id": "exact id", "line": "optional self-initiated action", "emotion": "", "pose": ""} or null,
-  "relation_updates": [
-    {"card_id": "exact npc id", "target": "player or exact other card_id",
-     "delta": {"trust": -6}, "reason": "observable fact", "evidence": "what was seen or done"}
-  ],
-  "cue": "short instruction to the narrator about tone, consequences and what must not be contradicted"
-}"""
+- decision: allow | partial | refuse | own_beat.
+- outcome: one concrete sentence, 30 words at most.
+- cue: one sentence to the narrator, 25 words at most: tone, consequences and
+  what must not be contradicted.
+- reactions: [{npc: exact name, reaction: what they do or feel (12 words at
+  most), line: short spoken line (12 words at most) or empty, emotion:
+  canonical emotion, pose: visible pose (6 words at most)}].
+- initiative: {npc, line: the self-initiated action, emotion, pose} or null.
+- relation_updates: [{card_id: exact npc name, target: "player" or another
+  npc's exact name, delta: {"trust": -6}, reason: observable fact (8 words at
+  most), evidence: what was seen or done (12 words at most)}]."""
 
 
 def _obedience_context(card: dict) -> str:
@@ -246,6 +246,42 @@ _SCENE_TAIL = 1600
 _GATE_MEMORY_KEEP = 4
 _GATE_MEMORY_CHARS = 160
 _ABSENT_KEEP = 20
+# O juiz levava 28 s sozinho (5,2 mil tokens de entrada a 355 tok/s e 620 de
+# resposta a 46 tok/s) contra um prazo de 15 s: nunca respondeu em produção.
+# Fichas longas entram cortadas; o que o NPC é cabe nas primeiras frases.
+_PROFILE_CHARS = {"class": 80, "personality": 260, "goals": 260,
+                  "background": 180, "notes": 180, "entry": 360}
+_ADVENTURE_CHARS = {"title": 120, "premise": 400, "plot_essentials": 600}
+_MAX_REACTIONS = 2
+_MAX_RELATION_UPDATES = 2
+
+
+_CONSEQUENCE_CHARS = 900
+# Só "pt-BR" não bastava: metade das respostas vinha com outcome e cue em inglês,
+# e o outcome aparece para o jogador.
+_REPLY_LANGUAGE = ("pt-BR. Escreva outcome, cue, reaction, line, pose, reason e "
+                   "evidence em português do Brasil.")
+
+
+def _recent_lines(text: str, limit: int) -> str:
+    """Linhas inteiras, sem repetição, as mais recentes primeiro a caber."""
+    lines = list(dict.fromkeys(line for line in (text or "").splitlines() if line.strip()))
+    if not lines:
+        return ""
+    head, rest = lines[0], lines[1:]
+    kept: list[str] = []
+    used = len(head)
+    for line in reversed(rest):
+        if used + len(line) + 1 > limit:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return "\n".join([head, *reversed(kept)])
+
+
+def _profile_text(key: str, value) -> str:
+    text = " ".join(str(value or "").split())
+    return npc_assets._clip(text, _PROFILE_CHARS[key])
 
 
 def _scene_of(actions: list[dict]) -> str:
@@ -284,12 +320,12 @@ def _card_context(card: dict, *, present: bool) -> dict:
         "aliases": npc_bonds._names(card),
         "present": present,
         "profile": {
-            "class": sheet.get("class") or "",
-            "personality": sheet.get("personality") or "",
-            "goals": sheet.get("goals") or "",
-            "background": sheet.get("background") or "",
-            "notes": sheet.get("notes") or "",
-            "entry": card.get("entry") or "",
+            "class": _profile_text("class", sheet.get("class")),
+            "personality": _profile_text("personality", sheet.get("personality")),
+            "goals": _profile_text("goals", sheet.get("goals")),
+            "background": _profile_text("background", sheet.get("background")),
+            "notes": _profile_text("notes", sheet.get("notes")),
+            "entry": _profile_text("entry", card.get("entry")),
             "alignment": sheet.get("alignment") or "neutro",
             "obedience": _obedience_context(card),
         },
@@ -317,10 +353,10 @@ def _player_context(card: dict | None, username: str) -> dict:
         "name": card.get("title") or username or "Jogador",
         "card_id": card.get("id"),
         "profile": {
-            "class": sheet.get("class") or "",
-            "personality": sheet.get("personality") or "",
-            "goals": sheet.get("goals") or "",
-            "entry": card.get("entry") or "",
+            "class": _profile_text("class", sheet.get("class")),
+            "personality": _profile_text("personality", sheet.get("personality")),
+            "goals": _profile_text("goals", sheet.get("goals")),
+            "entry": _profile_text("entry", card.get("entry")),
         },
         "body": {
             "pain": state.get("pain"),
@@ -334,7 +370,8 @@ def _player_context(card: dict | None, username: str) -> dict:
 
 # JSON completo da adjudicação. O schema exige os campos aninhados: sem isso o
 # modelo pode devolver reação sem emoção e omitir relation_updates em fatos materiais.
-GATE_MAX_TOKENS = 650
+# Duas reações curtas, duas mudanças de relação e a deixa cabem em uns 300 tokens.
+GATE_MAX_TOKENS = 420
 
 
 def _neutral_decision(payload: dict) -> dict:
@@ -376,16 +413,16 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
                 "name": "turn_adjudication", "strict": True,
                 "schema": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["decision", "outcome", "reactions", "initiative", "relation_updates", "cue"],
+                    "required": ["decision", "outcome", "cue", "reactions", "initiative", "relation_updates"],
                     "properties": {
                         "decision": {"type": "string", "enum": list(DECISIONS)},
                         "outcome": {"type": "string"},
-                        "reactions": {"type": "array", "items": {
+                        "cue": {"type": "string"},
+                        "reactions": {"type": "array", "maxItems": _MAX_REACTIONS, "items": {
                             "type": "object", "additionalProperties": False,
-                            "required": ["npc", "card_id", "reaction", "line", "emotion", "pose"],
+                            "required": ["npc", "reaction", "line", "emotion", "pose"],
                             "properties": {
                                 "npc": {"type": "string"},
-                                "card_id": {"type": "string"},
                                 "reaction": {"type": "string", "minLength": 1},
                                 "line": {"type": "string"},
                                 "emotion": {"type": "string", "enum": list(EMOTIONS)},
@@ -394,16 +431,15 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
                         }},
                         "initiative": {
                             "type": ["object", "null"], "additionalProperties": False,
-                            "required": ["npc", "card_id", "line", "emotion", "pose"],
+                            "required": ["npc", "line", "emotion", "pose"],
                             "properties": {
                                 "npc": {"type": "string"},
-                                "card_id": {"type": "string"},
                                 "line": {"type": "string"},
                                 "emotion": {"type": "string", "enum": list(EMOTIONS)},
                                 "pose": {"type": "string"},
                             },
                         },
-                        "relation_updates": {"type": "array", "items": {
+                        "relation_updates": {"type": "array", "maxItems": _MAX_RELATION_UPDATES, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": ["card_id", "target", "delta", "reason", "evidence"],
                             "properties": {
@@ -418,7 +454,6 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
                                 "evidence": {"type": "string", "minLength": 1},
                             },
                         }},
-                        "cue": {"type": "string"},
                     },
                 },
             }},
@@ -462,13 +497,14 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
         memories = npc_life.list_memories(
             conn, adventure_id, card["id"], limit=_GATE_MEMORY_KEEP,
         )
-        item["memories"] = [
-            {
-                "kind": row.get("kind"),
-                "text": npc_assets._clip(row.get("text") or "", _GATE_MEMORY_CHARS),
-            }
-            for row in memories[:_GATE_MEMORY_KEEP]
-        ]
+        seen: set[str] = set()
+        item["memories"] = []
+        for row in memories[:_GATE_MEMORY_KEEP]:
+            memory = npc_assets._clip(row.get("text") or "", _GATE_MEMORY_CHARS)
+            if memory.casefold() in seen:
+                continue
+            seen.add(memory.casefold())
+            item["memories"].append({"kind": row.get("kind"), "text": memory})
         roster.append(item)
     player = _player_context(db.player_character(conn, adventure_id, user), user)
     try:
@@ -480,15 +516,16 @@ def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[
         "mode": "player_action" if text else "continue",
         "scene_tail": scene,
         "adventure": {
-            "title": adventure.get("title") or "",
-            "premise": adventure.get("premise") or "",
-            "plot_essentials": adventure.get("plot_essentials") or "",
-            "consequences": __import__("app.consequences", fromlist=["effect_context"]).effect_context(adventure),
+            **{key: npc_assets._clip(" ".join(str(adventure.get(key) or "").split()), limit)
+               for key, limit in _ADVENTURE_CHARS.items()},
+            "consequences": _recent_lines(
+                __import__("app.consequences", fromlist=["effect_context"]).effect_context(adventure),
+                _CONSEQUENCE_CHARS),
         },
         "player": player,
         "people": roster,
         "relationships_between_npcs": __import__("app.progression", fromlist=["relationship_context"]).relationship_context(living),
-        "language": "pt-BR",
+        "language": _REPLY_LANGUAGE,
     }
     return payload, roster
 
@@ -585,6 +622,38 @@ def _roster_ids(payload: dict) -> tuple[set[str], set[str]]:
     return roster - players, players
 
 
+def _relation_ids(raw, people: list[dict], player: dict) -> list:
+    """O juiz escreve o nome em `card_id` e `target` (o id de 32 letras custava
+    uns 20 tokens por citação). Nome ou apelido vira o id do cartão; o nome do
+    jogador vira "player". Um id já certo passa como veio."""
+    if not isinstance(raw, list):
+        return []
+    by_alias: dict[str, str] = {}
+    for person in people:
+        card_id = str(person.get("card_id") or "")
+        if not card_id:
+            continue
+        for alias in (person.get("name"), *(person.get("aliases") or [])):
+            key = " ".join(str(alias or "").split()).casefold()
+            if key:
+                by_alias.setdefault(key, card_id)
+    player_name = " ".join(str(player.get("name") or "").split()).casefold()
+    fixed = []
+    for item in raw:
+        if not isinstance(item, dict):
+            fixed.append(item)
+            continue
+        entry = dict(item)
+        for key in ("card_id", "target"):
+            value = " ".join(str(item.get(key) or "").split()).casefold()
+            if key == "target" and value and value == player_name:
+                entry[key] = npc_bonds.PLAYER_TARGET
+            elif value in by_alias:
+                entry[key] = by_alias[value]
+        fixed.append(entry)
+    return fixed
+
+
 def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
     names = [item for item in (payload.get("people") or []) if item.get("name")]
     by_name = {str(item.get("name")).casefold(): item for item in names}
@@ -647,7 +716,7 @@ def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
         cue = outcome
     roster_ids, player_ids = _roster_ids(payload)
     relation_updates = npc_bonds.normalize_relation_updates(
-        data.get("relation_updates"),
+        _relation_ids(data.get("relation_updates"), names, player),
         roster_ids,
         player_ids,
         player_text=str(payload.get("action") or ""),

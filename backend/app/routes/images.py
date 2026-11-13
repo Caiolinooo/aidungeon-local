@@ -1097,6 +1097,12 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                     (card.get("title") or "").casefold() == location.casefold():
                 entry = card.get("entry") or ""
                 break
+    # Ponto sem cartão em que a história entrou (cabana, caverna, barco): o See
+    # pinta esse ponto dentro do lugar, não a descrição do cartão.
+    from app import scene_spot
+    location, entry = scene_spot.place(
+        location, entry, scene_spot.current(adv, visible, cards, location=location,
+                                            assessment=assessment))
     atmosphere = scene.atmosphere_of(assessment.safe_excerpt or moment)
     place = ""
     if location and location != "the current scene":
