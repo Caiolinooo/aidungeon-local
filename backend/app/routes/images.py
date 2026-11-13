@@ -616,7 +616,7 @@ _PT_FUNCTION = frozenset(
     "o os um uma uns umas da do das dos na no nas nos em com para pelo pela "
     "que seu sua seus suas ele ela eles elas e mas nao sobre entre ao aos esta".split())
 _EN_FUNCTION = frozenset(
-    "the a an of in on at with to for by and but his her their its is are was were "
+    "the an of in on at with to for by and but his her their its is are was were "
     "he she they it from into over".split())
 
 

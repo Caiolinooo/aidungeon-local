@@ -516,3 +516,9 @@ def test_unaccented_portuguese_with_a_function_word_is_dropped():
     """Revisão 8."""
     assert images.one_image_sentence("Bruno corre pelo mato.") == ""
     assert images.one_image_sentence("Eles seguem juntos.") == ""
+
+
+def test_the_article_a_does_not_count_for_english():
+    """Revisão 10: "A mulher corre pelo mato" empatava e ficava como inglês."""
+    assert images.one_image_sentence("A mulher corre pelo mato.") == ""
+    assert images.one_image_sentence("A wolf lies by the door.") == "A wolf lies by the door."
