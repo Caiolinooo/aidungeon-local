@@ -102,9 +102,12 @@ _ENTER_EN = (
     r"|\b(?:inside|into|aboard|within)\s+(?:the|a|an|his|her|their)\s+)"
 )
 _LEAVE_PT = (
-    r"\b(?:sai|saem|saiu|sa[ií]ram|sa[ií]mos|saindo|sair|deix[\wÀ-ÿ]*|abandon[\wÀ-ÿ]*|"
-    r"fog[\wÀ-ÿ]*|escap[\wÀ-ÿ]*|desembarc[\wÀ-ÿ]*)\b[^.!?\n]{0,30}?"
-    r"\b(?:d[ao]s?|[ao]s?)\s+"
+    # "Saem da cabana" e "deixam a cabana". "Ele deixa a espada na cabana" não
+    # é saída: quem fica na cabana é a espada.
+    r"(?:\b(?:sai|saem|saiu|sa[ií]ram|sa[ií]mos|saindo|fog[\wÀ-ÿ]*|escap[\wÀ-ÿ]*|"
+    r"desembarc[\wÀ-ÿ]*)\b[^.!?\n]{0,30}?\bd[ao]s?\s+"
+    r"|\b(?:deix[\wÀ-ÿ]*|abandon[\wÀ-ÿ]*)\s+(?:[ao]s?)\s+"
+    r"(?![\wÀ-ÿ-]+\s+(?:n[ao]s?|em|numa?|dentro)\b))"
 )
 _LEAVE_EN = (
     r"\b(?:leav(?:e|es|ing)|left|exit(?:s|ed|ing)?|step(?:s|ped)?\s+out\s+of|"
@@ -122,7 +125,19 @@ _NOT_YET = re.compile(
     r"poder\w*|dever\w*|se\s+voc[eê]|vai|v[aã]o|ir[aáã]o?|precis\w+|"
     r"not|never|without|before|wants?\s+to|tr(?:y|ies|ied)\s+to|about\s+to|"
     r"could|should|will|would)\b[^.!?\n]{0,18}$"
+    r"|\bto\s*$"
 )
+# "She puts the key inside the cabin", "guarda a faca dentro da cabana": quem
+# entra é o objeto, não a cena.
+_PLACED = re.compile(
+    r"(?i)\b(?:puts?|plac(?:e|es|ed)|leaves?|left|throws?|threw|toss(?:es|ed)?|hid(?:e|es)?|"
+    r"drops?|dropped|sets?|stor(?:e|es|ed)|keeps?|kept|"
+    r"coloc[\wÀ-ÿ]*|p[oõ]e[\wÀ-ÿ]*|deix[\wÀ-ÿ]*|jog[\wÀ-ÿ]*|escond[\wÀ-ÿ]*|guard[\wÀ-ÿ]*|"
+    r"larg[\wÀ-ÿ]*)\b[^.!?\n]{0,40}$"
+)
+
+
+_BARE = frozenset({"inside", "into", "aboard", "within", "dentro", "para", "no", "a", "sob"})
 
 
 def _compile(prefix_pt: str, prefix_en: str) -> list[tuple[re.Pattern[str], str, bool]]:
@@ -168,10 +183,19 @@ def detect(text: str, cards: list[dict] | None = None) -> dict | str | None:
     events: list[tuple[int, dict | str]] = []
     for pattern, phrase, indoor in _ENTER:
         for match in pattern.finditer(text):
-            if _NOT_YET.search(text[max(0, match.start() - 40):match.start()]):
+            before = text[max(0, match.start() - 40):match.start()]
+            if _NOT_YET.search(before):
+                continue
+            # A preposição sozinha ("inside the", "dentro da") também vale
+            # para um objeto guardado ali.
+            head = match.group(0).lstrip().split()[0].casefold()
+            if head in _BARE and _PLACED.search(before):
                 continue
             word = _fold(match.group(0).split()[-1])
             if word and re.search(rf"\b{re.escape(word)}\b", known):
+                # Entraram num lugar que tem cartão: o cartão manda e o ponto
+                # anterior acaba (senão ficava "cabana, em Taverna do Javali").
+                events.append((match.end(), ""))
                 continue
             events.append((match.end(), {"en": phrase, "indoor": indoor}))
     for pattern, _phrase, _indoor in _LEAVE:

@@ -1628,15 +1628,18 @@ def is_outfit(text: str) -> bool:
     return bool(text) and not _NO_OUTFIT.search(text)
 
 
-# "fairy on shoulder", "cat perched on her arm": um ser pousado na pessoa.
-# "wolf bite on left arm" não casa: depois do ser vem a marca, não a posição.
+# "fairy on shoulder", "cat perched on her arm", "A Fada pousa no ombro dele":
+# um ser pousado na pessoa. "wolf bite on left arm" não casa: depois do ser
+# vem a marca, não a posição.
+_BESIDE = (
+    r"\s+(?:(?:is\s+|est[aá]\s+)?(?:perched|sitting|seated|resting|riding|standing|clinging|"
+    r"hovering|flying|floating|pousad[ao]|sentad[ao]|pousa|senta|fica|descansa)\s+)?"
+    r"(?:on|upon|atop|beside|near|behind|next\s+to|above|over|n[ao]s?|sobre|ao\s+lado)\b")
 _BEING_BESIDE = re.compile(
     r"(?i)\b(?:fairy|pixie|sprite|imp|familiar|wolf|dog|cat|bird|owl|raven|crow|parrot|dragon|"
     r"snake|spider|rat|mouse|monkey|fox|bear|horse|creature|companion|pet|ghost|spirit|"
     r"man|woman|girl|boy|child|person|fada|lobo|gato|p[aá]ssaro|coruja|corvo|drag[aã]o|cobra)"
-    r"\s+(?:(?:is\s+)?(?:perched|sitting|seated|resting|riding|standing|clinging|hovering|"
-    r"flying|floating|pousad[ao]|sentad[ao])\s+)?"
-    r"(?:on|upon|atop|beside|near|behind|next\s+to|above|over|n[ao]|sobre|ao\s+lado)\b")
+    + _BESIDE)
 
 
 def other_names(card: dict, cards: list[dict]) -> list[str]:
@@ -1660,7 +1663,9 @@ def names_someone(text: str, names: list[str]) -> bool:
     low = " ".join(str(text or "").split()).casefold()
     if _BEING_BESIDE.search(low):
         return True
-    return any(re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", low) for name in names)
+    # O nome sozinho não basta: "wolf bite on left arm" e "Bruno's blood on her
+    # sleeve" são marcas de verdade que citam quem as causou.
+    return any(re.search(rf"(?i)(?<![\wÀ-ÿ]){re.escape(name)}{_BESIDE}", low) for name in names)
 
 
 _DRESSING = re.compile(r"(?i)\b(?:bandage[sd]?|bandaging|sling|splint|cast|gauze|tourniquet)\b")

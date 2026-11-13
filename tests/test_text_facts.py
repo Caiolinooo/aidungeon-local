@@ -63,9 +63,6 @@ def test_a_new_faction_cannot_take_a_characters_name(tmp_db):
             conn, adv["id"], pool, {"name": "Marina", "summary": "Um grupo."},
             "faction", set()) is None
         assert npc_chronicle.apply_world(
-            conn, adv["id"], pool, {"name": "Os Vigias", "aliases": ["marina teste"],
-                                    "summary": "Um grupo."}, "faction", set()) is None
-        assert npc_chronicle.apply_world(
             conn, adv["id"], pool, {"name": "Guilda dos Ferreiros", "summary": "Um grupo."},
             "faction", set()) == "created"
         titles = [card["title"] for card in db.list_cards(conn, adv["id"])]
@@ -96,3 +93,40 @@ def test_a_name_without_the_accent_is_the_same_person():
     assert scene._last_mention("Jose entra na sala e Marina o segue.", "José") == 0
     assert scene._last_mention("A Íris observa.", "Iris") == 2
     assert scene._last_mention("Josefina entra.", "José") == -1
+
+
+def test_review_findings_on_facts():
+    """Achados da revisão independente sobre o primeiro corte destas regras."""
+    # tirar e pôr só é roupa com a peça na frase
+    assert not text_facts.is_transient("He removed the curse permanently.")
+    assert not text_facts.is_transient("Ele tirou a vida do rei.")
+    assert text_facts.is_transient("He removed his brown leather hat.")
+    # a continuação que nega é outro fato
+    assert not text_facts.same_fact("He can swim.", "He can swim no longer.")
+    assert not text_facts.same_fact("Ela confia em Bruno.", "Ela confia em Bruno, mas não em Marina.")
+    # a primeira frase (a do jogador) fica mesmo passando da metade do limite
+    assert text_facts.fit("The player has sworn never to abandon the northern gate. New fact.",
+                          60, keep="head") == "The player has sworn never to abandon the northern gate."
+
+
+def test_effects_of_different_targets_are_both_kept():
+    adventure = {"ui_state": {"world_effects": [
+        {"kind": "physical", "target": "Alice", "summary": "Cannot speak.", "duration": "persistent"},
+        {"kind": "physical", "target": "Bob", "summary": "Cannot speak.", "duration": "persistent"},
+    ]}}
+    text = consequences.effect_context(adventure)
+    assert "physical / Alice: Cannot speak." in text and "physical / Bob: Cannot speak." in text
+
+
+def test_a_place_named_after_its_owner_is_still_created(tmp_db):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], type="character", title="Marina",
+                       triggers=["Marina"], entry="Dona da taverna.")
+        assert npc_chronicle.apply_world(
+            conn, adv["id"], [], {"name": "Taverna da Marina", "aliases": ["Marina", "a taverna"],
+                                  "summary": "Uma taverna que pertence a Marina."},
+            "location", set()) == "created"
+        tavern = next(card for card in db.list_cards(conn, adv["id"])
+                      if card["title"] == "Taverna da Marina")
+    assert "Marina" not in tavern["triggers"]          # o apelido de gente não vira gatilho do lugar

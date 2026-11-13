@@ -373,6 +373,9 @@ def test_another_character_is_not_a_body_mark():
     kept = npc_chronicle._without_people_as_marks(body, others)["conditions"]
     assert [item.get("visual_en") or item["op"] for item in kept] == [
         "fresh cut on the left cheek", "heal"]
+    # a marca que cita quem a causou é marca de verdade
+    assert not npc_assets.names_someone("wolf bite on left arm", ["wolf", "fada"])
+    assert not npc_assets.names_someone("Bruno's blood on her sleeve", ["bruno"])
 
 
 def test_the_see_outfit_must_name_a_garment(monkeypatch):

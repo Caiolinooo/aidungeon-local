@@ -421,24 +421,18 @@ def _world_triggers(item: dict, protagonists: set[str]) -> list[str]:
     return triggers[:8]
 
 
-def _names_a_character(conn, adventure_id: str, item: dict) -> bool:
-    labels = {text_facts.fold(label) for label in (item.get("name"), *(item.get("aliases") or []))
-              if isinstance(label, str)}
-    labels.discard("")
-    if not labels:
-        return False
+def _character_names(conn, adventure_id: str) -> set[str]:
+    names: set[str] = set()
     for card in db.list_cards(conn, adventure_id):
         if (card.get("type") or "character") != "character":
             continue
         title = str(card.get("title") or "")
-        names = {text_facts.fold(title), text_facts.fold(card.get("player_username") or "")}
+        names |= {text_facts.fold(title), text_facts.fold(card.get("player_username") or "")}
         # O primeiro nome sozinho só conta com 4+ letras ("Ana" bate em muita coisa).
         names |= {text_facts.fold(alias) for alias in npc_assets.title_aliases(title)
                   if len(alias) >= 4}
-        names.discard("")
-        if labels & names:
-            return True
-    return False
+    names.discard("")
+    return names
 
 
 def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
@@ -457,11 +451,15 @@ def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
             return None
         # O registro já criou uma facção com o nome de um personagem: lugar,
         # facção ou item novo não pode ter nome ou apelido de gente da história.
-        if _names_a_character(conn, adventure_id, item):
+        # Só o nome barra: "Taverna da Marina" com o apelido "Marina" é um lugar
+        # de verdade e entra sem esse apelido nos gatilhos.
+        people = _character_names(conn, adventure_id)
+        if text_facts.fold(name) in people:
             return None
         created = db.insert_card(
             conn, adventure_id, title=name[:80], type=type_,
-            triggers=_world_triggers(item, protagonists),
+            triggers=[trigger for trigger in _world_triggers(item, protagonists)
+                      if text_facts.fold(trigger) not in people],
             entry=_append_unique(summary, facts)[:1600],
         )
         cards.append(created)

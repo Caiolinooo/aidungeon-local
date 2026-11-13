@@ -39,7 +39,24 @@ def test_intention_negation_and_objects_do_not_move_the_scene():
 def test_a_spot_that_is_a_location_card_stays_with_the_card():
     assert scene_spot.detect("Entram na taverna rindo alto.", [FOREST])["en"] \
         == "the interior of a tavern"
-    assert scene_spot.detect("Entram na taverna rindo alto.", [FOREST, TAVERN]) is None
+    # com cartão o cartão manda, e o ponto anterior acaba: senão a cena ficava
+    # "cabana, em Taverna do Javali"
+    assert scene_spot.detect("Entram na taverna rindo alto.", [FOREST, TAVERN]) == ""
+    story = _canon("Você está na floresta.", "Eles entram na cabana.",
+                   "Eles entram na Taverna do Javali.")
+    assert scene_spot.current({}, story, [FOREST, TAVERN]) is None
+
+
+def test_objects_and_plans_do_not_move_the_scene():
+    """Achados da revisão: a chave guardada na cabana e a decisão de entrar
+    moviam a cena; a espada deixada na cabana tirava a cena de lá."""
+    for text in ("She puts the key inside the cabin.", "They decide to enter the cabin.",
+                 "Marina guarda a faca dentro da cabana."):
+        assert scene_spot.detect(text) is None, text
+    assert scene_spot.detect("Ele deixa a espada na cabana.") is None
+    assert scene_spot.detect("Eles deixam a velha cabana para trás.") == ""
+    assert scene_spot.detect("Ela leva o ferido para dentro da cabana.")["indoor"] is True
+    assert scene_spot.detect("They are inside the cave now.")["en"] == "the interior of a cave"
 
 
 def test_current_follows_the_story_turn_by_turn():

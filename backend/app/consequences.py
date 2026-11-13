@@ -81,8 +81,11 @@ def effect_context(adventure: dict, *, target: str = "") -> str:
         return ""
     lines = ["[Persistent consequences]"]
     said: list[str] = []
-    for item in _latest_distinct([item for item in effects if item.get("summary")],
-                                 8, key=lambda item: str(item["summary"])):
+    for item in _latest_distinct(
+            [item for item in effects if item.get("summary")], 8,
+            key=lambda item: str(item["summary"]),
+            group=lambda item: (str(item.get("kind") or ""),
+                                " ".join(str(item.get("target") or "").split()).casefold())):
         kind = item.get("kind") or "effect"
         who = item.get("target") or "world"
         lines.append(f"- {kind} / {who}: {item['summary']}")
@@ -96,11 +99,13 @@ def effect_context(adventure: dict, *, target: str = "") -> str:
     return "\n".join(lines)
 
 
-def _latest_distinct(items: list, limit: int, *, key) -> list:
-    """Os `limit` mais recentes sem dois quase iguais, na ordem original."""
+def _latest_distinct(items: list, limit: int, *, key, group=lambda item: None) -> list:
+    """Os `limit` mais recentes sem dois quase iguais, na ordem original. Só é
+    repetição dentro do mesmo `group`: "Cannot speak." da Alice e do Bob são
+    dois efeitos."""
     kept: list = []
     for item in reversed(items):
-        if text_facts.known(key(item), [key(old) for old in kept]):
+        if text_facts.known(key(item), [key(old) for old in kept if group(old) == group(item)]):
             continue
         kept.append(item)
         if len(kept) >= limit:
