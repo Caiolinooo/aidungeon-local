@@ -1853,8 +1853,13 @@ def _utc_offset(seconds: float) -> str:
     return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+# Menos urgente que o fundo da cena: retrato em lote, tick, assets, clipe de retrato.
+HOLD_FROM_PRIORITY = 4
+
+
 def claim_next_job(conn: sqlite3.Connection, *,
-                   max_priority: int | None = None) -> dict | None:
+                   max_priority: int | None = None,
+                   hold_adventures: list[str] | tuple[str, ...] = ()) -> dict | None:
     """pending → running do job de menor prioridade e, nela, do mais antigo.
 
     O worker é único por processo. `max_priority` deixa de fora os menos
@@ -1862,6 +1867,10 @@ def claim_next_job(conn: sqlite3.Connection, *,
     pending ou preparing que não seja clipe automático nem giro 360°. Se só
     restarem clipes automáticos, eles seguem a ordem normal. Clipe manual não
     entra no gate.
+
+    `hold_adventures`: aventuras com o pós-turno em curso. Delas esperam o
+    clipe automático, o retrato refeito por mudança de estado e tudo que é
+    menos urgente que o fundo; See, fundo e retrato pedido passam.
     """
     sql = (
         "SELECT id FROM jobs WHERE status='pending'"
@@ -1892,6 +1901,16 @@ def claim_next_job(conn: sqlite3.Connection, *,
     )
     idle_since = _utc_offset(-turnaround_idle_s())
     params: list = [utcnow(), idle_since, idle_since]
+    held = [str(item) for item in hold_adventures if item]
+    if held:
+        sql += (
+            " AND NOT (adventure_id IN (" + ",".join("?" for _ in held) + ") AND ("
+            " priority >= ?"
+            " OR (type='scene_clip' AND COALESCE(json_extract(payload, '$.automatic'), 0) = 1)"
+            " OR (type='character_portrait'"
+            " AND COALESCE(json_extract(payload, '$.state_key'), '') != '')))"
+        )
+        params.extend([*held, HOLD_FROM_PRIORITY])
     if max_priority is not None:
         sql += " AND priority<=?"
         params.append(int(max_priority))

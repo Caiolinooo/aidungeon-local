@@ -61,6 +61,8 @@ def _image_english_reset():
 @pytest.fixture(autouse=True)
 def _scheduler_reset():
     """Fila, slots ocupados e breaker do llm_scheduler não vazam entre testes."""
+    from app import post_turn_state
+    post_turn_state.reset()
     llm_scheduler.reset()
     yield
     llm_scheduler.reset()

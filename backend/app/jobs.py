@@ -74,7 +74,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app import (db, events, game_engine, image_client, image_english, likeness, llm_client,
-                    look_lock, npc_assets, outfit_lock, settings_store, turnaround)
+                    look_lock, npc_assets, outfit_lock, post_turn_state, settings_store,
+                    turnaround)
 from app.errors import GameError
 from app.image_client import ImageError
 from app.llm_client import LlmError
@@ -2828,7 +2829,8 @@ def process_pending(transport: Any = None, *, should_pause=None,
     while True:
         paused = should_pause is not None and should_pause()
         with db.session() as conn:
-            job = db.claim_next_job(conn, max_priority=PRIORITY_SEE if paused else None)
+            job = db.claim_next_job(conn, max_priority=PRIORITY_SEE if paused else None,
+                                    hold_adventures=post_turn_state.busy())
         if not job:
             return processed
         _run_job(job, transport)

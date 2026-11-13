@@ -60,6 +60,7 @@ from app import (
     npc_bonds,
     npc_chronicle,
     npc_life,
+    post_turn_state,
     output_sanitizer,
     scripting,
     settings_store,
@@ -347,6 +348,7 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
     cancel = threading.Event()
     with _post_turn_guard:
         _post_turn_cancels[adventure_id] = cancel
+    post_turn_state.begin(adventure_id)
 
     def _bg() -> None:
         with _post_turn_lock_for(adventure_id):
@@ -368,6 +370,9 @@ def _finish_post_turn(adventure_id: str, cancel: threading.Event) -> None:
     with _post_turn_guard:
         if _post_turn_cancels.get(adventure_id) is cancel:
             del _post_turn_cancels[adventure_id]
+            # Só o pós-turno mais recente libera a fila: o de um turno antigo
+            # que termina não solta os jobs enquanto o novo ainda roda.
+            post_turn_state.end(adventure_id)
         if cancel.is_set():
             _summary_deferrals[adventure_id] = _summary_deferrals.get(adventure_id, 0) + 1
         else:
@@ -389,6 +394,7 @@ def forget_adventure(adventure_id: str) -> None:
     """Aventura apagada: pós-turno cancelado, choices e eventos descartados."""
     with _post_turn_guard:
         cancel = _post_turn_cancels.pop(adventure_id, None)
+    post_turn_state.end(adventure_id)
     if cancel is not None:
         cancel.set()
     choices_service.forget(adventure_id)

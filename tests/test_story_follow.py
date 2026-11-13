@@ -413,3 +413,60 @@ def test_a_mark_names_its_owner_in_a_group():
     # sozinho na cena não há para quem a marca ir
     assert npc_assets.cast_state_bits([bruno])["bruno-teste"] == [
         "now wearing grey wool coat", "white bandage on right forearm"]
+
+
+def test_non_urgent_paints_wait_for_the_post_turn_chain(tmp_db):
+    """Num turno de teste a crônica levou 275 s: quatro retratos refeitos, o
+    clipe automático e o tick disputavam a placa com ela. Enquanto o pós-turno
+    da aventura roda, só passa o que o jogador está esperando."""
+    from app import db, jobs, post_turn_state
+    from tests.conftest import make_adventure
+
+    adv = make_adventure()
+    other = make_adventure()
+    with db.session() as conn:
+        clip = jobs.enqueue(conn, "scene_clip", adv["id"], "img-1", {"automatic": True},
+                            priority=jobs.PRIORITY_SCENE_CLIP)
+        synced = jobs.enqueue(conn, "character_portrait", adv["id"], "card-1",
+                              {"state_key": "abc"}, priority=jobs.PRIORITY_PRESENT_PORTRAIT)
+        tick = jobs.enqueue(conn, "npc_day_tick", adv["id"], "tick", {},
+                            priority=jobs.PRIORITY_LIFE_TICK)
+        asked = jobs.enqueue(conn, "character_portrait", adv["id"], "card-2", {},
+                             priority=jobs.PRIORITY_PRESENT_PORTRAIT)
+        backdrop = jobs.enqueue(conn, "scene_backdrop", adv["id"], "ref", {"prompt": "x"},
+                                priority=jobs.PRIORITY_BACKDROP)
+        elsewhere = jobs.enqueue(conn, "npc_day_tick", other["id"], "tick", {},
+                                 priority=jobs.PRIORITY_LIFE_TICK)
+    post_turn_state.begin(adv["id"])
+    assert post_turn_state.busy() == [adv["id"]]
+    claimed = []
+    with db.session() as conn:
+        while True:
+            job = db.claim_next_job(conn, hold_adventures=post_turn_state.busy())
+            if not job:
+                break
+            claimed.append(job["id"])
+            db.finish_job(conn, job["id"], "done", {})
+    # retrato pedido, fundo e o job de outra aventura passam; o resto espera
+    assert claimed == [asked["id"], backdrop["id"], elsewhere["id"]]
+    post_turn_state.end(adv["id"])
+    with db.session() as conn:
+        rest = []
+        while True:
+            job = db.claim_next_job(conn, hold_adventures=post_turn_state.busy())
+            if not job:
+                break
+            rest.append(job["id"])
+            db.finish_job(conn, job["id"], "done", {})
+    assert sorted(rest) == sorted([clip["id"], synced["id"], tick["id"]])
+
+
+def test_a_stuck_post_turn_chain_does_not_hold_the_queue_forever(monkeypatch):
+    from app import post_turn_state
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(post_turn_state.time, "monotonic", lambda: clock["now"])
+    post_turn_state.begin("adv")
+    assert post_turn_state.busy() == ["adv"]
+    clock["now"] += post_turn_state.HOLD_S + 1
+    assert post_turn_state.busy() == []
