@@ -1579,7 +1579,58 @@ def coverage_lock(*cards: dict | None, explicit: bool = False) -> str:
             f"{names(creatures)}: {CREATURE_LOCK}")
 
 
-def story_state_bits(card: dict | None, *, limit: int = 80) -> list[str]:
+_NO_OUTFIT = re.compile(
+    r"(?i)^(?:no|not|none|nothing|unknown|unspecified|unchanged|same|n/?a|empty|undefined)\b"
+    r"|\b(?:not|none|nothing|no\s+(?:clothing|clothes|outfit|garments?))\s+"
+    r"(?:is\s+|was\s+|are\s+)?(?:described|specified|mentioned|stated|given|shown|known|visible)\b"
+    r"|\bunknown\b")
+
+
+def is_outfit(text: str) -> bool:
+    """Falso para a não-resposta do modelo ("no clothing described", "unknown",
+    "same as before"): gravada como roupa, o See pintava "now wearing no
+    clothing described"."""
+    text = " ".join(str(text or "").split())
+    return bool(text) and not _NO_OUTFIT.search(text)
+
+
+# "fairy on shoulder", "cat perched on her arm": um ser pousado na pessoa.
+# "wolf bite on left arm" não casa: depois do ser vem a marca, não a posição.
+_BEING_BESIDE = re.compile(
+    r"(?i)\b(?:fairy|pixie|sprite|imp|familiar|wolf|dog|cat|bird|owl|raven|crow|parrot|dragon|"
+    r"snake|spider|rat|mouse|monkey|fox|bear|horse|creature|companion|pet|ghost|spirit|"
+    r"man|woman|girl|boy|child|person|fada|lobo|gato|p[aá]ssaro|coruja|corvo|drag[aã]o|cobra)"
+    r"\s+(?:(?:is\s+)?(?:perched|sitting|seated|resting|riding|standing|clinging|hovering|"
+    r"flying|floating|pousad[ao]|sentad[ao])\s+)?"
+    r"(?:on|upon|atop|beside|near|behind|next\s+to|above|over|n[ao]|sobre|ao\s+lado)\b")
+
+
+def other_names(card: dict, cards: list[dict]) -> list[str]:
+    """Nomes, apelidos e espécie dos outros personagens, em minúsculas."""
+    own = str(card.get("id"))
+    names: list[str] = []
+    for other in cards:
+        if str(other.get("id")) == own or (other.get("type") or "character") != "character":
+            continue
+        names.extend(title_aliases(str(other.get("title") or "")))
+        kind = creature_kind(other)
+        if kind:
+            names.append(kind)
+    return [name.casefold() for name in names if len(name) >= 3]
+
+
+def names_someone(text: str, names: list[str]) -> bool:
+    """A marca cita outro personagem ("fairy on shoulder"): não é marca no
+    corpo, é quem está ao lado. Pintada como marca, a fada virou um enfeite
+    no ombro de duas pessoas."""
+    low = " ".join(str(text or "").split()).casefold()
+    if _BEING_BESIDE.search(low):
+        return True
+    return any(re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", low) for name in names)
+
+
+def story_state_bits(card: dict | None, *, limit: int = 80,
+                     others: list[str] | None = None) -> list[str]:
     """O que a história mudou nesta pessoa e a pintura tem de mostrar: roupa
     do momento e marcas visíveis. Só texto em inglês (o estado gravado em
     português não serve ao renderizador). Criatura não leva roupa.
@@ -1589,11 +1640,14 @@ def story_state_bits(card: dict | None, *, limit: int = 80) -> list[str]:
     sheet = parse_sheet(card.get("sheet") or "")
     bits = []
     outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
-    if outfit and not _looks_portuguese(outfit):
+    if outfit and is_outfit(outfit) and not _looks_portuguese(outfit):
         bits.append(_clip("now wearing " + outfit, limit))
-    wounds = body_state.visual_prompt(sheet.get("body_state"), portrait=False)
-    if wounds and not _looks_portuguese(wounds):
-        bits.append(_clip(wounds, limit))
+    marks = [
+        mark for mark in body_state.visual_marks(sheet.get("body_state"), portrait=False)
+        if not _looks_portuguese(mark) and not names_someone(mark, others or [])
+    ]
+    if marks:
+        bits.append(_clip(", ".join(marks), limit))
     return bits
 
 
@@ -1666,7 +1720,9 @@ def cast_state_bits(cards: list[dict], *, limit: int = 80) -> dict[str, list[str
     macacão da Marina e uma vez virou um segundo homem de camisa xadrez. Com a
     roupa de cada um escrita, 6 de 6 saíram certos.
     """
-    bits = {str(card.get("id")): story_state_bits(card, limit=limit) for card in cards}
+    bits = {str(card.get("id")): story_state_bits(card, limit=limit,
+                                                   others=other_names(card, cards))
+            for card in cards}
     changed = any(bit.startswith("now wearing") for found in bits.values() for bit in found)
     if not changed or len(cards) < 2:
         return bits

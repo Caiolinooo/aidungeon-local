@@ -472,6 +472,23 @@ def _snapshot_for_undo(conn, source_action_id: int | None, snapshots: dict[str, 
     db.merge_action_rules(conn, source_action_id, {"body_before": merged})
 
 
+def _without_people_as_marks(body: dict, others: list[str]) -> dict:
+    """Tira das marcas novas as que citam outro personagem: "fairy on shoulder"
+    foi gravado como marca no ombro do protagonista e da própria fada."""
+    conditions = body.get("conditions")
+    if not isinstance(conditions, list):
+        return body
+    kept = []
+    for item in conditions:
+        op = str((item or {}).get("op") or "add").casefold() if isinstance(item, dict) else ""
+        text = " ".join(str(item.get(key) or "") for key in ("visual_en", "description")) \
+            if isinstance(item, dict) else ""
+        if op in ("add", "update") and npc_assets.names_someone(text, others):
+            continue
+        kept.append(item)
+    return {**body, "conditions": kept}
+
+
 def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, source_seq) -> int:
     items = payload.get("bodies")
     if not isinstance(items, list):
@@ -493,6 +510,7 @@ def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, s
             continue
         sheet = npc_assets.parse_sheet(card.get("sheet") or "")
         before = body_state.snapshot(sheet)
+        raw = _without_people_as_marks(raw, npc_assets.other_names(card, cards))
         updated = body_state.apply_to_sheet(
             sheet, raw, source_action_id=source_action_id, source_seq=source_seq)
         if updated == sheet:
@@ -724,7 +742,12 @@ def update_from_turn(adventure_id: str, transport: Any = None) -> dict:
                     "characters": {"type": "array", "items": {"type": "object"}},
                     "bodies": {"type": "array", "items": {"type": "object"}},
                     "ui": {"type": "object"},
-                    "scene": {"type": "object"},
+                    "scene": {
+                        "type": "object", "required": ["spot_en", "indoors", "left_spot"],
+                        "properties": {"spot_en": {"type": "string"},
+                                       "indoors": {"type": "boolean"},
+                                       "left_spot": {"type": "boolean"}},
+                    },
                     "places": {"type": "array", "items": {"type": "object"}},
                     "factions": {"type": "array", "items": {"type": "object"}},
                     "items": {"type": "array", "items": {"type": "object"}},

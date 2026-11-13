@@ -246,8 +246,8 @@ _SCENE_TAIL = 1600
 _GATE_MEMORY_KEEP = 4
 _GATE_MEMORY_CHARS = 160
 _ABSENT_KEEP = 20
-# O juiz levava 28 s sozinho (5,2 mil tokens de entrada a 355 tok/s e 620 de
-# resposta a 46 tok/s) contra um prazo de 15 s: nunca respondeu em produção.
+# Com quatro NPCs na cena o juiz levava 28 s sozinho (5,2 mil tokens de entrada
+# e 620 de resposta) contra um prazo de 15 s, e o turno seguia sem a decisão.
 # Fichas longas entram cortadas; o que o NPC é cabe nas primeiras frases.
 _PROFILE_CHARS = {"class": 80, "personality": 260, "goals": 260,
                   "background": 180, "notes": 180, "entry": 360}

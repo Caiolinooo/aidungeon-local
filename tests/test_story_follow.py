@@ -287,3 +287,49 @@ def test_the_own_outfit_survives_the_trait_cut():
     cut = scene._drop_traits(line, 90)
     assert "wearing light blue camisole top and petal dress" in cut
     assert "hair" not in cut
+
+
+def test_a_non_answer_is_not_an_outfit():
+    """O See pintou "now wearing no clothing described"."""
+    for text in ("no clothing described", "No outfit mentioned", "unknown", "not specified",
+                 "same as before", "none", "N/A", "clothing not described", ""):
+        assert not npc_assets.is_outfit(text), text
+    for text in ("yellow raincoat over blue jumpsuit", "worn suit", "white nightgown"):
+        assert npc_assets.is_outfit(text), text
+    dick = _card("Dick", sheet={"current_outfit": "no clothing described"})
+    assert npc_assets.story_state_bits(dick) == []
+    from app import body_state
+    kept = body_state.apply_to_sheet({"current_outfit": "worn suit"},
+                                     {"current_outfit": "no clothing described"})
+    assert kept["current_outfit"] == "worn suit"
+
+
+def test_another_character_is_not_a_body_mark():
+    """O registro gravou "fairy on shoulder" como marca no ombro do protagonista
+    e da própria fada; no fundo a fada virou um enfeite e a cena saiu errada."""
+    from app import npc_chronicle
+    marks = {"body_state": {"conditions": [
+        {"id": "c1", "kind": "mark", "location": "shoulder", "visual_en": "fairy on shoulder",
+         "active": True, "scene_visible": True, "visibility": "scene"},
+        {"id": "c2", "kind": "cut", "location": "right forearm",
+         "visual_en": "white bandage on right forearm", "active": True, "scene_visible": True,
+         "visibility": "scene"},
+        {"id": "c3", "kind": "wound", "location": "left arm", "visual_en": "wolf bite on left arm",
+         "active": True, "scene_visible": True, "visibility": "scene"},
+    ]}}
+    dick = _card("Dick", sheet=marks)
+    assert npc_assets.story_state_bits(dick) == [
+        "white bandage on right forearm, wolf bite on left arm"]
+    fada = _card("Fada dos Espelhos")
+    others = npc_assets.other_names(dick, [dick, fada])
+    assert "fada" in others and "dick" not in others
+    body = {"conditions": [
+        {"op": "add", "kind": "mark", "visual_en": "small glowing figure on the shoulder",
+         "description": "A Fada pousa no ombro dele."},
+        {"op": "add", "kind": "cut", "visual_en": "fresh cut on the left cheek",
+         "description": "Um corte no rosto."},
+        {"op": "heal", "id": "c1", "description": "a fada sai do ombro"},
+    ]}
+    kept = npc_chronicle._without_people_as_marks(body, others)["conditions"]
+    assert [item.get("visual_en") or item["op"] for item in kept] == [
+        "fresh cut on the left cheek", "heal"]

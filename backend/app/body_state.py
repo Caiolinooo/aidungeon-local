@@ -227,7 +227,9 @@ def apply_to_sheet(sheet: dict | None, body: Any, *, source_action_id: int | Non
     if expression:
         updated["expression"] = expression
     outfit = _text(body.get("current_outfit") or body.get("outfit"), 240)
-    if outfit:
+    # "no clothing described" e "unknown" são a não-resposta do modelo.
+    from app import npc_assets
+    if outfit and npc_assets.is_outfit(outfit):
         updated["current_outfit"] = outfit
     return updated
 
@@ -239,14 +241,19 @@ def active_conditions(state: Any, *, portrait: bool = False) -> list[dict]:
     return [c for c in conditions if c.get("active") and c.get("scene_visible")]
 
 
-def visual_prompt(state: Any, *, portrait: bool = False) -> str:
+def visual_marks(state: Any, *, portrait: bool = False) -> list[str]:
+    """Uma frase visual por marca ativa, sem repetição."""
     bits: list[str] = []
     for condition in active_conditions(state, portrait=portrait):
         visual = condition.get("visual_en") or condition.get("description") or ""
         visual = _text(visual, 180)
         if visual:
             bits.append(visual)
-    return ", ".join(dict.fromkeys(bits))
+    return list(dict.fromkeys(bits))
+
+
+def visual_prompt(state: Any, *, portrait: bool = False) -> str:
+    return ", ".join(visual_marks(state, portrait=portrait))
 
 
 def condition_context(state: Any, *, limit: int = 8) -> str:

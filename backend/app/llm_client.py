@@ -81,8 +81,8 @@ DEFAULT_ROLE_TIMEOUTS = {"choices": 15.0, "chronicle": 150.0, "summary": 60.0,
                          # turn_gate: 3,5 mil tokens de entrada e uns 300 de
                          # resposta levam de 9 a 12 s sozinho. Com a crônica
                          # do turno anterior ainda gerando, a placa divide a
-                         # vazão e ele passa de 15 s; com 15 s de prazo o juiz
-                         # nunca respondeu em produção.
+                         # vazão e ele passa de 15 s. Com 15 s de prazo e
+                         # quatro NPCs na cena o juiz estourava sempre.
                          "turn_check": 12.0, "turn_gate": 25.0}
 
 # Cache de descoberta: (base_url, model_alias) -> id do modelo (ou None)

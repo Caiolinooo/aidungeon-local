@@ -119,7 +119,8 @@ def _story_outfits(names: list[str], passage: str, order: str, *,
         outfit = " ".join(value.split()).strip(" .;,")
         # Nudez não entra por aqui: resposta que fala de corpo nu é descartada
         # inteira, não "limpa" (sobraria "completely" como roupa).
-        if (not outfit or _PT_MARK.search(outfit) or likeness.strip_explicit(outfit) != outfit
+        if (not npc_assets.is_outfit(outfit) or _PT_MARK.search(outfit)
+                or likeness.strip_explicit(outfit) != outfit
                 or re.search(r"(?i)\b(?:nude|naked|bare|underwear|lingerie|topless|undressed)\b",
                              outfit)):
             continue

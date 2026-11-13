@@ -517,9 +517,9 @@ def test_gate_payload_keeps_present_sheet_and_bounds_the_rest(tmp_db, monkeypatc
 
 
 def test_gate_reply_is_short_enough_to_fit_the_deadline():
-    """O juiz levava 28 s contra 15 s de prazo e nunca respondeu em produção:
-    5,2 mil tokens de entrada e 620 de resposta. Duas reações, duas mudanças de
-    relação e fichas cortadas cabem."""
+    """Com quatro NPCs na cena o juiz levava 28 s contra 15 s de prazo: 5,2 mil
+    tokens de entrada e 620 de resposta. Duas reações, duas mudanças de relação
+    e fichas cortadas cabem."""
     assert npc_gate.GATE_MAX_TOKENS <= 450
     assert npc_gate._MAX_REACTIONS == 2 and npc_gate._MAX_RELATION_UPDATES == 2
     long = "frase longa sobre a vida dela " * 60
