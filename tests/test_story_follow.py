@@ -97,7 +97,8 @@ def test_wolf_is_an_animal_in_the_frame_not_another_person():
         "Marina, Bruno, the fairy and the wolf wait by the fire.")
     assert painted is True
     assert "Exactly 3 people and 1 animal" in prompt
-    assert "Every animal has the body of that animal, never a human body" in prompt
+    assert "each animal with its own fur and markings" in prompt
+    assert prompt.count("never a person") == 1        # sem a terceira trava repetida
     assert "Exactly 4 people" not in prompt
     assert "Exactly 5 people" not in prompt
 
@@ -139,11 +140,11 @@ def test_backdrop_paints_the_outfit_the_story_gave(tmp_db):
     assert "Marina Teste: no glasses; now wearing long red dress; chin-length" in prompt
     assert "Bruno Teste: no glasses" in prompt and "Bruno Teste: now wearing" not in prompt
     assert npc_assets.STORY_STATE_NOTE in prompt
-    assert "each with that exact face, hair and age." in prompt
+    assert "each person with that exact face, hair and age." in prompt
     plain, _ = scene._prompt("the cabin", "A wooden cabin.", "cinematic", "night",
                              [looked("Marina Teste"), bruno], "Marina and Bruno wait.")
     assert npc_assets.STORY_STATE_NOTE not in plain
-    assert "each with that exact face, hair and age and clothing." in plain
+    assert "each person with that exact face, hair and age and clothing." in plain
     # cena explícita não recebe a roupa do momento por este caminho
     from app import likeness
     assert "now wearing" not in likeness.opening_clause([marina, bruno], explicit=True)
@@ -473,3 +474,24 @@ def test_a_stuck_post_turn_chain_does_not_hold_the_queue_forever(monkeypatch):
     post_turn_state.begin("adv")
     clock["now"] += 11
     assert post_turn_state.busy() == []
+
+
+def test_backdrop_inside_a_spot_keeps_the_indoor_note_and_no_reference_outfit():
+    """Revisão 5: com a roupa trocada, a guarda pedia "outfit" da referência;
+    a nota de interior caía antes de traços de identidade."""
+    from app import scene_spot
+    marina = _card("Marina Teste", portrait_prompt="A woman",
+                   sheet={"current_outfit": "yellow raincoat over blue jumpsuit",
+                          "reference": {"turnaround": {"master_image_id": "m"}}})
+    lobo = _card("Lobo de Fogo", entry="O Lobo de Fogo é uma criatura mágica.",
+                 portrait_prompt="A majestic fiery wolf")
+    title, entry = scene_spot.place("Floresta", "Árvores de vidro.",
+                                    {"en": "the interior of a cave", "indoor": True})
+    prompt, _ = scene._prompt(title, entry, "cinematic", "night", [marina, lobo],
+                              "Marina e o lobo esperam.")
+    assert scene_spot._INDOOR_NOTE in prompt
+    assert "vidro" not in prompt
+    assert "hair, body, outfit and distinctive" not in prompt
+    assert "each animal with its own fur and markings" in prompt
+    only_wolf, _ = scene._prompt("the cabin", "", "cinematic", "night", [lobo], "O lobo dorme.")
+    assert "and clothing" not in only_wolf

@@ -303,9 +303,15 @@ def _reference_layout_guard(cast: list[dict], *, explicit: bool = False,
                     "is authoritative: follow it even when a reference image shows different "
                     "clothing. " + together
                 )
+            # Roupa trocada pela história: a referência não manda na roupa. Com
+            # "outfit" aqui o modelo voltava à roupa da referência que a linha
+            # "now wearing" acabara de substituir.
+            changed = bool(npc_assets.story_state_note(cast))
             return (
                 "Use the reference images only for the named characters' identity, face, "
-                "hair, body, outfit and distinctive details. " + together
+                + ("hair, body and distinctive details. " if changed
+                   else "hair, body, outfit and distinctive details. ")
+                + together
             )
     return ""
 
@@ -446,6 +452,11 @@ def uncrowded(entry: str) -> str:
     text = re.sub(r"\b([Aa])n (?=[^aeiouAEIOU\W])", r"\1 ", text)
     text = re.sub(r"\b([Aa]) (?=[aeiouAEIOU])", r"\1n ", text)
     return text.strip(" ,;")
+
+
+def _indoor_note() -> str:
+    from app import scene_spot
+    return scene_spot._INDOOR_NOTE
 
 
 def _alone_there(count: int, animals: int = 0) -> str:
@@ -627,17 +638,25 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         # Roupa do momento e marcas visíveis que a história gravou: sem isto o
         # fundo pintava sempre a roupa padrão das referências.
         state_line = npc_assets.story_state_note(cast)
-        animal_lock = "" if not beasts else (
-            "Every animal has the body of that animal, never a human body")
+        # O animal já está dito duas vezes (frase de espécie e linha própria);
+        # uma terceira trava só tirava espaço da aparência de quem é gente.
+        people = len(cast) - beasts
+        keep = (f"each person with that exact face, hair and age"
+                f"{'' if state_line else ' and clothing'}") if people else ""
+        if beasts:
+            keep = ", and ".join(bit for bit in (keep, "each animal with its own fur and markings")
+                                 if bit)
+        # Dentro de um ponto (cabana, caverna) a nota de interior é obrigatória:
+        # como opcional ela caía primeiro e o fundo voltava para fora.
+        indoor = entry if entry == _indoor_note() else ""
         required = [
             sex_line,
             clause,
             headcount,
-            animal_lock,
             state_line,
-            f"wide cinematic shot of {title}, only the characters named above, "
-            f"each with that exact face, hair and age{'' if state_line else ' and clothing'}. "
+            f"wide cinematic shot of {title}, only the characters named above, {keep}. "
             f"{_alone_there(len(cast), beasts)}",
+            indoor,
             f"atmosphere: {atmosphere}",
             layout_guard,
             lock,
@@ -647,11 +666,11 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         ]
         required = [part for part in required if part and str(part).strip()]
         beat_at = sum(
-            1 for part in (sex_line, clause, headcount, animal_lock, state_line)
+            1 for part in (sex_line, clause, headcount, state_line)
             if part and str(part).strip())
         beat = _latest_words(beat, 280)
         text = _fit(required, beat, beat_at,
-                    [reaction, clip_words(uncrowded(entry or ""), 400)],
+                    [reaction, "" if indoor else clip_words(uncrowded(entry or ""), 400)],
                     beat_limit=280, look=clause)
         return text, True
     from app.routes.images import clip_words
