@@ -408,7 +408,7 @@ def test_chronicle_failure_still_runs_mind_xp_and_tick(tmp_db, monkeypatch):
     monkeypatch.setattr(game_engine, "_apply_progression",
                         lambda adventure_id, user: order.append(("xp", user)))
     monkeypatch.setattr("app.npc_life.run_mind",
-                        lambda adventure_id, transport: order.append("mind"))
+                        lambda adventure_id, transport, stop=None: order.append("mind"))
     monkeypatch.setattr(game_engine, "_maybe_auto_tick",
                         lambda adventure_id: order.append("tick"))
     monkeypatch.setattr(game_engine, "_maybe_update_memory",

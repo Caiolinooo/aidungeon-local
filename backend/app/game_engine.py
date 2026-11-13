@@ -369,7 +369,7 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
                     ("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel)),
                     ("consequences", lambda: _evaluate_consequences(adventure_id, transport, stop)),
                     ("progression", lambda: _apply_progression(adventure_id, user)),
-                    ("mind", lambda: npc_life.run_mind(adventure_id, transport)),
+                    ("mind", lambda: npc_life.run_mind(adventure_id, transport, stop)),
                     ("tick", lambda: _maybe_auto_tick(adventure_id)),
                 )
                 for label, step in steps:
@@ -403,13 +403,13 @@ def _finish_post_turn(adventure_id: str, cancel: threading.Event) -> None:
 def stop_post_turn(adventure_id: str) -> None:
     """Undo: o pós-turno do turno desfeito para no próximo passo e não grava
     o que estava esperando do LLM."""
+    # Sob a trava: um turno novo que troca os eventos no meio não fica com o
+    # undo marcado no evento velho.
     with _post_turn_guard:
-        stop = _post_turn_stops.get(adventure_id)
-        cancel = _post_turn_cancels.get(adventure_id)
-    if stop is not None:
-        stop.set()
-    if cancel is not None:
-        cancel.set()
+        for events in (_post_turn_stops, _post_turn_cancels):
+            event = events.get(adventure_id)
+            if event is not None:
+                event.set()
     choices_service.cancel(adventure_id)
 
 
@@ -428,9 +428,11 @@ def forget_adventure(adventure_id: str) -> None:
     """Aventura apagada: pós-turno cancelado, choices e eventos descartados."""
     with _post_turn_guard:
         cancel = _post_turn_cancels.pop(adventure_id, None)
+        stop = _post_turn_stops.pop(adventure_id, None)
     post_turn_state.end(adventure_id)
-    if cancel is not None:
-        cancel.set()
+    for event in (cancel, stop):
+        if event is not None:
+            event.set()
     choices_service.forget(adventure_id)
     events_bus.forget(adventure_id)
 

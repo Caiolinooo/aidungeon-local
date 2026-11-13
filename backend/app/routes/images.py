@@ -621,13 +621,17 @@ _EN_FUNCTION = frozenset(
 
 
 def _mostly_portuguese(text: str) -> bool:
-    """Frase sem acento ainda pode ser português ("Marina segura a lanterna
-    acesa"): mais palavras de ligação do português que do inglês."""
-    # Palavra com maiúscula é nome ("Dona Ana", "Rio") e fica de fora.
-    words = [word for word in re.findall(r"[A-Za-z]+", text or "") if not word[0].isupper()]
+    """Frase sem acento ainda pode ser português ("Bruno corre pelo mato"):
+    mais palavras de ligação do português que do inglês. Frase sem nenhuma
+    ("Marina segura a lanterna acesa") não dá para decidir e fica."""
+    found = re.findall(r"[A-Za-z]+", text or "")
+    # Palavra com maiúscula no meio da frase é nome ("Dona Ana", "Rio"); a
+    # primeira conta em minúscula ("Eles seguem juntos").
+    words = [word.lower() for index, word in enumerate(found)
+             if index == 0 or not word[0].isupper()]
     pt = sum(1 for word in words if word in _PT_FUNCTION and word not in _EN_FUNCTION)
     en = sum(1 for word in words if word in _EN_FUNCTION and word not in _PT_FUNCTION)
-    return pt >= 2 and pt > en
+    return pt > en
 
 
 def one_image_sentence(text: str) -> str:

@@ -222,7 +222,7 @@ def _apply_mind_item(conn, adventure_id: str, card: dict, item: dict, *,
         log.warning("npc_life: retrato não sincronizado", exc_info=True)
 
 
-def run_mind(adventure_id: str, transport: Any = None) -> dict:
+def run_mind(adventure_id: str, transport: Any = None, stop=None) -> dict:
     """Um passe de mente. Erro de LLM ou JSON é logado e engolido."""
     try:
         with db.session() as conn:
@@ -251,6 +251,9 @@ def run_mind(adventure_id: str, transport: Any = None) -> dict:
         if not isinstance(items, list):
             raise ValueError("resposta sem characters")
         updated = 0
+        # Turno desfeito enquanto o LLM pensava: a mente é de um trecho que sumiu.
+        if stop is not None and stop.is_set():
+            return {"updated": 0}
         with db.session() as conn:
             fresh = [
                 card for card in db.list_cards(conn, adventure_id)

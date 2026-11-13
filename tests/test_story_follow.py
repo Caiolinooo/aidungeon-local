@@ -510,3 +510,9 @@ def test_english_with_names_is_not_taken_for_portuguese():
     for text in ("Marina watches as Rio sleeps.", "Dona Ana smiles as Rio kneels.",
                  "Sao Paulo glows as Rio sleeps.", "Dona Ana de Souza kneels."):
         assert images.one_image_sentence(text) == text, text
+
+
+def test_unaccented_portuguese_with_a_function_word_is_dropped():
+    """Revisão 8."""
+    assert images.one_image_sentence("Bruno corre pelo mato.") == ""
+    assert images.one_image_sentence("Eles seguem juntos.") == ""
