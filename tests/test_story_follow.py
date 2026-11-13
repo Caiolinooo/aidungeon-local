@@ -501,5 +501,5 @@ def test_a_portuguese_only_sentence_is_dropped():
     """Revisão 6: sem frase em inglês, a primeira em português ia para o prompt."""
     assert images.one_image_sentence("Dick e Marina entram na cabana.") == ""
     assert images.one_image_sentence("Bruno está sentado no banco.") == ""
-    assert images.one_image_sentence("Marina segura a lanterna. Marina holds the lantern.") \
+    assert images.one_image_sentence("Marina está com a lanterna. Marina holds the lantern.") \
         == "Marina holds the lantern."
