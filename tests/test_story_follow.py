@@ -97,7 +97,7 @@ def test_wolf_is_an_animal_in_the_frame_not_another_person():
         "Marina, Bruno, the fairy and the wolf wait by the fire.")
     assert painted is True
     assert "Exactly 3 people and 1 animal" in prompt
-    assert "each animal with its own fur and markings" in prompt
+    assert "each animal with its own natural coat and markings" in prompt
     assert prompt.count("never a person") == 1        # sem a terceira trava repetida
     assert "Exactly 4 people" not in prompt
     assert "Exactly 5 people" not in prompt
@@ -492,7 +492,7 @@ def test_backdrop_inside_a_spot_keeps_the_indoor_note_and_no_reference_outfit():
     assert scene_spot._INDOOR_NOTE in prompt
     assert "vidro" not in prompt
     assert "hair, body, outfit and distinctive" not in prompt
-    assert "each animal with its own fur and markings" in prompt
+    assert "each animal with its own natural coat and markings" in prompt
     only_wolf, _ = scene._prompt("the cabin", "", "cinematic", "night", [lobo], "O lobo dorme.")
     assert "and clothing" not in only_wolf
 
@@ -503,3 +503,10 @@ def test_a_portuguese_only_sentence_is_dropped():
     assert images.one_image_sentence("Bruno está sentado no banco.") == ""
     assert images.one_image_sentence("Marina está com a lanterna. Marina holds the lantern.") \
         == "Marina holds the lantern."
+
+
+def test_english_with_names_is_not_taken_for_portuguese():
+    """Revisão 7: "as" e nomes próprios faziam inglês parecer português."""
+    for text in ("Marina watches as Rio sleeps.", "Dona Ana smiles as Rio kneels.",
+                 "Sao Paulo glows as Rio sleeps.", "Dona Ana de Souza kneels."):
+        assert images.one_image_sentence(text) == text, text

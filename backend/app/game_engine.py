@@ -88,6 +88,7 @@ _locks: dict[str, threading.Lock] = {}
 _post_turn_guard = threading.Lock()
 _post_turn_locks: dict[str, threading.Lock] = {}
 _post_turn_cancels: dict[str, threading.Event] = {}
+_post_turn_stops: dict[str, threading.Event] = {}
 # Jogador rápido não pode deixar o resumo parado para sempre: depois de tantos
 # passes adiados seguidos, a ação nova deixa o summary terminar.
 _MAX_SUMMARY_DEFERRALS = 2
@@ -253,7 +254,8 @@ def _prime_memory_query(adventure_id: str) -> None:
             query_chars=int(mem_cfg.get("query_chars", mod.DEFAULT_QUERY_CHARS)))
     except Exception:
         pass
-def _evaluate_consequences(adventure_id: str, transport: Any = None) -> None:
+def _evaluate_consequences(adventure_id: str, transport: Any = None,
+                           stop: threading.Event | None = None) -> None:
     """Registra magia, percepção e fatos sociais do último trecho canônico."""
     try:
         from app import consequences
@@ -274,6 +276,10 @@ def _evaluate_consequences(adventure_id: str, transport: Any = None) -> None:
             llm_cfg, passage, cards, adventure, transport=transport,
         )
         with db.session() as conn:
+            # Turno desfeito enquanto o LLM respondia: o resultado é de um
+            # trecho que não existe mais.
+            if stop is not None and stop.is_set():
+                return
             consequences.apply_evaluation(conn, adventure_id, evaluation)
     except Exception:
         log.warning("consequences: avaliação falhou", exc_info=True)
@@ -346,8 +352,12 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
         return
     choices_service.start(adventure_id, transport=transport)
     cancel = threading.Event()
+    # `stop`: o turno foi desfeito. Diferente de `cancel` (ação nova, que só
+    # adia o summary), nada mais deste pós-turno pode gravar.
+    stop = threading.Event()
     with _post_turn_guard:
         _post_turn_cancels[adventure_id] = cancel
+        _post_turn_stops[adventure_id] = stop
     post_turn_state.begin(adventure_id)
 
     def _bg() -> None:
@@ -355,12 +365,18 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
         # aventura segura (post_turn_state) até o teto.
         try:
             with _post_turn_lock_for(adventure_id):
-                _guard_post("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel))
-                _guard_post("consequences", lambda: _evaluate_consequences(adventure_id, transport))
-                _guard_post("progression", lambda: _apply_progression(adventure_id, user))
-                _guard_post("mind", lambda: npc_life.run_mind(adventure_id, transport))
-                _guard_post("tick", lambda: _maybe_auto_tick(adventure_id))
-                if not cancel.is_set():
+                steps = (
+                    ("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel)),
+                    ("consequences", lambda: _evaluate_consequences(adventure_id, transport, stop)),
+                    ("progression", lambda: _apply_progression(adventure_id, user)),
+                    ("mind", lambda: npc_life.run_mind(adventure_id, transport)),
+                    ("tick", lambda: _maybe_auto_tick(adventure_id)),
+                )
+                for label, step in steps:
+                    if stop.is_set():
+                        return
+                    _guard_post(label, step)
+                if not cancel.is_set() and not stop.is_set():
                     _maybe_update_memory(adventure_id, cancel)
         finally:
             _finish_post_turn(adventure_id, cancel)
@@ -374,6 +390,7 @@ def _finish_post_turn(adventure_id: str, cancel: threading.Event) -> None:
     with _post_turn_guard:
         if _post_turn_cancels.get(adventure_id) is cancel:
             del _post_turn_cancels[adventure_id]
+            _post_turn_stops.pop(adventure_id, None)
             # Só o pós-turno mais recente libera a fila: o de um turno antigo
             # que termina não solta os jobs enquanto o novo ainda roda.
             post_turn_state.end(adventure_id)
@@ -381,6 +398,19 @@ def _finish_post_turn(adventure_id: str, cancel: threading.Event) -> None:
             _summary_deferrals[adventure_id] = _summary_deferrals.get(adventure_id, 0) + 1
         else:
             _summary_deferrals.pop(adventure_id, None)
+
+
+def stop_post_turn(adventure_id: str) -> None:
+    """Undo: o pós-turno do turno desfeito para no próximo passo e não grava
+    o que estava esperando do LLM."""
+    with _post_turn_guard:
+        stop = _post_turn_stops.get(adventure_id)
+        cancel = _post_turn_cancels.get(adventure_id)
+    if stop is not None:
+        stop.set()
+    if cancel is not None:
+        cancel.set()
+    choices_service.cancel(adventure_id)
 
 
 def cancel_post_turn(adventure_id: str) -> None:
@@ -1393,7 +1423,7 @@ def handle_undo(adventure_id: str) -> dict:
     """POST /undo: remove o último turno; nunca remove a action `start`."""
     # O pós-turno do turno desfeito não pode gravar consequências, XP e mente
     # depois da restauração (a crônica já se descartava sozinha como velha).
-    cancel_post_turn(adventure_id)
+    stop_post_turn(adventure_id)
     with appending(adventure_id) as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")

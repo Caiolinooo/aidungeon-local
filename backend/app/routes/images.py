@@ -610,9 +610,11 @@ def clip_words(text: str, limit: int) -> str:
 _PT_MARK = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
 
 
+# "as", "a", "de", "se" também aparecem em inglês e em nomes ("Dona Ana de
+# Souza", "watches as Rio sleeps"): não contam.
 _PT_FUNCTION = frozenset(
-    "a o as os um uma uns umas de da do das dos na no nas nos em com para pelo pela "
-    "que se seu sua seus suas ele ela eles elas e mas nao sobre entre ao aos".split())
+    "o os um uma uns umas da do das dos na no nas nos em com para pelo pela "
+    "que seu sua seus suas ele ela eles elas e mas nao sobre entre ao aos esta".split())
 _EN_FUNCTION = frozenset(
     "the a an of in on at with to for by and but his her their its is are was were "
     "he she they it from into over".split())
@@ -621,10 +623,11 @@ _EN_FUNCTION = frozenset(
 def _mostly_portuguese(text: str) -> bool:
     """Frase sem acento ainda pode ser português ("Marina segura a lanterna
     acesa"): mais palavras de ligação do português que do inglês."""
-    words = re.findall(r"[a-zA-Z]+", (text or "").lower())
+    # Palavra com maiúscula é nome ("Dona Ana", "Rio") e fica de fora.
+    words = [word for word in re.findall(r"[A-Za-z]+", text or "") if not word[0].isupper()]
     pt = sum(1 for word in words if word in _PT_FUNCTION and word not in _EN_FUNCTION)
     en = sum(1 for word in words if word in _EN_FUNCTION and word not in _PT_FUNCTION)
-    return pt > en
+    return pt >= 2 and pt > en
 
 
 def one_image_sentence(text: str) -> str:

@@ -144,3 +144,31 @@ def test_an_existing_place_does_not_gain_a_characters_name_as_trigger(tmp_db):
             "location", set()) == "updated"
         card = next(c for c in db.list_cards(conn, adv["id"]) if c["title"] == "Taverna")
     assert "Marina" not in card["triggers"]
+
+
+def test_undo_stops_the_post_turn_chain_from_writing(monkeypatch):
+    """Revisão 7: depois do undo as consequências do turno desfeito ainda eram gravadas."""
+    import threading
+    from app import consequences, game_engine
+
+    applied = []
+    stop = threading.Event()
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(game_engine.db, "get_adventure", lambda conn, adv: {"id": adv})
+    monkeypatch.setattr(game_engine.db, "list_actions",
+                        lambda conn, adv: [{"type": "continue", "text": "Algo acontece."}])
+    monkeypatch.setattr(game_engine.db, "list_cards", lambda conn, adv: [])
+    monkeypatch.setattr(game_engine.settings_store, "effective_llm_settings", lambda conn: {})
+
+    def evaluate(*args, **kwargs):
+        stop.set()                      # o undo chega enquanto o LLM responde
+        return {"effects": []}
+
+    monkeypatch.setattr(consequences, "evaluate_passage", evaluate)
+    monkeypatch.setattr(consequences, "apply_evaluation", lambda *a, **k: applied.append(a))
+    game_engine._evaluate_consequences("adv", None, stop)
+    assert applied == []

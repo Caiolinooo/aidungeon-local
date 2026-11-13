@@ -644,7 +644,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         keep = (f"each person with that exact face, hair and age"
                 f"{'' if state_line else ' and clothing'}") if people else ""
         if beasts:
-            keep = ", and ".join(bit for bit in (keep, "each animal with its own fur and markings")
+            keep = ", and ".join(bit for bit in (keep, "each animal with its own natural coat and markings")
                                  if bit)
         # Dentro de um ponto (cabana, caverna) a nota de interior é obrigatória:
         # como opcional ela caía primeiro e o fundo voltava para fora.
