@@ -20,8 +20,10 @@ _busy: dict[str, float] = {}
 
 
 def begin(adventure_id: str) -> None:
+    """O relógio conta do primeiro turno da sequência: quem joga um turno por
+    minuto não renova a espera para sempre, e a cada `HOLD_S` a fila anda."""
     with _lock:
-        _busy[str(adventure_id)] = time.monotonic()
+        _busy.setdefault(str(adventure_id), time.monotonic())
 
 
 def end(adventure_id: str) -> None:

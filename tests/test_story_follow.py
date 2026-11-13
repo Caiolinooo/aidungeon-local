@@ -468,5 +468,8 @@ def test_a_stuck_post_turn_chain_does_not_hold_the_queue_forever(monkeypatch):
     monkeypatch.setattr(post_turn_state.time, "monotonic", lambda: clock["now"])
     post_turn_state.begin("adv")
     assert post_turn_state.busy() == ["adv"]
-    clock["now"] += post_turn_state.HOLD_S + 1
+    # turnos seguidos não renovam a espera: o relógio conta do primeiro
+    clock["now"] += post_turn_state.HOLD_S - 10
+    post_turn_state.begin("adv")
+    clock["now"] += 11
     assert post_turn_state.busy() == []
