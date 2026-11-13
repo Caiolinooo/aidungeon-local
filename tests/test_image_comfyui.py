@@ -935,3 +935,30 @@ def test_identity_check_is_skipped_without_the_recognizer(monkeypatch, tmp_path)
         assert face_regions.repeated_person(b"not an image", [b"a", b"b"]) is None
     # uma referência só não tem com quem repetir
     assert face_regions.repeated_person(b"x", [b"a"]) is None
+
+
+def test_after_a_repeat_only_a_full_cast_is_accepted(monkeypatch):
+    """Revisão: quatro rostos com um repetido perdiam para três rostos
+    distintos — trocava um erro por outro."""
+    from app import face_regions
+
+    faces = {b"first": 4, b"paint-1": 3, b"paint-2": 4}
+    painted = []
+
+    def fake_generate(cfg, client, prompt, width, height, *, reference_images, progress):
+        painted.append(cfg.get("seed"))
+        return f"paint-{len(painted)}".encode(), width, height
+
+    monkeypatch.setattr(image_client, "_generate_comfyui", fake_generate)
+    monkeypatch.setattr(face_regions, "count_main_faces", lambda content, expected: faces[content])
+    monkeypatch.setattr(face_regions, "repeated_person",
+                        lambda content, references: content == b"first")
+    out = image_client._without_extra_people(
+        {"seed": 1}, None, "prompt", 1344, 768, b"first", 4, [b"a", b"b", b"c", b"d"], None)
+    assert out == b"paint-2" and len(painted) == 2
+    # sem repetição nenhuma, um rosto a menos não pede nova pintura
+    painted.clear()
+    monkeypatch.setattr(face_regions, "repeated_person", lambda content, references: False)
+    assert image_client._without_extra_people(
+        {"seed": 1}, None, "prompt", 1344, 768, b"paint-1", 4, [b"a", b"b"], None) == b"paint-1"
+    assert painted == []

@@ -1669,7 +1669,10 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         image_id=image_id, transport=transport,
         width=_BACKDROP_WIDTH, height=_BACKDROP_HEIGHT,
         negative_extra=ban, reference_images=references or None,
-        expected_people=int(payload.get("expected_people") or 0) or None,
+        # Com gente no fundo o zero vale (elenco só de animais); sem gente,
+        # não há elenco para conferir.
+        expected_people=(int(payload.get("expected_people") or 0)
+                         if payload.get("include_people") else None),
         progress=_generation_progress(job, transport, watch_cancel=False),
     )
     try:

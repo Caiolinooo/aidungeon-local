@@ -151,3 +151,33 @@ def test_a_refused_bedroom_is_not_painted():
     assessment = world_facts.assess({"plot_essentials": "[Name: Caio]"}, actions, cards, [])
     assert scene_spot.current({}, actions, cards, location="The Yard",
                               assessment=assessment) is None
+
+
+def test_the_same_spot_confirmed_later_advances_the_record(tmp_db):
+    """Revisão: "saem da cabana e depois voltam para perto da lareira" era
+    relido a partir do registro antigo e a cena saía da cabana."""
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    cabin = {"en": "the interior of a small wooden cabin", "indoor": True}
+    with db.session() as conn:
+        assert scene_spot.store(conn, adv["id"], cabin, seq=2, location="Floresta") is True
+        assert scene_spot.store(conn, adv["id"], cabin, seq=4, location="Floresta") is True
+        assert scene_spot.store(conn, adv["id"], cabin, seq=4, location="Floresta") is False
+        adventure = db.get_adventure(conn, adv["id"])
+    story = _canon("a", "b", "Entram na cabana.", "c",
+                   "Eles saem da cabana. Mais tarde voltam aos seus lugares junto à lareira.")
+    assert scene_spot.current(adventure, story, [FOREST], location="Floresta")["en"] == cabin["en"]
+
+
+def test_the_panel_cannot_erase_the_scene_spot(client):
+    """Revisão: o painel salva o estado inteiro que carregou; um PUT com o
+    estado antigo apagava o ponto gravado pelo registro pós-turno."""
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        scene_spot.store(conn, adv["id"], {"en": "the interior of a cave", "indoor": True},
+                         seq=3, location="Floresta")
+    resp = client.put(f"/api/adventures/{adv['id']}/ui-state",
+                      json={"state": {"hud": [], "scene_spot": {"en": "forged", "seq": 99}}})
+    assert resp.status_code == 200, resp.text
+    with db.session() as conn:
+        stored = scene_spot.stored(db.get_adventure(conn, adv["id"]))
+    assert stored["en"] == "the interior of a cave" and stored["seq"] == 3

@@ -20,6 +20,7 @@ adjudicador só descreve consequências físicas no `outcome`/`cue`.
 from __future__ import annotations
 
 import json
+import time
 import logging
 import re
 from typing import Any
@@ -397,6 +398,7 @@ def _neutral_decision(payload: dict) -> dict:
 
 def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX_TOKENS,
           cancel=None) -> dict | None:
+    started = time.monotonic()
     try:
         raw = llm_client.chat_completion(
             llm_client.role_config(llm_cfg, "turn_gate"),
@@ -466,12 +468,46 @@ def _call(llm_cfg: dict, payload: dict, transport, *, max_tokens: int = GATE_MAX
     try:
         data = npc_assets._extract_json(raw)
     except Exception:
-        if max_tokens == GATE_MAX_TOKENS:
+        # Cortada no teto de tokens: decisão, desfecho e deixa vêm primeiro no
+        # JSON e quase sempre chegaram inteiros. Uma segunda chamada de 900
+        # tokens dobrava a espera do turno (até uns 50 s).
+        saved = _salvage(raw)
+        if saved is not None:
+            return saved
+        budget = llm_client.role_timeout(llm_client.role_config(llm_cfg, "turn_gate"), "turn_gate")
+        if max_tokens == GATE_MAX_TOKENS and time.monotonic() - started < budget / 2:
             return _call(llm_cfg, payload, transport, max_tokens=900,
                          cancel=cancel)
         log.warning("npc_gate: resposta sem JSON: %r", (raw or "")[:300])
         return None
     return data if isinstance(data, dict) else None
+
+
+def _salvage(raw: str) -> dict | None:
+    """O que veio completo de uma resposta cortada, se já decide o turno."""
+    from app import consequences
+    data = None
+    try:
+        start = (raw or "").index("{")
+        data = json.loads(consequences._close_truncated(raw[start:]))
+    except (ValueError, TypeError):
+        data = None
+    if not isinstance(data, dict):
+        # Cortada antes de fechar o primeiro objeto das listas: os três campos
+        # do começo ainda estão inteiros no texto.
+        data = {"reactions": [], "initiative": None, "relation_updates": []}
+        for key in ("decision", "outcome", "cue"):
+            found = re.search(rf'"{key}"\s*:\s*("(?:[^"\\]|\\.)*")', raw or "")
+            if found:
+                try:
+                    data[key] = json.loads(found.group(1))
+                except ValueError:
+                    pass
+    if data.get("decision") not in DECISIONS:
+        return None
+    if not (str(data.get("outcome") or "").strip() or str(data.get("cue") or "").strip()):
+        return None
+    return data
 
 
 def _payload(conn, adventure_id: str, text: str, user: str) -> tuple[dict, list[dict]] | None:
@@ -628,15 +664,27 @@ def _relation_ids(raw, people: list[dict], player: dict) -> list:
     jogador vira "player". Um id já certo passa como veio."""
     if not isinstance(raw, list):
         return []
-    by_alias: dict[str, str] = {}
+    def norm(value) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    # Nome exato primeiro; apelido só quando é de um cartão só. Com "Ana
+    # Silva" e "Ana" na cena, o apelido "ana" da primeira roubava a mudança
+    # de relação da segunda.
+    titles: dict[str, list[str]] = {}
+    aliases: dict[str, set[str]] = {}
     for person in people:
         card_id = str(person.get("card_id") or "")
         if not card_id:
             continue
-        for alias in (person.get("name"), *(person.get("aliases") or [])):
-            key = " ".join(str(alias or "").split()).casefold()
-            if key:
-                by_alias.setdefault(key, card_id)
+        titles.setdefault(norm(person.get("name")), []).append(card_id)
+        for alias in person.get("aliases") or []:
+            if norm(alias):
+                aliases.setdefault(norm(alias), set()).add(card_id)
+    by_alias = {key: next(iter(ids)) for key, ids in aliases.items() if len(ids) == 1}
+    by_alias.update({key: ids[0] for key, ids in titles.items() if key and len(ids) == 1})
+    for key, ids in titles.items():
+        if len(ids) > 1:
+            by_alias.pop(key, None)       # dois cartões com o mesmo nome: não adivinha
     player_name = " ".join(str(player.get("name") or "").split()).casefold()
     fixed = []
     for item in raw:
@@ -656,7 +704,14 @@ def _relation_ids(raw, people: list[dict], player: dict) -> list:
 
 def _normalize_payload(data: dict | None, payload: dict) -> dict | None:
     names = [item for item in (payload.get("people") or []) if item.get("name")]
-    by_name = {str(item.get("name")).casefold(): item for item in names}
+    # Sem o id na reação, dois cartões com o mesmo nome não se distinguem: a
+    # reação de um ia para a memória do outro. Nome repetido fica sem dono.
+    counted: dict[str, int] = {}
+    for item in names:
+        key = str(item.get("name")).casefold()
+        counted[key] = counted.get(key, 0) + 1
+    by_name = {str(item.get("name")).casefold(): item for item in names
+               if counted[str(item.get("name")).casefold()] == 1}
     by_id = {item.get("card_id"): item for item in names if item.get("card_id")}
     if not isinstance(data, dict):
         return None

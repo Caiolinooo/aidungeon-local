@@ -573,3 +573,45 @@ def test_gate_payload_keeps_the_player_action(tmp_db, monkeypatch):
     assert payload["action"] == "Eu cumprimento Elara."
     assert payload["language"].startswith("pt-BR")
     assert [item["text"] for item in roster[0]["memories"]] == ["Elara lembra da ponte."]
+
+
+def test_exact_name_wins_over_a_shared_alias():
+    """Revisão: com "Ana Silva" e "Ana" na cena, o apelido "ana" da primeira
+    levava a mudança de relação da segunda."""
+    people = [{"name": "Ana Silva", "card_id": "a1", "aliases": ["Ana Silva", "Ana"]},
+              {"name": "Ana", "card_id": "a2", "aliases": ["Ana"]},
+              {"name": "Bruno Teste", "card_id": "b1", "aliases": ["Bruno Teste", "Bruno"]}]
+    fixed = npc_gate._relation_ids([
+        {"card_id": "Ana", "target": "player"},
+        {"card_id": "Ana Silva", "target": "Bruno"},
+    ], people, {"name": "Dick"})
+    assert [(item["card_id"], item["target"]) for item in fixed] == [("a2", "player"), ("a1", "b1")]
+    # dois cartões com o mesmo nome: não adivinha
+    twins = [{"name": "Alex", "card_id": "x1", "aliases": ["Alex"]},
+             {"name": "Alex", "card_id": "x2", "aliases": ["Alex"]}]
+    assert npc_gate._relation_ids([{"card_id": "Alex", "target": "player"}], twins, {})[0][
+        "card_id"] == "Alex"
+    payload = {"people": twins, "action": "olho para eles", "player": {}}
+    result = npc_gate._normalize_payload({
+        "decision": "allow", "outcome": "Eles olham de volta.", "cue": "Segue.",
+        "reactions": [{"npc": "Alex", "reaction": "Sorri.", "line": "", "emotion": "joy",
+                       "pose": "de pé"}],
+        "initiative": None, "relation_updates": []}, payload)
+    assert result["reactions"] == []          # sem dono certo, a reação não vai para ninguém
+
+
+def test_a_truncated_reply_is_used_when_it_already_decides(monkeypatch):
+    """Revisão: a segunda chamada de 900 tokens dobrava a espera do turno."""
+    calls = []
+
+    def fake_chat(*args, **kwargs):
+        calls.append(kwargs["max_tokens"])
+        return ('{"decision":"partial","outcome":"Marina hesita.","cue":"Ela não entrega tudo.",'
+                '"reactions":[{"npc":"Marina Teste","reaction":"Recua um passo.","line":"Ainda n')
+
+    monkeypatch.setattr(npc_gate.llm_client, "chat_completion", fake_chat)
+    result = npc_gate._call({}, {"action": "peço a lanterna"}, None)
+    assert calls == [npc_gate.GATE_MAX_TOKENS]
+    assert result["decision"] == "partial" and result["cue"] == "Ela não entrega tudo."
+    assert npc_gate._salvage('{"decision":"allow","reactions":[') is None      # ainda não decide
+    assert npc_gate._salvage("sem json") is None

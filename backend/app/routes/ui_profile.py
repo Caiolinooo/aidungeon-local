@@ -248,6 +248,10 @@ def get_ui_profile(adventure_id: str,
         return {"profile": profile, "state": _visible_ui_state(adv, info.user, adv["ui_state"])}
 
 
+# Chaves de `ui_state` que só o servidor escreve.
+_SERVER_KEYS = ("scene_spot",)
+
+
 @router.put("/{adventure_id}/ui-state")
 def put_ui_state(adventure_id: str, body: UiStateIn,
                  info: auth.AuthInfo = Depends(auth.require_auth)) -> dict:
@@ -260,8 +264,16 @@ def put_ui_state(adventure_id: str, body: UiStateIn,
         if not adv:
             raise GameError.not_found(f"adventure {adventure_id} not found")
         state = dict(body.state)
+        stored = adv.get("ui_state") if isinstance(adv.get("ui_state"), dict) else {}
+        # O painel manda o estado inteiro que carregou; o que o servidor grava
+        # no meio do caminho (ponto da cena, do registro pós-turno) não pode
+        # ser apagado nem voltar a uma versão antiga por esse PUT.
+        for key in _SERVER_KEYS:
+            if key in stored:
+                state[key] = stored[key]
+            else:
+                state.pop(key, None)
         if not db.is_adventure_owner(adv, info.user):
-            stored = adv.get("ui_state") if isinstance(adv.get("ui_state"), dict) else {}
             if "private_facts" in stored:
                 state["private_facts"] = stored["private_facts"]
             else:

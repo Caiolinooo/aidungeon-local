@@ -989,6 +989,7 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
     from app import face_regions
 
     best, best_score = content, None
+    doubled = False
     for attempt in range(_HEADCOUNT_RETRIES + 1):
         if attempt:
             retry_cfg = dict(cfg)
@@ -1002,7 +1003,13 @@ def _without_extra_people(cfg: dict, client: httpx.Client, prompt: str, width: i
             return best
         extra = max(0, found - expected)
         repeated = bool(face_regions.repeated_person(content, references)) if expected > 1 else False
-        score = extra + (1 if repeated else 0)
+        doubled = doubled or repeated
+        # Depois de um personagem repetido, a pintura seguinte só serve com o
+        # elenco inteiro: três rostos distintos no lugar de quatro trocava um
+        # erro por outro. Sem repetição, rosto a menos não conta (pode ser só
+        # alguém de costas).
+        missing = max(0, expected - found) if doubled else 0
+        score = extra + missing + (1 if repeated else 0)
         if best_score is None or score < best_score:
             best, best_score = content, score
         if not score:
@@ -1886,13 +1893,16 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 cfg, client, prompt, width, height,
                 init_image=init_image, reference_images=refs,
                 progress=progress)
-            if expected_people and refs and init_image is None:
+            # Zero é um número: elenco só de animais não espera rosto humano
+            # nenhum, e um humano pintado ao lado do lobo é gente a mais.
+            if expected_people is not None and refs and init_image is None:
                 content = _without_extra_people(
                     cfg, client, prompt, width, height, content, int(expected_people),
                     refs, progress)
-                content = _without_bystanders(
-                    cfg, client, width, height, content, int(expected_people), refs,
-                    progress)
+                if int(expected_people) > 0:
+                    content = _without_bystanders(
+                        cfg, client, width, height, content, int(expected_people), refs,
+                        progress)
         elif init_image is not None:
             if provider == "sdwebui":
                 content, width, height = _generate_sdwebui_img2img(

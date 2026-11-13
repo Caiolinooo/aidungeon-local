@@ -265,7 +265,11 @@ def store(conn, adventure_id: str, spot: dict | None, *, seq: int | None,
     before = state.get(KEY) if isinstance(state.get(KEY), dict) else None
     if before is None and not entry["en"]:
         return False
-    if before and all(before.get(key) == entry[key] for key in ("en", "indoor", "location")):
+    # O seq entra na comparação: o mesmo ponto confirmado num turno mais novo
+    # avança o registro. Sem isso, "saem da cabana e depois voltam para perto
+    # da lareira" era relido a partir do registro antigo e a cena saía de lá.
+    if before and all(before.get(key) == entry[key]
+                      for key in ("en", "indoor", "location", "seq")):
         return False
     db.update_adventure_ui_state(conn, adventure_id, {**state, KEY: entry})
     return True
