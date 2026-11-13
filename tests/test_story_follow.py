@@ -495,3 +495,11 @@ def test_backdrop_inside_a_spot_keeps_the_indoor_note_and_no_reference_outfit():
     assert "each animal with its own fur and markings" in prompt
     only_wolf, _ = scene._prompt("the cabin", "", "cinematic", "night", [lobo], "O lobo dorme.")
     assert "and clothing" not in only_wolf
+
+
+def test_a_portuguese_only_sentence_is_dropped():
+    """Revisão 6: sem frase em inglês, a primeira em português ia para o prompt."""
+    assert images.one_image_sentence("Dick e Marina entram na cabana.") == ""
+    assert images.one_image_sentence("Bruno está sentado no banco.") == ""
+    assert images.one_image_sentence("Marina segura a lanterna. Marina holds the lantern.") \
+        == "Marina holds the lantern."

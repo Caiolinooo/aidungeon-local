@@ -1391,6 +1391,9 @@ def _restore_body_from_action(conn, adventure_id: str, action: dict | None) -> i
 # ------------------------------------------------------------------ undo
 def handle_undo(adventure_id: str) -> dict:
     """POST /undo: remove o último turno; nunca remove a action `start`."""
+    # O pós-turno do turno desfeito não pode gravar consequências, XP e mente
+    # depois da restauração (a crônica já se descartava sozinha como velha).
+    cancel_post_turn(adventure_id)
     with appending(adventure_id) as conn:
         if not db.get_adventure(conn, adventure_id):
             raise GameError.not_found(f"adventure {adventure_id} not found")

@@ -610,6 +610,23 @@ def clip_words(text: str, limit: int) -> str:
 _PT_MARK = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
 
 
+_PT_FUNCTION = frozenset(
+    "a o as os um uma uns umas de da do das dos na no nas nos em com para pelo pela "
+    "que se seu sua seus suas ele ela eles elas e mas nao sobre entre ao aos".split())
+_EN_FUNCTION = frozenset(
+    "the a an of in on at with to for by and but his her their its is are was were "
+    "he she they it from into over".split())
+
+
+def _mostly_portuguese(text: str) -> bool:
+    """Frase sem acento ainda pode ser português ("Marina segura a lanterna
+    acesa"): mais palavras de ligação do português que do inglês."""
+    words = re.findall(r"[a-zA-Z]+", (text or "").lower())
+    pt = sum(1 for word in words if word in _PT_FUNCTION and word not in _EN_FUNCTION)
+    en = sum(1 for word in words if word in _EN_FUNCTION and word not in _PT_FUNCTION)
+    return pt > en
+
+
 def one_image_sentence(text: str) -> str:
     """A primeira frase em inglês do resumo. O resto (entry, segunda frase) sai."""
     flat = " ".join((text or "").replace("\n", " ").split()).strip().strip('"')
@@ -619,9 +636,13 @@ def one_image_sentence(text: str) -> str:
     parts = [part.strip() for part in re.findall(r"[^.!?]+[.!?]?", flat) if part.strip()]
     if not parts:
         return ""
-    english = [part for part in parts if not _PT_MARK.search(part)]
-    chosen = english[0] if english else parts[0]
-    return clip_words(chosen, 280)
+    english = [part for part in parts
+               if not _PT_MARK.search(part) and not _mostly_portuguese(part)]
+    if not english:
+        # Só português: melhor sem frase (o pedido e o lugar já vão em inglês)
+        # do que palavras que o modelo de imagem não entende.
+        return ""
+    return clip_words(english[0], 280)
 
 
 def _dedupe_negative(*parts: str) -> str:
@@ -1245,6 +1266,11 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         state_line = npc_assets.story_state_note(frame)
         if state_line:
             lead_bits.append(state_line)
+            # A referência fica para rosto, cabelo e corpo; sem esta frase as
+            # referências puxavam de volta a roupa antiga no See.
+            guard = scene._reference_layout_guard(locked) if locked else ""
+            if guard:
+                lead_bits.append(guard)
     # A instrução do jogador não engole mais a ação: antes o order_lock
     # omitia a frase do momento, e "donzela sem roupa" virava só um retrato.
     if sentence and not refusal:
@@ -1253,6 +1279,10 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         lead_bits.append(order_en)
     if where:
         lead_bits.append("Place: " + ", ".join(where))
+    if entry and entry == scene_spot._INDOOR_NOTE:
+        # Dentro de um ponto sem cartão (cabana, caverna): a nota só ia para o
+        # construtor de frase e a imagem final podia sair ao ar livre.
+        lead_bits.append(entry)
     lead_bits.append("same continuous scene, coherent bodies, preserve every person's stated action and position")
     # Bicho conta como bicho na cena comum: "Exactly 4 people" com um lobo no
     # elenco pintava quatro humanos e o lobo.
@@ -1299,7 +1329,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             )
             lead_bits.append(crowd + assignments)
     if _is_interaction(moment, names) and not explicit:
-        lead_bits.append("wide shot of that action, clothes on, not a close-up portrait")
+        lead_bits.append("wide shot of that action, people clothed, not a close-up portrait"
+                         if beasts else
+                         "wide shot of that action, clothes on, not a close-up portrait")
     suffix = re.sub(r"(?i)\b(?:nude|naked)\b", "", img_cfg["style_suffix"] or "")
     suffix = " ".join(suffix.replace(", ,", ",").split()).strip(" ,")
     if creature and not explicit and "natural skin texture" in suffix:
