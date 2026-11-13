@@ -351,15 +351,19 @@ def _spawn_post_turn(adventure_id: str, transport: Any = None, user: str = "") -
     post_turn_state.begin(adventure_id)
 
     def _bg() -> None:
-        with _post_turn_lock_for(adventure_id):
-            _guard_post("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel))
-            _guard_post("consequences", lambda: _evaluate_consequences(adventure_id, transport))
-            _guard_post("progression", lambda: _apply_progression(adventure_id, user))
-            _guard_post("mind", lambda: npc_life.run_mind(adventure_id, transport))
-            _guard_post("tick", lambda: _maybe_auto_tick(adventure_id))
-            if not cancel.is_set():
-                _maybe_update_memory(adventure_id, cancel)
-        _finish_post_turn(adventure_id, cancel)
+        # finally: um erro fora dos guardas não pode deixar a fila de jobs da
+        # aventura segura (post_turn_state) até o teto.
+        try:
+            with _post_turn_lock_for(adventure_id):
+                _guard_post("chronicle", lambda: _chronicle_with_retry(adventure_id, transport, cancel))
+                _guard_post("consequences", lambda: _evaluate_consequences(adventure_id, transport))
+                _guard_post("progression", lambda: _apply_progression(adventure_id, user))
+                _guard_post("mind", lambda: npc_life.run_mind(adventure_id, transport))
+                _guard_post("tick", lambda: _maybe_auto_tick(adventure_id))
+                if not cancel.is_set():
+                    _maybe_update_memory(adventure_id, cancel)
+        finally:
+            _finish_post_turn(adventure_id, cancel)
 
     threading.Thread(target=_prime_memory_query, args=(adventure_id,),
                      name="memory-query", daemon=True).start()

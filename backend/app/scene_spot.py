@@ -104,7 +104,7 @@ _ENTER_EN = (
 _LEAVE_PT = (
     # "Saem da cabana" e "deixam a cabana". "Ele deixa a espada na cabana" não
     # é saída: quem fica na cabana é a espada.
-    r"(?:\b(?:sai|saem|saiu|sa[ií]ram|sa[ií]mos|saindo|fog[\wÀ-ÿ]*|escap[\wÀ-ÿ]*|"
+    r"(?:\b(?:sai|saem|saiu|sair|sa[ií]ram|sa[ií]mos|saindo|fog[\wÀ-ÿ]*|escap[\wÀ-ÿ]*|"
     r"desembarc[\wÀ-ÿ]*)\b[^.!?\n]{0,30}?\bd[ao]s?\s+"
     r"|\b(?:deix[\wÀ-ÿ]*|abandon[\wÀ-ÿ]*)\s+(?:[ao]s?)\s+"
     r"(?![\wÀ-ÿ-]+\s+(?:n[ao]s?|em|numa?|dentro)\b))"

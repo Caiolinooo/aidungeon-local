@@ -12,6 +12,9 @@ from __future__ import annotations
 import threading
 import time
 
+# O registro fica na memória do processo: vale porque a API e o worker de jobs
+# rodam no mesmo processo uvicorn (um worker). Com vários processos ele teria
+# de ir para o banco.
 # Teto: pós-turno travado não segura a fila para sempre.
 HOLD_S = 240.0
 

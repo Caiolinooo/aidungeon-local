@@ -466,8 +466,10 @@ def apply_world(conn, adventure_id: str, cards: list[dict], item: dict,
         return "created"
     entry = _append_unique(card.get("entry") or summary, facts)
     triggers = list(card.get("triggers") or [])
+    people = _character_names(conn, adventure_id)
     for trigger in _world_triggers(item, protagonists):
-        if trigger not in triggers:
+        # Apelido de gente não vira gatilho de lugar (nem no card que já existe).
+        if trigger not in triggers and text_facts.fold(trigger) not in people:
             triggers.append(trigger)
     updated = db.update_card(conn, adventure_id, card["id"], {
         "entry": entry[:1600],

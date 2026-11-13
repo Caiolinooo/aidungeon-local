@@ -181,3 +181,7 @@ def test_the_panel_cannot_erase_the_scene_spot(client):
     with db.session() as conn:
         stored = scene_spot.stored(db.get_adventure(conn, adv["id"]))
     assert stored["en"] == "the interior of a cave" and stored["seq"] == 3
+
+
+def test_leaving_with_the_infinitive():
+    assert scene_spot.detect("Ao sair da cabana, veem a floresta.") == ""

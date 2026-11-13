@@ -130,3 +130,17 @@ def test_a_place_named_after_its_owner_is_still_created(tmp_db):
         tavern = next(card for card in db.list_cards(conn, adv["id"])
                       if card["title"] == "Taverna da Marina")
     assert "Marina" not in tavern["triggers"]          # o apelido de gente não vira gatilho do lugar
+
+
+def test_an_existing_place_does_not_gain_a_characters_name_as_trigger(tmp_db):
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.insert_card(conn, adv["id"], type="character", title="Marina", triggers=["Marina"], entry="x")
+        tavern = db.insert_card(conn, adv["id"], type="location", title="Taverna",
+                                triggers=["Taverna"], entry="Uma taverna.")
+        assert npc_chronicle.apply_world(
+            conn, adv["id"], [tavern], {"name": "Taverna", "existing_title": "Taverna",
+                                        "aliases": ["Marina"], "summary": "Marina serve ali."},
+            "location", set()) == "updated"
+        card = next(c for c in db.list_cards(conn, adv["id"]) if c["title"] == "Taverna")
+    assert "Marina" not in card["triggers"]
