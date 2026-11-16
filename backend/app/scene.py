@@ -217,10 +217,21 @@ def _location(cards: list[dict], text: str) -> tuple[str, str]:
 def _cast(cards: list[dict], text: str) -> list[dict]:
     from app import death_rules
     ranked: list[tuple[int, dict]] = []
+    # "Ana" é apelido de "Ana Beatriz" e de "Ana Clara": a narração que cita
+    # uma punha as duas na cena. Apelido de mais de um cartão não conta.
+    shared: dict[str, int] = {}
+    for card in cards:
+        if (card.get("type") or "") != "character":
+            continue
+        for alias in set(npc_assets.title_aliases(str(card.get("title") or ""))):
+            key = alias.casefold()
+            shared[key] = shared.get(key, 0) + 1
     for card in death_rules.living_cast(cards):
         if (card.get("type") or "") != "character":
             continue
-        names = _mention_names(card)
+        title = " ".join(str(card.get("title") or "").split()).casefold()
+        names = [name for name in _mention_names(card)
+                 if name.casefold() == title or shared.get(name.casefold(), 0) < 2]
         index = max((_last_mention(text, name) for name in names), default=-1)
         if index >= 0:
             ranked.append((index, card))
@@ -572,7 +583,10 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     creature = any(npc_assets.creature_kind(card) for card in cast)
     style_text = re.sub(r"(?i)\b(?:nude|naked)\b", "", style)
     style_text = " ".join(style_text.replace(", ,", ",").split()).strip(" ,")
-    if creature and "natural skin texture" in style_text:
+    # Só quando todos são bichos: com um lobo entre pessoas, "not human skin"
+    # valia para as pessoas também.
+    if cast and all(npc_assets.creature_kind(card) for card in cast) \
+            and "natural skin texture" in style_text:
         style_text = style_text.replace(
             "natural skin texture",
             "scales, hide or fur, not human skin",

@@ -339,8 +339,10 @@ def place(title: str, entry: str, spot: dict | None) -> tuple[str, str]:
     """
     if not spot or not spot.get("en"):
         return title, entry
+    if spot.get("indoor"):
+        # Dentro, o título do lugar de fora sobra: "cabana, em Floresta Sombria"
+        # ia em português e puxava a floresta para dentro da cabana.
+        return spot["en"], _INDOOR_NOTE
     known = title and title != "the current scene"
     name = f"{spot['en']}, in {title}" if known else spot["en"]
-    if spot.get("indoor"):
-        return name, _INDOOR_NOTE
     return name, entry

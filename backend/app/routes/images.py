@@ -1119,6 +1119,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # O cânone inteiro, não só o último trecho: o lugar pode ter sido
     # estabelecido na abertura e a narração recente só falar de chuva.
     location, entry = scene._location(cards, assessment.canon_blob or moment)
+    # O ponto gravado guarda o título do cartão de lugar; o `where` em
+    # português ("cabana") não bate com ele.
+    card_location = location
     if (assessment.where != "unestablished"
             and not world_facts.is_atmospheric_place_name(assessment.where, cards)):
         # Lugar canônico vence: pinta o lugar real, não o destino da tentativa.
@@ -1133,7 +1136,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # pinta esse ponto dentro do lugar, não a descrição do cartão.
     from app import scene_spot
     location, entry = scene_spot.place(
-        location, entry, scene_spot.current(adv, visible, cards, location=location,
+        location, entry, scene_spot.current(adv, visible, cards, location=card_location,
                                             assessment=assessment))
     atmosphere = scene.atmosphere_of(assessment.safe_excerpt or moment)
     place = ""
@@ -1299,7 +1302,7 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             resolved.get(name) or by_name.get(name) or _card_named(cards, name), name))
     if names:
         counted = npc_assets.count_phrase(len(names) - beasts, beasts) if beasts \
-            else f"{len(names)} people"
+            else (f"{len(names)} people" if len(names) != 1 else "1 person")
         lead_bits.append(
             f"Exactly {counted}, no more, no fewer: " + ", ".join(who_bits)
         )
@@ -1341,7 +1344,13 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
                          "wide shot of that action, clothes on, not a close-up portrait")
     suffix = re.sub(r"(?i)\b(?:nude|naked)\b", "", img_cfg["style_suffix"] or "")
     suffix = " ".join(suffix.replace(", ,", ",").split()).strip(" ,")
-    if creature and not explicit and "natural skin texture" in suffix:
+    # Só quando todos são bichos: com um lobo entre três pessoas, "not human
+    # skin" valia para as pessoas também.
+    all_creatures = bool(names) and all(
+        npc_assets.creature_kind(
+            resolved.get(name) or by_name.get(name) or _card_named(cards, name), name)
+        for name in names)
+    if all_creatures and not explicit and "natural skin texture" in suffix:
         suffix = suffix.replace(
             "natural skin texture",
             "scales, hide or fur, not human skin",
@@ -1404,7 +1413,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
             adv.get("image_style") or "", explicit_suffix) if part)
         prompt = f"{lead} BREAK {tail}" if lead and tail else lead or tail
     else:
-        lead = ", ".join(lead_bits)
+        # Frases com ponto, como no fundo: em cadeia de vírgulas "…never a
+        # person, Marina, Bruno, Fada: fully clothed" juntava o lobo às pessoas.
+        lead = scene._sentences(lead_bits)
         tail = ", ".join(part for part in (
             adv.get("image_style") or "",
             suffix,

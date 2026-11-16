@@ -522,3 +522,14 @@ def test_the_article_a_does_not_count_for_english():
     """Revisão 10: "A mulher corre pelo mato" empatava e ficava como inglês."""
     assert images.one_image_sentence("A mulher corre pelo mato.") == ""
     assert images.one_image_sentence("A wolf lies by the door.") == "A wolf lies by the door."
+
+
+def test_a_first_name_shared_by_two_cards_does_not_pull_both_in():
+    """Revisão tardia: "Maria" puxava "Maria Beatriz" e "Maria Clara" para a cena."""
+    beatriz, clara = _card("Maria Beatriz"), _card("Maria Clara")
+    marina = _card("Marina Teste")
+    found = scene._cast([beatriz, clara, marina], "Maria Clara abre a porta; Marina espera.")
+    assert [card["title"] for card in found] == ["Maria Clara", "Marina Teste"]
+    # o primeiro nome que é de um cartão só continua valendo
+    assert [card["title"] for card in scene._cast([beatriz, marina], "Maria sorri.")] \
+        == ["Maria Beatriz"]

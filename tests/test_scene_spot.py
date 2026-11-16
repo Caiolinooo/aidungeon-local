@@ -91,7 +91,7 @@ def test_the_recorded_spot_wins_until_the_text_leaves_it():
 def test_place_puts_the_spot_inside_the_card_and_drops_the_outdoor_text():
     title, entry = scene_spot.place("Floresta dos Espelhos", "Árvores de vidro.",
                                     {"en": "the interior of a cave", "indoor": True})
-    assert title == "the interior of a cave, in Floresta dos Espelhos"
+    assert title == "the interior of a cave"
     assert "vidro" not in entry and "indoors" in entry
     title, entry = scene_spot.place("Floresta dos Espelhos", "Árvores de vidro.",
                                     {"en": "a small boat on the water", "indoor": False})
@@ -134,7 +134,7 @@ def test_store_and_backdrop_use_the_spot(tmp_db, monkeypatch):
         state = scene.sync_scene(conn, adv["id"])
     # o painel continua mostrando o lugar do cartão; a pintura recebe o ponto
     assert state["location"] == "Floresta dos Espelhos"
-    assert seen["title"] == "the interior of a hunting lodge, in Floresta dos Espelhos"
+    assert seen["title"] == "the interior of a hunting lodge"
     assert "vidro" not in seen["entry"]
 
 
