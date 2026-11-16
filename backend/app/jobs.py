@@ -2914,6 +2914,11 @@ def _deadline_seconds(job_type: str, img_cfg: dict, llm_cfg: dict) -> float | No
         return max(180.0, timeout + 60.0)
     if job_type == "npc_day_tick":
         return 900.0
+    if job_type == "character_turnaround":
+        # Várias pinturas (mestre, ficha, vistas) com conferência e nova
+        # tentativa; sem prazo, um travado segurava a fila inteira.
+        timeout = _timeout_seconds(img_cfg.get("timeout_seconds"), 300.0)
+        return max(1800.0, timeout * 8 + 60.0)
     return None
 
 

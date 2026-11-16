@@ -183,3 +183,21 @@ def test_a_long_player_sentence_is_never_replaced_by_a_new_fact():
     assert len(out) <= 1600
     exact = "x" * 59 + "."
     assert text_facts.fit(exact + " New fact.", 60, keep="head") == exact
+
+
+def test_the_chronicle_finds_a_body_by_short_name(tmp_db):
+    """Auditoria: "target": "Thalita" para o card "Thalita Massoto" perdia a roupa."""
+    from app import npc_assets as assets
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        card = db.insert_card(conn, adv["id"], type="character", title="Thalita Massoto",
+                              triggers=["Thalita"], entry="x")
+        changed = npc_chronicle._apply_bodies(
+            conn, adv["id"], {"bodies": [{"target": "thalita", "card_id": "",
+                                          "current_outfit": "red wool coat"}]},
+            source_action_id=None, source_seq=None)
+        sheet = assets.parse_sheet(next(c for c in db.list_cards(conn, adv["id"])
+                                        if c["id"] == card["id"])["sheet"])
+    assert changed == 1 and sheet["current_outfit"] == "red wool coat"
+    assert not assets._looks_portuguese("translucent silk dress")
+    assert assets._looks_portuguese("vestes translúcidas")

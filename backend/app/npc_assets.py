@@ -640,7 +640,7 @@ _PT_WORD = re.compile(
     r"(?<!\w)(?:pele|cabelo|cabelos|olhos|olho|labios|boca|vestido|estrutura|"
     r"atletica|palida|pretos|preto|preta|lisos|liso|cachead\w*|ruivos|ruivo|"
     r"loiros|loiro|morena|moreno|sobrancelha|nariz|postura|magro|agil|vestes|"
-    r"veste|transluc\w*|ambar|flutuando|armadura|elegante|terno|ternos|gravata|"
+    r"veste|translucid\w*|ambar|flutuando|armadura|elegante|terno|ternos|gravata|"
     r"camisa|calca|saias?|blusas?|sapatos?|manto|jaqueta|sobretudo|uniforme|"
     r"vestindo|vestia|usando|usava|trajando|trajava|seda|couro|algodao|brancos?|"
     r"brancas?|vermelhos?|vermelhas?|azuis?|verdes?|cinza|escuros?|claras?|"

@@ -522,6 +522,19 @@ def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, s
     cards = db.list_cards(conn, adventure_id)
     by_id = {card.get("id"): card for card in cards}
     by_name = {(card.get("title") or "").casefold(): card for card in cards if card.get("title")}
+    # "Thalita" para "Thalita Massoto", "Sandra" para "Sandra, A Salamandra",
+    # sem acento também: o registro escrevia o nome curto e a roupa e o
+    # ferimento do turno se perdiam. Apelido de mais de um cartão não vale.
+    owners: dict[str, set[str]] = {}
+    for card in cards:
+        if (card.get("type") or "character") != "character" or not card.get("title"):
+            continue
+        labels = {text_facts.fold(card["title"])}
+        labels |= {text_facts.fold(alias) for alias in npc_assets.title_aliases(card["title"])}
+        labels |= {text_facts.fold(trigger) for trigger in card.get("triggers") or []}
+        for label in labels - {""}:
+            owners.setdefault(label, set()).add(card["id"])
+    by_alias = {label: by_id[next(iter(ids))] for label, ids in owners.items() if len(ids) == 1}
     player_cards = [card for card in cards if card.get("player_username")]
     snapshots: dict[str, dict] = {}
     changed = 0
@@ -529,7 +542,8 @@ def _apply_bodies(conn, adventure_id: str, payload: dict, *, source_action_id, s
         if not isinstance(raw, dict):
             continue
         target = " ".join(str(raw.get("target") or "").split())
-        card = by_id.get(raw.get("card_id")) or by_name.get(target.casefold())
+        card = (by_id.get(raw.get("card_id")) or by_name.get(target.casefold())
+                or by_alias.get(text_facts.fold(target)))
         if card is None and target.casefold() in ("player", "jogador", "you"):
             card = player_cards[0] if len(player_cards) == 1 else None
         if card is None:
