@@ -522,7 +522,7 @@ em `/home/caio/llama.cpp-upstream` (worktree do clone
 ```ini
 ExecStart=/home/caio/llama.cpp-upstream/build/bin/llama-server --host 0.0.0.0 --port 1234 \
   -t 8 --threads-batch 16 -np 5 --kv-unified -cram 0 --ctx-checkpoints 8 --metrics \
-  -c 262144 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024 --api-key <chave> -rea auto -fa on \
+  -c 131072 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024 --api-key <chave> -rea auto -fa on \
   --tools all --jinja -m /home/caio/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
   --mmproj /home/caio/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf \
   --n-gpu-layers 99 -ncmoe 32 --moe-cache-mib 2048 -lm none --image-min-tokens 1024
@@ -532,7 +532,7 @@ ExecStart=/home/caio/llama.cpp-upstream/build/bin/llama-server --host 0.0.0.0 --
 |---|---|
 | `-ncmoe 32 --moe-cache-mib 2048` | experts de 32 camadas na RAM e um cache de 2 GiB na GPU para os mais usados (`docs/moe-cache.md` do llama.cpp). Mesma VRAM do `-ncmoe 24` sem cache (~10,6 GB) e 2,4× a geração. Só existe no upstream |
 | `-lm none` | substitui o `--no-mmap`, que o upstream removeu. Sem mmap os experts ficam em memória pinada e o upload para o cache usa a banda toda do barramento |
-| `-np 5 --kv-unified` | slots 0–3 do app (contrato C1) e o 4 para clientes sem `id_slot`; o KV unificado divide os 262144 tokens entre eles |
+| `-np 5 --kv-unified` | slots 0–3 do app (contrato C1) e o 4 para clientes sem `id_slot`; o KV unificado divide os 131072 tokens entre eles |
 | `-cram 0` | sem prompt cache no servidor: era ele que disparava o livelock #28280; também libera ~7 GB de RAM |
 | `--ctx-checkpoints 8` | o padrão é 32 checkpoints de ~63 MiB por slot |
 | `-ub 1024` | prompt 1290 tok/s contra 913 com 512; o 2048 (1596 tok/s) estoura o pico de VRAM com SDXL até a G6 |

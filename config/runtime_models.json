@@ -8,7 +8,7 @@
         "min_vram_mib": 14424,
         "min_ram_mib": 0,
         "min_vram_note": "deploy/vm/README.md: llama-server carregado ~14424 MiB. Não há URL nem SHA256 desse GGUF no repositório.",
-        "notes": "O -c 262144 é o contexto do llama-server. context_size 32768 é o orçamento do app em config/settings.json. Não são o mesmo número.",
+        "notes": "O -c 131072 é o contexto do llama-server. context_size 32768 é o orçamento do app em config/settings.json. Não são o mesmo número.",
         "artifacts": [
           {
             "role": "weights",
@@ -47,7 +47,7 @@
             "-cram", "0",
             "--ctx-checkpoints", "8",
             "--metrics",
-            "-c", "262144",
+            "-c", "131072",
             "-ctk", "q8_0",
             "-ctv", "q8_0",
             "-b", "2048",
