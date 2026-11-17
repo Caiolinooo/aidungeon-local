@@ -130,3 +130,55 @@ def test_scene_context_is_private_and_order_stays_the_user_message(monkeypatch):
     assert messages[0]["role"] == "system"
     assert "A Donzela da Noite stands beside Caio" in messages[0]["content"]
     assert messages[1] == {"role": "user", "content": "ela tira o vestido"}
+
+
+def test_break_invented_for_a_source_without_break_is_dropped(monkeypatch):
+    source = "appearance: dark hair\nbody: broad shoulders\nclothing: navy shirt"
+    reply = "appearance: dark hair BREAK body: broad shoulders BREAK clothing: navy shirt"
+    calls = install_stub(monkeypatch, reply)
+
+    result = image_english.render_english(source, llm_cfg={})
+
+    assert result == "appearance: dark hair body: broad shoulders clothing: navy shirt"
+    assert len(calls) == 1
+    system = calls[0]["messages"][0]["content"]
+    assert "Never add the token BREAK" in system
+    assert "same count" not in system
+
+
+def test_break_rule_is_sent_only_when_the_source_has_break(monkeypatch):
+    calls = install_stub(monkeypatch, "knight BREAK ink sketch")
+
+    image_english.render_english("knight BREAK ink sketch", llm_cfg={})
+
+    system = calls[0]["messages"][0]["content"]
+    assert "Keep the token BREAK exactly where it is" in system
+    assert "Never add" not in system
+    assert "{break_rule}" not in system
+
+
+def test_extra_break_is_still_rejected_when_the_source_has_break(monkeypatch):
+    install_stub(monkeypatch, ["knight BREAK ink BREAK sketch"] * 2)
+
+    with pytest.raises(image_client.ImageError):
+        image_english.render_english(
+            "o cavaleiro BREAK ink sketch", llm_cfg={})
+
+
+def test_english_do_and_no_do_not_block_the_passthrough(monkeypatch):
+    source = "Mandatory appearance, do not contradict: no jewelry is visible"
+    install_stub(monkeypatch, [llm_client.LlmError("down")] * 2)
+
+    assert image_english.render_english(source, llm_cfg={}) == source
+    assert not image_english._is_probable_english("o cavaleiro com uma espada")
+
+
+def test_line_breaks_reach_the_model_as_single_spaces(monkeypatch):
+    calls = install_stub(monkeypatch, "portrait of a red-haired woman in a green dress")
+
+    result = image_english.render_english(
+        "retrato de uma mulher ruiva\ncom vestido verde", llm_cfg={})
+
+    assert result == "portrait of a red-haired woman in a green dress"
+    assert calls[0]["messages"][1]["content"] == (
+        "retrato de uma mulher ruiva com vestido verde")

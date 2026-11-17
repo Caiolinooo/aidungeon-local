@@ -13,10 +13,16 @@ Return only the rewritten prompt. No JSON, no markdown, no quotes, no explanatio
 Rules:
 - Translate every non-English word into English.
 - Keep each placeholder [[0]], [[1]], [[2]] and so on exactly as written.
-- Keep the token BREAK exactly where it is, with the same count.
+{break_rule}
 - Keep every English word and every number.
 - Do not add people, clothing, nudity, style, camera directions, or actions.
 - If the prompt is already English, return it unchanged."""
+# A regra do BREAK só entra quando a fonte tem BREAK. Citada num prompt sem
+# BREAK, o modelo passa a trocar cada quebra de linha por um, e a contagem
+# diferente reprovava um prompt que já estava em inglês.
+_BREAK_KEEP = "- Keep the token BREAK exactly where it is, with the same count."
+_BREAK_NONE = "- Never add the token BREAK."
+_STRAY_BREAK = re.compile(r"\s*\bBREAK\b\s*")
 _RETRY_SUFFIX = "The previous answer was rejected. Return only the English prompt."
 _FAILURE = "generation_failed: image prompt could not be translated to English"
 _NAME_SPAN = re.compile(
@@ -55,6 +61,18 @@ def _clean_reply(reply: str) -> str:
     return text
 
 
+def _system_for(masked: str) -> str:
+    rule = _BREAK_KEEP if "BREAK" in masked else _BREAK_NONE
+    return _SYSTEM.format(break_rule=rule)
+
+
+def _drop_stray_breaks(masked: str, reply: str) -> str:
+    """Remove BREAKs the model invented for a source that has none."""
+    if "BREAK" in masked or "BREAK" not in reply:
+        return reply
+    return _STRAY_BREAK.sub(" ", reply).strip()
+
+
 def _accepted(masked: str, reply: str) -> bool:
     if not reply or reply.count("BREAK") != masked.count("BREAK"):
         return False
@@ -87,7 +105,8 @@ def _failed() -> None:
 
 
 _PT_STOPWORDS = {
-    "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+    # "do" e "no" ficam de fora: também são inglês ("do not", "no jewelry").
+    "de", "da", "dos", "das", "em", "na", "nos", "nas",
     "um", "uma", "uns", "umas", "com", "sem", "para", "por", "que",
     "olhos", "cabelos", "pele", "corpo", "rosto", "mulher", "homem",
     "vestindo", "usando", "roupa", "fundo", "cabeça", "braço",
@@ -123,14 +142,18 @@ def render_english(text: str, *, transport=None,
         return cached
 
     masked, names = _mask_names(text)
+    # Uma linha só para o modelo: diante de quebras de linha ele "conserta" a
+    # quebra (junta as linhas ou põe BREAK) e devolve o português sem traduzir.
+    masked = " ".join(masked.split())
     if llm_cfg is None:
         with db.session() as conn:
             llm_cfg = settings_store.effective_llm_settings(conn)
 
-    messages = [{"role": "system", "content": _SYSTEM}]
+    system_prompt = _system_for(masked)
+    messages = [{"role": "system", "content": system_prompt}]
     if context and context.strip():
         messages[0]["content"] = (
-            _SYSTEM
+            system_prompt
             + "\n\nStory context, for meaning only; never translate, repeat "
             "or output it:\n"
             + " ".join(context.split())[:1800]
@@ -160,7 +183,7 @@ def render_english(text: str, *, transport=None,
                     return text
                 _failed()
             continue
-        cleaned = _clean_reply(reply or "")
+        cleaned = _drop_stray_breaks(masked, _clean_reply(reply or ""))
         if not _accepted(masked, cleaned):
             if attempt == 1:
                 if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
