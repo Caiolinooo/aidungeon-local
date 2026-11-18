@@ -1690,6 +1690,19 @@ def owned_mark(mark: str, owner: str, *, dressed: bool) -> str:
     return named
 
 
+_NUDE_OUTFIT_RE = re.compile(
+    r"(?i)^(?:nude|naked|nu|nua|nus|nuas|pelad[oa]s?|sem\s+roupas?|unclothed|"
+    r"undressed|completely\s+(?:nude|naked)|fully\s+(?:nude|naked)|nothing|"
+    r"bare\s+skin)\b"
+)
+
+
+def is_nude_outfit(text: str) -> bool:
+    """True when an outfit string actually records nudity ('naked', 'nude', 'sem roupa')."""
+    clean = " ".join(str(text or "").split()).strip(" ,.;")
+    return bool(clean and _NUDE_OUTFIT_RE.match(clean))
+
+
 def story_state_bits(card: dict | None, *, limit: int = 80,
                      others: list[str] | None = None, owner: str = "") -> list[str]:
     """O que a história mudou nesta pessoa e a pintura tem de mostrar: roupa
@@ -1701,7 +1714,8 @@ def story_state_bits(card: dict | None, *, limit: int = 80,
     sheet = parse_sheet(card.get("sheet") or "")
     bits = []
     outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
-    if outfit and is_outfit(outfit) and not _looks_portuguese(outfit):
+    if (outfit and is_outfit(outfit) and not is_nude_outfit(outfit)
+            and not _looks_portuguese(outfit)):
         bits.append(_clip("now wearing " + outfit, limit))
     marks = [
         mark for mark in body_state.visual_marks(sheet.get("body_state"), portrait=False)
@@ -1832,8 +1846,23 @@ _TITLE_STOP = {
 }
 
 
+def _singular_forms(token: str) -> list[str]:
+    """Formas singulares/bilingues para cartões coletivos ('Elves' -> 'Elf', 'Elfa')."""
+    low = token.casefold()
+    forms: list[str] = []
+    if low == "elves":
+        forms.extend(["Elf", "Elfa", "Elfas", "Elfo", "Elfos"])
+    elif low in ("elfas", "elfos"):
+        forms.extend(["Elfa", "Elfo", "Elf", "Elves"])
+    elif low.endswith("ves") and len(token) >= 5:
+        forms.append(token[:-3] + "f")
+    elif low.endswith("s") and not low.endswith("ss") and len(token) >= 5:
+        forms.append(token[:-1])
+    return forms
+
+
 def title_aliases(title: str) -> list[str]:
-    """Título completo + o primeiro nome significativo.
+    """Título completo + o primeiro nome significativo (e singular se plural).
 
     "A Donzela da Noite" também é chamada de "Donzela" na fala do jogador.
     Sem esse alias, o pedido "donzela sem roupa" não encontrava o card e a
@@ -1848,11 +1877,15 @@ def title_aliases(title: str) -> list[str]:
         if (len(token) >= 4 and token[0].isupper()
                 and token.casefold() not in _TITLE_STOP):
             names.append(token)
+            names.extend(_singular_forms(token))
             break
+    if len(clean.split()) == 1:
+        names.extend(_singular_forms(clean))
     return list(dict.fromkeys(names))
 
 
-def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
+def _nude_states(cards: list[dict], text: str, *,
+                 include_sheet: bool = False) -> tuple[set[str], set[str]]:
     """Estados locais por card: nudez afirmada e nudez negada/roupa."""
     titles = [" ".join(str(card.get("title") or "").split()) for card in cards]
     short_aliases = [title_aliases(title)[1:] for title in titles]
@@ -1876,8 +1909,20 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
         )))
     everyone = sorted({name for names in aliases for name in names},
                       key=len, reverse=True)
-    if not everyone or not text:
+    if not everyone:
         return set(), set()
+    states: dict[int, bool] = {}
+    if include_sheet:
+        for index, card in enumerate(cards):
+            sheet = parse_sheet(card.get("sheet") or "")
+            if is_nude_outfit(str(sheet.get("current_outfit") or "")):
+                states[index] = False
+    if not text:
+        nude_titles = {titles[index] for index, covered_state in states.items()
+                       if not covered_state and titles[index]}
+        covered_titles = {titles[index] for index, covered_state in states.items()
+                          if covered_state and titles[index]}
+        return nude_titles, covered_titles
     coordinated_names = "|".join(re.escape(name) for name in everyone)
     coordinated = rf"(?:\s*(?:,|and|e)\s*(?:{coordinated_names}))*"
     nude = (
@@ -1919,7 +1964,6 @@ def _nude_states(cards: list[dict], text: str) -> tuple[set[str], set[str]]:
         r"(?i)\b(?:not|never|no|nao|não|nunca|nem)\b"
         r"(?:\s+[\w'-]+){0,2}\s*$"
     )
-    states: dict[int, bool] = {}
     for index, names in enumerate(aliases):
         other_names = [
             other for other_index, other_aliases in enumerate(aliases)
@@ -2000,7 +2044,7 @@ def scene_clothing(cards: list[dict], moment: str, order: str = "") -> tuple[set
 
     Devolve (títulos nus, títulos vestidos pelo pedido).
     """
-    nude_moment, _covered_moment = _nude_states(cards, moment)
+    nude_moment, _covered_moment = _nude_states(cards, moment, include_sheet=True)
     nude_order, covered_order = _nude_states(cards, order)
     if nude_order:
         return nude_order, covered_order
@@ -2009,7 +2053,7 @@ def scene_clothing(cards: list[dict], moment: str, order: str = "") -> tuple[set
 
 def nude_names(cards: list[dict], moment: str, order: str = "") -> list[str]:
     """`(nude_moment - cobertos_order) ∪ nude_order`, sem cruzar sujeitos."""
-    nude_moment, _covered_moment = _nude_states(cards, moment)
+    nude_moment, _covered_moment = _nude_states(cards, moment, include_sheet=True)
     nude_order, covered_order = _nude_states(cards, order)
     found = (nude_moment - covered_order) | nude_order
     return [title for card in cards

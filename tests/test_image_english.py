@@ -182,3 +182,17 @@ def test_line_breaks_reach_the_model_as_single_spaces(monkeypatch):
     assert result == "portrait of a red-haired woman in a green dress"
     assert calls[0]["messages"][1]["content"] == (
         "retrato de uma mulher ruiva com vestido verde")
+
+
+def test_portuguese_echo_on_first_attempt_retries_to_english(monkeypatch):
+    source = "wide shot, A Donzela observa cruzando os braços"
+    translated = "wide shot, A Donzela watches with arms crossed"
+    calls = install_stub(monkeypatch, [
+        "wide shot, [[0]] observa cruzando os braços",
+        "wide shot, [[0]] watches with arms crossed",
+    ])
+
+    assert image_english.render_english(source, llm_cfg={}) == translated
+    assert len(calls) == 2
+
+

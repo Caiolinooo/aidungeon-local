@@ -83,6 +83,7 @@ Rules:
 - Do not record that an NPC complied, left, undressed, or changed location unless the canon passage shows it.
 - If the Facts block says a place was not established, do not record that place.
 - Never include the protagonist as a character.
+- Never group multiple distinct individuals into a single plural character card (e.g. "Elves", "Guards"); create a separate character entry for each distinct individual who acts or speaks.
 - Never invent appearance, relatives, death, or numbers.
 - look_changed is true only when the body or face itself changes (scar, curse, aging), not when clothes change.
 - If the card already has an appearance or a portrait, leave appearance and clothing empty unless look_changed is true.

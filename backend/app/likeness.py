@@ -53,8 +53,9 @@ _USER_AGENT = "AIDungeonLocal/0.9 (local adventure; likeness reference)"
 _PT_MARK = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
 _EXPLICIT_STRIP = re.compile(
     r"(?i)\b(?:naked|nude|nudes|topless|bottomless|undressed|undressing|"
-    r"uncensored|sex|sexual|fuck(?:ing)?|orgasm|penis|vagina|nipples?|"
-    r"intercourse|nua|nuas|nus|pelad[oa]s?)\b|clothes off|do not restore outfits"
+    r"uncensored|sex|sexual|fuck(?:ing)?|fod(?:er|o|e|endo|a)|orgasm|penis|"
+    r"vagina|nipples?|genitals?|buttocks?|anus|intercourse|nua|nuas|nus|"
+    r"pelad[oa]s?|despid[oa]s?)\b|clothes off|do not restore outfits"
 )
 _FICTIONAL = re.compile(
     r"(?i)\b(?:fictional|fictitious|fictício|ficticio|personagem fictício|"

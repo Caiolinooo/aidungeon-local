@@ -1224,3 +1224,28 @@ def test_cast_scene_drops_the_crowd_from_the_place_text():
     assert scene.uncrowded("An old lighthouse on a cliff.") == "An old lighthouse on a cliff."
     assert "These 3 are the only people there" in scene._alone_there(3)
     assert scene._alone_there(1).startswith("This person is alone there")
+
+
+def test_nude_current_outfit_and_singular_alias_and_portuguese_explicit():
+    from app import npc_assets
+    assert scene.is_explicit("Fodo o cu das duas elfas causando extrema dor.")
+    card = {
+        "id": "elves-1",
+        "type": "character",
+        "title": "Elves",
+        "portrait_prompt": "adult woman, silver hair, pointed ears",
+        "sheet": json.dumps({"current_outfit": "naked"}),
+    }
+    assert npc_assets.story_state_bits(card) == []
+    assert "Elfa" in npc_assets.title_aliases("Elves")
+    assert [c["id"] for c in scene._cast([card], "A elfa recua na câmara.")] == ["elves-1"]
+    assert npc_assets.nude_names([card], "A elfa recua na câmara.") == ["Elves"]
+    prompt, include_people = scene._prompt(
+        "Stone Chamber", "carved stone walls", "photorealistic", "tense",
+        [card], "A elfa recua na câmara.",
+    )
+    assert include_people is True
+    assert "now wearing naked" not in prompt.lower()
+    assert "fully clothed in her nude" not in prompt.lower()
+    assert "completely naked" in prompt.lower()
+

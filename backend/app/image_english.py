@@ -11,12 +11,12 @@ from app import db, llm_client, settings_store
 _SYSTEM = """You rewrite an image-model prompt into English.
 Return only the rewritten prompt. No JSON, no markdown, no quotes, no explanation.
 Rules:
-- Translate every non-English word into English.
+- Translate every non-English word or clause into English, even if the rest of the prompt is already English.
 - Keep each placeholder [[0]], [[1]], [[2]] and so on exactly as written.
 {break_rule}
 - Keep every English word and every number.
 - Do not add people, clothing, nudity, style, camera directions, or actions.
-- If the prompt is already English, return it unchanged."""
+- If the entire prompt is already English, return it unchanged."""
 # A regra do BREAK só entra quando a fonte tem BREAK. Citada num prompt sem
 # BREAK, o modelo passa a trocar cada quebra de linha por um, e a contagem
 # diferente reprovava um prompt que já estava em inglês.
@@ -76,9 +76,6 @@ def _drop_stray_breaks(masked: str, reply: str) -> str:
 def _accepted(masked: str, reply: str) -> bool:
     if not reply or reply.count("BREAK") != masked.count("BREAK"):
         return False
-    # Language cannot be inferred from accents: unaccented Portuguese must be
-    # translatable. Lexical preservation is instructed in _SYSTEM; these are
-    # the structural invariants that can be checked without a dictionary.
     placeholders = re.findall(r"\[\[\d+\]\]", masked)
     return all(placeholder in reply for placeholder in placeholders)
 
@@ -111,12 +108,22 @@ _PT_STOPWORDS = {
     "olhos", "cabelos", "pele", "corpo", "rosto", "mulher", "homem",
     "vestindo", "usando", "roupa", "fundo", "cabeça", "braço",
     "perna", "calça", "camisa", "vestido", "olhando", "sorrindo",
+    "fodo", "fode", "foder", "fodendo", "causando", "extrema", "dor",
+    "duas", "dois", "elfa", "elfas", "elfo", "elfos", "dourada", "prateada",
+    "observa", "cruzando", "braços", "bracos", "ainda", "postura",
+    "defensiva", "hesitante", "câmara", "camara", "pedra", "chão", "chao",
+    "nua", "nuas", "pelada", "pelado", "bunda", "buceta", "pau", "rola",
+    "cu", "peitos", "seios", "joelhos", "costas", "enquanto", "ambas",
+    "delas", "deles", "estão", "estao", "sobre", "atrás", "atras",
 }
+_PT_DIACRITIC = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
 
 
 def _is_probable_english(text: str) -> bool:
-    # If text has no typical Portuguese stopwords and has ASCII letters, it is safe to treat as English
-    words = re.findall(r"[a-zA-ZáàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]+", text.lower())
+    stripped = re.sub(r"\[\[\d+\]\]", " ", text or "")
+    if _PT_DIACRITIC.search(stripped):
+        return False
+    words = re.findall(r"[a-zA-ZáàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]+", stripped.lower())
     if not words:
         return True
     pt_hits = sum(1 for w in words if w in _PT_STOPWORDS)
@@ -190,6 +197,8 @@ def render_english(text: str, *, transport=None,
                     _remember(text, text)
                     return text
                 _failed()
+            continue
+        if attempt == 0 and not _is_probable_english(masked) and not _is_probable_english(cleaned):
             continue
         for index, name in enumerate(names):
             cleaned = cleaned.replace(f"[[{index}]]", name)

@@ -545,9 +545,15 @@ def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
     if _apply_key(conn, "image.openai_api_key", update.get("openai_api_key")):
         changed.add("openai_api_key")
     if update.get("comfyui_engine"):
-        _set_override(
-            conn, "image.comfyui_engine",
-            str(update["comfyui_engine"]).strip().lower())
+        engine_val = str(update["comfyui_engine"]).strip().lower()
+        _set_override(conn, "image.comfyui_engine", engine_val)
+        runtime_img = {
+            "flux2_klein": "flux2_klein",
+            "qwen": "fineview_qwen",
+            "z_image_turbo": "z_image_turbo",
+        }.get(engine_val)
+        if runtime_img:
+            _set_override(conn, "runtime.models.image", runtime_img)
         changed.add("comfyui_engine")
     if _apply_sampling_block(conn, "image.comfyui_flux2", update, (
             ("flux2_steps", "steps"), ("flux2_cfg", "cfg"),
@@ -630,6 +636,8 @@ def _apply_video_choice(conn: sqlite3.Connection, update: dict) -> bool:
         base.update(explicit)
         if requested:
             base["engine"] = requested
+    if requested in ("ltxv", "wan", "h3"):
+        _set_override(conn, "runtime.models.video", requested)
     _set_override(conn, "image.comfyui_video", _identity_from(base, _VIDEO_FIELDS))
     return True
 

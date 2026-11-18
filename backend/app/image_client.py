@@ -1895,11 +1895,12 @@ def generate_image(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 progress=progress)
             # Zero é um número: elenco só de animais não espera rosto humano
             # nenhum, e um humano pintado ao lado do lobo é gente a mais.
-            if expected_people is not None and refs and init_image is None:
+            if (expected_people is not None and refs and init_image is None
+                    and bool(cfg.get("verify_headcount", False))):
                 content = _without_extra_people(
                     cfg, client, prompt, width, height, content, int(expected_people),
                     refs, progress)
-                if int(expected_people) > 0:
+                if int(expected_people) > 0 and bool(cfg.get("remove_bystanders", False)):
                     content = _without_bystanders(
                         cfg, client, width, height, content, int(expected_people), refs,
                         progress)

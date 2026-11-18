@@ -185,9 +185,10 @@ _GLUE = {"and", "the", "with", "her", "his", "its", "from", "into", "over"}
 
 
 def moment_for_painter(actions: list[dict], action_seq: int) -> str:
-    """Os dois últimos trechos, com o pedido do jogador marcado à parte.
+    """Os dois últimos trechos como ação imediata, com contexto recente antes.
 
-    O modelo de imagem tem de pintar isto, não um trecho anterior.
+    O modelo de imagem tem de pintar a ação final mantendo a continuidade de
+    quem está presente e onde a cena acontece.
     """
     eligible = [
         action for action in actions
@@ -196,6 +197,10 @@ def moment_for_painter(actions: list[dict], action_seq: int) -> str:
         and (action.get("text") or "").strip()
     ]
     lines = []
+    earlier = eligible[:-2][-4:]
+    if earlier:
+        prior = " ".join(action["text"].strip() for action in earlier)[-900:]
+        lines.append("Recent scene context (who is present and where): " + prior)
     for action in eligible[-2:]:
         text = action["text"].strip()
         if action.get("type") in ("do", "say", "story"):
@@ -206,7 +211,7 @@ def moment_for_painter(actions: list[dict], action_seq: int) -> str:
 
 
 def current_moment(actions: list[dict], action_seq: int) -> str:
-    """Os dois últimos trechos até este seq. O See pinta isto, não o livro inteiro."""
+    """Os últimos trechos até este seq para detectar elenco e estado da cena."""
     eligible = [
         action for action in actions
         if action.get("type") != "see"
@@ -215,7 +220,7 @@ def current_moment(actions: list[dict], action_seq: int) -> str:
     ]
     if not eligible:
         return ""
-    return "\n".join(action["text"].strip() for action in eligible[-2:])[-1400:]
+    return "\n".join(action["text"].strip() for action in eligible[-4:])[-1600:]
 
 
 def _token_in_canon(token: str, canon_l: str) -> bool:
@@ -427,8 +432,11 @@ def _pronoun_for(name: str, card: dict | None) -> str:
 
 
 def _clothed_predicate(card: dict | None, name: str = "") -> str:
-    outfit = _short_outfit(npc_assets.current_outfit_text(card))
+    raw_outfit = npc_assets.current_outfit_text(card)
     pronoun = _pronoun_for(name, card)
+    if npc_assets.is_nude_outfit(raw_outfit):
+        return f"fully clothed in {pronoun} current outfit"
+    outfit = _short_outfit(raw_outfit)
     if outfit:
         return f"fully clothed in {pronoun} {outfit}"
     return f"fully clothed in {pronoun} current outfit"
@@ -988,15 +996,20 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
     # A recusa por menor usa o texto cru da cena — mesmo quando
     # o world-facts rebaixa o explícito para a recusa canônica.
     # A segurança olha o pedido do jogador tambem.
+    narration_text = scene.narration_moment(actions, body.action_seq)
+    cast_nude = bool(npc_assets.nude_names(frame, narration_text, order))
     decision = likeness.decide_frame(
-        frame, explicit=scene.is_explicit(raw_moment) or scene.is_explicit(order))
+        frame,
+        explicit=scene.is_explicit(raw_moment) or scene.is_explicit(order) or cast_nude,
+    )
     if decision.refusal:
         raise GameError(422, decision.refusal, decision.message)
     # A pintura segue a narracao: um pedido do jogador nao veste a cena.
     # O See e o fundo do chat usam a mesma regra (scene.narration_moment).
     explicit = decision.allow_explicit and (
-        scene.is_explicit(scene.narration_moment(actions, body.action_seq))
+        scene.is_explicit(narration_text)
         or scene.is_explicit(order)
+        or cast_nude
     )
     if world_facts.REFUSAL_IMAGE in assessment.image_directive:
         # Apenas uma recusa estabelecida rebaixa a instrução explícita.

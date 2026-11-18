@@ -401,9 +401,9 @@
           "height": 448,
           "vertical_width": 448,
           "vertical_height": 768,
-          "auto_scene": true,
-          "auto_portraits": true,
-          "auto_turnaround": true
+          "auto_scene": false,
+          "auto_portraits": false,
+          "auto_turnaround": false
         },
         "source": "deploy/vm/install_ltxv_video.sh e config/settings.json image.providers.comfyui.video"
       },
@@ -476,8 +476,8 @@
           "height": 704,
           "vertical_width": 704,
           "vertical_height": 1280,
-          "auto_scene": true,
-          "auto_portraits": true
+          "auto_scene": false,
+          "auto_portraits": false
         },
         "vertical_note": "704x1280 é o quadro documentado 1280x704 invertido. O README não publica outro vertical.",
         "source": "deploy/vm/install_wan_video.sh; opt-in do README: engine=wan, clip UMT5, 20 passos, CFG 5, 1280x704"

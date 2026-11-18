@@ -40,12 +40,14 @@ _CAST_LIMIT = 4
 _EXPLICIT_RE = re.compile(
     r"(?<!\w)(?:"
     r"naked|nude|nudes|topless|bottomless|undress(?:ed|ing)?|"
-    r"nua|nuas|nu|nus|desnud[oa]s?|pelad[oa]s?|sem roupa|"
-    r"sex|sexo|sexual|fuck(?:ing)?|foder|transar|transando|"
+    r"nua|nuas|nu|nus|desnud[oa]s?|pelad[oa]s?|despid[oa]s?|sem roupa|"
+    r"sex|sexo|sexual|fuck(?:ing)?|foder|fodo|fode(?:m|ndo)?|foda|transar|transando|"
     r"orgasm(?:o|s)?|gozar|gozando|ejacul\w*|"
-    r"penis|p[eê]nis|vagina|buceta|pau|cock|pussy|clit(?:oris)?|"
-    r"nipples?|breasts?|seios|bunda|boquete|"
-    r"anal|intercourse|thrust(?:ing)?"
+    r"penis|p[eê]nis|vagina|buceta|boceta|xoxota|pau|rola|cacete|piroca|cock|pussy|clit(?:oris)?|"
+    r"nipples?|mamilos?|breasts?|seios|peitos?|bunda|rabo|cu|boquete|chup(?:ar|o|a|ando)|"
+    r"genitals?|buttocks?|anus|rectum|erect(?:ion)?|penetrat\w*|penetr\w*|"
+    r"fellatio|cunnilingus|blowjob|handjob|anal|intercourse|thrust(?:ing)?|"
+    r"bare\s+(?:breasts?|buttocks?|body|chest|skin)|exposed\s+(?:breasts?|buttocks?|genitals?|body)"
     r")(?!\w)",
     re.IGNORECASE,
 )
@@ -98,7 +100,7 @@ def is_explicit(text: str) -> bool:
 
 
 def narration_moment(actions: list[dict], action_seq: int | None = None) -> str:
-    """Os dois últimos trechos de NARRAÇÃO ('start' e 'continue').
+    """Os últimos trechos de NARRAÇÃO ('start' e 'continue').
 
     A ação e a fala do jogador não entram: pedir não é descrever. O See e o
     fundo do chat pintam a mesma coisa — o que a história narrou, não o que
@@ -112,7 +114,7 @@ def narration_moment(actions: list[dict], action_seq: int | None = None) -> str:
     ]
     if not eligible:
         return ""
-    return "\n".join(action["text"].strip() for action in eligible[-2:])[-1400:]
+    return "\n".join(action["text"].strip() for action in eligible[-4:])[-1600:]
 
 
 def _slug(text: str) -> str:
@@ -253,7 +255,7 @@ def _cast(cards: list[dict], text: str) -> list[dict]:
 
 
 def _reaction_clause(cast: list[dict]) -> str:
-    """Ação, emoção e pose do elenco. Sem seq, sem bonds, sem motivo oculto."""
+    """Ação, emoção e pose do elenco em inglês. Sem seq, sem bonds, sem motivo oculto."""
     bits: list[str] = []
     for card in cast:
         raw_sheet = card.get("sheet") or ""
@@ -268,7 +270,7 @@ def _reaction_clause(cast: list[dict]) -> str:
         parts = [
             f"{key} {reaction[key]}"
             for key in ("action", "emotion", "pose")
-            if reaction.get(key)
+            if reaction.get(key) and not npc_assets._looks_portuguese(str(reaction[key]))
         ]
         if parts:
             bits.append(name + ": " + ", ".join(parts))
@@ -548,7 +550,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     e o modelo pintava outra mulher. Nudez e sexo entram no prompt, e a roupa
     do card não volta. Sem visual travado, o fundo continua vazio de gente.
     """
-    decision = likeness.decide_frame(cast, explicit=is_explicit(moment))
+    has_nude = is_explicit(moment) or bool(npc_assets.nude_names(cast, moment))
+    decision = likeness.decide_frame(cast, explicit=has_nude)
     if decision.refusal:
         cast = []
         moment = ""
@@ -864,14 +867,16 @@ def sync_scene(conn, adventure_id: str, *, retry: bool = False,
     cast_cards = []
     for card in _cast(cards, text):
         cast_cards.append(npc_assets.ensure_portrait_prompt(conn, card))
-    # A segurança olha tudo: o pedido do jogador tambem conta.
-    decision = likeness.decide_frame(cast_cards, explicit=is_explicit(text))
-    # O fundo pinta o momento narrado agora, nao o protesto do jogador.
     moment = narration_moment(actions)
+    cast_nude = bool(npc_assets.nude_names(cast_cards, moment))
+    # A segurança olha tudo: o pedido do jogador tambem conta.
+    decision = likeness.decide_frame(
+        cast_cards, explicit=is_explicit(text) or cast_nude)
+    # O fundo pinta o momento narrado agora, nao o protesto do jogador.
     paint_cast = [] if decision.refusal else decision.cast
     paint_text = "" if decision.refusal else moment
     explicit = False if decision.refusal else (
-        decision.allow_explicit and is_explicit(moment)
+        decision.allow_explicit and (is_explicit(moment) or cast_nude)
     )
     img_cfg = settings_store.effective_image_settings(conn)
     # A história pode ter entrado num ponto sem cartão (cabana, caverna, barco):
