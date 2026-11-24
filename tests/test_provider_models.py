@@ -8,7 +8,16 @@ import json
 import httpx
 import pytest
 
-from app import db, deps, embeddings_client, image_client, llm_client, settings_store
+from app import (
+    db,
+    deps,
+    embeddings_client,
+    image_client,
+    llm_client,
+    provider_models,
+    settings_store,
+    voice_client,
+)
 
 
 @pytest.fixture()
@@ -449,25 +458,13 @@ def test_custom_cloud_proxy_retries_once_when_http_400_rejects_unknown_fields():
     assert "chat_template_kwargs" not in calls[1]
 
 
-def test_openai_reasoning_model_swaps_max_tokens_to_max_completion_tokens_on_400():
+def test_openai_reasoning_model_proactively_uses_max_completion_tokens():
     calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/chat/completions"):
             body = json.loads(request.content.decode("utf-8"))
             calls.append(body)
-            if "max_tokens" in body:
-                return httpx.Response(
-                    400,
-                    json={
-                        "error": {
-                            "message": (
-                                "Unsupported parameter: 'max_tokens' is not supported with this "
-                                "model. Use 'max_completion_tokens' instead."
-                            ),
-                        }
-                    },
-                )
             return httpx.Response(
                 200,
                 json={"choices": [{"message": {"content": "feito"}, "finish_reason": "stop"}]},
@@ -484,13 +481,109 @@ def test_openai_reasoning_model_swaps_max_tokens_to_max_completion_tokens_on_400
         cfg,
         [{"role": "user", "content": "oi"}],
         max_tokens=150,
+        stop=["\n> You", "\n> you"],
         transport=httpx.MockTransport(handler),
     )
     assert out == "feito"
-    assert len(calls) == 2
-    assert calls[0]["max_tokens"] == 150
-    assert "max_tokens" not in calls[1]
-    assert calls[1]["max_completion_tokens"] == 150
+    assert len(calls) == 1
+    assert "max_tokens" not in calls[0]
+    assert calls[0]["max_completion_tokens"] == 150
+    assert "temperature" not in calls[0]
+    assert "stop" not in calls[0]
+
+
+def test_custom_gateway_multistep_400_422_retry_and_stop_limit():
+    calls: list[dict] = []
+    many_stops = [f"\n> Stop{i}" for i in range(10)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/props"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if "stop" in body and len(body["stop"]) > 5:
+                return httpx.Response(
+                    400,
+                    json=[{
+                        "error": {
+                            "code": 400,
+                            "message": (
+                                "* GenerateContentRequest.generation_config.stop_sequences: "
+                                "the number of stop_sequences must not exceed 5\n"
+                            ),
+                            "status": "INVALID_ARGUMENT",
+                        }
+                    }],
+                )
+            if "max_tokens" in body:
+                return httpx.Response(
+                    422,
+                    json={
+                        "error": {
+                            "message": (
+                                "Unsupported parameter: 'max_tokens' is not supported. "
+                                "Use 'max_completion_tokens' instead."
+                            ),
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "recuperado"}, "finish_reason": "stop"}]},
+            )
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://my-custom-gateway.example.com/v1",
+        "api_key": "gw-key",
+        "model_alias": "strict-model",
+        "timeout_seconds": 30,
+    }
+    out = llm_client.chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        max_tokens=150,
+        stop=many_stops,
+        transport=httpx.MockTransport(handler),
+    )
+    assert out == "recuperado"
+    assert len(calls) == 3
+    assert len(calls[0]["stop"]) == 10
+    assert len(calls[1]["stop"]) == 4
+    assert "max_tokens" not in calls[2]
+    assert calls[2]["max_completion_tokens"] == 150
+
+
+def test_cloud_llm_proactively_caps_stop_sequences_to_4_while_local_keeps_all():
+    many_stops = [
+        "\n> You", "\n> you", "\n> Alice", "\nAlice:", "\n>Alice",
+        "\nPlayer:", "\nUser:", "\n<lore>", "\n</lore>", "\n[Moment]",
+    ]
+    for url in (
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "https://api.openai.com/v1",
+        "https://api.groq.com/openai/v1",
+        "https://openrouter.ai/api/v1",
+    ):
+        payload = llm_client.build_chat_payload(
+            {"base_url": url, "api_key": "k", "model_alias": "m"},
+            [{"role": "user", "content": "hi"}],
+            sampler={"max_tokens": 100},
+            stop=many_stops,
+            model="m",
+        )
+        assert len(payload["stop"]) == 4
+        assert payload["stop"] == many_stops[:4]
+
+    local_payload = llm_client.build_chat_payload(
+        {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model_alias": "local"},
+        [{"role": "user", "content": "hi"}],
+        sampler={"max_tokens": 100},
+        stop=many_stops,
+        model="local",
+    )
+    assert len(local_payload["stop"]) == len(many_stops)
 
 
 def test_local_llamacpp_stream_still_sends_return_progress():
@@ -527,4 +620,144 @@ def test_local_llamacpp_stream_still_sends_return_progress():
     assert calls[0]["return_progress"] is True
     assert "cache_prompt" in calls[0]
     assert "dry_multiplier" in calls[0]
+
+
+def test_openrouter_and_xai_image_generation(tmp_path):
+    png_bytes = b"\x89PNG\r\n\x1a\nfake-image"
+    png_b64 = base64.b64encode(png_bytes).decode("ascii")
+    or_calls: list[tuple[str, dict]] = []
+
+    def or_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        or_calls.append((request.url.path, body))
+        return httpx.Response(200, json={
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Here is your image",
+                    "images": [{"image_url": {"url": f"data:image/png;base64,{png_b64}"}}],
+                }
+            }]
+        })
+
+    or_cfg = {
+        "provider": "openai_compatible",
+        "openai_base_url": "https://openrouter.ai/api/v1",
+        "openai_api_key": "sk-or-test",
+        "openai_model": "google/gemini-2.5-flash-image-preview",
+        "openai_size": "1024x1024",
+        "storage_dir": str(tmp_path),
+        "timeout_seconds": 30,
+    }
+    res_or = image_client.generate_image(
+        or_cfg, "a castle at dusk", adventure_id="adv1", image_id="or1",
+        transport=httpx.MockTransport(or_handler),
+    )
+    assert res_or["provider"] == "openai_compatible"
+    assert or_calls[0][0].endswith("/chat/completions")
+    assert or_calls[0][1]["modalities"] == ["image", "text"]
+
+    # xAI omits `size` proactively
+    xai_calls: list[dict] = []
+
+    def xai_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        xai_calls.append(body)
+        return httpx.Response(200, json={"data": [{"b64_json": png_b64}]})
+
+    xai_cfg = {
+        "provider": "openai_compatible",
+        "openai_base_url": "https://api.x.ai/v1",
+        "openai_api_key": "xai-test",
+        "openai_model": "grok-2-image",
+        "openai_size": "1024x1024",
+        "storage_dir": str(tmp_path),
+        "timeout_seconds": 30,
+    }
+    res_xai = image_client.generate_image(
+        xai_cfg, "a cyberpunk alley", adventure_id="adv1", image_id="xai1",
+        transport=httpx.MockTransport(xai_handler),
+    )
+    assert res_xai["provider"] == "openai_compatible"
+    assert "size" not in xai_calls[0]
+
+
+def test_groq_tts_uses_wav_skips_drama3_and_normalizes_stt_language():
+    calls: list[dict] = []
+    wav_bytes = b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    def tts_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        calls.append(body)
+        if "instructions" in body:
+            return httpx.Response(400, json={"error": {"message": "Unknown field: instructions"}})
+        assert body["response_format"] == "wav"
+        assert body["model"] == "playai-tts"
+        return httpx.Response(200, content=wav_bytes, headers={"content-type": "audio/wav"})
+
+    cfg = {
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key": "gsk-test",
+        "tts_model": "playai-tts",
+        "stt_model": "whisper-large-v3-turbo",
+        "narrator_voice": "Fritz-PlayAI",
+        "drama3_enabled": True,
+        "drama3_model": "drama-3",
+        "timeout_seconds": 30,
+    }
+    audio = voice_client.synthesize(
+        cfg, "Olá aventureiro", "Fritz-PlayAI", emotion="tenso",
+        transport=httpx.MockTransport(tts_handler),
+    )
+    assert audio == wav_bytes
+    assert len(calls) == 2
+    assert calls[0]["model"] == "playai-tts"
+    assert calls[0]["response_format"] == "wav"
+    assert "instructions" not in calls[1]
+
+    # STT normalizes BCP-47 locale "pt-BR" -> "pt" for Whisper
+    captured_stt: list[bytes] = []
+
+    def stt_handler(request: httpx.Request) -> httpx.Response:
+        captured_stt.append(request.content)
+        return httpx.Response(200, json={"text": "fala transcrita"})
+
+    text = voice_client.transcribe(
+        cfg, "audio.webm", "audio/webm", b"fake-audio", language="pt-BR",
+        transport=httpx.MockTransport(stt_handler),
+    )
+    assert text == "fala transcrita"
+    assert b'name="language"\r\n\r\npt\r\n' in captured_stt[0]
+
+
+def test_voyage_embeddings_health_and_discover_fallback_when_models_404():
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/embeddings"):
+            return httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2]}]})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    cfg = {
+        "enabled": True,
+        "base_url": "https://api.voyageai.com/v1",
+        "api_key": "pa-test",
+        "model": "voyage-3-lite",
+        "timeout_seconds": 10,
+    }
+    h = embeddings_client.health(cfg, transport=transport)
+    assert h["status"] == "ok"
+    assert any(p.endswith("/embeddings") for p in paths)
+
+    disc = provider_models.discover_models(
+        kind="embeddings",
+        base_url="https://api.voyageai.com/v1",
+        api_key="pa-test",
+        transport=transport,
+    )
+    assert disc["status"] == "ok"
+    assert any(m["id"] == "voyage-3-lite" for m in disc["models"])
+
 

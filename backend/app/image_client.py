@@ -385,28 +385,113 @@ def _generate_sdwebui_img2img(cfg: dict, client: httpx.Client, prompt: str,
     return _first_image(data, "img2img"), width, height
 
 
+def _extract_chat_image_url(data: dict) -> str | None:
+    """Extrai data-URL ou URL HTTP de imagem de respostas OpenRouter/chat multimodal."""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    msg = (choices[0] or {}).get("message")
+    if not isinstance(msg, dict):
+        return None
+    images = msg.get("images")
+    if isinstance(images, list):
+        for item in images:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, dict):
+                img_url = item.get("image_url")
+                if isinstance(img_url, dict) and img_url.get("url"):
+                    return str(img_url["url"]).strip()
+                if isinstance(img_url, str) and img_url.strip():
+                    return img_url.strip()
+                if item.get("url"):
+                    return str(item["url"]).strip()
+                if item.get("b64_json"):
+                    return f"data:image/png;base64,{item['b64_json']}"
+    content = msg.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            img_url = part.get("image_url")
+            if isinstance(img_url, dict) and img_url.get("url"):
+                return str(img_url["url"]).strip()
+            if part.get("b64_json"):
+                return f"data:image/png;base64,{part['b64_json']}"
+    elif isinstance(content, str) and "data:image/" in content:
+        start = content.find("data:image/")
+        end = len(content)
+        for delim in (")", '"', "'", " ", "\n"):
+            pos = content.find(delim, start)
+            if pos != -1 and pos < end:
+                end = pos
+        return content[start:end].strip()
+    return None
+
+
+def _generate_openrouter_image(
+    cfg: dict, client: httpx.Client, base: str, headers: dict[str, str], prompt: str,
+) -> tuple[bytes, int | None, int | None]:
+    payload: dict[str, Any] = {
+        "model": cfg["openai_model"],
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image", "text"],
+    }
+    data = _post_json(client, f"{base}/chat/completions", payload, headers,
+                      "chat/completions (image)")
+    target = _extract_chat_image_url(data)
+    if not target:
+        raise ImageError("resposta do OpenRouter sem imagem em choices[0].message.images")
+    if target.lstrip().startswith("data:"):
+        content = _decode_b64(target, "openrouter/image")
+    else:
+        content = _download(client, target, headers, base)
+    return content, None, None
+
+
 def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[bytes, int | None, int | None]:
     base = cfg["openai_base_url"].rstrip("/")
     if not base:
         raise ImageError("config_error: image.providers.openai_compatible.base_url vazio")
+    low_base = base.lower()
     headers = {"Accept": "application/json"}
     if cfg.get("openai_api_key"):
         headers["Authorization"] = f"Bearer {cfg['openai_api_key']}"
-    payload = {
+    if "openrouter.ai" in low_base:
+        headers["X-Title"] = "AI Dungeon Local"
+        return _generate_openrouter_image(cfg, client, base, headers, prompt)
+
+    payload: dict[str, Any] = {
         "model": cfg["openai_model"],
         "prompt": prompt,
-        "size": cfg["openai_size"],
         "response_format": "b64_json",
     }
-    try:
-        data = _post_json(client, f"{base}/images/generations", payload, headers,
-                          "images/generations")
-    except ImageError as exc:
-        if "HTTP 400" not in exc.message or "response_format" not in payload:
+    # xAI (grok-2-image) e Google Gemini Imagen rejeitam o campo `size` no /images/generations
+    omit_size_host = ("api.x.ai" in low_base or "generativelanguage.googleapis.com" in low_base)
+    if cfg.get("openai_size") and not omit_size_host:
+        payload["size"] = cfg["openai_size"]
+
+    data: dict | None = None
+    for _ in range(3):
+        try:
+            data = _post_json(client, f"{base}/images/generations", payload, headers,
+                              "images/generations")
+            break
+        except ImageError as exc:
+            if "HTTP 400" not in exc.message and "HTTP 422" not in exc.message:
+                raise
+            low_err = exc.message.lower()
+            if "size" in low_err and "size" in payload:
+                payload = {k: v for k, v in payload.items() if k != "size"}
+                continue
+            if "response_format" in payload:
+                payload = {k: v for k, v in payload.items() if k != "response_format"}
+                continue
+            if "size" in payload:
+                payload = {k: v for k, v in payload.items() if k != "size"}
+                continue
             raise
-        retry_payload = {k: v for k, v in payload.items() if k != "response_format"}
-        data = _post_json(client, f"{base}/images/generations", retry_payload, headers,
-                          "images/generations")
+    assert data is not None
     items = data.get("data")
     if not isinstance(items, list) or not items or not isinstance(items[0], dict):
         raise ImageError("resposta de images/generations sem lista 'data'")
@@ -418,11 +503,12 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
     else:
         raise ImageError("resposta de images/generations sem b64_json nem url")
     width = height = None
-    try:  # size "WxH" → dimensões (best-effort; None se formato inesperado)
-        w, h = str(cfg["openai_size"]).lower().split("x", 1)
-        width, height = int(w), int(h)
-    except (ValueError, AttributeError):
-        pass
+    if "size" in payload:
+        try:  # size "WxH" → dimensões (best-effort; None se formato inesperado)
+            w, h = str(payload["size"]).lower().split("x", 1)
+            width, height = int(w), int(h)
+        except (ValueError, AttributeError):
+            pass
     return content, width, height
 
 
@@ -1977,6 +2063,8 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 headers = {"Accept": "application/json"}
                 if cfg.get("openai_api_key"):
                     headers["Authorization"] = f"Bearer {cfg['openai_api_key']}"
+                if "openrouter.ai" in base.lower():
+                    headers["X-Title"] = "AI Dungeon Local"
                 try:
                     resp = client.get(f"{base}/models", headers=headers)
                 except httpx.TransportError as exc:
@@ -1994,12 +2082,19 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                     models = data
                 elif isinstance(data, dict) and isinstance(data.get("data"), list):
                     models = data["data"]
+                elif isinstance(data, dict) and isinstance(data.get("models"), list):
+                    models = data["models"]
                 else:
                     raise ImageError("resposta de models sem lista 'data'")
-                ids = {str(item.get("id")) for item in models if isinstance(item, dict)}
+                ids = {str(item.get("id") or item.get("name") or "") for item in models if isinstance(item, dict)}
+                ids.discard("")
+                basenames = {mid.rsplit("/", 1)[-1] for mid in ids}
                 result["model_count"] = len(ids)
                 if cfg.get("openai_model"):
-                    result["model_available"] = cfg["openai_model"] in ids
+                    wanted = str(cfg["openai_model"]).strip()
+                    result["model_available"] = (
+                        wanted in ids or wanted.rsplit("/", 1)[-1] in basenames
+                    )
                 if not models:
                     result["status"] = "degraded"
                     result["detail"] = "servidor respondeu, mas nenhum modelo está disponível"

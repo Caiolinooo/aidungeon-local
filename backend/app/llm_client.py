@@ -243,6 +243,41 @@ def _is_gemini_openai(cfg: dict) -> bool:
     return "generativelanguage.googleapis.com" in str(cfg.get("base_url") or "").lower()
 
 
+_OPENAI_REASONING_RE = re.compile(r"^(?:o1|o3|o4|gpt-5)(?:$|[-_.])", re.IGNORECASE)
+
+
+def _is_openai_reasoning_model(cfg: dict, model: str) -> bool:
+    base = str(cfg.get("base_url") or "").lower()
+    if "api.openai.com" not in base and "openai.azure.com" not in base:
+        return False
+    clean = str(model or "").strip().rsplit("/", 1)[-1].lower()
+    if not clean or "chat" in clean:
+        return False
+    return bool(_OPENAI_REASONING_RE.match(clean))
+
+
+def _cloud_stop_sequences(stop: list[str] | None, *, limit: int = 4) -> list[str]:
+    """Deduplica e limita `stop` ao teto universal de APIs OpenAI-compatíveis.
+
+    OpenAI, Groq, xAI, Mistral e maioria dos gateways aceitam no máximo 4
+    sequências; Google Gemini aceita no máximo 5. O `output_sanitizer` cobre
+    eventuais marcadores excedentes no pós-processamento.
+    """
+    if not stop:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in stop:
+        if not isinstance(item, str) or not item:
+            continue
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+            if len(out) >= limit:
+                break
+    return out
+
+
 _LLAMA_CPP_ONLY_FIELDS = frozenset({
     "return_progress",
     "cache_prompt",
@@ -263,6 +298,7 @@ _OPTIONAL_SAMPLER_FIELDS = frozenset({
     "top_p",
     "stop",
     "temperature",
+    "reasoning_effort",
 })
 
 _UNKNOWN_PARAM_MARKERS = (
@@ -275,16 +311,27 @@ _UNKNOWN_PARAM_MARKERS = (
     "unsupported parameter",
     "unsupported value",
     "is not supported",
+    "not supported",
     "additional properties are not allowed",
     "cannot find field",
+    "invalid_argument",
+    "must not exceed",
+    "cannot both be specified",
+    "too many",
+    "at most",
+)
+
+_STOP_LIMIT_RE = re.compile(
+    r"(?:not exceed|at most|max(?:imum)?(?: of)?|up to|limit(?: of)?)\s+(\d+)",
+    re.IGNORECASE,
 )
 
 
 def _strip_rejected_fields(payload: dict[str, Any], error_body: str) -> tuple[dict[str, Any], list[str]] | None:
-    """Remove campos opcionais/llama.cpp rejeitados num HTTP 400 para retry único.
+    """Remove ou ajusta campos rejeitados num HTTP 400/422 para retry automático.
 
     Retorna `(novo_payload, campos_alterados)` se houve saneamento aplicável,
-    ou `None` quando o 400 não indica parâmetro desconhecido/não suportado.
+    ou `None` quando o erro não indica parâmetro desconhecido/limite de sampler.
     """
     lower = (error_body or "").lower()
     if not any(marker in lower for marker in _UNKNOWN_PARAM_MARKERS):
@@ -293,10 +340,30 @@ def _strip_rejected_fields(payload: dict[str, Any], error_body: str) -> tuple[di
     cleaned = dict(payload)
     changed: set[str] = set()
 
+    # 1. OpenAI o1/o3/o4/gpt-5: max_tokens -> max_completion_tokens
     if "max_completion_tokens" in lower and "max_tokens" in cleaned:
         cleaned["max_completion_tokens"] = cleaned.pop("max_tokens")
         changed.add("max_tokens->max_completion_tokens")
 
+    # 2. Limite ou rejeição de stop / stop_sequences (ex.: Gemini > 5, OpenAI > 4)
+    if "stop" in cleaned and ("stop_sequences" in lower or "stop sequence" in lower):
+        stops = cleaned.get("stop")
+        m = _STOP_LIMIT_RE.search(error_body or "")
+        limit = int(m.group(1)) if m else 4
+        safe_limit = max(0, min(limit, 4))
+        if isinstance(stops, list) and safe_limit > 0 and len(stops) > safe_limit:
+            cleaned["stop"] = stops[:safe_limit]
+            changed.add(f"stop[:{safe_limit}]")
+        else:
+            cleaned.pop("stop", None)
+            changed.add("stop")
+
+    # 3. Proxies Anthropic/Bedrock: temperature e top_p mutuamente exclusivos
+    if "cannot both be specified" in lower and "temperature" in cleaned and "top_p" in cleaned:
+        cleaned.pop("top_p", None)
+        changed.add("top_p")
+
+    # 4. Campos opcionais ou extensões llama.cpp citados pelo nome no corpo do erro
     strippable = _LLAMA_CPP_ONLY_FIELDS | _OPTIONAL_SAMPLER_FIELDS
     matched_llama = False
     for key in list(cleaned.keys()):
@@ -308,6 +375,8 @@ def _strip_rejected_fields(payload: dict[str, Any], error_body: str) -> tuple[di
             if key in _LLAMA_CPP_ONLY_FIELDS:
                 matched_llama = True
 
+    # Se algum campo llama.cpp foi rejeitado (ou erro genérico de extra fields),
+    # limpa todas as extensões llama.cpp de uma vez para evitar múltiplos 400s.
     if matched_llama or not changed:
         for key in list(cleaned.keys()):
             if key in _LLAMA_CPP_ONLY_FIELDS:
@@ -855,19 +924,25 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
     """Payload de /chat/completions (inclui o flag anti-thinking do Qwen3.x no llama.cpp)."""
     role = normalize_role(role)
     if _is_cloud_openai(cfg):
+        reasoning = _is_openai_reasoning_model(cfg, model)
+        max_tok = int(sampler.get("max_tokens", 300))
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "temperature": sampler.get("temperature", 0.85),
-            "top_p": sampler.get("top_p", 1.0),
-            "max_tokens": int(sampler.get("max_tokens", 300)),
         }
-        if not _is_gemini_openai(cfg):
-            payload["presence_penalty"] = sampler.get("presence_penalty", 0.15)
-            payload["frequency_penalty"] = sampler.get("frequency_penalty", 0.10)
-        if stop:
-            payload["stop"] = list(stop)
+        if reasoning:
+            payload["max_completion_tokens"] = max_tok
+        else:
+            payload["temperature"] = sampler.get("temperature", 0.85)
+            payload["top_p"] = sampler.get("top_p", 1.0)
+            payload["max_tokens"] = max_tok
+            if not _is_gemini_openai(cfg):
+                payload["presence_penalty"] = sampler.get("presence_penalty", 0.15)
+                payload["frequency_penalty"] = sampler.get("frequency_penalty", 0.10)
+            cloud_stops = _cloud_stop_sequences(stop, limit=4)
+            if cloud_stops:
+                payload["stop"] = cloud_stops
         return payload
 
     payload = {
@@ -931,7 +1006,7 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
     current_payload = payload
     try:
         with _make_client(cfg, transport, read_timeout) as client:
-            for attempt in range(2):
+            for attempt in range(4):
                 with client.stream("POST", f"{base}/chat/completions",
                                    json=current_payload, headers=_headers(cfg),
                                    extensions={"trace": guard.trace}) as resp:
@@ -939,14 +1014,15 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                     if resp.status_code in (401, 403):
                         resp.read()
                         raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /chat/completions")
-                    if resp.status_code == 400 and attempt == 0:
+                    if resp.status_code in (400, 422) and attempt < 3:
                         resp.read()
                         sanitized = _strip_rejected_fields(current_payload, resp.text)
                         if sanitized is not None:
                             current_payload, removed = sanitized
                             log.warning(
-                                "HTTP 400 em /chat/completions por campo rejeitado (%s); "
+                                "HTTP %s em /chat/completions por campo rejeitado (%s); "
                                 "repetindo sem esses campos",
+                                resp.status_code,
                                 ", ".join(removed),
                             )
                             continue
@@ -1177,16 +1253,22 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
     if not model:
         raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
     cloud = _is_cloud_openai(cfg)
+    reasoning = cloud and _is_openai_reasoning_model(cfg, model)
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "temperature": temperature,
-        "max_tokens": int(max_tokens),
     }
+    if reasoning:
+        payload["max_completion_tokens"] = int(max_tokens)
+    else:
+        payload["temperature"] = temperature
+        payload["max_tokens"] = int(max_tokens)
     if cloud:
-        if stop:
-            payload["stop"] = list(stop)
+        if not reasoning:
+            cloud_stops = _cloud_stop_sequences(stop, limit=4)
+            if cloud_stops:
+                payload["stop"] = cloud_stops
         slot = None
     else:
         payload["stop"] = list(stop or [])
@@ -1207,7 +1289,7 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
     except LlmPreempted:
         log.info("llm %s preemptada no slot %s; repetindo uma vez", role, slot)
     except LlmError as exc:
-        if response_format is None or "HTTP 400" not in exc.message:
+        if response_format is None or ("HTTP 400" not in exc.message and "HTTP 422" not in exc.message):
             raise
         log.warning("llm %s rejeitou JSON schema; repetindo sem response_format", role)
         payload.pop("response_format", None)

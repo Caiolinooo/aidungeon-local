@@ -33,7 +33,8 @@ def test_list_profiles_empty_and_multimodal_templates(client):
     assert set(templates["openai"]["capabilities"]) == {"llm", "image", "voice", "embeddings"}
     assert set(templates["together"]["capabilities"]) == {"llm", "image", "embeddings"}
     assert set(templates["groq"]["capabilities"]) == {"llm", "voice"}
-    assert set(templates["openrouter"]["capabilities"]) == {"llm", "embeddings"}
+    assert set(templates["openrouter"]["capabilities"]) == {"llm", "image", "embeddings"}
+    assert set(templates["gemini"]["capabilities"]) == {"llm", "image", "embeddings"}
 
 
 def test_create_activate_reuse_single_api_key_across_all_four_modalities(client):

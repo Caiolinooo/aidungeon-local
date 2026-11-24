@@ -239,6 +239,16 @@ async def _prepare_tts(request: Request, body: TtsRequest,
     return cfg, text, voice, emotion, cloned
 
 
+def _audio_media_type(data: bytes) -> str:
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    return "audio/mpeg"
+
+
 @router.post("/tts")
 async def post_tts(request: Request, body: TtsRequest,
                    info: auth.AuthInfo = Depends(auth.require_auth),
@@ -248,7 +258,7 @@ async def post_tts(request: Request, body: TtsRequest,
         cfg, text, voice, emotion, "mp3", transport)
     cached = voice_client.cached_speech(cache_key)
     if cached is not None:
-        return Response(content=cached, media_type="audio/mpeg",
+        return Response(content=cached, media_type=_audio_media_type(cached),
                         headers={"X-Voice-Emotion": emotion})
 
     async def speak() -> bytes:
@@ -264,7 +274,7 @@ async def post_tts(request: Request, body: TtsRequest,
         audio = await _retry_if_clone_missing(
             request, cfg, voice, cloned, transport, exc, speak)
     voice_client.remember_speech(cache_key, audio)
-    return Response(content=audio, media_type="audio/mpeg",
+    return Response(content=audio, media_type=_audio_media_type(audio),
                     headers={"X-Voice-Emotion": emotion})
 
 

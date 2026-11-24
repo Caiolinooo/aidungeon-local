@@ -273,6 +273,42 @@ def _speech_status_error(resp: httpx.Response) -> VoiceError:
     return VoiceError(message)
 
 
+def _is_cloud_voice(cfg: dict) -> bool:
+    from app import provider_models
+    return provider_models.is_cloud_openai_url(str(cfg.get("base_url") or ""))
+
+
+def _default_tts_format(cfg: dict) -> str:
+    # Groq PlayAI-TTS / Orpheus só aceitam WAV e rejeitam mp3 com HTTP 400
+    if "api.groq.com" in str(cfg.get("base_url") or "").lower():
+        return "wav"
+    return "mp3"
+
+
+def _next_speech_retry_payload(payload: dict, resp: httpx.Response) -> dict | None:
+    """Ajusta payload de /audio/speech em HTTP 400/422 (instructions ou response_format)."""
+    if resp.status_code not in (400, 422) or _missing_clone_response(resp):
+        return None
+    if "instructions" in payload:
+        return {k: v for k, v in payload.items() if k != "instructions"}
+    low = (resp.text or "")[:500].lower()
+    if payload.get("response_format") == "mp3" and any(
+        tok in low for tok in ("response_format", "mp3", "wav", "format")
+    ):
+        updated = dict(payload)
+        updated["response_format"] = "wav"
+        return updated
+    return None
+
+
+def _normalize_stt_language(language: str | None) -> str | None:
+    """Normaliza locale BCP-47 (ex.: pt-BR -> pt) para Whisper OpenAI/Groq."""
+    raw = str(language or "").strip()
+    if not raw:
+        return None
+    return raw.split("-", 1)[0].split("_", 1)[0].lower()
+
+
 def _speech_payload(cfg: dict, text: str, voice: str, emotion: str | None,
                     response_format: str) -> dict:
     voice = voice or cfg["narrator_voice"]
@@ -298,17 +334,20 @@ def open_speech_stream(cfg: dict, text: str, voice: str, *,
     response: httpx.Response | None = None
     handed = False
     try:
-        response = client.send(client.build_request(
-            "POST", f"{_base(cfg)}/audio/speech", json=payload,
-            headers=_headers(cfg)), stream=True)
-        if (response.status_code == 400 and "instructions" in payload):
-            response.read()
-            if not _missing_clone_response(response):
-                response.close()
-                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
-                response = client.send(client.build_request(
-                    "POST", f"{_base(cfg)}/audio/speech", json=retry_payload,
-                    headers=_headers(cfg)), stream=True)
+        current = payload
+        for _ in range(3):
+            response = client.send(client.build_request(
+                "POST", f"{_base(cfg)}/audio/speech", json=current,
+                headers=_headers(cfg)), stream=True)
+            if response.status_code in (400, 422):
+                response.read()
+                retry = _next_speech_retry_payload(current, response)
+                if retry is not None:
+                    response.close()
+                    current = retry
+                    continue
+            break
+        assert response is not None
         if response.status_code in (401, 403) or response.status_code != 200:
             response.read()
             raise _speech_status_error(response)
@@ -348,14 +387,19 @@ def _post_speech(cfg: dict, payload: dict, *,
     client, owns = _borrow_sync(_base(cfg), timeout, transport)
     try:
         try:
-            resp = client.post(f"{_base(cfg)}/audio/speech", json=payload,
-                               headers=_headers(cfg))
-            if resp.status_code == 400 and "instructions" in payload and not _missing_clone_response(resp):
-                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
-                resp = client.post(f"{_base(cfg)}/audio/speech", json=retry_payload,
+            current = payload
+            resp: httpx.Response | None = None
+            for _ in range(3):
+                resp = client.post(f"{_base(cfg)}/audio/speech", json=current,
                                    headers=_headers(cfg))
+                retry = _next_speech_retry_payload(current, resp)
+                if retry is not None:
+                    current = retry
+                    continue
+                break
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+        assert resp is not None
         return _finish_speech(resp)
     finally:
         if owns:
@@ -368,14 +412,19 @@ async def _post_speech_async(cfg: dict, payload: dict, *,
     client, owns = _borrow_async(_base(cfg), timeout, transport)
     try:
         try:
-            resp = await client.post(f"{_base(cfg)}/audio/speech", json=payload,
-                                     headers=_headers(cfg))
-            if resp.status_code == 400 and "instructions" in payload and not _missing_clone_response(resp):
-                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
-                resp = await client.post(f"{_base(cfg)}/audio/speech", json=retry_payload,
+            current = payload
+            resp: httpx.Response | None = None
+            for _ in range(3):
+                resp = await client.post(f"{_base(cfg)}/audio/speech", json=current,
                                          headers=_headers(cfg))
+                retry = _next_speech_retry_payload(current, resp)
+                if retry is not None:
+                    current = retry
+                    continue
+                break
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
+        assert resp is not None
         return _finish_speech(resp)
     finally:
         if owns:
@@ -385,21 +434,20 @@ async def _post_speech_async(cfg: dict, payload: dict, *,
 def synthesize(cfg: dict, text: str, voice: str, *,
                emotion: str | None = None,
                transport: httpx.BaseTransport | None = None) -> bytes:
-    """Sintetiza `text` com `voice` no provider efetivo; devolve bytes mp3.
+    """Sintetiza `text` com `voice` no provider efetivo; devolve bytes de áudio.
 
     `emotion` vira o campo `instructions` (o audio_server atual aceita e
-    ignora). Com `drama3_enabled`, o modelo pedido é o Drama-3 e a direção
-    entra no texto, no formato dos colchetes. Se esse modelo recusar, a
-    fala volta ao `tts_model` (Supertonic) sem a etiqueta — senão ele leria
-    o colchete em voz alta. Levanta VoiceError subclasses.
+    ignora). Com `drama3_enabled` (apenas em servidor local), o modelo pedido
+    é o Drama-3 e a direção entra no texto, no formato dos colchetes. Se esse
+    modelo recusar, a fala volta ao `tts_model` sem a etiqueta.
     """
     instruction = direction_for(emotion) if emotion else None
-    use_drama = bool(cfg.get("drama3_enabled"))
+    use_drama = bool(cfg.get("drama3_enabled")) and not _is_cloud_voice(cfg)
     payload = {
         "model": (cfg.get("drama3_model") or "drama-3") if use_drama else cfg["tts_model"],
         "voice": voice,
         "input": f"{instruction} {text}" if use_drama and instruction else text,
-        "response_format": "mp3",
+        "response_format": _default_tts_format(cfg),
     }
     if instruction:
         payload["instructions"] = instruction
@@ -421,12 +469,12 @@ async def synthesize_async(cfg: dict, text: str, voice: str, *,
                            transport: httpx.AsyncBaseTransport | None = None) -> bytes:
     """Versão assíncrona de synthesize; cancelar a coroutine fecha o POST HTTP."""
     instruction = direction_for(emotion) if emotion else None
-    use_drama = bool(cfg.get("drama3_enabled"))
+    use_drama = bool(cfg.get("drama3_enabled")) and not _is_cloud_voice(cfg)
     payload = {
         "model": (cfg.get("drama3_model") or "drama-3") if use_drama else cfg["tts_model"],
         "voice": voice,
         "input": f"{instruction} {text}" if use_drama and instruction else text,
-        "response_format": "mp3",
+        "response_format": _default_tts_format(cfg),
     }
     if instruction:
         payload["instructions"] = instruction
@@ -455,8 +503,9 @@ def transcribe(cfg: dict, filename: str, content_type: str, data: bytes, *,
     timeout = float(cfg.get("timeout_seconds", 60))
     files = {"file": (filename, data, content_type)}
     form = {"model": cfg["stt_model"]}
-    if language:
-        form["language"] = language
+    norm_lang = _normalize_stt_language(language)
+    if norm_lang:
+        form["language"] = norm_lang
     with _make_client(transport, timeout) as client:
         try:
             resp = client.post(f"{_base(cfg)}/audio/transcriptions", files=files,
@@ -485,8 +534,9 @@ async def transcribe_async(cfg: dict, filename: str, content_type: str, data: by
     timeout = float(cfg.get("timeout_seconds", 60))
     files = {"file": (filename, data, content_type)}
     form = {"model": cfg["stt_model"]}
-    if language:
-        form["language"] = language
+    norm_lang = _normalize_stt_language(language)
+    if norm_lang:
+        form["language"] = norm_lang
     async with _make_async_client(transport, timeout) as client:
         try:
             resp = await client.post(f"{_base(cfg)}/audio/transcriptions", files=files,

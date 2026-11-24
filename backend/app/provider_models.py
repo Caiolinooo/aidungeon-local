@@ -223,6 +223,24 @@ def provider_presets() -> dict[str, list[dict[str, Any]]]:
                 "default_size": "1024x1024",
             },
             {
+                "id": "openrouter",
+                "label": "OpenRouter Images",
+                "provider": "openai_compatible",
+                "base_url": "https://openrouter.ai/api/v1",
+                "requires_api_key": True,
+                "default_model": "google/gemini-2.5-flash-image-preview",
+                "default_size": "1024x1024",
+            },
+            {
+                "id": "gemini",
+                "label": "Google Gemini (Imagen)",
+                "provider": "openai_compatible",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "requires_api_key": True,
+                "default_model": "imagen-3.0-generate-002",
+                "default_size": "1024x1024",
+            },
+            {
                 "id": "local_openai",
                 "label": "OpenAI-Compatível (Local)",
                 "provider": "openai_compatible",
@@ -338,6 +356,13 @@ def provider_presets() -> dict[str, list[dict[str, Any]]]:
                 "default_model": "mistral-embed",
             },
             {
+                "id": "gemini",
+                "label": "Google Gemini Embeddings",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "requires_api_key": True,
+                "default_model": "gemini-embedding-001",
+            },
+            {
                 "id": "voyage",
                 "label": "Voyage AI",
                 "base_url": "https://api.voyageai.com/v1",
@@ -378,10 +403,12 @@ def _make_client(transport: httpx.BaseTransport | None, timeout: float = DISCOVE
     return httpx.Client(**kwargs)
 
 
-def _auth_headers(api_key: str | None) -> dict[str, str]:
+def _auth_headers(api_key: str | None, base_url: str = "") -> dict[str, str]:
     headers = {"Accept": "application/json"}
     if api_key and api_key.isascii() and api_key.isprintable():
         headers["Authorization"] = f"Bearer {api_key}"
+    if "openrouter.ai" in (base_url or "").lower():
+        headers["X-Title"] = "AI Dungeon Local"
     return headers
 
 
@@ -660,6 +687,36 @@ def _discover_comfyui(client: httpx.Client, base: str) -> list[dict[str, Any]]:
     return models
 
 
+_STATIC_PROVIDER_MODELS: dict[str, list[dict[str, Any]]] = {
+    "api.voyageai.com": [
+        {"id": "voyage-3.5", "name": "Voyage 3.5", "owned_by": "voyageai", "type": "embedding"},
+        {"id": "voyage-3.5-lite", "name": "Voyage 3.5 Lite", "owned_by": "voyageai", "type": "embedding"},
+        {"id": "voyage-3-large", "name": "Voyage 3 Large", "owned_by": "voyageai", "type": "embedding"},
+        {"id": "voyage-3-lite", "name": "Voyage 3 Lite", "owned_by": "voyageai", "type": "embedding"},
+        {"id": "voyage-code-3", "name": "Voyage Code 3", "owned_by": "voyageai", "type": "embedding"},
+        {"id": "voyage-multilingual-2", "name": "Voyage Multilingual 2", "owned_by": "voyageai", "type": "embedding"},
+    ],
+    "api.jina.ai": [
+        {"id": "jina-embeddings-v3", "name": "Jina Embeddings v3", "owned_by": "jina", "type": "embedding"},
+        {"id": "jina-embeddings-v2-base-en", "name": "Jina Embeddings v2 Base EN", "owned_by": "jina", "type": "embedding"},
+        {"id": "jina-clip-v2", "name": "Jina CLIP v2", "owned_by": "jina", "type": "embedding"},
+    ],
+}
+
+
+def _static_fallback_models(base: str, kind: str, task: str | None) -> list[dict[str, Any]]:
+    host = (urlparse(base).hostname or "").lower()
+    raw_items = _STATIC_PROVIDER_MODELS.get(host)
+    if not raw_items:
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw_items:
+        norm = _normalize_openai_model(item, kind, task)
+        if norm is not None:
+            out.append(norm)
+    return out
+
+
 def _discover_openai_compatible(
     client: httpx.Client,
     base: str,
@@ -676,19 +733,24 @@ def _discover_openai_compatible(
     candidate_urls.append(f"{ollama_root}/api/tags")
 
     last_error: Exception | None = None
+    all_not_found = True
     for idx, url in enumerate(candidate_urls):
         try:
             resp = client.get(url, headers=headers)
         except httpx.TransportError as exc:
             last_error = exc
+            all_not_found = False
             if idx == 0:
                 raise
             continue
         if resp.status_code in (401, 403):
             raise PermissionError(f"HTTP {resp.status_code}")
-        if resp.status_code == 404 and idx + 1 < len(candidate_urls):
+        if resp.status_code == 404:
             last_error = RuntimeError(f"HTTP 404 em {urlparse(url).path}")
-            continue
+            if idx + 1 < len(candidate_urls):
+                continue
+            break
+        all_not_found = False
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code} em {urlparse(url).path}")
         try:
@@ -706,6 +768,10 @@ def _discover_openai_compatible(
                     normalized["recommended"] = True
                 models.append(normalized)
         return models
+    if all_not_found:
+        fallback = _static_fallback_models(base, kind, task)
+        if fallback:
+            return fallback
     if last_error is not None:
         raise last_error
     return []
@@ -740,7 +806,7 @@ def discover_models(
             "voices": [],
         }
 
-    headers = _auth_headers(api_key)
+    headers = _auth_headers(api_key, base)
     voices: list[str] = []
     try:
         with _make_client(transport) as client:

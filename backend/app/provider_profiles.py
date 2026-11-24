@@ -190,8 +190,13 @@ def profile_templates() -> list[dict[str, Any]]:
             "name": "OpenRouter",
             "base_url": "https://openrouter.ai/api/v1",
             "requires_api_key": True,
-            "capabilities": ["llm", "embeddings"],
+            "capabilities": ["llm", "image", "embeddings"],
             "llm": {"model_alias": "openai/gpt-4o-mini"},
+            "image": {
+                "provider": "openai_compatible",
+                "model": "google/gemini-2.5-flash-image-preview",
+                "size": "1024x1024",
+            },
             "embeddings": {"model": "openai/text-embedding-3-small"},
         },
         {
@@ -274,9 +279,10 @@ def profile_templates() -> list[dict[str, Any]]:
             "name": "Google Gemini",
             "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
             "requires_api_key": True,
-            "capabilities": ["llm", "embeddings"],
+            "capabilities": ["llm", "image", "embeddings"],
             "llm": {"model_alias": "gemini-2.5-flash"},
-            "embeddings": {"model": "text-embedding-004"},
+            "image": {"provider": "openai_compatible", "model": "imagen-3.0-generate-002", "size": "1024x1024"},
+            "embeddings": {"model": "gemini-embedding-001"},
         },
         {
             "id": "deepseek",

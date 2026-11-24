@@ -127,6 +127,8 @@ def get_embedding(
     api_key = resolved_cfg.get("api_key")
     if isinstance(api_key, str) and api_key and api_key.isascii() and api_key.isprintable():
         headers["Authorization"] = f"Bearer {api_key}"
+    if "openrouter.ai" in base_url.lower():
+        headers["X-Title"] = "AI Dungeon Local"
 
     try:
         t = httpx.Timeout(timeout, connect=min(5.0, timeout))
@@ -165,7 +167,7 @@ def get_embedding(
 
 
 def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
-    """Sonda não-gerativa (/models) do serviço de embeddings. Sempre serializável."""
+    """Sonda do serviço de embeddings (/models ou fallback /embeddings p/ Voyage/Jina)."""
     if not cfg.get("enabled", True):
         return {"status": "disabled", "details": "embeddings desativados"}
     base_url = str(cfg.get("base_url") or "").strip().rstrip("/")
@@ -175,6 +177,8 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
     api_key = cfg.get("api_key")
     if isinstance(api_key, str) and api_key and api_key.isascii() and api_key.isprintable():
         headers["Authorization"] = f"Bearer {api_key}"
+    if "openrouter.ai" in base_url.lower():
+        headers["X-Title"] = "AI Dungeon Local"
     timeout = min(float(cfg.get("timeout_seconds", DEFAULT_TIMEOUT)), 10.0)
     t = httpx.Timeout(timeout, connect=min(5.0, timeout))
     client_kwargs: dict[str, Any] = {"timeout": t, "trust_env": False}
@@ -188,6 +192,15 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
     try:
         with httpx.Client(**client_kwargs) as client:
             resp = client.get(probe_url, headers=headers)
+            if resp.status_code == 404:
+                # Provedores dedicados de embeddings (Voyage AI, Jina AI) não expõem /models.
+                model = str(cfg.get("model") or DEFAULT_MODEL).strip()
+                emb_headers = {**headers, "Content-Type": "application/json"}
+                resp = client.post(
+                    f"{base_url}/embeddings",
+                    json={"model": model, "input": "ok"},
+                    headers=emb_headers,
+                )
         if resp.status_code in (401, 403):
             return {"status": "auth_error", "details": f"HTTP {resp.status_code}"}
         if resp.status_code != 200:
