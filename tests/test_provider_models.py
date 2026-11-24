@@ -345,3 +345,186 @@ def test_openai_image_retries_without_response_format_for_gpt_image_1(tmp_path):
     assert "response_format" in calls[0]
     assert "response_format" not in calls[1]
     assert result["provider"] == "openai_compatible"
+
+
+def test_gemini_stream_chat_completion_omits_frequency_penalty_and_return_progress():
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            sse = (
+                'data: {"choices":[{"delta":{"content":"Olá "}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"mundo!"},"finish_reason":"stop"}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "api_key": "AIza-test",
+        "model_alias": "gemini-2.5-flash",
+        "disable_thinking": True,
+        "context_size": 32768,
+        "timeout_seconds": 30,
+    }
+    tokens = list(llm_client.stream_chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        sampler={"temperature": 0.8, "max_tokens": 120, "frequency_penalty": 0.1, "presence_penalty": 0.15},
+        stop=[],
+        transport=httpx.MockTransport(handler),
+        role="narrative",
+    ))
+    assert "".join(tokens) == "Olá mundo!"
+    assert len(calls) == 1
+    sent = calls[0]
+    assert sent["model"] == "gemini-2.5-flash"
+    assert "return_progress" not in sent
+    assert "frequency_penalty" not in sent
+    assert "presence_penalty" not in sent
+    assert "dry_multiplier" not in sent
+    assert "cache_prompt" not in sent
+    assert "chat_template_kwargs" not in sent
+    assert "id_slot" not in sent
+
+
+def test_custom_cloud_proxy_retries_once_when_http_400_rejects_unknown_fields():
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/props"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if "frequency_penalty" in body or "return_progress" in body or "cache_prompt" in body:
+                return httpx.Response(
+                    400,
+                    json=[{
+                        "error": {
+                            "code": 400,
+                            "message": (
+                                'Invalid JSON payload received. Unknown name "frequency_penalty": '
+                                'Cannot find field.\n'
+                                'Invalid JSON payload received. Unknown name "return_progress": '
+                                'Cannot find field.'
+                            ),
+                        }
+                    }],
+                )
+            sse = (
+                'data: {"choices":[{"delta":{"content":"Ok!"}}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://my-gemini-proxy.example.com/v1",
+        "api_key": "proxy-key",
+        "model_alias": "gemini-2.5-pro",
+        "disable_thinking": True,
+        "context_size": 32768,
+        "timeout_seconds": 30,
+    }
+    tokens = list(llm_client.stream_chat_completion(
+        cfg,
+        [{"role": "user", "content": "teste"}],
+        sampler={"temperature": 0.7, "max_tokens": 100, "frequency_penalty": 0.1},
+        stop=[],
+        transport=httpx.MockTransport(handler),
+        role="narrative",
+    ))
+    assert "".join(tokens) == "Ok!"
+    assert len(calls) == 2
+    assert "return_progress" in calls[0]
+    assert "frequency_penalty" in calls[0]
+    assert "return_progress" not in calls[1]
+    assert "frequency_penalty" not in calls[1]
+    assert "cache_prompt" not in calls[1]
+    assert "dry_multiplier" not in calls[1]
+    assert "chat_template_kwargs" not in calls[1]
+
+
+def test_openai_reasoning_model_swaps_max_tokens_to_max_completion_tokens_on_400():
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if "max_tokens" in body:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "message": (
+                                "Unsupported parameter: 'max_tokens' is not supported with this "
+                                "model. Use 'max_completion_tokens' instead."
+                            ),
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "feito"}, "finish_reason": "stop"}]},
+            )
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-test",
+        "model_alias": "o3-mini",
+        "timeout_seconds": 30,
+    }
+    out = llm_client.chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        max_tokens=150,
+        transport=httpx.MockTransport(handler),
+    )
+    assert out == "feito"
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 150
+    assert "max_tokens" not in calls[1]
+    assert calls[1]["max_completion_tokens"] == 150
+
+
+def test_local_llamacpp_stream_still_sends_return_progress():
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/props"):
+            return httpx.Response(200, json={"total_slots": 4})
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            sse = 'data: {"choices":[{"delta":{"content":"local"}}]}\n\ndata: [DONE]\n\n'
+            return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "http://127.0.0.1:8080/v1",
+        "api_key": "",
+        "model_alias": "qwen3-local",
+        "disable_thinking": True,
+        "context_size": 32768,
+        "timeout_seconds": 30,
+    }
+    tokens = list(llm_client.stream_chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        sampler={"temperature": 0.8, "max_tokens": 100},
+        stop=[],
+        transport=httpx.MockTransport(handler),
+        role="narrative",
+    ))
+    assert "".join(tokens) == "local"
+    assert len(calls) == 1
+    assert calls[0]["return_progress"] is True
+    assert "cache_prompt" in calls[0]
+    assert "dry_multiplier" in calls[0]
+

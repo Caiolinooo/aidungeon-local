@@ -46,6 +46,7 @@ import collections
 import json
 import logging
 import math
+import re
 import socket
 import threading
 import time
@@ -236,6 +237,86 @@ def _record_call(role: str, slot: int | None, state: StreamState,
 def _is_cloud_openai(cfg: dict) -> bool:
     from app import provider_models
     return provider_models.is_cloud_openai_url(str(cfg.get("base_url") or ""))
+
+
+def _is_gemini_openai(cfg: dict) -> bool:
+    return "generativelanguage.googleapis.com" in str(cfg.get("base_url") or "").lower()
+
+
+_LLAMA_CPP_ONLY_FIELDS = frozenset({
+    "return_progress",
+    "cache_prompt",
+    "id_slot",
+    "chat_template_kwargs",
+    "min_p",
+    "repeat_penalty",
+    "dry_multiplier",
+    "dry_base",
+    "dry_allowed_length",
+    "dry_penalty_last_n",
+    "dry_sequence_breakers",
+})
+
+_OPTIONAL_SAMPLER_FIELDS = frozenset({
+    "frequency_penalty",
+    "presence_penalty",
+    "top_p",
+    "stop",
+    "temperature",
+})
+
+_UNKNOWN_PARAM_MARKERS = (
+    "unknown name",
+    "unknown field",
+    "unknown parameter",
+    "unrecognized request argument",
+    "unrecognized field",
+    "extra inputs are not permitted",
+    "unsupported parameter",
+    "unsupported value",
+    "is not supported",
+    "additional properties are not allowed",
+    "cannot find field",
+)
+
+
+def _strip_rejected_fields(payload: dict[str, Any], error_body: str) -> tuple[dict[str, Any], list[str]] | None:
+    """Remove campos opcionais/llama.cpp rejeitados num HTTP 400 para retry único.
+
+    Retorna `(novo_payload, campos_alterados)` se houve saneamento aplicável,
+    ou `None` quando o 400 não indica parâmetro desconhecido/não suportado.
+    """
+    lower = (error_body or "").lower()
+    if not any(marker in lower for marker in _UNKNOWN_PARAM_MARKERS):
+        return None
+
+    cleaned = dict(payload)
+    changed: set[str] = set()
+
+    if "max_completion_tokens" in lower and "max_tokens" in cleaned:
+        cleaned["max_completion_tokens"] = cleaned.pop("max_tokens")
+        changed.add("max_tokens->max_completion_tokens")
+
+    strippable = _LLAMA_CPP_ONLY_FIELDS | _OPTIONAL_SAMPLER_FIELDS
+    matched_llama = False
+    for key in list(cleaned.keys()):
+        if key not in strippable:
+            continue
+        if re.search(rf"(?<![a-zA-Z0-9_]){re.escape(key)}(?![a-zA-Z0-9_])", error_body):
+            cleaned.pop(key, None)
+            changed.add(key)
+            if key in _LLAMA_CPP_ONLY_FIELDS:
+                matched_llama = True
+
+    if matched_llama or not changed:
+        for key in list(cleaned.keys()):
+            if key in _LLAMA_CPP_ONLY_FIELDS:
+                cleaned.pop(key, None)
+                changed.add(key)
+
+    if not changed:
+        return None
+    return cleaned, sorted(changed)
 
 
 def _headers(cfg: dict) -> dict[str, str]:
@@ -780,10 +861,11 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
             "stream": True,
             "temperature": sampler.get("temperature", 0.85),
             "top_p": sampler.get("top_p", 1.0),
-            "presence_penalty": sampler.get("presence_penalty", 0.15),
-            "frequency_penalty": sampler.get("frequency_penalty", 0.10),
             "max_tokens": int(sampler.get("max_tokens", 300)),
         }
+        if not _is_gemini_openai(cfg):
+            payload["presence_penalty"] = sampler.get("presence_penalty", 0.15)
+            payload["frequency_penalty"] = sampler.get("frequency_penalty", 0.10)
         if stop:
             payload["stop"] = list(stop)
         return payload
@@ -846,80 +928,96 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
     saw_content = False
     saw_reasoning = False
     finished = False
+    current_payload = payload
     try:
         with _make_client(cfg, transport, read_timeout) as client:
-            with client.stream("POST", f"{base}/chat/completions",
-                               json=payload, headers=_headers(cfg),
-                               extensions={"trace": guard.trace}) as resp:
-                guard.attach(_stream_socket(resp.extensions.get("network_stream")))
-                if resp.status_code in (401, 403):
-                    resp.read()
-                    raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /chat/completions")
-                if resp.status_code != 200:
-                    resp.read()
-                    raise LlmError(f"HTTP {resp.status_code} em /chat/completions:"
-                                   f" {resp.text[:200]}")
-                ctype = resp.headers.get("content-type", "")
-                if "event-stream" not in ctype:
-                    resp.read()
-                    guard.check()
-                    try:
-                        data = resp.json()
-                        msg = (data.get("choices") or [{}])[0].get("message") or {}
-                    except (ValueError, IndexError, AttributeError) as exc:
-                        raise LlmError("resposta de /chat/completions inválida "
-                                       "(sem choices[0].message)") from exc
-                    if isinstance(data.get("timings"), dict):
-                        state.timings = data["timings"]
-                    choice = (data.get("choices") or [{}])[0]
-                    if choice.get("finish_reason") in ("length", "max_tokens"):
-                        state.truncated = True
-                    finished = True
-                    content = msg.get("content") or ""
-                    if content:
-                        state.ttft_s = time.monotonic() - started
-                        guard.token()
-                        yield content
-                        return
-                    if msg.get("reasoning_content"):
-                        saw_reasoning = True
-                else:
-                    for line in resp.iter_lines():
+            for attempt in range(2):
+                with client.stream("POST", f"{base}/chat/completions",
+                                   json=current_payload, headers=_headers(cfg),
+                                   extensions={"trace": guard.trace}) as resp:
+                    guard.attach(_stream_socket(resp.extensions.get("network_stream")))
+                    if resp.status_code in (401, 403):
+                        resp.read()
+                        raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /chat/completions")
+                    if resp.status_code == 400 and attempt == 0:
+                        resp.read()
+                        sanitized = _strip_rejected_fields(current_payload, resp.text)
+                        if sanitized is not None:
+                            current_payload, removed = sanitized
+                            log.warning(
+                                "HTTP 400 em /chat/completions por campo rejeitado (%s); "
+                                "repetindo sem esses campos",
+                                ", ".join(removed),
+                            )
+                            continue
+                        raise LlmError(f"HTTP {resp.status_code} em /chat/completions:"
+                                       f" {resp.text[:300]}")
+                    if resp.status_code != 200:
+                        resp.read()
+                        raise LlmError(f"HTTP {resp.status_code} em /chat/completions:"
+                                       f" {resp.text[:300]}")
+                    ctype = resp.headers.get("content-type", "")
+                    if "event-stream" not in ctype:
+                        resp.read()
                         guard.check()
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data = line[len("data:"):].strip()
-                        if data == "[DONE]":
-                            finished = True
-                            break
                         try:
-                            chunk = json.loads(data)
-                        except ValueError:
-                            continue
-                        if isinstance(chunk.get("timings"), dict):
-                            state.timings = chunk["timings"]
-                        if isinstance(chunk.get("prompt_progress"), dict):
-                            state.progress = chunk["prompt_progress"]
-                            guard.progress()
-                        for choice in chunk.get("choices") or []:
-                            delta = choice.get("delta") or {}
-                            token = delta.get("content")
-                            if token:
-                                if not saw_content:
-                                    state.ttft_s = time.monotonic() - started
-                                saw_content = True
-                                guard.token()
-                                yield token
-                            elif delta.get("reasoning_content"):
-                                saw_reasoning = True
-                            if choice.get("finish_reason"):
+                            data = resp.json()
+                            msg = (data.get("choices") or [{}])[0].get("message") or {}
+                        except (ValueError, IndexError, AttributeError) as exc:
+                            raise LlmError("resposta de /chat/completions inválida "
+                                           "(sem choices[0].message)") from exc
+                        if isinstance(data.get("timings"), dict):
+                            state.timings = data["timings"]
+                        choice = (data.get("choices") or [{}])[0]
+                        if choice.get("finish_reason") in ("length", "max_tokens"):
+                            state.truncated = True
+                        finished = True
+                        content = msg.get("content") or ""
+                        if content:
+                            state.ttft_s = time.monotonic() - started
+                            guard.token()
+                            yield content
+                            return
+                        if msg.get("reasoning_content"):
+                            saw_reasoning = True
+                    else:
+                        for line in resp.iter_lines():
+                            guard.check()
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[len("data:"):].strip()
+                            if data == "[DONE]":
                                 finished = True
-                            if choice.get("finish_reason") in ("length", "max_tokens"):
-                                state.truncated = True
-                    if not finished and guard.reason:
-                        # Socket derrubado pelo guard: o corpo pode ter terminado
-                        # "limpo", mas a resposta está incompleta.
-                        raise guard.error()
+                                break
+                            try:
+                                chunk = json.loads(data)
+                            except ValueError:
+                                continue
+                            if isinstance(chunk.get("timings"), dict):
+                                state.timings = chunk["timings"]
+                            if isinstance(chunk.get("prompt_progress"), dict):
+                                state.progress = chunk["prompt_progress"]
+                                guard.progress()
+                            for choice in chunk.get("choices") or []:
+                                delta = choice.get("delta") or {}
+                                token = delta.get("content")
+                                if token:
+                                    if not saw_content:
+                                        state.ttft_s = time.monotonic() - started
+                                    saw_content = True
+                                    guard.token()
+                                    yield token
+                                elif delta.get("reasoning_content"):
+                                    saw_reasoning = True
+                                if choice.get("finish_reason"):
+                                    finished = True
+                                if choice.get("finish_reason") in ("length", "max_tokens"):
+                                    state.truncated = True
+                        if not finished and guard.reason:
+                            # Socket derrubado pelo guard: o corpo pode ter terminado
+                            # "limpo", mas a resposta está incompleta.
+                            raise guard.error()
+                    break
     except httpx.TimeoutException as exc:
         if guard.reason:
             raise guard.error() from exc
@@ -1026,7 +1124,7 @@ def stream_chat_completion(cfg: dict, messages: list[dict], *, sampler: dict,
         raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
     payload = build_chat_payload(cfg, messages, sampler=sampler, stop=stop, model=model,
                                  transport=transport, role=role)
-    stall = _stall_limits(cfg) if role == "narrative" else None
+    stall = None if _is_cloud_openai(cfg) else (_stall_limits(cfg) if role == "narrative" else None)
     if stall is not None:
         payload["return_progress"] = True
     state.slot = payload.get("id_slot")
