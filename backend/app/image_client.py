@@ -398,8 +398,15 @@ def _generate_openai(cfg: dict, client: httpx.Client, prompt: str) -> tuple[byte
         "size": cfg["openai_size"],
         "response_format": "b64_json",
     }
-    data = _post_json(client, f"{base}/images/generations", payload, headers,
-                      "images/generations")
+    try:
+        data = _post_json(client, f"{base}/images/generations", payload, headers,
+                          "images/generations")
+    except ImageError as exc:
+        if "HTTP 400" not in exc.message or "response_format" not in payload:
+            raise
+        retry_payload = {k: v for k, v in payload.items() if k != "response_format"}
+        data = _post_json(client, f"{base}/images/generations", retry_payload, headers,
+                          "images/generations")
     items = data.get("data")
     if not isinstance(items, list) or not items or not isinstance(items[0], dict):
         raise ImageError("resposta de images/generations sem lista 'data'")
@@ -1970,9 +1977,24 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 headers = {"Accept": "application/json"}
                 if cfg.get("openai_api_key"):
                     headers["Authorization"] = f"Bearer {cfg['openai_api_key']}"
-                data = _get_json(client, f"{base}/models", headers, "models")
-                models = data.get("data")
-                if not isinstance(models, list):
+                try:
+                    resp = client.get(f"{base}/models", headers=headers)
+                except httpx.TransportError as exc:
+                    raise ImageUnreachable(
+                        f"image provider unreachable: {type(exc).__name__}") from exc
+                if resp.status_code in (401, 403):
+                    raise ImageAuthError(f"auth_error: HTTP {resp.status_code} em models")
+                if resp.status_code != 200:
+                    raise ImageError(f"HTTP {resp.status_code} em models")
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    raise ImageError("resposta de models não é JSON") from exc
+                if isinstance(data, list):
+                    models = data
+                elif isinstance(data, dict) and isinstance(data.get("data"), list):
+                    models = data["data"]
+                else:
                     raise ImageError("resposta de models sem lista 'data'")
                 ids = {str(item.get("id")) for item in models if isinstance(item, dict)}
                 result["model_count"] = len(ids)

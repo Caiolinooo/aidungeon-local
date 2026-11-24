@@ -124,6 +124,9 @@ def get_embedding(
     url = f"{base_url}/embeddings"
     payload = {"model": model, "input": clean_text}
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    api_key = resolved_cfg.get("api_key")
+    if isinstance(api_key, str) and api_key and api_key.isascii() and api_key.isprintable():
+        headers["Authorization"] = f"Bearer {api_key}"
 
     try:
         t = httpx.Timeout(timeout, connect=min(5.0, timeout))
@@ -159,3 +162,42 @@ def get_embedding(
         log.warning("embeddings_client: erro inesperado (%s: %s)",
                     type(exc).__name__, exc, exc_info=True)
         return None
+
+
+def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
+    """Sonda não-gerativa (/models) do serviço de embeddings. Sempre serializável."""
+    if not cfg.get("enabled", True):
+        return {"status": "disabled", "details": "embeddings desativados"}
+    base_url = str(cfg.get("base_url") or "").strip().rstrip("/")
+    if not base_url:
+        return {"status": "config_error", "details": "embeddings.base_url vazio"}
+    headers = {"Accept": "application/json"}
+    api_key = cfg.get("api_key")
+    if isinstance(api_key, str) and api_key and api_key.isascii() and api_key.isprintable():
+        headers["Authorization"] = f"Bearer {api_key}"
+    timeout = min(float(cfg.get("timeout_seconds", DEFAULT_TIMEOUT)), 10.0)
+    t = httpx.Timeout(timeout, connect=min(5.0, timeout))
+    client_kwargs: dict[str, Any] = {"timeout": t, "trust_env": False}
+    if transport is not None:
+        client_kwargs["transport"] = transport
+    probe_url = (
+        f"{base_url}/embeddings/models"
+        if "openrouter.ai" in base_url.lower()
+        else f"{base_url}/models"
+    )
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            resp = client.get(probe_url, headers=headers)
+        if resp.status_code in (401, 403):
+            return {"status": "auth_error", "details": f"HTTP {resp.status_code}"}
+        if resp.status_code != 200:
+            return {"status": "error", "details": f"HTTP {resp.status_code}"}
+        data = resp.json()
+        if not isinstance(data, (dict, list)):
+            return {"status": "error", "details": "resposta inválida"}
+        return {"status": "ok", "details": None}
+    except (httpx.TransportError, httpx.TimeoutException) as exc:
+        return {"status": "unreachable", "details": type(exc).__name__}
+    except Exception:
+        return {"status": "error", "details": "falha ao verificar embeddings"}
+

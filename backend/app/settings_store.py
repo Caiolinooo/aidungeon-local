@@ -46,14 +46,14 @@ OVERRIDE_KEYS = (
     "image.storage_dir", "image.timeout_seconds", "image.seed", "image.variation",
     "image.cfg_scale", "image.sampler_name", "image.scheduler",
     "image.denoising_strength", "image.sd_model_checkpoint",
-    # voz (v0.4.0; voices/max_text_chars/stt_max_bytes são internos — não saem no PUT)
+    # voz (v0.4.0; max_text_chars/stt_max_bytes são internos — não saem no PUT)
     "voice.enabled", "voice.base_url", "voice.api_key", "voice.tts_model",
-    "voice.stt_model", "voice.narrator_voice", "voice.timeout_seconds",
+    "voice.stt_model", "voice.narrator_voice", "voice.voices", "voice.timeout_seconds",
     "voice.max_text_chars", "voice.stt_max_bytes",
     "voice.drama3_model", "voice.drama3_enabled",
     # embeddings (v0.8.0 / M2)
     "embeddings.enabled", "embeddings.base_url", "embeddings.model",
-    "embeddings.timeout_seconds",
+    "embeddings.timeout_seconds", "embeddings.api_key",
     # runtime portátil (local / hybrid / colab). Segredos não entram aqui.
     "runtime.mode", "runtime.placements.llm", "runtime.placements.comfyui",
     "runtime.models.llm", "runtime.models.image", "runtime.models.video",
@@ -662,6 +662,15 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
 
     api_key = _api_key_or_env(conn, "voice.api_key", voice.get("api_key_env", "VOICE_API_KEY"))
 
+    raw_voices = ov("voice.voices", voice.get("voices", []))
+    voices_list = (
+        [str(v).strip() for v in raw_voices if isinstance(v, str) and str(v).strip()]
+        if isinstance(raw_voices, list)
+        else list(voice.get("voices", []))
+    )
+    if not voices_list:
+        voices_list = list(voice.get("voices", []))
+
     return {
         "enabled": bool(ov("voice.enabled", voice.get("enabled", True))),
         "base_url": ov("voice.base_url", voice.get("base_url", "")),
@@ -669,7 +678,7 @@ def effective_voice_settings(conn: sqlite3.Connection) -> dict:
         "tts_model": ov("voice.tts_model", voice.get("tts_model", "")),
         "stt_model": ov("voice.stt_model", voice.get("stt_model", "")),
         "narrator_voice": ov("voice.narrator_voice", voice.get("narrator_voice", "M1")),
-        "voices": list(voice.get("voices", [])),
+        "voices": voices_list,
         "timeout_seconds": int(ov("voice.timeout_seconds",
                                   voice.get("timeout_seconds", 60))),
         "max_text_chars": int(ov("voice.max_text_chars",
@@ -695,6 +704,16 @@ def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
+    if "voices" in update and update["voices"] is not None:
+        cleaned = list(dict.fromkeys(
+            str(v).strip() for v in update["voices"]
+            if isinstance(v, str) and str(v).strip()
+        ))
+        if cleaned:
+            _set_override(conn, "voice.voices", cleaned)
+        else:
+            db.delete_setting(conn, "voice.voices")
+        changed.add("voices")
     if _apply_key(conn, "voice.api_key", update.get("api_key")):
         changed.add("api_key")
     return changed
@@ -702,7 +721,11 @@ def apply_voice_update(conn: sqlite3.Connection, update: dict) -> set[str]:
 
 # ---------------------------------------------------------------- embeddings
 def effective_embeddings_settings(conn: sqlite3.Connection | None = None) -> dict:
-    """Config efetiva do cliente de embeddings (arquivo + overrides SQLite)."""
+    """Config efetiva do cliente de embeddings (arquivo + overrides SQLite).
+
+    Precedência da api_key: override do banco > env/.env nomeada por
+    embeddings.api_key_env (default EMBEDDINGS_API_KEY) > None.
+    """
     cfg = load_file_settings()
     emb = cfg.get("embeddings", {})
 
@@ -712,11 +735,18 @@ def effective_embeddings_settings(conn: sqlite3.Connection | None = None) -> dic
         value = _get_override(conn, key)
         return default if value is None else value
 
+    env_name = emb.get("api_key_env", "EMBEDDINGS_API_KEY")
+    if conn is not None:
+        api_key = _api_key_or_env(conn, "embeddings.api_key", env_name)
+    else:
+        api_key = resolve_env_value(env_name) or None
+
     return {
         "enabled": bool(ov("embeddings.enabled", emb.get("enabled", True))),
         "base_url": str(ov("embeddings.base_url", emb.get("base_url", "http://127.0.0.1:8091/v1"))),
         "model": str(ov("embeddings.model", emb.get("model", "Qwen3-Embedding-0.6B"))),
         "timeout_seconds": int(ov("embeddings.timeout_seconds", emb.get("timeout_seconds", 30))),
+        "api_key": api_key,
     }
 
 
@@ -732,6 +762,8 @@ def apply_embeddings_update(conn: sqlite3.Connection, update: dict) -> set[str]:
         if field in update and update[field] is not None:
             _set_override(conn, key, update[field])
             changed.add(field)
+    if _apply_key(conn, "embeddings.api_key", update.get("api_key")):
+        changed.add("api_key")
     return changed
 
 

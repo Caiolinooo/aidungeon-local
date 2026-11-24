@@ -33,16 +33,23 @@ function safeHealthText(value) {
     .slice(0, 240)
 }
 
+const HEALTH_SERVICES = {
+  llm: { label: 'LLM', check: () => api.healthLlm() },
+  image: { label: 'imagem', check: () => api.healthImage() },
+  voice: { label: 'voz', check: () => api.healthVoice() },
+  embeddings: { label: 'embeddings', check: () => api.healthEmbeddings() },
+}
+
 export function HealthCheck({ service, compact = false }) {
   const [checking, setChecking] = useState(false)
   const [result, setResult] = useState(null)
-  const isVoice = service === 'voice'
-  const serviceName = isVoice ? 'voz' : 'imagem'
+  const svc = HEALTH_SERVICES[service] ?? HEALTH_SERVICES.image
+  const serviceName = svc.label
 
   const check = async () => {
     setChecking(true)
     try {
-      const health = await (isVoice ? api.healthVoice() : api.healthImage())
+      const health = await svc.check()
       setResult({ ...health, failed: false })
     } catch {
       setResult({ failed: true })

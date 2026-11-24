@@ -94,10 +94,21 @@ def put_voice_settings(body: VoiceSettingsUpdate,
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         narrator = update.get("narrator_voice")
-        if narrator is not None and not _known_voice(conn, narrator):
-            raise GameError.bad_request(
-                "invalid_voice",
-                f"unknown narrator_voice {narrator!r}")
+        incoming_voices = update.get("voices")
+        cleaned_voices = (
+            list(dict.fromkeys(
+                str(v).strip() for v in incoming_voices
+                if isinstance(v, str) and str(v).strip()
+            ))
+            if isinstance(incoming_voices, list)
+            else None
+        )
+        if narrator is not None:
+            in_incoming = cleaned_voices is not None and narrator in cleaned_voices
+            if not in_incoming and not _known_voice(conn, narrator):
+                raise GameError.bad_request(
+                    "invalid_voice",
+                    f"unknown narrator_voice {narrator!r}")
         settings_store.apply_voice_update(conn, update)
         return _voice_settings_response(conn)
 

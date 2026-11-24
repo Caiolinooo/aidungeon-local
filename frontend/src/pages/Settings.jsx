@@ -12,6 +12,7 @@ import ImageEngineFields, {
   imageEnginePayload,
 } from '../components/settings/ImageEngineFields.jsx'
 import LlmSamplingControls, { LLM_DEFAULTS } from '../components/settings/LlmSamplingControls.jsx'
+import ProviderModelPicker from '../components/settings/ProviderModelPicker.jsx'
 import RuntimeSettings, {
   configFromRuntimeResponse,
   extractCatalog,
@@ -51,6 +52,12 @@ export default function Settings() {
   const [showReaderModal, setShowReaderModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [providerPresets, setProviderPresets] = useState({
+    llm: [],
+    image: [],
+    voice: [],
+    embeddings: [],
+  })
 
   // LLM Settings State
   const [llmForm, setLlmForm] = useState({
@@ -64,6 +71,7 @@ export default function Settings() {
     timeout_seconds: 180,
     ...LLM_DEFAULTS,
   })
+  const [llmApiKeyMasked, setLlmApiKeyMasked] = useState(null)
   const [llmHealth, setLlmHealth] = useState(null)
 
   // Image Settings State
@@ -94,6 +102,7 @@ export default function Settings() {
     denoising_strength: 0.35,
     sd_model_checkpoint: '',
   })
+  const [imageApiKeyMasked, setImageApiKeyMasked] = useState(null)
 
   // Voice Settings State
   const [voiceForm, setVoiceForm] = useState({
@@ -116,7 +125,9 @@ export default function Settings() {
     base_url: 'http://127.0.0.1:8081/v1',
     model: 'Qwen3-Embedding-0.6B',
     timeout_seconds: 30,
+    api_key: '',
   })
+  const [embeddingsApiKeyMasked, setEmbeddingsApiKeyMasked] = useState(null)
   const [scriptingForm, setScriptingForm] = useState({
     input_modifier: '',
     context_modifier: '',
@@ -142,7 +153,11 @@ export default function Settings() {
   const voiceOptions = [
     ...(voiceForm.voices || ['M1', 'M2', 'M3', 'F1', 'F2', 'F3']).map((voice) => ({
       value: voice,
-      label: `${voice} (${voice.startsWith('M') ? 'masculina' : 'feminina'})`,
+      label: /^M\d+$/.test(voice)
+        ? `${voice} (masculina)`
+        : /^F\d+$/.test(voice)
+          ? `${voice} (feminina)`
+          : voice,
     })),
     ...(voiceForm.cloned || []).map((clone) => ({ value: clone.id, label: `${clone.name} (clone)` })),
   ]
@@ -158,12 +173,13 @@ export default function Settings() {
         if (!cancelled && health) setLlmHealth(health)
       }).catch(() => {})
       try {
-        const [llm, img, vce, emb, scr, runtime] = await Promise.all([
+        const [llm, img, vce, emb, scr, presetsRes, runtime] = await Promise.all([
           api.getLlmSettings().catch(() => ({})),
           api.getImageSettings().catch(() => ({})),
           api.getVoiceSettings().catch(() => ({})),
           api.getEmbeddingsSettings().catch(() => ({})),
           api.getScriptingSettings().catch(() => ({})),
+          api.getProviderPresets().catch(() => ({})),
           api.getRuntimeSettings().then(
             (data) => ({ ok: true, data }),
             (error) => ({ ok: false, error }),
@@ -171,7 +187,11 @@ export default function Settings() {
         ])
         if (cancelled) return
 
+        if (presetsRes?.providers) {
+          setProviderPresets((prev) => ({ ...prev, ...presetsRes.providers }))
+        }
         if (llm && Object.keys(llm).length) {
+          setLlmApiKeyMasked(llm.api_key || null)
           setLlmForm((prev) => ({
             ...prev,
             ...llm,
@@ -180,6 +200,7 @@ export default function Settings() {
           }))
         }
         if (img && Object.keys(img).length) {
+          setImageApiKeyMasked(img.openai_api_key || null)
           setImageForm((prev) => ({ ...prev, ...img, openai_api_key: '' }))
         }
         if (vce && Object.keys(vce).length) {
@@ -202,7 +223,10 @@ export default function Settings() {
             }))
           }).catch(() => {})
         }
-        if (emb && Object.keys(emb).length) setEmbeddingsForm((prev) => ({ ...prev, ...emb }))
+        if (emb && Object.keys(emb).length) {
+          setEmbeddingsApiKeyMasked(emb.api_key || null)
+          setEmbeddingsForm((prev) => ({ ...prev, ...emb, api_key: '' }))
+        }
         if (scr && Object.keys(scr).length) setScriptingForm((prev) => ({ ...prev, ...scr }))
         if (runtime?.ok) {
           const form = normalizeRuntimeConfig(runtime.data)
@@ -254,6 +278,7 @@ export default function Settings() {
         }
         if (!llmForm.api_key) delete payload.api_key
         const updated = await api.putLlmSettings(payload)
+        setLlmApiKeyMasked(updated.api_key || null)
         setLlmForm((prev) => ({
           ...prev,
           ...updated,
@@ -269,6 +294,7 @@ export default function Settings() {
           sdwebui_steps: Number(imageForm.sdwebui_steps),
           sdwebui_width: Number(imageForm.sdwebui_width),
           sdwebui_height: Number(imageForm.sdwebui_height),
+          comfyui_base_url: imageForm.comfyui_base_url,
           negative_prompt: imageForm.negative_prompt,
           style_suffix: imageForm.style_suffix,
           openai_base_url: imageForm.openai_base_url,
@@ -289,6 +315,7 @@ export default function Settings() {
         }
         if (imageForm.openai_api_key) payload.openai_api_key = imageForm.openai_api_key
         const updated = await api.putImageSettings(payload)
+        setImageApiKeyMasked(updated.openai_api_key || null)
         setImageForm((prev) => ({ ...prev, ...updated, openai_api_key: '' }))
         toast('Configurações de imagem salvas.', 'ok')
       } else if (activeTab === 'voice') {
@@ -298,6 +325,7 @@ export default function Settings() {
           tts_model: voiceForm.tts_model,
           stt_model: voiceForm.stt_model,
           narrator_voice: voiceForm.narrator_voice,
+          voices: voiceForm.voices,
           timeout_seconds: Number(voiceForm.timeout_seconds),
         }
         if (voiceForm.api_key) payload.api_key = voiceForm.api_key
@@ -307,13 +335,20 @@ export default function Settings() {
         toast('Configurações de voz salvas.', 'ok')
       } else if (activeTab === 'memory') {
         const embPayload = {
-          ...embeddingsForm,
+          enabled: embeddingsForm.enabled,
+          base_url: embeddingsForm.base_url,
+          model: embeddingsForm.model,
           timeout_seconds: Number(embeddingsForm.timeout_seconds),
         }
-        await Promise.all([
+        if (embeddingsForm.api_key) embPayload.api_key = embeddingsForm.api_key
+        const [updatedEmb] = await Promise.all([
           api.putEmbeddingsSettings(embPayload),
           api.putScriptingSettings(scriptingForm),
         ])
+        if (updatedEmb) {
+          setEmbeddingsApiKeyMasked(updatedEmb.api_key || null)
+          setEmbeddingsForm((prev) => ({ ...prev, ...updatedEmb, api_key: '' }))
+        }
         toast('Configurações de memória salvas.', 'ok')
       } else if (activeTab === 'runtime') {
         if (!runtimeLoaded) {
@@ -353,12 +388,45 @@ export default function Settings() {
     }
   }
 
+  const clearLlmKey = async () => {
+    try {
+      const updated = await api.putLlmSettings({ api_key: '' })
+      setLlmApiKeyMasked(updated.api_key || null)
+      setLlmForm((prev) => ({ ...prev, api_key: '' }))
+      toast('Chave da API do LLM removida.', 'ok')
+    } catch (e) {
+      toast('Falha ao remover a chave: ' + e.message)
+    }
+  }
+
+  const clearImageKey = async () => {
+    try {
+      const updated = await api.putImageSettings({ openai_api_key: '' })
+      setImageApiKeyMasked(updated.openai_api_key || null)
+      setImageForm((prev) => ({ ...prev, openai_api_key: '' }))
+      toast('Chave da API de imagem removida.', 'ok')
+    } catch (e) {
+      toast('Falha ao remover a chave: ' + e.message)
+    }
+  }
+
   const clearVoiceKey = async () => {
     try {
       const updated = await api.putVoiceSettings({ api_key: '' })
       setVoiceSettings((prev) => ({ ...prev, ...updated }))
       setVoiceForm((prev) => ({ ...prev, api_key: '' }))
       toast('Chave da API de voz removida.', 'ok')
+    } catch (e) {
+      toast('Falha ao remover a chave: ' + e.message)
+    }
+  }
+
+  const clearEmbeddingsKey = async () => {
+    try {
+      const updated = await api.putEmbeddingsSettings({ api_key: '' })
+      setEmbeddingsApiKeyMasked(updated.api_key || null)
+      setEmbeddingsForm((prev) => ({ ...prev, api_key: '' }))
+      toast('Chave da API de embeddings removida.', 'ok')
     } catch (e) {
       toast('Falha ao remover a chave: ' + e.message)
     }
@@ -516,6 +584,8 @@ export default function Settings() {
                     )}
                   </div>
 
+                  <HealthCheck service="llm" />
+
                   {/* Server Connection */}
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
@@ -542,15 +612,55 @@ export default function Settings() {
                       </SettingField>
                     </div>
 
-                    <SettingField label="Chave da API (opcional / oculta)" labelClassName={labelCls}>
-                      <input
-                        type="password"
-                        value={llmForm.api_key || ''}
-                        onChange={(e) => setLlmForm({ ...llmForm, api_key: e.target.value })}
-                        placeholder="Deixe em branco para usar a chave atual ou o .env"
-                        className={inputCls}
-                      />
-                    </SettingField>
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                      <SettingField
+                        label="Chave da API (opcional / oculta)"
+                        labelClassName={labelCls}
+                        className="flex-1"
+                      >
+                        <input
+                          type="password"
+                          value={llmForm.api_key || ''}
+                          onChange={(e) => setLlmForm({ ...llmForm, api_key: e.target.value })}
+                          placeholder={
+                            llmApiKeyMasked
+                              ? `Atual: ${llmApiKeyMasked} (em branco mantém)`
+                              : 'Deixe em branco para usar a chave atual ou o .env'
+                          }
+                          className={inputCls}
+                        />
+                      </SettingField>
+                      {llmApiKeyMasked && (
+                        <button
+                          type="button"
+                          onClick={clearLlmKey}
+                          className="shrink-0 rounded-lg border border-danger-900 px-3 py-2 text-xs text-danger-400 hover:bg-danger-950"
+                        >
+                          Remover chave
+                        </button>
+                      )}
+                    </div>
+
+                    <ProviderModelPicker
+                      kind="llm"
+                      presets={providerPresets.llm || []}
+                      baseUrl={llmForm.base_url}
+                      apiKey={llmForm.api_key}
+                      selectedModel={llmForm.model_alias}
+                      onSelectPreset={(preset) =>
+                        setLlmForm((prev) => ({
+                          ...prev,
+                          base_url: preset.base_url,
+                          model_alias: preset.default_model || prev.model_alias,
+                        }))
+                      }
+                      onSelectModel={(modelId) => {
+                        setLlmForm((prev) => ({ ...prev, model_alias: modelId }))
+                        toast(`Modelo LLM selecionado: ${modelId}. Clique em Salvar para aplicar.`, 'ok')
+                      }}
+                      title="Provedores e modelos LLM"
+                      subtitle="Escolha um provedor (OpenRouter, OpenAI, Groq, Together, DeepSeek, Mistral, xAI, Gemini, Ollama ou local), puxe a lista de modelos da API e pesquise."
+                    />
                   </div>
 
                   {/* Context Size & Long-Horizon Durability */}
@@ -777,6 +887,19 @@ export default function Settings() {
                             className={inputCls}
                           />
                         </SettingField>
+
+                        <ProviderModelPicker
+                          kind="image"
+                          provider="sdwebui"
+                          baseUrl={imageForm.sdwebui_base_url}
+                          selectedModel={imageForm.sd_model_checkpoint}
+                          onSelectModel={(modelId) => {
+                            setImageForm((prev) => ({ ...prev, sd_model_checkpoint: modelId }))
+                            toast(`Checkpoint SD WebUI selecionado: ${modelId}. Clique em Salvar.`, 'ok')
+                          }}
+                          title="Checkpoints instalados no SD WebUI"
+                          subtitle="Puxa e pesquisa os checkpoints diretamente de /sdapi/v1/sd-models."
+                        />
                       </div>
                     ) : imageForm.provider === 'comfyui' ? (
                       <div className="space-y-4 pt-2">
@@ -832,6 +955,15 @@ export default function Settings() {
                           />
                         </div>
 
+                        <ProviderModelPicker
+                          kind="image"
+                          provider="comfyui"
+                          baseUrl={imageForm.comfyui_base_url}
+                          allowSelect={false}
+                          title="Modelos instalados no ComfyUI"
+                          subtitle="Consulta e pesquisa UNETs/checkpoints disponíveis no servidor ComfyUI via /object_info."
+                        />
+
                         <p className="text-xs text-secondary">
                           Os nomes dos arquivos continuam no settings. Este formulário não pede filename.
                         </p>
@@ -853,7 +985,7 @@ export default function Settings() {
                               type="text"
                               value={imageForm.openai_model}
                               onChange={(e) => setImageForm({ ...imageForm, openai_model: e.target.value })}
-                              placeholder="dall-e-3"
+                              placeholder="gpt-image-1 / dall-e-3"
                               className={inputCls}
                             />
                           </SettingField>
@@ -867,15 +999,58 @@ export default function Settings() {
                             />
                           </SettingField>
                         </div>
-                        <SettingField label="Chave da API OpenAI" labelClassName={labelCls}>
-                          <input
-                            type="password"
-                            value={imageForm.openai_api_key}
-                            onChange={(e) => setImageForm({ ...imageForm, openai_api_key: e.target.value })}
-                            placeholder="Em branco mantém a chave atual"
-                            className={inputCls}
-                          />
-                        </SettingField>
+                        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                          <SettingField
+                            label="Chave da API OpenAI"
+                            labelClassName={labelCls}
+                            className="flex-1"
+                          >
+                            <input
+                              type="password"
+                              value={imageForm.openai_api_key}
+                              onChange={(e) => setImageForm({ ...imageForm, openai_api_key: e.target.value })}
+                              placeholder={
+                                imageApiKeyMasked
+                                  ? `Atual: ${imageApiKeyMasked} (em branco mantém)`
+                                  : 'Em branco mantém a chave atual'
+                              }
+                              className={inputCls}
+                            />
+                          </SettingField>
+                          {imageApiKeyMasked && (
+                            <button
+                              type="button"
+                              onClick={clearImageKey}
+                              className="shrink-0 rounded-lg border border-danger-900 px-3 py-2 text-xs text-danger-400 hover:bg-danger-950"
+                            >
+                              Remover chave
+                            </button>
+                          )}
+                        </div>
+
+                        <ProviderModelPicker
+                          kind="image"
+                          provider="openai_compatible"
+                          presets={providerPresets.image || []}
+                          baseUrl={imageForm.openai_base_url}
+                          apiKey={imageForm.openai_api_key}
+                          selectedModel={imageForm.openai_model}
+                          onSelectPreset={(preset) =>
+                            setImageForm((prev) => ({
+                              ...prev,
+                              provider: 'openai_compatible',
+                              openai_base_url: preset.base_url,
+                              openai_model: preset.default_model || prev.openai_model,
+                              openai_size: preset.default_size || prev.openai_size,
+                            }))
+                          }
+                          onSelectModel={(modelId) => {
+                            setImageForm((prev) => ({ ...prev, openai_model: modelId }))
+                            toast(`Modelo de imagem selecionado: ${modelId}. Clique em Salvar.`, 'ok')
+                          }}
+                          title="Provedores e modelos de imagem (API)"
+                          subtitle="Escolha OpenAI, Together AI (FLUX), xAI, Nebius, Fireworks ou endpoint compatível, puxe e pesquise os modelos."
+                        />
                       </div>
                     )}
 
@@ -897,7 +1072,7 @@ export default function Settings() {
                       Voz e fala
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Narração com OmniVoice e transcrição com Whisper.
+                      Narração (TTS) e transcrição (STT) local ou via APIs OpenAI-compatíveis.
                     </p>
                   </div>
 
@@ -938,16 +1113,16 @@ export default function Settings() {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <SettingField label="Modelo de voz (OmniVoice)" labelClassName={labelCls}>
+                      <SettingField label="Modelo de voz (TTS)" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={voiceForm.tts_model}
                           onChange={(e) => setVoiceForm({ ...voiceForm, tts_model: e.target.value })}
-                          placeholder="omnivoice"
+                          placeholder="omnivoice / gpt-4o-mini-tts"
                           className={inputCls}
                         />
                       </SettingField>
-                      <SettingField label="Modelo de transcrição (Whisper)" labelClassName={labelCls}>
+                      <SettingField label="Modelo de transcrição (STT)" labelClassName={labelCls}>
                         <input
                           type="text"
                           value={voiceForm.stt_model}
@@ -980,6 +1155,47 @@ export default function Settings() {
                         />
                       </SettingField>
                     </div>
+
+                    <ProviderModelPicker
+                      kind="voice"
+                      presets={providerPresets.voice || []}
+                      baseUrl={voiceForm.base_url}
+                      apiKey={voiceForm.api_key}
+                      selectedTtsModel={voiceForm.tts_model}
+                      selectedSttModel={voiceForm.stt_model}
+                      selectedVoice={voiceForm.narrator_voice}
+                      onSelectPreset={(preset) =>
+                        setVoiceForm((prev) => ({
+                          ...prev,
+                          base_url: preset.base_url,
+                          tts_model: preset.default_tts_model || prev.tts_model,
+                          stt_model: preset.default_stt_model || prev.stt_model,
+                          voices: preset.default_voices?.length ? preset.default_voices : prev.voices,
+                          narrator_voice:
+                            preset.default_narrator_voice
+                            || preset.default_voices?.[0]
+                            || prev.narrator_voice,
+                        }))
+                      }
+                      onSelectTtsModel={(modelId) => {
+                        setVoiceForm((prev) => ({ ...prev, tts_model: modelId }))
+                        toast(`Modelo TTS selecionado: ${modelId}. Clique em Salvar.`, 'ok')
+                      }}
+                      onSelectSttModel={(modelId) => {
+                        setVoiceForm((prev) => ({ ...prev, stt_model: modelId }))
+                        toast(`Modelo STT selecionado: ${modelId}. Clique em Salvar.`, 'ok')
+                      }}
+                      onApplyVoices={(discoveredVoices, chosenVoice) => {
+                        setVoiceForm((prev) => ({
+                          ...prev,
+                          voices: discoveredVoices.length ? discoveredVoices : prev.voices,
+                          narrator_voice: chosenVoice || discoveredVoices[0] || prev.narrator_voice,
+                        }))
+                        toast(`Voz selecionada: ${chosenVoice || discoveredVoices[0]}. Clique em Salvar.`, 'ok')
+                      }}
+                      title="Provedores e modelos de voz (TTS / STT)"
+                      subtitle="Escolha Local (OmniVoice/Whisper), OpenAI Audio, Groq, DeepInfra, Kokoro ou Speaches, puxe modelos e vozes da API."
+                    />
 
                     <div className="flex flex-wrap justify-end gap-2">
                       {voiceSettings?.api_key && (
@@ -1066,9 +1282,11 @@ export default function Settings() {
                       Embeddings de memória e scripts isolados
                     </h2>
                     <p className="text-xs text-secondary mt-0.5">
-                      Busca vetorial e ganchos de script Python isolados.
+                      Busca vetorial (local ou via API) e ganchos de script Python isolados.
                     </p>
                   </div>
+
+                  <HealthCheck service="embeddings" />
 
                   {/* Embeddings Vector Engine */}
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
@@ -1105,6 +1323,71 @@ export default function Settings() {
                         />
                       </SettingField>
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="flex items-end gap-2">
+                        <SettingField
+                          label="Chave da API de embeddings (opcional / oculta)"
+                          labelClassName={labelCls}
+                          className="flex-1"
+                        >
+                          <input
+                            type="password"
+                            value={embeddingsForm.api_key || ''}
+                            onChange={(e) => setEmbeddingsForm({ ...embeddingsForm, api_key: e.target.value })}
+                            placeholder={
+                              embeddingsApiKeyMasked
+                                ? `Atual: ${embeddingsApiKeyMasked} (em branco mantém)`
+                                : 'Opcional (ou EMBEDDINGS_API_KEY no .env)'
+                            }
+                            className={inputCls}
+                          />
+                        </SettingField>
+                        {embeddingsApiKeyMasked && (
+                          <button
+                            type="button"
+                            onClick={clearEmbeddingsKey}
+                            className="shrink-0 rounded-lg border border-danger-900 px-3 py-2 text-xs text-danger-400 hover:bg-danger-950"
+                          >
+                            Remover
+                          </button>
+                        )}
+                      </div>
+                      <SettingField label="Tempo limite (segundos)" labelClassName={labelCls}>
+                        <input
+                          type="number"
+                          min="1"
+                          max="600"
+                          step="1"
+                          value={embeddingsForm.timeout_seconds}
+                          onChange={(e) =>
+                            setEmbeddingsForm({ ...embeddingsForm, timeout_seconds: Number(e.target.value) })
+                          }
+                          className={inputCls}
+                        />
+                      </SettingField>
+                    </div>
+
+                    <ProviderModelPicker
+                      kind="embeddings"
+                      presets={providerPresets.embeddings || []}
+                      baseUrl={embeddingsForm.base_url}
+                      apiKey={embeddingsForm.api_key}
+                      selectedModel={embeddingsForm.model}
+                      onSelectPreset={(preset) =>
+                        setEmbeddingsForm((prev) => ({
+                          ...prev,
+                          base_url: preset.base_url,
+                          model: preset.default_model || prev.model,
+                        }))
+                      }
+                      onSelectModel={(modelId) => {
+                        setEmbeddingsForm((prev) => ({ ...prev, model: modelId }))
+                        toast(`Modelo de embedding selecionado: ${modelId}. Clique em Salvar.`, 'ok')
+                      }}
+                      title="Provedores e modelos de embeddings"
+                      subtitle="Escolha Local (llama-server), OpenAI, OpenRouter, Together, Fireworks, Mistral, Voyage, Jina ou Ollama, puxe e pesquise os modelos."
+                    />
                   </div>
 
                   {/* Sandboxed Scripting Hooks */}

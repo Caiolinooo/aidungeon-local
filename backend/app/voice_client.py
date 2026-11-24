@@ -301,6 +301,14 @@ def open_speech_stream(cfg: dict, text: str, voice: str, *,
         response = client.send(client.build_request(
             "POST", f"{_base(cfg)}/audio/speech", json=payload,
             headers=_headers(cfg)), stream=True)
+        if (response.status_code == 400 and "instructions" in payload):
+            response.read()
+            if not _missing_clone_response(response):
+                response.close()
+                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
+                response = client.send(client.build_request(
+                    "POST", f"{_base(cfg)}/audio/speech", json=retry_payload,
+                    headers=_headers(cfg)), stream=True)
         if response.status_code in (401, 403) or response.status_code != 200:
             response.read()
             raise _speech_status_error(response)
@@ -342,6 +350,10 @@ def _post_speech(cfg: dict, payload: dict, *,
         try:
             resp = client.post(f"{_base(cfg)}/audio/speech", json=payload,
                                headers=_headers(cfg))
+            if resp.status_code == 400 and "instructions" in payload and not _missing_clone_response(resp):
+                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
+                resp = client.post(f"{_base(cfg)}/audio/speech", json=retry_payload,
+                                   headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
         return _finish_speech(resp)
@@ -358,6 +370,10 @@ async def _post_speech_async(cfg: dict, payload: dict, *,
         try:
             resp = await client.post(f"{_base(cfg)}/audio/speech", json=payload,
                                      headers=_headers(cfg))
+            if resp.status_code == 400 and "instructions" in payload and not _missing_clone_response(resp):
+                retry_payload = {k: v for k, v in payload.items() if k != "instructions"}
+                resp = await client.post(f"{_base(cfg)}/audio/speech", json=retry_payload,
+                                         headers=_headers(cfg))
         except httpx.TransportError as exc:
             raise VoiceUnreachable(f"voice provider unreachable: {type(exc).__name__}") from exc
         return _finish_speech(resp)
@@ -511,6 +527,8 @@ def probe_models(cfg: dict, *,
         body = resp.json()
     except ValueError as exc:
         raise VoiceError("resposta de /models não é JSON") from exc
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, dict)]
     models = body.get("data") if isinstance(body, dict) else None
     if not isinstance(models, list):
         raise VoiceError("resposta de /models sem lista 'data'")

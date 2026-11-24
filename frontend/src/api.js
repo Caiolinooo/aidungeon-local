@@ -343,9 +343,12 @@ export const api = {
   // ----------------------------------------------------- settings / health
   getLlmSettings: () => request('/settings/llm'),
   putLlmSettings: (payload) => request('/settings/llm', { method: 'PUT', body: payload }),
+  getProviderPresets: () => request('/settings/providers'),
+  discoverModels: (payload) => request('/settings/models/discover', { method: 'POST', body: payload }),
   healthLlm: () => request('/health/llm'),
   healthVoice: () => request('/health/voice'),
   healthImage: () => request('/health/image'),
+  healthEmbeddings: () => request('/health/embeddings'),
   getVoiceSettings: async () => {
     const data = await request('/settings/voice')
     noteNarratorVoice(data)

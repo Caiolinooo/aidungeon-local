@@ -233,10 +233,17 @@ def _record_call(role: str, slot: int | None, state: StreamState,
 
 
 # ---------------------------------------------------------------- helpers
+def _is_cloud_openai(cfg: dict) -> bool:
+    from app import provider_models
+    return provider_models.is_cloud_openai_url(str(cfg.get("base_url") or ""))
+
+
 def _headers(cfg: dict) -> dict[str, str]:
     headers = {"Accept": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    if "openrouter.ai" in str(cfg.get("base_url") or "").lower():
+        headers["X-Title"] = "AI Dungeon Local"
     return headers
 
 
@@ -266,7 +273,9 @@ def probe_models(cfg: dict, transport: httpx.BaseTransport | None = None) -> lis
         data = resp.json()
     except ValueError as exc:
         raise LlmError("resposta de /models não é JSON") from exc
-    models = data.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    models = data.get("data") if isinstance(data, dict) else None
     if not isinstance(models, list):
         raise LlmError("resposta de /models sem lista 'data'")
     return models
@@ -354,7 +363,10 @@ def server_slot_count(cfg: dict, transport: httpx.BaseTransport | None = None) -
 
     Qualquer falha (exceção, HTTP ≠ 200, corpo não-JSON, valor ilegível)
     cacheia e devolve 0. A chave do cache é o base_url já normalizado.
+    Provedores OpenAI em nuvem não expõem /props e retornam 0 sem chamada extra.
     """
+    if _is_cloud_openai(cfg):
+        return 0
     base = _props_base(cfg)
     now = time.monotonic()
     cached = _slot_cache.get(base)
@@ -516,6 +528,9 @@ def slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
 
 def probe_slot_roles(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
     """Sonda estrita para health: 401/403 nunca vira falso positivo."""
+    if _is_cloud_openai(cfg):
+        return {"total": None, "roles": {},
+                "details": "provedor externo (API OpenAI); slots gerenciados na nuvem"}
     base = _props_base(cfg)
     timeout = min(float(cfg.get("timeout_seconds", 180)), PROBE_TIMEOUT)
     try:
@@ -756,9 +771,24 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
                        stop: list[str], model: str,
                        transport: httpx.BaseTransport | None = None,
                        role: str = "narrative") -> dict:
-    """Payload de /chat/completions (inclui o flag anti-thinking do Qwen3.x)."""
+    """Payload de /chat/completions (inclui o flag anti-thinking do Qwen3.x no llama.cpp)."""
     role = normalize_role(role)
-    payload: dict[str, Any] = {
+    if _is_cloud_openai(cfg):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "temperature": sampler.get("temperature", 0.85),
+            "top_p": sampler.get("top_p", 1.0),
+            "presence_penalty": sampler.get("presence_penalty", 0.15),
+            "frequency_penalty": sampler.get("frequency_penalty", 0.10),
+            "max_tokens": int(sampler.get("max_tokens", 300)),
+        }
+        if stop:
+            payload["stop"] = list(stop)
+        return payload
+
+    payload = {
         "model": model,
         "messages": messages,
         "stream": True,
@@ -1048,23 +1078,29 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
     model = resolve_model(cfg, transport)
     if not model:
         raise LlmError("nenhum modelo descoberto em /models (model_alias=auto)")
+    cloud = _is_cloud_openai(cfg)
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
         "temperature": temperature,
         "max_tokens": int(max_tokens),
-        "stop": list(stop or []),
-        "cache_prompt": _cache_prompt(cfg, role),
     }
-    slot = slot_for(cfg, role, transport)
-    if slot is not None:
-        payload["id_slot"] = slot
+    if cloud:
+        if stop:
+            payload["stop"] = list(stop)
+        slot = None
+    else:
+        payload["stop"] = list(stop or [])
+        payload["cache_prompt"] = _cache_prompt(cfg, role)
+        slot = slot_for(cfg, role, transport)
+        if slot is not None:
+            payload["id_slot"] = slot
+        if cfg.get("disable_thinking", True):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
     if response_format is not None:
         payload["response_format"] = response_format
     state.slot = slot
-    if cfg.get("disable_thinking", True):
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     total = float(timeout_s) if timeout_s else role_timeout(cfg, role)
     try:

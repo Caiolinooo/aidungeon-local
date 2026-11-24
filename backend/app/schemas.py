@@ -372,6 +372,7 @@ class VoiceSettingsUpdate(BaseModel):
     tts_model: str | None = None
     stt_model: str | None = None
     narrator_voice: str | None = None
+    voices: list[str] | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
     api_key: str | None = None
 
@@ -455,6 +456,19 @@ class EmbeddingsSettingsUpdate(BaseModel):
     base_url: str | None = None
     model: str | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    api_key: str | None = None
+
+
+class ModelDiscoverRequest(BaseModel):
+    """POST /api/settings/models/discover — puxa e pesquisa modelos de um provedor."""
+    kind: Literal["llm", "image", "voice", "embeddings"]
+    provider: str | None = Field(default=None, max_length=64)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    query: str = Field(default="", max_length=200)
+    task: Literal["tts", "stt", "all"] | None = None
+    only_matching: bool = False
+    limit: int = Field(default=120, ge=1, le=500)
 
 
 class ScriptingSettingsUpdate(BaseModel):
