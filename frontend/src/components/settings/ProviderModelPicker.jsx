@@ -26,6 +26,7 @@ function normalizeUrl(url) {
 export default function ProviderModelPicker({
   kind,
   provider = null,
+  profileId = null,
   presets = [],
   baseUrl = '',
   apiKey = '',
@@ -65,6 +66,7 @@ export default function ProviderModelPicker({
       const res = await api.discoverModels({
         kind,
         provider: provider || undefined,
+        profile_id: profileId || undefined,
         base_url: (baseUrl || '').trim() || undefined,
         api_key: (apiKey || '').trim() || undefined,
         query: (overrideQuery || '').trim(),

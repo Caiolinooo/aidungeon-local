@@ -12,7 +12,9 @@ import ImageEngineFields, {
   imageEnginePayload,
 } from '../components/settings/ImageEngineFields.jsx'
 import LlmSamplingControls, { LLM_DEFAULTS } from '../components/settings/LlmSamplingControls.jsx'
+import ProfileQuickBar from '../components/settings/ProfileQuickBar.jsx'
 import ProviderModelPicker from '../components/settings/ProviderModelPicker.jsx'
+import ProviderProfilesTab from '../components/settings/ProviderProfilesTab.jsx'
 import RuntimeSettings, {
   configFromRuntimeResponse,
   extractCatalog,
@@ -34,9 +36,11 @@ import {
   Sliders,
   BookOpen,
   Server,
+  Layers,
 } from 'lucide-react'
 
 const TABS = [
+  { id: 'profiles', label: 'Perfis e APIs', icon: Layers },
   { id: 'llm', label: 'Modelo e amostragem', icon: Cpu },
   { id: 'image', label: 'Geração de imagem', icon: ImageIcon },
   { id: 'voice', label: 'Voz e fala', icon: Volume2 },
@@ -58,6 +62,12 @@ export default function Settings() {
     voice: [],
     embeddings: [],
   })
+  const [providerProfiles, setProviderProfiles] = useState({
+    profiles: [],
+    active: { llm: null, image: null, voice: null, embeddings: null },
+    templates: [],
+  })
+  const [activatingProfileId, setActivatingProfileId] = useState(null)
 
   // LLM Settings State
   const [llmForm, setLlmForm] = useState({
@@ -173,13 +183,14 @@ export default function Settings() {
         if (!cancelled && health) setLlmHealth(health)
       }).catch(() => {})
       try {
-        const [llm, img, vce, emb, scr, presetsRes, runtime] = await Promise.all([
+        const [llm, img, vce, emb, scr, presetsRes, profilesRes, runtime] = await Promise.all([
           api.getLlmSettings().catch(() => ({})),
           api.getImageSettings().catch(() => ({})),
           api.getVoiceSettings().catch(() => ({})),
           api.getEmbeddingsSettings().catch(() => ({})),
           api.getScriptingSettings().catch(() => ({})),
           api.getProviderPresets().catch(() => ({})),
+          api.getProviderProfiles().catch(() => ({})),
           api.getRuntimeSettings().then(
             (data) => ({ ok: true, data }),
             (error) => ({ ok: false, error }),
@@ -189,6 +200,13 @@ export default function Settings() {
 
         if (presetsRes?.providers) {
           setProviderPresets((prev) => ({ ...prev, ...presetsRes.providers }))
+        }
+        if (profilesRes && Array.isArray(profilesRes.profiles)) {
+          setProviderProfiles({
+            profiles: profilesRes.profiles,
+            active: profilesRes.active || { llm: null, image: null, voice: null, embeddings: null },
+            templates: profilesRes.templates || [],
+          })
         }
         if (llm && Object.keys(llm).length) {
           setLlmApiKeyMasked(llm.api_key || null)
@@ -253,6 +271,188 @@ export default function Settings() {
     return () => { cancelled = true }
   }, [toast])
 
+  const refreshProfiles = () => {
+    api.getProviderProfiles().then((res) => {
+      if (res && Array.isArray(res.profiles)) {
+        setProviderProfiles({
+          profiles: res.profiles,
+          active: res.active || { llm: null, image: null, voice: null, embeddings: null },
+          templates: res.templates || [],
+        })
+      }
+    }).catch(() => {})
+  }
+
+  const applyReturnedSettings = (res) => {
+    if (res?.llm) {
+      setLlmApiKeyMasked(res.llm.api_key || null)
+      setLlmForm((prev) => ({
+        ...prev,
+        ...res.llm,
+        api_key: '',
+        context_size: Math.min(res.llm.context_size_max ?? contextSizeMax, res.llm.context_size),
+      }))
+    }
+    if (res?.image) {
+      setImageApiKeyMasked(res.image.openai_api_key || null)
+      setImageForm((prev) => ({ ...prev, ...res.image, openai_api_key: '' }))
+    }
+    if (res?.voice) {
+      setVoiceSettings((prev) => ({ ...prev, ...res.voice }))
+      setVoiceForm((prev) => ({
+        ...prev,
+        ...res.voice,
+        voices: res.voice.voices || prev.voices,
+        api_key: '',
+      }))
+    }
+    if (res?.embeddings) {
+      setEmbeddingsApiKeyMasked(res.embeddings.api_key || null)
+      setEmbeddingsForm((prev) => ({ ...prev, ...res.embeddings, api_key: '' }))
+    }
+  }
+
+  const handleActivateProfile = async (profileId, kinds = null) => {
+    setActivatingProfileId(profileId)
+    try {
+      const res = await api.activateProviderProfile(profileId, kinds)
+      applyReturnedSettings(res)
+      setProviderProfiles((prev) => ({
+        ...prev,
+        profiles: res.profiles || prev.profiles,
+        active: res.active || prev.active,
+      }))
+      const profName = (res.profiles || providerProfiles.profiles).find((p) => p.id === profileId)?.name || profileId
+      const labelMap = { llm: 'LLM', image: 'Imagem', voice: 'Voz', embeddings: 'Embeddings' }
+      const applied = (res.activated || []).map((k) => labelMap[k] || k).join(', ')
+      toast(`Perfil "${profName}" ativado em: ${applied}.`, 'ok')
+    } catch (e) {
+      toast('Falha ao ativar perfil: ' + e.message)
+    } finally {
+      setActivatingProfileId(null)
+    }
+  }
+
+  const handleCreateOrUpdateProfile = async (profileId, payload) => {
+    try {
+      const res = profileId
+        ? await api.updateProviderProfile(profileId, payload)
+        : await api.createProviderProfile(payload)
+      setProviderProfiles({
+        profiles: res.profiles || [],
+        active: res.active || { llm: null, image: null, voice: null, embeddings: null },
+        templates: res.templates || providerProfiles.templates,
+      })
+      if (Array.isArray(res.synced) && res.synced.length > 0) {
+        const [llm, img, vce, emb] = await Promise.all([
+          res.synced.includes('llm') ? api.getLlmSettings().catch(() => null) : null,
+          res.synced.includes('image') ? api.getImageSettings().catch(() => null) : null,
+          res.synced.includes('voice') ? api.getVoiceSettings().catch(() => null) : null,
+          res.synced.includes('embeddings') ? api.getEmbeddingsSettings().catch(() => null) : null,
+        ])
+        applyReturnedSettings({ llm, image: img, voice: vce, embeddings: emb })
+      }
+      toast(
+        profileId
+          ? `Perfil "${res.profile?.name}" atualizado.${res.synced?.length ? ' Configurações ativas sincronizadas.' : ''}`
+          : `Perfil "${res.profile?.name}" criado.`,
+        'ok',
+      )
+    } catch (e) {
+      toast('Falha ao salvar perfil: ' + e.message)
+      throw e
+    }
+  }
+
+  const handleDeleteProfile = async (prof) => {
+    try {
+      const res = await api.deleteProviderProfile(prof.id)
+      setProviderProfiles({
+        profiles: res.profiles || [],
+        active: res.active || { llm: null, image: null, voice: null, embeddings: null },
+        templates: res.templates || providerProfiles.templates,
+      })
+      toast(`Perfil "${prof.name}" removido.`, 'ok')
+    } catch (e) {
+      toast('Falha ao remover perfil: ' + e.message)
+    }
+  }
+
+  const handleCaptureCurrentProfile = async (name, kinds = null) => {
+    try {
+      const res = await api.captureCurrentProfile({ name, kinds, activate: true })
+      setProviderProfiles({
+        profiles: res.profiles || [],
+        active: res.active || { llm: null, image: null, voice: null, embeddings: null },
+        templates: res.templates || providerProfiles.templates,
+      })
+      toast(`Setup atual salvo no perfil "${res.profile?.name}".`, 'ok')
+    } catch (e) {
+      toast('Falha ao capturar setup atual: ' + e.message)
+      throw e
+    }
+  }
+
+  const handleQuickSaveTabProfile = async (kind, name) => {
+    try {
+      const payload = {
+        name,
+        provider_id: 'custom',
+        capabilities: [kind],
+        sync_active: false,
+      }
+      if (kind === 'llm') {
+        payload.base_url = llmForm.base_url.trim()
+        if (llmForm.api_key.trim()) payload.api_key = llmForm.api_key.trim()
+        else payload.inherit_key_from = 'llm'
+        payload.llm = { model_alias: llmForm.model_alias.trim() || 'auto' }
+      } else if (kind === 'image') {
+        const prov = imageForm.provider || 'openai_compatible'
+        if (prov === 'comfyui') {
+          payload.base_url = imageForm.comfyui_base_url.trim()
+          payload.image = { provider: 'comfyui' }
+        } else if (prov === 'sdwebui') {
+          payload.base_url = imageForm.sdwebui_base_url.trim()
+          payload.image = { provider: 'sdwebui', sd_model_checkpoint: imageForm.sd_model_checkpoint.trim() }
+        } else {
+          payload.base_url = imageForm.openai_base_url.trim()
+          if (imageForm.openai_api_key.trim()) payload.api_key = imageForm.openai_api_key.trim()
+          else payload.inherit_key_from = 'image'
+          payload.image = {
+            provider: 'openai_compatible',
+            model: imageForm.openai_model.trim(),
+            size: imageForm.openai_size.trim() || '1024x1024',
+          }
+        }
+      } else if (kind === 'voice') {
+        payload.base_url = voiceForm.base_url.trim()
+        if (voiceForm.api_key.trim()) payload.api_key = voiceForm.api_key.trim()
+        else payload.inherit_key_from = 'voice'
+        payload.voice = {
+          tts_model: voiceForm.tts_model.trim(),
+          stt_model: voiceForm.stt_model.trim(),
+          narrator_voice: voiceForm.narrator_voice.trim(),
+          voices: voiceForm.voices || [],
+        }
+      } else if (kind === 'embeddings') {
+        payload.base_url = embeddingsForm.base_url.trim()
+        if (embeddingsForm.api_key.trim()) payload.api_key = embeddingsForm.api_key.trim()
+        else payload.inherit_key_from = 'embeddings'
+        payload.embeddings = { model: embeddingsForm.model.trim() }
+      }
+
+      const created = await api.createProviderProfile(payload)
+      if (created?.profile?.id) {
+        await handleActivateProfile(created.profile.id, [kind])
+      } else {
+        refreshProfiles()
+      }
+    } catch (e) {
+      toast('Falha ao salvar perfil: ' + e.message)
+      throw e
+    }
+  }
+
   // Save current active tab settings
   const handleSave = async () => {
     setSaving(true)
@@ -285,6 +485,7 @@ export default function Settings() {
           api_key: '',
           context_size: Math.min(updated.context_size_max ?? contextSizeMax, updated.context_size),
         }))
+        refreshProfiles()
         toast('Configurações do modelo salvas.', 'ok')
       } else if (activeTab === 'image') {
         const payload = {
@@ -317,6 +518,7 @@ export default function Settings() {
         const updated = await api.putImageSettings(payload)
         setImageApiKeyMasked(updated.openai_api_key || null)
         setImageForm((prev) => ({ ...prev, ...updated, openai_api_key: '' }))
+        refreshProfiles()
         toast('Configurações de imagem salvas.', 'ok')
       } else if (activeTab === 'voice') {
         const payload = {
@@ -332,6 +534,7 @@ export default function Settings() {
         const updated = await api.putVoiceSettings(payload)
         setVoiceSettings((prev) => ({ ...prev, ...updated }))
         setVoiceForm((prev) => ({ ...prev, ...updated, api_key: '' }))
+        refreshProfiles()
         toast('Configurações de voz salvas.', 'ok')
       } else if (activeTab === 'memory') {
         const embPayload = {
@@ -349,6 +552,7 @@ export default function Settings() {
           setEmbeddingsApiKeyMasked(updatedEmb.api_key || null)
           setEmbeddingsForm((prev) => ({ ...prev, ...updatedEmb, api_key: '' }))
         }
+        refreshProfiles()
         toast('Configurações de memória salvas.', 'ok')
       } else if (activeTab === 'runtime') {
         if (!runtimeLoaded) {
@@ -521,14 +725,16 @@ export default function Settings() {
             <span className="hidden sm:inline">Tema / tipografia</span>
           </button>
 
-          <button
-            onClick={handleSave}
-            disabled={saving || loading || (activeTab === 'runtime' && !runtimeLoaded)}
-            className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span>{saving ? 'Salvando…' : 'Salvar'}</span>
-          </button>
+          {activeTab !== 'profiles' && (
+            <button
+              onClick={handleSave}
+              disabled={saving || loading || (activeTab === 'runtime' && !runtimeLoaded)}
+              className="flex items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-1.5 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{saving ? 'Salvando…' : 'Salvar'}</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -564,6 +770,22 @@ export default function Settings() {
             </div>
           ) : (
             <>
+              {/* TAB 0: Provider Profiles & Shared APIs */}
+              {activeTab === 'profiles' && (
+                <ProviderProfilesTab
+                  profiles={providerProfiles.profiles}
+                  active={providerProfiles.active}
+                  templates={providerProfiles.templates}
+                  activatingId={activatingProfileId}
+                  onCreateOrUpdate={handleCreateOrUpdateProfile}
+                  onDelete={handleDeleteProfile}
+                  onActivate={handleActivateProfile}
+                  onCaptureCurrent={handleCaptureCurrentProfile}
+                  inputCls={inputCls}
+                  labelCls={labelCls}
+                />
+              )}
+
               {/* TAB 1: LLM & Samplers */}
               {activeTab === 'llm' && (
                 <div className="space-y-6">
@@ -585,6 +807,16 @@ export default function Settings() {
                   </div>
 
                   <HealthCheck service="llm" />
+
+                  <ProfileQuickBar
+                    kind="llm"
+                    profiles={providerProfiles.profiles}
+                    activeProfileId={providerProfiles.active?.llm || null}
+                    activatingId={activatingProfileId}
+                    onActivate={handleActivateProfile}
+                    onQuickSaveCurrent={(name) => handleQuickSaveTabProfile('llm', name)}
+                    onManageProfiles={() => setActiveTab('profiles')}
+                  />
 
                   {/* Server Connection */}
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
@@ -643,6 +875,7 @@ export default function Settings() {
 
                     <ProviderModelPicker
                       kind="llm"
+                      profileId={providerProfiles.active?.llm || null}
                       presets={providerPresets.llm || []}
                       baseUrl={llmForm.base_url}
                       apiKey={llmForm.api_key}
@@ -772,6 +1005,16 @@ export default function Settings() {
                   </div>
 
                   <HealthCheck service="image" />
+
+                  <ProfileQuickBar
+                    kind="image"
+                    profiles={providerProfiles.profiles}
+                    activeProfileId={providerProfiles.active?.image || null}
+                    activatingId={activatingProfileId}
+                    onActivate={handleActivateProfile}
+                    onQuickSaveCurrent={(name) => handleQuickSaveTabProfile('image', name)}
+                    onManageProfiles={() => setActiveTab('profiles')}
+                  />
 
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <div className="flex items-center justify-between">
@@ -1031,6 +1274,7 @@ export default function Settings() {
                         <ProviderModelPicker
                           kind="image"
                           provider="openai_compatible"
+                          profileId={providerProfiles.active?.image || null}
                           presets={providerPresets.image || []}
                           baseUrl={imageForm.openai_base_url}
                           apiKey={imageForm.openai_api_key}
@@ -1077,6 +1321,16 @@ export default function Settings() {
                   </div>
 
                   <HealthCheck service="voice" />
+
+                  <ProfileQuickBar
+                    kind="voice"
+                    profiles={providerProfiles.profiles}
+                    activeProfileId={providerProfiles.active?.voice || null}
+                    activatingId={activatingProfileId}
+                    onActivate={handleActivateProfile}
+                    onQuickSaveCurrent={(name) => handleQuickSaveTabProfile('voice', name)}
+                    onManageProfiles={() => setActiveTab('profiles')}
+                  />
 
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <label className="flex items-center gap-2 text-xs font-semibold text-primary cursor-pointer">
@@ -1158,6 +1412,7 @@ export default function Settings() {
 
                     <ProviderModelPicker
                       kind="voice"
+                      profileId={providerProfiles.active?.voice || null}
                       presets={providerPresets.voice || []}
                       baseUrl={voiceForm.base_url}
                       apiKey={voiceForm.api_key}
@@ -1288,6 +1543,16 @@ export default function Settings() {
 
                   <HealthCheck service="embeddings" />
 
+                  <ProfileQuickBar
+                    kind="embeddings"
+                    profiles={providerProfiles.profiles}
+                    activeProfileId={providerProfiles.active?.embeddings || null}
+                    activatingId={activatingProfileId}
+                    onActivate={handleActivateProfile}
+                    onQuickSaveCurrent={(name) => handleQuickSaveTabProfile('embeddings', name)}
+                    onManageProfiles={() => setActiveTab('profiles')}
+                  />
+
                   {/* Embeddings Vector Engine */}
                   <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
@@ -1370,6 +1635,7 @@ export default function Settings() {
 
                     <ProviderModelPicker
                       kind="embeddings"
+                      profileId={providerProfiles.active?.embeddings || null}
                       presets={providerPresets.embeddings || []}
                       baseUrl={embeddingsForm.base_url}
                       apiKey={embeddingsForm.api_key}

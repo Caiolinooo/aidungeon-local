@@ -344,6 +344,19 @@ export const api = {
   getLlmSettings: () => request('/settings/llm'),
   putLlmSettings: (payload) => request('/settings/llm', { method: 'PUT', body: payload }),
   getProviderPresets: () => request('/settings/providers'),
+  getProviderProfiles: () => request('/settings/profiles'),
+  createProviderProfile: (payload) => request('/settings/profiles', { method: 'POST', body: payload }),
+  updateProviderProfile: (id, payload) =>
+    request(`/settings/profiles/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }),
+  deleteProviderProfile: (id) =>
+    request(`/settings/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  activateProviderProfile: (id, kinds = null) =>
+    request(`/settings/profiles/${encodeURIComponent(id)}/activate`, {
+      method: 'POST',
+      body: kinds ? { kinds } : {},
+    }),
+  captureCurrentProfile: (payload) =>
+    request('/settings/profiles/capture-current', { method: 'POST', body: payload }),
   discoverModels: (payload) => request('/settings/models/discover', { method: 'POST', body: payload }),
   healthLlm: () => request('/health/llm'),
   healthVoice: () => request('/health/voice'),

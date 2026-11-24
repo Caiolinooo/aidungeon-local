@@ -13,12 +13,24 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app import access, auth, db, embeddings_client, llm_client, provider_models, settings_store
+from app import (
+    access,
+    auth,
+    db,
+    embeddings_client,
+    llm_client,
+    provider_models,
+    provider_profiles,
+    settings_store,
+)
 from app.deps import get_http_transport
 from app.schemas import (
     EmbeddingsSettingsUpdate,
     LlmSettingsUpdate,
     ModelDiscoverRequest,
+    ProviderProfileActivateRequest,
+    ProviderProfileCaptureRequest,
+    ProviderProfileUpsert,
     ScriptingSettingsUpdate,
 )
 
@@ -77,8 +89,9 @@ def _resolve_discover_credentials(
     provider: str | None,
     raw_base_url: str | None,
     raw_api_key: str | None,
+    profile_id: str | None = None,
 ) -> tuple[str, str | None, str | None]:
-    """Resolve base_url efetivo e api_key (enviada ou salva), sem aceitar chave mascarada."""
+    """Resolve base_url efetivo e api_key (enviada, de perfil salvo ou ativa), sem vazar para outro host."""
     saved_url = ""
     saved_key: str | None = None
     eff_provider = provider
@@ -107,13 +120,21 @@ def _resolve_discover_credentials(
         saved_url = str(cfg.get("base_url") or "")
         saved_key = cfg.get("api_key")
 
-    base_url = (raw_base_url or "").strip() or saved_url
     provided_key = settings_store._usable_secret(raw_api_key)
-    # Só reutiliza a chave salva quando o host/URL não foi trocado para outro servidor,
-    # ou quando nenhuma chave foi informada no formulário (mesmo endpoint).
+    raw_url_clean = (raw_base_url or "").strip()
+
+    # Se veio profile_id (ou a URL bate com um perfil salvo), reaproveita a chave daquele perfil
+    # apenas quando o host corresponde (nunca envia chave de um host para outro).
+    profile_key, resolved_from_profile = provider_profiles.find_api_key_for_url(
+        conn, kind, raw_url_clean, profile_id=profile_id
+    )
+    base_url = raw_url_clean or (resolved_from_profile or "") or saved_url
+
     if provided_key is not None:
         api_key = provided_key
-    elif not raw_base_url or base_url.rstrip("/") == saved_url.rstrip("/"):
+    elif profile_key is not None:
+        api_key = profile_key
+    elif not raw_url_clean or base_url.rstrip("/") == saved_url.rstrip("/"):
         api_key = saved_key
     else:
         api_key = None
@@ -126,6 +147,99 @@ def get_provider_presets() -> dict:
     return {"providers": provider_models.provider_presets()}
 
 
+@router.get("/settings/profiles")
+def get_provider_profiles() -> dict:
+    """Perfis salvos de provedores (api_key SEMPRE mascarada) + ativos + templates."""
+    with db.session() as conn:
+        return provider_profiles.list_profiles(conn)
+
+
+@router.post("/settings/profiles")
+def create_provider_profile(
+    body: ProviderProfileUpsert,
+    info: auth.AuthInfo = Depends(access.require_admin),
+) -> dict:
+    data = body.model_dump(exclude_unset=True)
+    sync_active = bool(data.pop("sync_active", True))
+    with db.session() as conn:
+        profile, synced = provider_profiles.upsert_profile(conn, data, sync_active=sync_active)
+        state = provider_profiles.list_profiles(conn)
+        return {"profile": profile, "synced": synced, **state}
+
+
+@router.post("/settings/profiles/capture-current")
+def capture_current_provider_profile(
+    body: ProviderProfileCaptureRequest,
+    info: auth.AuthInfo = Depends(access.require_admin),
+) -> dict:
+    """Salva as configurações atuais (incluindo chaves salvas no servidor) como um perfil."""
+    with db.session() as conn:
+        profile = provider_profiles.capture_current_as_profile(
+            conn,
+            name=body.name,
+            profile_id=body.profile_id,
+            kinds=body.kinds,
+            activate=body.activate,
+        )
+        state = provider_profiles.list_profiles(conn)
+        return {"profile": profile, **state}
+
+
+@router.put("/settings/profiles/{profile_id}")
+def update_provider_profile(
+    profile_id: str,
+    body: ProviderProfileUpsert,
+    info: auth.AuthInfo = Depends(access.require_admin),
+) -> dict:
+    data = body.model_dump(exclude_unset=True)
+    sync_active = bool(data.pop("sync_active", True))
+    with db.session() as conn:
+        profile, synced = provider_profiles.upsert_profile(
+            conn, data, profile_id=profile_id, sync_active=sync_active
+        )
+        state = provider_profiles.list_profiles(conn)
+        return {"profile": profile, "synced": synced, **state}
+
+
+@router.delete("/settings/profiles/{profile_id}")
+def delete_provider_profile(
+    profile_id: str,
+    info: auth.AuthInfo = Depends(access.require_admin),
+) -> dict:
+    with db.session() as conn:
+        return provider_profiles.delete_profile(conn, profile_id)
+
+
+@router.post("/settings/profiles/{profile_id}/activate")
+def activate_provider_profile(
+    profile_id: str,
+    body: ProviderProfileActivateRequest | None = None,
+    info: auth.AuthInfo = Depends(access.require_admin),
+    transport: Any = Depends(get_http_transport),
+) -> dict:
+    """Ativa um perfil em uma ou mais modalidades, reaproveitando a mesma API key."""
+    from app.routes import images as image_routes
+    from app.routes import voice as voice_routes
+
+    kinds = body.kinds if body is not None else None
+    with db.session() as conn:
+        activated, active = provider_profiles.activate_profile(conn, profile_id, kinds=kinds)
+        result: dict[str, Any] = {
+            "activated": activated,
+            "active": active,
+            "profiles": provider_profiles.list_profiles(conn)["profiles"],
+        }
+        if "llm" in activated:
+            result["llm"] = _settings_response(conn, transport)
+        if "image" in activated:
+            result["image"] = image_routes._image_settings_response(conn)
+        if "voice" in activated:
+            result["voice"] = voice_routes._voice_settings_response(conn)
+        if "embeddings" in activated:
+            result["embeddings"] = _embeddings_settings_response(conn)
+        return result
+
+
 @router.post("/settings/models/discover")
 def post_discover_models(
     body: ModelDiscoverRequest,
@@ -135,7 +249,12 @@ def post_discover_models(
     """Puxa e pesquisa modelos (e vozes) diretamente da API do provedor."""
     with db.session() as conn:
         base_url, api_key, eff_provider = _resolve_discover_credentials(
-            conn, body.kind, body.provider, body.base_url, body.api_key
+            conn,
+            body.kind,
+            body.provider,
+            body.base_url,
+            body.api_key,
+            profile_id=body.profile_id,
         )
     return provider_models.discover_models(
         kind=body.kind,
@@ -163,6 +282,7 @@ def put_llm_settings(body: LlmSettingsUpdate,
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         changed = settings_store.apply_llm_update(conn, update)
+        provider_profiles.sync_active_profile_from_settings(conn, "llm", update)
         # api_key (e qualquer outro campo) também: a sonda de slots fica
         # cacheada por base_url, então um 0 de falha sobreviveria ao PUT.
         llm_client.invalidate_discovery_cache()
@@ -189,6 +309,7 @@ def put_embeddings_settings(body: EmbeddingsSettingsUpdate,
     update = body.model_dump(exclude_unset=True)
     with db.session() as conn:
         settings_store.apply_embeddings_update(conn, update)
+        provider_profiles.sync_active_profile_from_settings(conn, "embeddings", update)
         return _embeddings_settings_response(conn)
 
 

@@ -463,12 +463,72 @@ class ModelDiscoverRequest(BaseModel):
     """POST /api/settings/models/discover — puxa e pesquisa modelos de um provedor."""
     kind: Literal["llm", "image", "voice", "embeddings"]
     provider: str | None = Field(default=None, max_length=64)
+    profile_id: str | None = Field(default=None, max_length=64)
     base_url: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=500)
     query: str = Field(default="", max_length=200)
     task: Literal["tts", "stt", "all"] | None = None
     only_matching: bool = False
     limit: int = Field(default=120, ge=1, le=500)
+
+
+class ProviderProfileLlmConfig(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    model_alias: str | None = Field(default=None, max_length=300)
+
+
+class ProviderProfileImageConfig(BaseModel):
+    provider: Literal["openai_compatible", "comfyui", "sdwebui"] | None = None
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=300)
+    size: str | None = Field(default=None, max_length=64)
+    sd_model_checkpoint: str | None = Field(default=None, max_length=300)
+
+
+class ProviderProfileVoiceConfig(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    tts_model: str | None = Field(default=None, max_length=300)
+    stt_model: str | None = Field(default=None, max_length=300)
+    narrator_voice: str | None = Field(default=None, max_length=120)
+    voices: list[str] | None = None
+
+
+class ProviderProfileEmbeddingsConfig(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=300)
+
+
+class ProviderProfileUpsert(BaseModel):
+    """POST /api/settings/profiles e PUT /api/settings/profiles/{id}."""
+    id: str | None = Field(default=None, max_length=64)
+    name: str | None = Field(default=None, max_length=120)
+    provider_id: str | None = Field(default=None, max_length=64)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    capabilities: list[Literal["llm", "image", "voice", "embeddings"]] | None = None
+    llm: ProviderProfileLlmConfig | None = None
+    image: ProviderProfileImageConfig | None = None
+    voice: ProviderProfileVoiceConfig | None = None
+    embeddings: ProviderProfileEmbeddingsConfig | None = None
+    inherit_key_from: Literal["llm", "image", "voice", "embeddings"] | None = None
+    sync_active: bool = True
+
+
+class ProviderProfileActivateRequest(BaseModel):
+    """POST /api/settings/profiles/{id}/activate — omitir kinds ativa todas as capabilities."""
+    kinds: list[Literal["llm", "image", "voice", "embeddings"]] | None = None
+
+
+class ProviderProfileCaptureRequest(BaseModel):
+    """POST /api/settings/profiles/capture-current — salva o setup atual como perfil."""
+    name: str = Field(min_length=1, max_length=120)
+    profile_id: str | None = Field(default=None, max_length=64)
+    kinds: list[Literal["llm", "image", "voice", "embeddings"]] | None = None
+    activate: bool = True
 
 
 class ScriptingSettingsUpdate(BaseModel):

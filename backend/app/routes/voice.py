@@ -110,6 +110,8 @@ def put_voice_settings(body: VoiceSettingsUpdate,
                     "invalid_voice",
                     f"unknown narrator_voice {narrator!r}")
         settings_store.apply_voice_update(conn, update)
+        from app import provider_profiles
+        provider_profiles.sync_active_profile_from_settings(conn, "voice", update)
         return _voice_settings_response(conn)
 
 
