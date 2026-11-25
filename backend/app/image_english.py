@@ -26,11 +26,18 @@ _STRAY_BREAK = re.compile(r"\s*\bBREAK\b\s*")
 _RETRY_SUFFIX = "The previous answer was rejected. Return only the English prompt."
 _FAILURE = "generation_failed: image prompt could not be translated to English"
 _NAME_SPAN = re.compile(
-    r"[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*"
-    r"(?:[ \t]+(?:d[aeo]s?|e|y|of|the|and)[ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*"
-    r"|[ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*)+"
-    r"|[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’.-]*[àáâãäéêíóôõúüç][\w'’.-]*"
+    r"[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’-]*"
+    r"(?:[ \t]+(?:d[aeo]s?|e|y|of|the|and)[ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’-]*"
+    r"|[ \t]+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’-]*)+"
+    r"|[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w'’-]*[àáâãäéêíóôõúüç][\w'’-]*"
 )
+_NON_NAME_SINGLE_WORDS = {
+    "aparência", "vestuário", "cenário", "iluminação", "câmara", "câmera",
+    "expressão", "físico", "músculos", "óculos", "pálido", "pálida",
+    "rápido", "rápida", "clássico", "clássica", "atlético", "atlética",
+    "enérgico", "enérgica", "médio", "média", "único", "única",
+    "túnica", "máscara", "lágrimas", "lábios", "cílios", "silêncio",
+}
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
 _CACHE: OrderedDict[str, str] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -45,7 +52,10 @@ def _mask_names(text: str) -> tuple[str, list[str]]:
     names: list[str] = []
 
     def replace(match: re.Match[str]) -> str:
-        names.append(match.group(0))
+        word = match.group(0)
+        if " " not in word and word.casefold() in _NON_NAME_SINGLE_WORDS:
+            return word
+        names.append(word)
         return f"[[{len(names) - 1}]]"
 
     return _NAME_SPAN.sub(replace, text), names
@@ -130,6 +140,12 @@ def _is_probable_english(text: str) -> bool:
     return pt_hits == 0
 
 
+def _restore_names(text: str, names: list[str]) -> str:
+    for index, name in enumerate(names):
+        text = text.replace(f"[[{index}]]", name)
+    return text
+
+
 def render_english(text: str, *, transport=None,
                    llm_cfg: dict | None = None,
                    context: str = "",
@@ -167,11 +183,14 @@ def render_english(text: str, *, transport=None,
         )
     messages.append({"role": "user", "content": masked})
 
+    partial_reply: str | None = None
     for attempt in range(2):
         system = messages[0]["content"] if attempt == 0 else (
             messages[0]["content"] + "\n" + _RETRY_SUFFIX)
         attempt_messages = [dict(message) for message in messages]
         attempt_messages[0]["content"] = system
+        if attempt == 1 and partial_reply:
+            attempt_messages[-1]["content"] = partial_reply
         try:
             with IMAGE_LLM_LOCK:
                 cached = _cached(text)
@@ -185,6 +204,10 @@ def render_english(text: str, *, transport=None,
                 )
         except llm_client.LlmError:
             if attempt == 1:
+                if partial_reply is not None:
+                    restored = _restore_names(partial_reply, names)
+                    _remember(text, restored)
+                    return restored
                 if allow_passthrough and _is_probable_english(text):
                     _remember(text, text)
                     return text
@@ -193,17 +216,26 @@ def render_english(text: str, *, transport=None,
         cleaned = _drop_stray_breaks(masked, _clean_reply(reply or ""))
         if not _accepted(masked, cleaned):
             if attempt == 1:
+                if partial_reply is not None:
+                    restored = _restore_names(partial_reply, names)
+                    _remember(text, restored)
+                    return restored
                 if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
                     _remember(text, text)
                     return text
                 _failed()
             continue
         if attempt == 0 and not _is_probable_english(masked) and not _is_probable_english(cleaned):
+            if cleaned.strip() != masked.strip():
+                partial_reply = cleaned
             continue
-        for index, name in enumerate(names):
-            cleaned = cleaned.replace(f"[[{index}]]", name)
-        _remember(text, cleaned)
-        return cleaned
+        restored = _restore_names(cleaned, names)
+        _remember(text, restored)
+        return restored
+    if partial_reply is not None:
+        restored = _restore_names(partial_reply, names)
+        _remember(text, restored)
+        return restored
     if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
         _remember(text, text)
         return text

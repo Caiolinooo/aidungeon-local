@@ -196,3 +196,62 @@ def test_portuguese_echo_on_first_attempt_retries_to_english(monkeypatch):
     assert len(calls) == 2
 
 
+def test_name_masking_does_not_cross_sentences_or_mask_portuguese_nouns():
+    masked, names = image_english._mask_names(
+        "estilo National Geographic. Sem 3D. clothing: Vestuário moderno."
+    )
+    assert names == ["National Geographic"]
+    assert "[[0]]. Sem 3D." in masked
+    assert "Vestuário" in masked
+
+
+def test_partial_translation_feeds_retry_and_recovers_on_second_attempt_error(monkeypatch):
+    source = "Fotografia natural com iluminação quente. appearance: Cabelos pretos e olhos castanhos."
+    partial = "Natural photography with warm lighting. appearance: Cabelos pretos e olhos castanhos."
+    calls = install_stub(monkeypatch, [
+        partial,
+        llm_client.LlmError("HTTP 429 em /chat/completions: Too Many Requests"),
+    ])
+
+    result = image_english.render_english(source, llm_cfg={})
+    assert result == partial
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["content"] == partial
+
+
+def test_llm_client_retries_on_http_429_with_retry_after():
+    import httpx
+
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "solar-mini4:free"}]})
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                text="Too Many Requests",
+            )
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "Natural photography portrait"}}],
+        })
+
+    cfg = {
+        "base_url": "https://inference-api.nousresearch.com/v1",
+        "api_key": "test-key",
+        "model_alias": "solar-mini4:free",
+        "timeout_seconds": 15,
+    }
+    reply = llm_client.chat_completion(
+        cfg,
+        [{"role": "user", "content": "translate"}],
+        role="image_prompt",
+        transport=httpx.MockTransport(handler),
+    )
+    assert reply == "Natural photography portrait"
+    assert attempts["count"] == 3
+
+
+

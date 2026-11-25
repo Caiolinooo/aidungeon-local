@@ -1008,6 +1008,42 @@ def _dry_window(cfg: dict, sampler: dict) -> int:
         return 4096
 
 
+_RATE_LIMIT_BACKOFFS = (1.5, 3.0, 5.0)
+
+
+def _rate_limit_delay(resp: httpx.Response, attempt: int, guard: _CallGuard) -> float | None:
+    """Calcula espera de backoff para HTTP 429/503 respeitando Retry-After e deadline."""
+    raw_retry = (resp.headers.get("retry-after") or "").strip()
+    delay: float | None = None
+    if raw_retry:
+        try:
+            delay = float(raw_retry)
+        except ValueError:
+            delay = None
+    if delay is None:
+        idx = min(attempt, len(_RATE_LIMIT_BACKOFFS) - 1)
+        delay = _RATE_LIMIT_BACKOFFS[idx]
+    delay = max(0.0, min(delay, 8.0))
+    if guard.deadline is not None:
+        remaining = guard.deadline - time.monotonic()
+        if remaining <= delay + 1.5:
+            return None
+    return delay
+
+
+def _sleep_guarded(delay: float, guard: _CallGuard) -> None:
+    if delay <= 0:
+        guard.check()
+        return
+    until = time.monotonic() + delay
+    while True:
+        guard.check()
+        left = until - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.1, left))
+
+
 def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | None,
                   read_timeout: float, guard: _CallGuard,
                   state: StreamState) -> Iterator[str]:
@@ -1020,6 +1056,7 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
     saw_reasoning = False
     finished = False
     current_payload = payload
+    cloud = _is_cloud_openai(cfg)
     try:
         with _make_client(cfg, transport, read_timeout) as client:
             for attempt in range(4):
@@ -1030,6 +1067,16 @@ def _iter_content(cfg: dict, payload: dict, *, transport: httpx.BaseTransport | 
                     if resp.status_code in (401, 403):
                         resp.read()
                         raise LlmAuthError(f"auth_error: HTTP {resp.status_code} em /chat/completions")
+                    if (resp.status_code == 429 or (resp.status_code == 503 and cloud)) and attempt < 3:
+                        resp.read()
+                        delay = _rate_limit_delay(resp, attempt, guard)
+                        if delay is not None:
+                            log.warning(
+                                "HTTP %s em /chat/completions; aguardando %.1fs antes de tentar novamente (%d/3)",
+                                resp.status_code, delay, attempt + 1,
+                            )
+                            _sleep_guarded(delay, guard)
+                            continue
                     if resp.status_code in (400, 422) and attempt < 3:
                         resp.read()
                         sanitized = _strip_rejected_fields(current_payload, resp.text)
