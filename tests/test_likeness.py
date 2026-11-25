@@ -789,6 +789,15 @@ def test_lookup_person_skips_name_list_and_uses_role_hint():
                     "extract": "Alok is a given name.",
                     "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Alok"}},
                 })
+            if title == "Alok Sharma":
+                return httpx.Response(200, json={
+                    "type": "standard",
+                    "title": "Alok Sharma",
+                    "description": "British politician",
+                    "extract": "Sir Alok Kumar Sharma (born 1967) is a British politician.",
+                    "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/a/a0/Sharma.jpg"},
+                    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Alok_Sharma"}},
+                })
             if title == "Alok (DJ)":
                 return httpx.Response(200, json={
                     "type": "standard",
@@ -802,7 +811,7 @@ def test_lookup_person_skips_name_list_and_uses_role_hint():
         if request.url.params.get("action") == "opensearch":
             q = (request.url.params.get("search") or "").lower()
             if "alok" in q:
-                return httpx.Response(200, json=[q, ["Alok", "Alok (DJ)"], [], []])
+                return httpx.Response(200, json=[q, ["Alok", "Alok Sharma", "Alok (DJ)"], [], []])
             return httpx.Response(200, json=[q, [], [], []])
         return httpx.Response(404)
 

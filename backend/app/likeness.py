@@ -896,6 +896,48 @@ def _clean_hint_words(hint: str) -> str:
     return " ".join(words[:2])
 
 
+def _search_fulltext(client: httpx.Client, lang: str, query: str, limit: int = 3) -> list[str]:
+    response = client.get(
+        f"https://{lang}.wikipedia.org/w/api.php",
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": limit,
+            "format": "json",
+            "utf8": 1,
+        },
+    )
+    if response.status_code != 200:
+        return []
+    try:
+        payload = response.json()
+    except ValueError:
+        return []
+    items = ((payload.get("query") or {}).get("search") or [])
+    out: list[str] = []
+    for item in items:
+        clean = " ".join(str(item.get("title") or "").split())
+        if clean and clean not in out:
+            out.append(clean)
+    return out
+
+
+def _rank_candidates(query: str, titles: list[str]) -> list[str]:
+    """Prioriza título exato ou com desambiguação entre parênteses ('Alok (DJ)') antes de homônimos com outro sobrenome ('Alok Sharma')."""
+    q = query.casefold()
+    prefix = f"{q} ("
+    exact_or_paren: list[str] = []
+    others: list[str] = []
+    for t in titles:
+        low = t.casefold()
+        if low == q or low.startswith(prefix):
+            exact_or_paren.append(t)
+        else:
+            others.append(t)
+    return exact_or_paren + others
+
+
 def lookup_person(query: str, transport: httpx.BaseTransport | None = None, *,
                   hint: str = "") -> WikiPage | None:
     """Página da Wikipedia para o nome. None se a rede ou o título falhar."""
@@ -904,42 +946,51 @@ def lookup_person(query: str, transport: httpx.BaseTransport | None = None, *,
         return None
     hint_words = _clean_hint_words(hint)
     fallback: WikiPage | None = None
+    checked: set[tuple[str, str]] = set()
+
+    def _inspect(client: httpx.Client, lang: str, title: str) -> WikiPage | None:
+        nonlocal fallback
+        key = (lang, title.casefold())
+        if key in checked:
+            return None
+        checked.add(key)
+        page = _fetch_summary(client, lang, title)
+        if not page or page.disambiguation:
+            return None
+        if page.minor:
+            return page
+        if page.is_real_adult and page.image_url:
+            return page
+        if fallback is None or (page.is_real_adult and not fallback.is_real_adult):
+            fallback = page
+        return None
+
     try:
         with _client(transport) as client:
+            # Passo 1: título exato em EN e PT primeiro (ex.: pt.wikipedia.org/wiki/Alok).
             for lang in ("en", "pt"):
-                checked: set[str] = set()
-                candidates = [query]
-                for title in candidates:
-                    key = title.casefold()
-                    if key in checked:
-                        continue
-                    checked.add(key)
-                    page = _fetch_summary(client, lang, title)
-                    if page and not page.disambiguation:
-                        if page.minor:
-                            return page
-                        if page.is_real_adult and page.image_url:
-                            return page
-                        if fallback is None or (page.is_real_adult and not fallback.is_real_adult):
-                            fallback = page
-                search_queries = [query]
+                hit = _inspect(client, lang, query)
+                if hit is not None:
+                    return hit
+
+            # Passo 2: busca com hint (full-text entende 'Alok DJ'; opensearch cobre prefixos).
+            for lang in ("pt", "en") if hint_words else ("en", "pt"):
+                found_titles: list[str] = []
                 if hint_words and hint_words.casefold() not in query.casefold():
-                    search_queries.insert(0, f"{query} {hint_words}")
-                for sq in search_queries:
-                    for found in _search_titles(client, lang, sq, limit=3):
-                        key = found.casefold()
-                        if key in checked:
-                            continue
-                        checked.add(key)
-                        page = _fetch_summary(client, lang, found)
-                        if not page or page.disambiguation:
-                            continue
-                        if page.minor:
-                            return page
-                        if page.is_real_adult and page.image_url:
-                            return page
-                        if fallback is None or (page.is_real_adult and not fallback.is_real_adult):
-                            fallback = page
+                    hq = f"{query} {hint_words}"
+                    for t in _search_fulltext(client, lang, hq, limit=3):
+                        if t not in found_titles:
+                            found_titles.append(t)
+                    for t in _search_titles(client, lang, hq, limit=3):
+                        if t not in found_titles:
+                            found_titles.append(t)
+                for t in _search_titles(client, lang, query, limit=4):
+                    if t not in found_titles:
+                        found_titles.append(t)
+                for found in _rank_candidates(query, found_titles):
+                    hit = _inspect(client, lang, found)
+                    if hit is not None:
+                        return hit
     except httpx.HTTPError as exc:
         log.warning("likeness: wikipedia falhou para %s (%s)", query, exc)
         return fallback
