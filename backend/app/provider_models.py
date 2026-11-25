@@ -62,6 +62,16 @@ CLOUD_OPENAI_HOSTS = frozenset({
     "api.sambanova.ai",
     "api.voyageai.com",
     "api.jina.ai",
+    "inference-api.nousresearch.com",
+    "nousresearch.com",
+    "api.chutes.ai",
+    "api.hyperbolic.xyz",
+    "api.siliconflow.cn",
+    "api.moonshot.ai",
+    "api.featherless.ai",
+    "api.venice.ai",
+    "integrate.api.nvidia.com",
+    "models.inference.ai.azure.com",
 })
 
 
@@ -160,6 +170,13 @@ def provider_presets() -> dict[str, list[dict[str, Any]]]:
                 "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
                 "requires_api_key": True,
                 "default_model": "gemini-2.5-flash",
+            },
+            {
+                "id": "nous",
+                "label": "Nous Research",
+                "base_url": "https://inference-api.nousresearch.com/v1",
+                "requires_api_key": True,
+                "default_model": "upstage/solar-mini4:free",
             },
             {
                 "id": "ollama",

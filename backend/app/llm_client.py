@@ -243,6 +243,13 @@ def _is_gemini_openai(cfg: dict) -> bool:
     return "generativelanguage.googleapis.com" in str(cfg.get("base_url") or "").lower()
 
 
+_NOUS_DEFAULT_TAGS = ("user=aidungeon",)
+
+
+def _is_nous_openai(cfg: dict) -> bool:
+    return "nousresearch.com" in str(cfg.get("base_url") or "").lower()
+
+
 _OPENAI_REASONING_RE = re.compile(r"^(?:o1|o3|o4|gpt-5)(?:$|[-_.])", re.IGNORECASE)
 
 
@@ -319,6 +326,8 @@ _UNKNOWN_PARAM_MARKERS = (
     "cannot both be specified",
     "too many",
     "at most",
+    "missing tags",
+    "missing user tag",
 )
 
 _STOP_LIMIT_RE = re.compile(
@@ -339,6 +348,11 @@ def _strip_rejected_fields(payload: dict[str, Any], error_body: str) -> tuple[di
 
     cleaned = dict(payload)
     changed: set[str] = set()
+
+    # 0. Gateways como Nous Research exigem `tags: ["user=..."]` em modelos :free
+    if ("missing tags" in lower or "missing user tag" in lower) and cleaned.get("tags") != list(_NOUS_DEFAULT_TAGS):
+        cleaned["tags"] = list(_NOUS_DEFAULT_TAGS)
+        changed.add("tags")
 
     # 1. OpenAI o1/o3/o4/gpt-5: max_tokens -> max_completion_tokens
     if "max_completion_tokens" in lower and "max_tokens" in cleaned:
@@ -943,6 +957,8 @@ def build_chat_payload(cfg: dict, messages: list[dict], *, sampler: dict,
             cloud_stops = _cloud_stop_sequences(stop, limit=4)
             if cloud_stops:
                 payload["stop"] = cloud_stops
+        if _is_nous_openai(cfg):
+            payload["tags"] = list(_NOUS_DEFAULT_TAGS)
         return payload
 
     payload = {
@@ -1269,6 +1285,8 @@ def chat_completion(cfg: dict, messages: list[dict], *, role: str = "assistant",
             cloud_stops = _cloud_stop_sequences(stop, limit=4)
             if cloud_stops:
                 payload["stop"] = cloud_stops
+        if _is_nous_openai(cfg):
+            payload["tags"] = list(_NOUS_DEFAULT_TAGS)
         slot = None
     else:
         payload["stop"] = list(stop or [])

@@ -761,3 +761,89 @@ def test_voyage_embeddings_health_and_discover_fallback_when_models_404():
     assert any(m["id"] == "voyage-3-lite" for m in disc["models"])
 
 
+def test_nous_research_recognized_as_cloud_and_sends_user_tag():
+    assert provider_models.is_cloud_openai_url("https://inference-api.nousresearch.com/v1") is True
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/props"):
+            raise AssertionError("cloud provider should not probe /props")
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if body.get("stream"):
+                sse = 'data: {"choices":[{"delta":{"content":"Ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+                return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Ok"}, "finish_reason": "stop"}]})
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://inference-api.nousresearch.com/v1",
+        "api_key": "sk-nous-test",
+        "model_alias": "upstage/solar-mini4:free",
+        "timeout_seconds": 30,
+    }
+    transport = httpx.MockTransport(handler)
+    tokens = list(llm_client.stream_chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        sampler={"temperature": 0.7, "max_tokens": 50},
+        stop=["a", "b", "c", "d", "e", "f"],
+        transport=transport,
+        role="narrative",
+    ))
+    assert "".join(tokens) == "Ok"
+    assert calls[0]["tags"] == ["user=aidungeon"]
+    assert len(calls[0]["stop"]) == 4
+    assert "return_progress" not in calls[0]
+    assert "cache_prompt" not in calls[0]
+
+    reply = llm_client.chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        transport=transport,
+        role="assistant",
+    )
+    assert reply == "Ok"
+    assert calls[1]["tags"] == ["user=aidungeon"]
+
+
+def test_custom_gateway_missing_tags_400_retries_with_user_tag():
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/props"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content.decode("utf-8"))
+            calls.append(body)
+            if body.get("tags") != ["user=aidungeon"]:
+                return httpx.Response(
+                    400,
+                    json={
+                        "status": 400,
+                        "message": "This request is not valid. Check the request parameters. Additional info: missing tags",
+                    },
+                )
+            sse = 'data: {"choices":[{"delta":{"content":"Recuperado"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+            return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    cfg = {
+        "base_url": "https://custom-gateway.example.com/v1",
+        "api_key": "sk-test",
+        "model_alias": "upstage/solar-mini4:free",
+        "timeout_seconds": 30,
+    }
+    tokens = list(llm_client.stream_chat_completion(
+        cfg,
+        [{"role": "user", "content": "oi"}],
+        sampler={"temperature": 0.7, "max_tokens": 50},
+        stop=[],
+        transport=httpx.MockTransport(handler),
+        role="narrative",
+    ))
+    assert "".join(tokens) == "Recuperado"
+    assert len(calls) == 2
+    assert "tags" not in calls[0]
+    assert calls[1]["tags"] == ["user=aidungeon"]
