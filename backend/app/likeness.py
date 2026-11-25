@@ -798,6 +798,13 @@ def _summary_url(lang: str, title: str) -> str:
     return f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{slug}"
 
 
+_NON_PERSON_DESC = re.compile(
+    r"(?i)\b(?:given name|male given name|female given name|name list|surname|"
+    r"family name|disambiguation|list of|wikimedia disambiguation|"
+    r"nome próprio|prenome|sobrenome|desambiguação|lista de)\b"
+)
+
+
 def _page_from_summary(data: dict) -> WikiPage | None:
     if not isinstance(data, dict):
         return None
@@ -820,6 +827,7 @@ def _page_from_summary(data: dict) -> WikiPage | None:
         image = thumb_url
     content = ((data.get("content_urls") or {}).get("desktop") or {})
     page_url = str(content.get("page") or "")
+    is_disambig = kind == "disambiguation" or _NON_PERSON_DESC.search(description) is not None
     return WikiPage(
         title=title,
         extract=extract,
@@ -829,30 +837,40 @@ def _page_from_summary(data: dict) -> WikiPage | None:
         page_url=page_url,
         fictional=_FICTIONAL.search(blob) is not None,
         minor=age_class(blob) == "minor",
-        disambiguation=kind == "disambiguation",
+        disambiguation=is_disambig,
     )
 
 
-def _search_title(client: httpx.Client, lang: str, query: str) -> str:
+def _search_titles(client: httpx.Client, lang: str, query: str, limit: int = 3) -> list[str]:
     response = client.get(
         f"https://{lang}.wikipedia.org/w/api.php",
         params={
             "action": "opensearch",
             "search": query,
-            "limit": 1,
+            "limit": limit,
             "namespace": 0,
             "format": "json",
         },
     )
     if response.status_code != 200:
-        return ""
+        return []
     try:
         payload = response.json()
     except ValueError:
-        return ""
-    if not isinstance(payload, list) or len(payload) < 2 or not payload[1]:
-        return ""
-    return " ".join(str(payload[1][0]).split())
+        return []
+    if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
+        return []
+    out: list[str] = []
+    for item in payload[1]:
+        clean = " ".join(str(item or "").split())
+        if clean and clean not in out:
+            out.append(clean)
+    return out
+
+
+def _search_title(client: httpx.Client, lang: str, query: str) -> str:
+    titles = _search_titles(client, lang, query, limit=1)
+    return titles[0] if titles else ""
 
 
 def _fetch_summary(client: httpx.Client, lang: str, title: str) -> WikiPage | None:
@@ -865,26 +883,67 @@ def _fetch_summary(client: httpx.Client, lang: str, title: str) -> WikiPage | No
         return None
 
 
-def lookup_person(query: str, transport: httpx.BaseTransport | None = None) -> WikiPage | None:
+def _clean_hint_words(hint: str) -> str:
+    # Remove JSON/lixo acidental e pega só 1-2 palavras úteis de ofício/contexto.
+    text = re.sub(r"\{.*$", "", str(hint or ""), flags=re.DOTALL)
+    text = re.sub(r"[^\wÀ-ÿ\s-]", " ", text)
+    stop = {
+        "de", "da", "do", "dos", "das", "em", "no", "na", "um", "uma", "e", "o", "a",
+        "os", "as", "com", "para", "por", "que", "se", "como", "mais", "sem", "muito",
+        "the", "and", "for", "with", "from", "into", "that", "this", "who", "her", "his",
+    }
+    words = [w for w in text.split() if len(w) >= 2 and w.casefold() not in stop]
+    return " ".join(words[:2])
+
+
+def lookup_person(query: str, transport: httpx.BaseTransport | None = None, *,
+                  hint: str = "") -> WikiPage | None:
     """Página da Wikipedia para o nome. None se a rede ou o título falhar."""
     query = " ".join((query or "").split())
     if len(query) < 2:
         return None
+    hint_words = _clean_hint_words(hint)
+    fallback: WikiPage | None = None
     try:
         with _client(transport) as client:
             for lang in ("en", "pt"):
-                page = _fetch_summary(client, lang, query)
-                if page and not page.disambiguation:
-                    return page
-                found = _search_title(client, lang, query)
-                if found and found.casefold() != query.casefold():
-                    page = _fetch_summary(client, lang, found)
+                checked: set[str] = set()
+                candidates = [query]
+                for title in candidates:
+                    key = title.casefold()
+                    if key in checked:
+                        continue
+                    checked.add(key)
+                    page = _fetch_summary(client, lang, title)
                     if page and not page.disambiguation:
-                        return page
+                        if page.minor:
+                            return page
+                        if page.is_real_adult and page.image_url:
+                            return page
+                        if fallback is None or (page.is_real_adult and not fallback.is_real_adult):
+                            fallback = page
+                search_queries = [query]
+                if hint_words and hint_words.casefold() not in query.casefold():
+                    search_queries.insert(0, f"{query} {hint_words}")
+                for sq in search_queries:
+                    for found in _search_titles(client, lang, sq, limit=3):
+                        key = found.casefold()
+                        if key in checked:
+                            continue
+                        checked.add(key)
+                        page = _fetch_summary(client, lang, found)
+                        if not page or page.disambiguation:
+                            continue
+                        if page.minor:
+                            return page
+                        if page.is_real_adult and page.image_url:
+                            return page
+                        if fallback is None or (page.is_real_adult and not fallback.is_real_adult):
+                            fallback = page
     except httpx.HTTPError as exc:
         log.warning("likeness: wikipedia falhou para %s (%s)", query, exc)
-        return None
-    return None
+        return fallback
+    return fallback
 
 
 def _sniff_ext(content: bytes, content_type: str, url: str) -> str:
@@ -1114,6 +1173,7 @@ def _store_sheet(conn, card: dict, sheet: dict) -> dict:
 
 
 def resolve_card(conn, card: dict, *, query: str | None = None,
+                 hint: str = "",
                  transport: httpx.BaseTransport | None = None,
                  llm_cfg: dict | None = None, force: bool = False,
                  describe: Callable[[bytes], str] | None = None) -> dict:
@@ -1126,7 +1186,12 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
     current = likeness_of(card)
     if current.get("verified_by_user") and current.get("reference_image_path") and not force:
         return card
-    page = lookup_person(query or display_name(card), transport=transport)
+    effective_hint = hint or ("" if query else str(card.get("entry") or ""))
+    page = lookup_person(
+        query or display_name(card),
+        transport=transport,
+        hint=effective_hint,
+    )
     if page is None or page.fictional or page.disambiguation or not page.title:
         raise GameError(422, "not_a_real_person",
                         "A Wikipedia não confirmou essa pessoa como real.")
@@ -1167,6 +1232,12 @@ def resolve_card(conn, card: dict, *, query: str | None = None,
         "page_url": page.page_url,
         "verified_by_user": False,
     }
+    # Limpa a âncora antiga (possivelmente gerada sem referência) para o
+    # próximo retrato partir diretamente da foto real recém-baixada.
+    conn.execute(
+        "UPDATE story_cards SET portrait_anchor_id='', updated_at=? WHERE id=?",
+        (db.utcnow(), card["id"]),
+    )
     return _store_sheet(conn, card, sheet)
 
 

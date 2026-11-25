@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from pydantic import BaseModel
 from app import db, likeness, settings_store
 from app.deps import get_http_transport
@@ -21,6 +21,35 @@ def _card_or_404(adventure_id: str, card_id: str) -> dict:
     if not card:
         raise GameError.not_found(f"card {card_id} not found")
     return card
+
+
+def _media_type(blob: bytes) -> str:
+    if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if blob.startswith(b"RIFF") and blob[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
+@router.get("/adventures/{adventure_id}/cards/{card_id}/reference")
+def get_reference(adventure_id: str, card_id: str,
+                  index: int = Query(default=0, ge=0)) -> Response:
+    """Devolve a foto de referência salva (upload manual ou Wikipedia)."""
+    card = _card_or_404(adventure_id, card_id)
+    if likeness.is_minor(card):
+        raise GameError.not_found("reference not found")
+    blobs = likeness.visual_reference_images(card)
+    if not blobs and likeness.is_real_person(card):
+        single = likeness.reference_bytes(card)
+        blobs = [single] if single else []
+    if not blobs or index >= len(blobs):
+        raise GameError.not_found("reference not found")
+    content = blobs[index]
+    return Response(
+        content=content,
+        media_type=_media_type(content),
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/adventures/{adventure_id}/cards/{card_id}/likeness/resolve")

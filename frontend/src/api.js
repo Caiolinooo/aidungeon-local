@@ -294,6 +294,15 @@ export const api = {
     body.append('mode', mode || 'reference')
     return request(`/adventures/${advId}/cards/${cardId}/reference`, { method: 'PUT', body })
   },
+  resolveLikeness: (advId, cardId, { title, force = false } = {}) =>
+    request(`/adventures/${advId}/cards/${cardId}/likeness/resolve${qs({
+      title: title || undefined,
+      force: force ? 'true' : undefined,
+    })}`, { method: 'POST' }),
+  setPrimaryReference: (advId, cardId, imagePath) =>
+    request(`/adventures/${advId}/cards/${cardId}/reference/primary`, {
+      method: 'POST', body: { image_path: imagePath },
+    }),
   deleteReference: (advId, cardId) =>
     request(`/adventures/${advId}/cards/${cardId}/reference`, { method: 'DELETE' }),
   deletePortrait: (advId, cardId) =>
@@ -519,6 +528,22 @@ export const api = {
     let res
     try {
       res = await fetch(`${API_BASE}/api/images/${imageId}`, { headers: authHeaders() })
+    } catch {
+      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
+    }
+    if (!res.ok) {
+      if (res.status === 401) notifyUnauthorized()
+      throw await parseError(res)
+    }
+    return res.blob()
+  },
+  fetchReferenceBlob: async (advId, cardId, index = 0) => {
+    let res
+    try {
+      res = await fetch(
+        `${API_BASE}/api/adventures/${advId}/cards/${cardId}/reference?index=${encodeURIComponent(index)}`,
+        { headers: authHeaders() },
+      )
     } catch {
       throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
     }

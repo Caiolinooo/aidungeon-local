@@ -85,6 +85,67 @@ function PortraitThumb({ card, activeJob }) {
   )
 }
 
+function ReferencePreview({ adventureId, cardId, referencePath, version, realPerson, wikiName, pageUrl, license }) {
+  const [url, setUrl] = useState(null)
+  const safePageUrl = /^https?:\/\//i.test(pageUrl || '') ? pageUrl : ''
+
+  useEffect(() => {
+    if (!referencePath) {
+      setUrl(null)
+      return undefined
+    }
+    let stale = false
+    let objectUrl = null
+    api.fetchReferenceBlob(adventureId, cardId, 0)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        if (stale) URL.revokeObjectURL(objectUrl)
+        else setUrl(objectUrl)
+      })
+      .catch(() => { if (!stale) setUrl(null) })
+    return () => {
+      stale = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [adventureId, cardId, referencePath, version])
+
+  if (!referencePath) return null
+  return (
+    <div className="mt-2 flex items-center gap-2 rounded-lg border border-subtle bg-elevated/40 p-2">
+      {url ? (
+        <img
+          src={url}
+          alt={wikiName ? `Referência de ${wikiName}` : 'Foto de referência'}
+          className="h-12 w-12 shrink-0 rounded-md border border-subtle object-cover"
+        />
+      ) : (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-subtle bg-surface text-xs text-muted">
+          IMG
+        </div>
+      )}
+      <div className="min-w-0 flex-1 text-xs">
+        <p className="font-medium text-primary">
+          {realPerson ? `Foto real${wikiName ? ` · ${wikiName}` : ''}` : 'Foto de referência ativa'}
+        </p>
+        <p className="truncate text-[11px] text-muted">
+          {safePageUrl ? (
+            <a
+              href={safePageUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent-pri underline hover:text-accent-hov"
+            >
+              Wikipedia{license ? ` (${license})` : ''}
+            </a>
+          ) : (
+            license || 'Usada para travar rosto nos retratos e cenas'
+          )}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function TurnaroundPreview({ turnaround, title }) {
   const [urls, setUrls] = useState({ master: null, sheet: null, clip: null })
   const masterId = turnaround?.master_image_id
@@ -462,8 +523,8 @@ function BondGlance({ sheet, peers }) {
 
 function NpcRow({
   card, job, adventureId, peers, onSave, onRegenerate, onEnrich, onDelete,
-  onRegenerateField, onRegenerateAll, onUploadPhoto, onDeleteReference,
-  onDeletePortrait, onPortraitFromPhoto, onGenerateTurnaround, saving, enriching, regenerating,
+  onRegenerateField, onRegenerateAll, onUploadPhoto, onResolveLikeness, onDeleteReference,
+  onDeletePortrait, onPortraitFromPhoto, onGenerateTurnaround, saving, enriching, resolving, regenerating,
   clonedVoices, onVoiceSaved, onVoiceDeleted,
 }) {
   const toast = useToast()
@@ -481,7 +542,10 @@ function NpcRow({
   const [photoMode, setPhotoMode] = useState('reference')
   const previewAudioRef = useRef(null)
   const fileRef = useRef(null)
-  const referencePath = form.sheet?.reference?.image_path || ''
+  const uploadedRefPath = form.sheet?.reference?.image_path || ''
+  const likenessInfo = form.sheet?.likeness || {}
+  const wikiRefPath = likenessInfo?.reference_image_path || ''
+  const referencePath = uploadedRefPath || wikiRefPath
   const referenceCount = (form.sheet?.reference?.images?.length || (referencePath ? 1 : 0))
   const turnaround = form.sheet?.reference?.turnaround
   const jobActive = isActiveJob(job)
@@ -683,6 +747,16 @@ function NpcRow({
         )}
       </div>
       <BondGlance sheet={form.sheet} peers={peers} />
+      <ReferencePreview
+        adventureId={adventureId}
+        cardId={card.id}
+        referencePath={referencePath}
+        version={card.updated_at || likenessInfo?.resolved_at || ''}
+        realPerson={Boolean(form.sheet?.real_person)}
+        wikiName={form.sheet?.real_name || form.sheet?.wiki_title || ''}
+        pageUrl={likenessInfo?.page_url || ''}
+        license={likenessInfo?.license || ''}
+      />
       <TurnaroundPreview turnaround={turnaround} title={card.title} />
       <div className="mt-2 flex w-full min-w-0 flex-wrap items-center gap-1">
         <input
@@ -715,6 +789,15 @@ function NpcRow({
         </button>
         <button
           type="button"
+          onClick={() => onResolveLikeness?.(card)}
+          disabled={resolving || enriching}
+          title="Buscar foto oficial na Wikipedia para pessoa real e usar como referência de rosto"
+          className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated disabled:opacity-50"
+        >
+          {resolving ? 'Buscando foto…' : '🌐 Buscar foto (Wiki)'}
+        </button>
+        <button
+          type="button"
           onClick={() => onDeleteReference?.(card)}
           className="rounded-md border border-subtle px-2 py-1 text-xs text-secondary hover:bg-elevated"
         >
@@ -731,7 +814,7 @@ function NpcRow({
           type="button"
           disabled={!referencePath}
           onClick={() => onPortraitFromPhoto?.(card)}
-          title={referencePath ? 'Gerar um retrato novo a partir da foto enviada' : 'Upload a photo first'}
+          title={referencePath ? 'Gerar um retrato novo a partir da foto de referência' : 'Envie uma foto ou busque na Wikipedia primeiro'}
           className="rounded-md border border-accent-800 px-2 py-1 text-xs text-accent-pri hover:bg-accent-950 disabled:cursor-not-allowed disabled:opacity-40"
         >
           New image from photo
@@ -802,6 +885,7 @@ export default function NpcsTab({ adventure }) {
   const [jobs, setJobs] = useState([])
   const [savingId, setSavingId] = useState(null)
   const [enrichingId, setEnrichingId] = useState(null)
+  const [resolvingId, setResolvingId] = useState(null)
   const [webOn, setWebOn] = useState(false)
   const [webSources, setWebSources] = useState([])
   const [regeneratingId, setRegeneratingId] = useState(null)
@@ -962,11 +1046,15 @@ export default function NpcsTab({ adventure }) {
     setEnrichingId(card.id)
     try {
       const updated = await api.enrichCard(adventure.id, card.id, { webSearch: webOn })
-      const { web_sources: sources = [], ...savedCard } = updated
+      const { web_sources: sources = [], likeness_resolved: gotPhoto = false, ...savedCard } = updated
       setCards((cs) => cs.map((c) => (c.id === card.id ? savedCard : c)))
       setWebSources(sources)
-      if (updated.web_sources?.length) {
-        toast(`NPC enriquecido com ${updated.web_sources.length} fontes da web.`, 'ok')
+      if (gotPhoto && sources.length) {
+        toast(`NPC enriquecido com ${sources.length} fontes + foto real da Wikipedia! Clique em "New image from photo" ou "Regenerate portrait".`, 'ok')
+      } else if (gotPhoto) {
+        toast('NPC enriquecido + foto real da Wikipedia salva!', 'ok')
+      } else if (sources.length) {
+        toast(`NPC enriquecido com ${sources.length} fontes da web.`, 'ok')
       } else if (webOn) {
         toast('NPC enriquecido, mas a busca não encontrou fontes úteis.', 'ok')
       } else {
@@ -976,6 +1064,21 @@ export default function NpcsTab({ adventure }) {
       toast(e.message)
     } finally {
       setEnrichingId(null)
+    }
+  }
+
+  const resolveLikeness = async (card) => {
+    setResolvingId(card.id)
+    try {
+      const updated = await api.resolveLikeness(adventure.id, card.id, { force: true })
+      setCards((cs) => cs.map((c) => (c.id === card.id ? updated : c)))
+      const sheet = parseSheet(updated.sheet)
+      const who = sheet?.real_name || updated.title || 'NPC'
+      toast(`Foto real de ${who} salva da Wikipedia! Use "New image from photo" ou "Regenerate portrait".`, 'ok')
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setResolvingId(null)
     }
   }
 
@@ -1187,6 +1290,7 @@ export default function NpcsTab({ adventure }) {
                 peers={npcs}
                 saving={savingId === c.id}
                 enriching={enrichingId === c.id}
+                resolving={resolvingId === c.id}
                 regenerating={regeneratingId === c.id}
                 onSave={save}
                 onRegenerate={regenerate}
@@ -1194,6 +1298,7 @@ export default function NpcsTab({ adventure }) {
                 onRegenerateField={regenerateFields}
                 onRegenerateAll={regenerateAll}
                 onUploadPhoto={uploadPhoto}
+                onResolveLikeness={resolveLikeness}
                 onDeleteReference={deleteReference}
                 onDeletePortrait={deletePortrait}
                 onPortraitFromPhoto={portraitFromPhoto}

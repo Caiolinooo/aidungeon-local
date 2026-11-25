@@ -1344,7 +1344,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                                  prompt,
                                  img_cfg["style_suffix"] or "") if p).strip()
     prefix = (likeness.real_person_prefix(card)
-              if img_cfg.get("provider") == "sdwebui" else "")
+              if img_cfg.get("provider") in ("sdwebui", "openai_compatible") else "")
     if prefix:
         final = f"{prefix}, {final}" if final else prefix
     look = npc_assets.sheet_context(card.get("sheet") or "")

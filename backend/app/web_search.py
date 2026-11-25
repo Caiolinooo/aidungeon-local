@@ -121,9 +121,39 @@ def should_auto_search(text: str) -> bool:
     return len(proper_nouns) >= 2
 
 
+def _fetch_wikipedia_extract(client: httpx.Client, lang: str, title: str, *,
+                             max_chars: int = 2000) -> str:
+    """Busca o texto limpo da página na MediaWiki Action API (intro + seções)."""
+    try:
+        resp = client.get(
+            f"https://{lang}.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "explaintext": 1,
+                "exchars": max_chars,
+                "redirects": 1,
+                "titles": title,
+                "format": "json",
+                "utf8": 1,
+            },
+        )
+        if resp.status_code != 200:
+            return ""
+        pages = ((resp.json().get("query") or {}).get("pages") or {})
+        for page in pages.values():
+            raw = str((page or {}).get("extract") or "").strip()
+            if raw:
+                return re.sub(r"\n{3,}", "\n\n", raw)[:max_chars].strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def _search_wikipedia(query: str, lang: str = "pt", max_results: int = 3,
-                      transport: httpx.BaseTransport | None = None) -> list[dict]:
-    """Busca resumos na API REST/Action da Wikipedia (PT + fallback EN)."""
+                      transport: httpx.BaseTransport | None = None, *,
+                      detail_chars: int = 900) -> list[dict]:
+    """Busca resumos (e extratos completos) na API da Wikipedia (PT + fallback EN)."""
     results: list[dict] = []
     langs = [lang] if lang in ("pt", "en", "es", "fr", "de", "it") else ["pt"]
     if "en" not in langs:
@@ -174,16 +204,20 @@ def _search_wikipedia(query: str, lang: str = "pt", max_results: int = 3,
                         if s_resp.status_code == 200:
                             s_data = s_resp.json()
                             if s_data.get("extract"):
-                                extract = str(s_data["extract"]).strip()[:600]
+                                extract = str(s_data["extract"]).strip()[:detail_chars]
                             content_urls = ((s_data.get("content_urls") or {}).get("desktop") or {})
                             if content_urls.get("page"):
                                 page_url = str(content_urls["page"])
                     except Exception:
                         pass
+                    if detail_chars > 900 and len(results) == 0:
+                        full = _fetch_wikipedia_extract(client, lg, title, max_chars=detail_chars)
+                        if len(full) > len(extract):
+                            extract = full
                     results.append({
                         "title": f"{title} (Wikipedia {lg.upper()})",
                         "url": page_url,
-                        "snippet": extract[:600],
+                        "snippet": extract[:detail_chars],
                         "source": "wikipedia",
                     })
                     if len(results) >= max_results:
@@ -286,13 +320,14 @@ def _search_duckduckgo(query: str, max_results: int = 4,
 
 
 def search_web(query: str, *, language: str = "pt", max_results: int = 5,
+               detail_chars: int = 900,
                transport: httpx.BaseTransport | None = None) -> list[dict]:
     """Executa busca combinada (Wikipedia + DuckDuckGo) com cache em memória."""
     clean_q = " ".join((query or "").split()).strip()
     if len(clean_q) < 2:
         return []
     lang = (language or "pt")[:2].lower()
-    cache_key = (clean_q.casefold(), lang, max_results)
+    cache_key = (clean_q.casefold(), lang, max_results, detail_chars)
     now = time.time()
     cached = _search_cache.get(cache_key)
     if cached and (now - cached[0]) < CACHE_TTL_SECONDS and transport is None:
@@ -300,7 +335,7 @@ def search_web(query: str, *, language: str = "pt", max_results: int = 5,
 
     results: list[dict] = []
     wiki_hits = _search_wikipedia(clean_q, lang=lang, max_results=max(2, max_results // 2),
-                                  transport=transport)
+                                  transport=transport, detail_chars=detail_chars)
     results.extend(wiki_hits)
 
     ddg_hits = _search_duckduckgo(clean_q, max_results=max_results, transport=transport)
@@ -314,6 +349,19 @@ def search_web(query: str, *, language: str = "pt", max_results: int = 5,
     if results and transport is None:
         _search_cache[cache_key] = (now, results)
     return results[:max_results]
+
+
+def _clean_role_hint(description: str) -> str:
+    """Extrai 1-2 palavras de papel/ofício da descrição, ignorando JSON ou ruído."""
+    text = re.sub(r"\{.*$", "", str(description or ""), flags=re.DOTALL)
+    text = re.sub(r"[^\wÀ-ÿ\s-]", " ", text)
+    stop = {
+        "de", "da", "do", "dos", "das", "em", "no", "na", "um", "uma", "e", "o", "a",
+        "os", "as", "com", "para", "por", "que", "se", "como", "mais", "sem", "muito",
+        "the", "and", "for", "with", "from", "into", "that", "this", "who", "her", "his",
+    }
+    words = [w for w in text.split() if len(w) >= 2 and w.casefold() not in stop]
+    return " ".join(words[:2])
 
 
 def extract_search_queries(llm_cfg: dict | None, text: str, *,
@@ -395,6 +443,67 @@ def research_context(text: str, *, llm_cfg: dict | None = None,
     ]
     for src in all_sources:
         lines.append(f"- {src['title']}: {src['snippet']}")
+    return {
+        "queries": queries,
+        "sources": all_sources,
+        "context_block": "\n".join(lines),
+    }
+
+
+def research_character(name: str, *, description: str = "",
+                       language: str = "pt", max_results: int = 5,
+                       transport: Any = None) -> dict:
+    """Pesquisa profunda de personagem/pessoa: biografia completa, aparência, estilo e história."""
+    clean_name = " ".join((name or "").split()).strip()
+    if len(clean_name) < 2:
+        return {"queries": [], "sources": [], "context_block": ""}
+
+    hint = _clean_role_hint(description)
+    primary_query = f"{clean_name} {hint}".strip() if (len(clean_name.split()) == 1 and hint) else clean_name
+    detail_query = (
+        f"{clean_name} biografia personalidade estilo aparência"
+        if (language or "pt").lower().startswith("pt")
+        else f"{clean_name} personality appearance backstory biography"
+    )
+    queries = [primary_query]
+    if detail_query.casefold() != primary_query.casefold():
+        queries.append(detail_query)
+
+    all_sources: list[dict] = []
+    # 1ª query: busca profunda na Wikipedia (até 2200 chars) + DDG
+    for idx, q in enumerate(queries):
+        hits = search_web(
+            q,
+            language=language,
+            max_results=max_results,
+            detail_chars=2200 if idx == 0 else 900,
+            transport=transport,
+        )
+        for h in hits:
+            if not any(s["url"] == h["url"] and s["title"] == h["title"] for s in all_sources):
+                all_sources.append(h)
+        if len(all_sources) >= max_results:
+            break
+
+    all_sources = all_sources[:max_results]
+    if not all_sources:
+        return {"queries": queries, "sources": [], "context_block": ""}
+
+    lines = [
+        "[Web Research & Canon Facts — Character Dossier]",
+        "(Untrusted excerpts from Wikipedia/public web — use these real facts for appearance, personality, speech, habits and background; do not invent contradicting biography.)",
+    ]
+    total_chars = 0
+    for src in all_sources:
+        snippet = str(src.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        remaining = max(0, 3600 - total_chars)
+        if remaining < 120:
+            break
+        chunk = snippet[:remaining]
+        lines.append(f"- {src['title']}: {chunk}")
+        total_chars += len(chunk)
     return {
         "queries": queries,
         "sources": all_sources,

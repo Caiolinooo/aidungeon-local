@@ -45,9 +45,7 @@ def enqueue_portrait(adventure_id: str, card_id: str,
         if not card:
             raise GameError.not_found(f"card {card_id} not found")
         if source == "reference":
-            sheet = npc_assets.parse_sheet(card.get("sheet") or "")
-            ref = sheet.get("reference") if isinstance(sheet.get("reference"), dict) else {}
-            if not str(ref.get("image_path") or "").strip():
+            if not likeness.has_reference_image(card):
                 raise GameError(422, "reference_required",
                                 "Este NPC não tem foto de referência.")
         return jobs.enqueue_portrait(

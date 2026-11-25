@@ -61,9 +61,9 @@ Given the character and the story context, output STRICT JSON (no markdown, no c
   "stats": {"str": 1-20, "dex": 1-20, "con": 1-20, "int": 1-20, "wis": 1-20, "cha": 1-20},
   "status": "alive, dead, missing or injured — only if the text establishes it",
   "notes": "abilities, secrets, plot-relevant facts (optional, short)",
-  "portrait_prompt": "one or two English sentences for a text-to-image model: physical appearance, clothing, expression, bust/upper-body framing, neutral background — visual traits only, no names, no quotes"
+  "portrait_prompt": "STRICTLY IN ENGLISH: one or two vivid sentences for a text-to-image model: physical appearance, hair, face, clothing, expression, bust/upper-body framing, neutral background — visual traits only, no names, no quotes"
 }
-Every key must be present. Use an empty string when a text field is unknown. status must be one of alive, dead, missing, injured. Base stats on the character concept (a frail wizard has low str, high int). Keep every text field to 1-2 sentences, except background (2-3 sentences). Never change an existing appearance, body or status unless the description says that the body itself changed. Output ONLY the JSON object."""
+Every key must be present. Use an empty string when a text field is unknown. status must be one of alive, dead, missing, injured. Base stats on the character concept (a frail wizard has low str, high int). Keep every text field to 1-2 sentences, except background (2-3 sentences). When [Web Research & Canon Facts] is provided, use those real facts faithfully for appearance, personality, speech, habits and background instead of inventing contradictory details. Never change an existing appearance, body or status unless the description or web research updates it. Output portrait_prompt strictly in English even when the other fields are in Portuguese. Output ONLY the JSON object."""
 
 
 def _extract_json(text: str) -> dict:
@@ -113,7 +113,8 @@ def _field_text(key: str, value: str) -> str:
     return text
 
 
-def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
+def _normalize_sheet(data: dict, previous: dict | None = None, *,
+                     allow_visual_refresh: bool = False) -> dict:
     """Recorta o JSON do LLM para o contrato da ficha, preservando estado vivo."""
     known = set(SHEET_TEXT_FIELDS) | {
         "status", "stats", "bonds", "alignment", "relations", "conduct",
@@ -143,11 +144,16 @@ def _normalize_sheet(data: dict, previous: dict | None = None) -> dict:
         if coerced:
             sheet["stats"] = coerced
     # A ficha já gravada é canônica: enriquecer de novo não troca o rosto,
-    # não apaga a morte e não some com um fato antigo.
+    # não apaga a morte e não some com um fato antigo — exceto quando uma
+    # pesquisa web/likeness acabou de trazer fatos reais (allow_visual_refresh).
     if previous:
-        if not data.get("look_changed"):
+        if not data.get("look_changed") and not allow_visual_refresh:
             for key in ("appearance", "body"):
                 if previous.get(key):
+                    sheet[key] = previous[key]
+        else:
+            for key in ("appearance", "body"):
+                if not sheet.get(key) and previous.get(key):
                     sheet[key] = previous[key]
         if previous.get("status") and "status" not in sheet:
             sheet["status"] = previous["status"]
@@ -229,7 +235,8 @@ def _sheet_user(title: str, entry: str, sheet: dict, *, story: str = "",
 
 def _complete_sheet(llm_cfg: dict, *, title: str, entry: str, sheet: dict,
                     transport: Any, role: str, story: str = "",
-                    card_type: str = "") -> tuple[dict, str | None]:
+                    card_type: str = "",
+                    allow_visual_refresh: bool = False) -> tuple[dict, str | None]:
     messages = [
         {"role": "system", "content": _ENRICH_SYSTEM},
         {"role": "user", "content": _sheet_user(
@@ -242,7 +249,7 @@ def _complete_sheet(llm_cfg: dict, *, title: str, entry: str, sheet: dict,
         data = _extract_json(content)
     except (ValueError, TypeError) as exc:
         raise _generation_failed(str(exc)) from exc
-    normalized = _normalize_sheet(data, sheet)
+    normalized = _normalize_sheet(data, sheet, allow_visual_refresh=allow_visual_refresh)
     if not normalized:
         raise _generation_failed("resposta sem campos de ficha aproveitáveis")
     prompt = data.get("portrait_prompt")
@@ -252,7 +259,7 @@ def _complete_sheet(llm_cfg: dict, *, title: str, entry: str, sheet: dict,
 
 def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = None,
                 transport=None, role: str = "assistant", story: str = "",
-                card_type: str = "") -> dict:
+                card_type: str = "", allow_visual_refresh: bool = False) -> dict:
     """Gera a ficha completa de um NPC por LLM. Devolve o dict normalizado.
 
     `portrait_prompt`, quando o modelo devolve, vem na mesma dict para o
@@ -263,6 +270,7 @@ def build_sheet(llm_cfg, *, title: str, entry: str = "", sheet: dict | None = No
     normalized, portrait = _complete_sheet(
         llm_cfg, title=title, entry=entry, sheet=existing,
         transport=transport, role=role, story=story, card_type=card_type,
+        allow_visual_refresh=allow_visual_refresh,
     )
     if portrait:
         normalized["portrait_prompt"] = portrait
@@ -388,34 +396,110 @@ def ensure_sheet_complete(sheet: dict, *, entry: str = "", card: dict | None = N
     return out
 
 
+_PT_PROMPT_HINT = re.compile(
+    r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]|"
+    r"\b(?:cabelo|olhos|vestido|sorriso|cantora|mulher|homem|retrato|camisa|jaqueta|fundo neutro)\b",
+    re.IGNORECASE,
+)
+
+
+def _ensure_english_portrait_prompt(prompt: str | None, llm_cfg: dict,
+                                    transport: Any) -> str | None:
+    if not prompt or not _PT_PROMPT_HINT.search(prompt):
+        return prompt
+    try:
+        from app import image_english
+        translated = image_english.render_english(
+            prompt, transport=transport, llm_cfg=llm_cfg,
+        )
+        if translated and translated.strip():
+            return translated.strip()[:500]
+    except Exception as exc:
+        log.debug("npc_assets: tradução do portrait_prompt indisponível (%s)", exc)
+    return prompt
+
+
 def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
                 transport: Any, *, role: str = "assistant",
                 web_search: bool = False) -> dict:
     """LLM → ficha + portrait_prompt persistidos; devolve o card atualizado.
 
-    Com web_search, pesquisa nome e descrição e injeta as fontes no contexto.
+    Com web_search, pesquisa biografia/lore completo na web e, para personagens
+    reais adultos, resolve automaticamente a foto de referência da Wikipedia.
     """
     existing = parse_sheet(card["sheet"])
     story = f"Story: {adv['title']} — {(adv.get('description') or '')[:600]}"
     web_sources: list[dict] = []
+    likeness_resolved = False
+    is_character = (card.get("type") or "") == "character"
     if web_search:
         from app import web_search as web_search_mod
-        query = " ".join(part for part in (
-            card.get("title") or "", card.get("entry") or "",
-        ) if part).strip()
-        research = web_search_mod.research_context(
-            query, llm_cfg=llm_cfg, language="pt", mode="always",
-            max_results=4, transport=transport,
-        )
-        web_sources = research.get("sources") or []
+        if is_character:
+            research = web_search_mod.research_character(
+                card.get("title") or "",
+                description=card.get("entry") or "",
+                language="pt",
+                max_results=5,
+                transport=transport,
+            )
+            # Para pessoas reais adultas, baixa a foto de referência da Wikipedia
+            # automaticamente (respeitando uploads manuais e bloqueio de menores).
+            try:
+                from app import likeness
+                current_like = likeness.likeness_of(card)
+                already_uploaded = bool(
+                    current_like.get("verified_by_user")
+                    and current_like.get("reference_image_path")
+                )
+                if not already_uploaded and not likeness.is_minor(card):
+                    resolved = likeness.resolve_card(
+                        conn, card,
+                        hint=str(card.get("entry") or ""),
+                        transport=transport,
+                        llm_cfg=llm_cfg,
+                    )
+                    if resolved:
+                        card = resolved
+                        existing = parse_sheet(card.get("sheet") or "")
+                        like_info = existing.get("likeness") if isinstance(existing.get("likeness"), dict) else {}
+                        if like_info.get("reference_image_path"):
+                            likeness_resolved = True
+                            desc = str(like_info.get("descriptor") or "").strip()
+                            if desc:
+                                story += f"\n\n[Verified Reference Photo Visuals]: {desc}"
+                            page_url = str(like_info.get("page_url") or "").strip()
+                            wiki_title = str(existing.get("wiki_title") or card.get("title") or "").strip()
+                            if page_url and not any(s.get("url") == page_url for s in (research.get("sources") or [])):
+                                web_sources.append({
+                                    "title": f"{wiki_title} (Wikipedia · Foto de referência)",
+                                    "url": page_url,
+                                    "snippet": desc or "Foto oficial de referência baixada da Wikipedia.",
+                                    "source": "wikipedia",
+                                })
+            except Exception as exc:
+                log.debug("npc_assets: likeness automático não aplicável para '%s' (%s)", card.get("title"), exc)
+        else:
+            query = " ".join(part for part in (
+                card.get("title") or "", card.get("entry") or "",
+            ) if part).strip()
+            research = web_search_mod.research_context(
+                query, llm_cfg=llm_cfg, language="pt", mode="always",
+                max_results=4, transport=transport,
+            )
+        for src in (research.get("sources") or []):
+            if not any(s.get("url") == src.get("url") for s in web_sources):
+                web_sources.append(src)
         if research.get("context_block"):
             story += "\n\n" + research["context_block"]
     built = build_sheet(
         llm_cfg, title=card["title"], entry=card.get("entry") or "",
         sheet=existing, transport=transport, role=role, story=story,
         card_type=card.get("type") or "",
+        allow_visual_refresh=bool(web_search and (web_sources or likeness_resolved)),
     )
-    portrait = built.pop("portrait_prompt", None)
+    portrait = _ensure_english_portrait_prompt(
+        built.pop("portrait_prompt", None), llm_cfg, transport,
+    )
     # O LLM pode omitir status, atributos ou classe: completa por aqui para
     # que a ficha saia sempre preenchida (ou estimada).
     sheet = ensure_sheet_complete(built, entry=card.get("entry") or "", card=card)
@@ -423,8 +507,11 @@ def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
     if portrait:
         fields["portrait_prompt"] = portrait
     updated = db.update_card(conn, adv["id"], card["id"], fields)
-    log.info("npc_assets: ficha enriquecida p/ card %s (%s)", card["id"], card["title"])
-    return {**updated, "web_sources": web_sources}
+    log.info(
+        "npc_assets: ficha enriquecida p/ card %s (%s) web=%s sources=%d likeness=%s",
+        card["id"], card["title"], web_search, len(web_sources), likeness_resolved,
+    )
+    return {**updated, "web_sources": web_sources, "likeness_resolved": likeness_resolved}
 
 
 def _regen_context(adv: dict, card: dict, sheet: dict) -> str:

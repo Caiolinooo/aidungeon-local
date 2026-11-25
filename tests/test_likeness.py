@@ -773,3 +773,216 @@ def test_load_reference_images_keeps_order_and_rejects_bad_paths(tmp_db, tmp_pat
             assert exc.code == "portrait_required"
         else:
             raise AssertionError("missing file")
+
+
+def test_lookup_person_skips_name_list_and_uses_role_hint():
+    """Nomes curtos como 'Alok' ignoram páginas de lista de nomes e usam o hint."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if "page/summary/" in path:
+            title = urllib_unquote(path.rsplit("/", 1)[-1]).replace("_", " ")
+            if title == "Alok":
+                return httpx.Response(200, json={
+                    "type": "standard",
+                    "title": "Alok",
+                    "description": "Name list",
+                    "extract": "Alok is a given name.",
+                    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Alok"}},
+                })
+            if title == "Alok (DJ)":
+                return httpx.Response(200, json={
+                    "type": "standard",
+                    "title": "Alok (DJ)",
+                    "description": "Brazilian DJ and record producer",
+                    "extract": "Alok Achkar Peres Petrillo (born 1991) is a Brazilian musician and DJ.",
+                    "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/a/a0/Alok.jpg"},
+                    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Alok_(DJ)"}},
+                })
+            return httpx.Response(404, json={"type": "not_found"})
+        if request.url.params.get("action") == "opensearch":
+            q = (request.url.params.get("search") or "").lower()
+            if "alok" in q:
+                return httpx.Response(200, json=[q, ["Alok", "Alok (DJ)"], [], []])
+            return httpx.Response(200, json=[q, [], [], []])
+        return httpx.Response(404)
+
+    result = likeness.lookup_person(
+        "Alok", transport=httpx.MockTransport(handler), hint="Músico e DJ brasileiro",
+    )
+    assert result is not None
+    assert result.title == "Alok (DJ)"
+    assert result.is_real_adult is True
+    assert result.minor is False
+    assert "Alok.jpg" in result.image_url
+
+
+def test_web_enrich_fetches_wiki_photo_refreshes_visuals_and_translates_prompt(tmp_db, tmp_path, monkeypatch):
+    """Enrich com web_search busca dossiê + foto real da Wikipedia, corrige visual e traduz prompt."""
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    adv = make_adventure()
+    card = _character(
+        adv["id"], "Anitta",
+        appearance="mulher idosa de cabelos grisalhos",
+        body="baixa e corpulenta",
+        status="alive",
+        bonds={"trust": 77},
+    )
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], card["id"], {
+            "entry": "Cantora brasileira de pop e funk.",
+            "portrait_prompt": "uma senhora com vestido florido",
+        })
+        fake_img = db.insert_image(
+            conn, adventure_id=adv["id"], action_seq=-1,
+            file_path="data/images/stale.png", kind="portrait", ref_id=card["id"],
+        )
+        db.set_card_portrait(conn, card["id"], fake_img["id"], anchor_id=fake_img["id"])
+        card = db.get_card(conn, adv["id"], card["id"])
+
+    seen_enrich_prompts: list[str] = []
+
+    def transport_handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        path = request.url.path
+        if "wikipedia.org" in host and "page/summary/" in path:
+            return httpx.Response(200, json={
+                "type": "standard",
+                "title": "Anitta",
+                "description": "Cantora e compositora brasileira",
+                "extract": "Larissa de Macedo Machado (1993), conhecida como Anitta, é uma cantora brasileira.",
+                "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/a/a0/Anitta.png"},
+                "content_urls": {"desktop": {"page": "https://pt.wikipedia.org/wiki/Anitta"}},
+            })
+        if "wikipedia.org" in host and request.url.params.get("list") == "search":
+            return httpx.Response(200, json={
+                "query": {"search": [{"title": "Anitta", "snippet": "Cantora brasileira de funk e pop."}]},
+            })
+        if "wikipedia.org" in host and request.url.params.get("action") == "opensearch":
+            return httpx.Response(200, json=["Anitta", ["Anitta"], ["Cantora brasileira"], ["https://pt.wikipedia.org/wiki/Anitta"]])
+        if "wikipedia.org" in host and request.url.params.get("prop") == "extracts":
+            return httpx.Response(200, json={
+                "query": {"pages": {"1": {
+                    "title": "Anitta",
+                    "extract": "Larissa de Macedo Machado, conhecida como Anitta, nasceu no Rio de Janeiro em 1993. Cantora de funk e pop de renome internacional, famosa pelo estilo ousado e carismático.",
+                }}},
+            })
+        if "duckduckgo.com" in host:
+            return httpx.Response(200, text="<html></html>")
+        if "upload.wikimedia.org" in host:
+            return httpx.Response(200, content=PNG_BYTES, headers={"content-type": "image/png"})
+        if "commons.wikimedia.org" in host:
+            return httpx.Response(200, json={
+                "query": {"pages": {"1": {"imageinfo": [{
+                    "extmetadata": {"LicenseShortName": {"value": "CC BY 3.0"}},
+                }]}}},
+            })
+        if path.endswith("/models"):
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [{"id": "mock-model", "object": "model"}],
+            })
+        if path.endswith("/chat/completions"):
+            payload = json.loads(request.content.decode("utf-8"))
+            sys_msg = payload["messages"][0]["content"]
+            if "portrait_prompt" in sys_msg:
+                seen_enrich_prompts.append(payload["messages"][-1]["content"])
+                # Enrich LLM returns corrected flat fields + Portuguese portrait_prompt (to test auto-translation).
+                return httpx.Response(200, json={
+                    "choices": [{"message": {"content": json.dumps({
+                        "class": "Cantora pop",
+                        "appearance": "Cabelos castanhos escuros longos, pele bronzeada, olhos castanhos expressivos.",
+                        "body": "Atlética, postura confiante de palco.",
+                        "clothing": "Figurino moderno de palco com brilho.",
+                        "personality": "Carismática, estratégica e direta.",
+                        "humor": "Irônica e bem-humorada.",
+                        "speech": "Sotaque carioca, rápida e direta.",
+                        "goals": "Expandir sua carreira global e proteger sua autonomia criativa.",
+                        "background": "Larissa de Macedo Machado nasceu no Rio de Janeiro e começou no funk carioca até conquistar palcos internacionais.",
+                        "lifestyle": "Rotina intensa de estúdio, ensaios e turnês.",
+                        "habits": "Analisa métricas e planeja cada lançamento.",
+                        "likes": "Música, dança, família e desafios ambiciosos.",
+                        "sentiments": "Atenta e aberta a boas parcerias.",
+                        "notes": "Estrela pop brasileira.",
+                        "portrait_prompt": "cantora brasileira jovem com cabelos castanhos escuros longos e olhar confiante",
+                    })}}],
+                })
+            # image_english.render_english translation call
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "Brazilian pop singer woman with long dark brown hair, bronze skin, confident gaze, stage lighting"}}],
+            })
+        return httpx.Response(404)
+
+    llm_cfg = {
+        "base_url": "http://mock-llm/v1",
+        "api_key": "",
+        "model": "mock-model",
+        "timeout_seconds": 10,
+    }
+    with db.session() as conn:
+        result = npc_assets.enrich_card(
+            conn, adv, card, llm_cfg, httpx.MockTransport(transport_handler),
+            web_search=True,
+        )
+        stored = db.get_card(conn, adv["id"], card["id"])
+
+    assert result["likeness_resolved"] is True
+    assert len(result["web_sources"]) >= 1
+    assert any("nasceu no Rio de Janeiro" in p for p in seen_enrich_prompts)
+    sheet = json.loads(result["sheet"])
+    assert sheet["real_person"] is True
+    assert Path(sheet["likeness"]["reference_image_path"]).is_file()
+    # Visuals refreshed, live state preserved.
+    assert "cabelos castanhos escuros" in sheet["appearance"].lower()
+    assert "grisalhos" not in sheet["appearance"].lower()
+    assert sheet["bonds"]["trust"] == 77
+    assert sheet["status"] == "alive"
+    # Stale anchor cleared when Wikipedia reference photo was attached.
+    assert stored["portrait_anchor_id"] in ("", None)
+    # Portuguese portrait_prompt auto-translated to English.
+    assert "brazilian pop singer" in result["portrait_prompt"].lower()
+
+
+def test_get_reference_endpoint_serves_wiki_photo_and_blocks_minors(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    photo = refs / "anitta.png"
+    photo.write_bytes(PNG_BYTES)
+    adv = make_adventure()
+    adult = _character(
+        adv["id"], "Anitta", real_person=True, real_name="Anitta",
+        likeness={"reference_image_path": str(photo)},
+    )
+    minor = _character(
+        adv["id"], "Kid", real_person=True, minor=True,
+        likeness={"reference_image_path": str(photo)},
+    )
+    empty = _character(adv["id"], "SemFoto")
+
+    ok = client.get(f"/api/adventures/{adv['id']}/cards/{adult['id']}/reference")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("image/png")
+    assert ok.content == PNG_BYTES
+
+    assert client.get(f"/api/adventures/{adv['id']}/cards/{minor['id']}/reference").status_code == 404
+    assert client.get(f"/api/adventures/{adv['id']}/cards/{empty['id']}/reference").status_code == 404
+
+
+def test_portrait_from_reference_accepts_wikipedia_likeness_photo(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    photo = refs / "anitta.png"
+    photo.write_bytes(PNG_BYTES)
+    adv = make_adventure()
+    card = _character(
+        adv["id"], "Anitta", real_person=True, real_name="Anitta",
+        likeness={"reference_image_path": str(photo)},
+    )
+    resp = client.post(
+        f"/api/adventures/{adv['id']}/cards/{card['id']}/portrait",
+        json={"source": "reference"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["payload"]["force_reference"] is True
+
