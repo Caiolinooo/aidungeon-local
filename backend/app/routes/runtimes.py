@@ -3,26 +3,28 @@
 GET /api/settings/runtime devolve a config, o catálogo, o hardware local e
 a última inscrição. PUT (admin) aplica na hora a URL escolhida — inclusive
 vazia, para o health fechar — e o modelo, sem mexer em sampling ou resolução.
-GET /api/runtime/notebook devolve o notebook gerado. POST /api/runtime/register
-(admin) só aceita os modelos já selecionados.
+GET /api/runtime/notebook devolve o notebook gerado, com o token de registro
+dentro. POST /api/runtime/register (admin ou esse token) só aceita os modelos
+já selecionados.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
 from app import access, auth, db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import ColabProjectRequest, RuntimeRegistration, RuntimeSettingsUpdate
+from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
 
 router = APIRouter()
+# Fora do Bearer de sessão do main: o Colab se registra com o token do notebook.
+register_router = APIRouter()
 
 _NOTEBOOK_NAME = "aidungeon-runtime.ipynb"
-_COLAB_PROJECT_NAME = "aidungeon-colab.ipynb"
 
 
 def _provisioning():
@@ -88,10 +90,14 @@ def put_runtime_settings(body: RuntimeSettingsUpdate,
 
 
 @router.get("/runtime/notebook")
-def get_runtime_notebook(info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
+def get_runtime_notebook(project_url: str = "",
+                         info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
     prov = _provisioning()
     with db.session() as conn:
         config = settings_store.effective_runtime_settings(conn)
+        if not config.get("project_url"):
+            # Sem URL salva, o Colab chama de volta o endereço de onde o admin baixou.
+            config = {**config, "project_url": project_url}
         catalog = _catalog()
         try:
             normalized = prov.validate_runtime(config, catalog, require_colab=True)
@@ -100,7 +106,12 @@ def get_runtime_notebook(info: auth.AuthInfo = Depends(access.require_admin)) ->
         if not isinstance(normalized, dict):
             raise GameError.bad_request("validation_error", "runtime config was rejected")
         public = settings_store.scrub_public(normalized, conn)
-        notebook = prov.generate_notebook(public, catalog)
+        if not public.get("project_url"):
+            raise GameError.bad_request(
+                "validation_error", "project_url is required so Colab can reach this server")
+        notebook = prov.generate_notebook(
+            public, catalog,
+            register_token=auth.make_runtime_token(auth.auth_config()["secret"]))
         raw = prov.notebook_bytes(notebook)
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
@@ -112,55 +123,17 @@ def get_runtime_notebook(info: auth.AuthInfo = Depends(access.require_admin)) ->
                     headers=headers)
 
 
-def _colab_project_response(notebook: dict) -> Response:
-    prov = _provisioning()
-    raw = prov.notebook_bytes(notebook)
-    if isinstance(raw, str):
-        raw = raw.encode("utf-8")
-    headers = {
-        "Content-Disposition": f'attachment; filename="{_COLAB_PROJECT_NAME}"',
-    }
-    return Response(content=raw, media_type="application/x-ipynb+json", headers=headers)
+def _require_registrar(request: Request) -> None:
+    """Admin logado ou o token de registro que vai dentro do notebook."""
+    cfg = auth.auth_config()
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if cfg and scheme.lower() == "bearer" and auth.runtime_token_ok(token, cfg["secret"]):
+        return
+    access.require_admin(auth.require_auth(request))
 
 
-@router.get("/runtime/colab-models")
-def get_colab_models(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
-    """Modelos do catálogo com link público, separados por Hugging Face e CivitAI."""
-    prov = _provisioning()
-    return {"models": prov.colab_model_choices()}
-
-
-@router.get("/runtime/colab-project")
-def get_colab_project(info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
-    """Notebook padrão: Qwen2.5-3B e FLUX.2 Klein."""
-    prov = _provisioning()
-    try:
-        notebook = prov.generate_colab_project()
-    except ValueError as exc:
-        raise GameError.bad_request("validation_error", str(exc)) from exc
-    return _colab_project_response(notebook)
-
-
-@router.post("/runtime/colab-project")
-def post_colab_project(body: ColabProjectRequest,
-                       info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
-    """Notebook com os modelos marcados e os links colados."""
-    prov = _provisioning()
-    manual = [item.model_dump() for item in body.manual]
-    if not body.models and not manual:
-        raise GameError.bad_request(
-            "validation_error", "escolha ao menos um modelo ou cole um link https")
-    try:
-        notebook = prov.generate_colab_project(
-            models=body.models, manual=manual or None)
-    except ValueError as exc:
-        raise GameError.bad_request("validation_error", str(exc)) from exc
-    return _colab_project_response(notebook)
-
-
-@router.post("/runtime/register")
+@register_router.post("/runtime/register", dependencies=[Depends(_require_registrar)])
 def post_runtime_register(body: RuntimeRegistration,
-                          info: auth.AuthInfo = Depends(access.require_admin),
                           transport: Any = Depends(get_http_transport)) -> dict:
     report = body.model_dump()
     with db.session() as conn:

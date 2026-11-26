@@ -392,7 +392,9 @@ export const api = {
   downloadRuntimeNotebook: async () => {
     let res
     try {
-      res = await fetch(`${API_BASE}/api/runtime/notebook`, { headers: authHeaders() })
+      // O Colab chama de volta este endereço quando não há project_url salvo.
+      const origin = encodeURIComponent(window.location.origin)
+      res = await fetch(`${API_BASE}/api/runtime/notebook?project_url=${origin}`, { headers: authHeaders() })
     } catch {
       throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
     }
@@ -413,28 +415,6 @@ export const api = {
         'invalid_response',
         'Backend returned a non-notebook response — it is probably running an older version.',
       )
-    }
-    return blob
-  },
-  listColabModels: () => request('/runtime/colab-models'),
-  downloadColabProject: async (selection) => {
-    let res
-    try {
-      res = await fetch(`${API_BASE}/api/runtime/colab-project`, {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(selection || { models: [], manual: [] }),
-      })
-    } catch {
-      throw new ApiError(0, 'network_error', 'Cannot reach the backend server.')
-    }
-    if (!res.ok) {
-      if (res.status === 401) notifyUnauthorized()
-      throw await parseError(res)
-    }
-    const blob = await res.blob()
-    if (!blob || blob.size === 0) {
-      throw new ApiError(res.status, 'invalid_response', 'O projeto Colab veio vazio.')
     }
     return blob
   },

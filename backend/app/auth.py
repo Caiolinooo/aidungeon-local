@@ -94,6 +94,31 @@ def verify_token(token: str, secret: str) -> tuple[bool, str | None, int | None]
     return True, user, exp
 
 
+# 30 dias: o mesmo arquivo serve para várias sessões do Colab.
+RUNTIME_TOKEN_TTL_H = 720
+
+
+def make_runtime_token(secret: str, ttl_h: int = RUNTIME_TOKEN_TTL_H) -> str:
+    """Token que só registra o runtime do Colab; vai escrito no notebook.
+
+    Assinado com uma chave derivada: nenhum nome de usuário produz a mesma
+    assinatura, e `verify_token` nunca o aceita como sessão.
+    """
+    exp = int(time.time()) + int(ttl_h * 3600)
+    return f"rt.{exp}.{_sign(secret + ':runtime', str(exp))}"
+
+
+def runtime_token_ok(token: str, secret: str) -> bool:
+    try:
+        tag, exp_text, sig = token.strip().split(".")
+        exp = int(exp_text)
+    except ValueError:
+        return False
+    return (tag == "rt"
+            and hmac.compare_digest(sig, _sign(secret + ":runtime", str(exp)))
+            and exp > int(time.time()))
+
+
 def iso_utc(ts: int) -> str:
     """Unix → ISO-8601 UTC com 'Z' (formato date-time do contrato)."""
     return datetime.fromtimestamp(ts, timezone.utc).isoformat(

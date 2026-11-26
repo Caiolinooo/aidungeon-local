@@ -192,7 +192,7 @@ def test_search_cache_key_includes_max_results(monkeypatch):
     web_search._search_cache.clear()
     calls = {"n": 0}
 
-    def wiki(query, lang="pt", max_results=3, transport=None):
+    def wiki(query, lang="pt", max_results=3, transport=None, **_kwargs):
         calls["n"] += 1
         return [{
             "title": f"Rome {i}",

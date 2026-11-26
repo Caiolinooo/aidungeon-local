@@ -479,17 +479,17 @@ def test_local_hardware_shape():
 def test_notebook_contract_and_selected_services():
     llm_only = rp.generate_notebook(_config(
         "hybrid", "colab", "local", project_url="https://runtime.example",
-    ))
+    ), register_token="rt.1.abc")
     comfy_only = rp.generate_notebook(_config(
         "hybrid", "local", "colab", project_url="https://runtime.example",
-    ))
+    ), register_token="rt.1.abc")
     both = rp.generate_notebook(_config(
         "colab", "colab", "colab",
         llm="qwen2.5-3b-instruct-q4_k_m",
         image="fineview_qwen",
-        video="wan",
+        video="h3",
         project_url="https://runtime.example",
-    ))
+    ), register_token="rt.1.abc")
     for nb in (llm_only, comfy_only, both):
         assert nb["nbformat"] == 4
         assert nb["cells"][1]["metadata"]["aidungeon_role"] == "variables"
@@ -504,13 +504,13 @@ def test_notebook_contract_and_selected_services():
         assert "retries=3" in src
         assert "tamanho inesperado" in src
         assert "Sem downgrade" in src
-        assert "userdata.get(\"AIDUNGEON_TOKEN\")" in src
-        assert "userdata.get(\"TAILSCALE_AUTH_KEY\")" in src
-        assert "tailscale" in src
+        # Nada manual: o token de registro vem no arquivo e o túnel dispensa Tailscale.
+        assert "AIDUNGEON_TOKEN = 'rt.1.abc'" in _role(nb, "secrets")
+        assert "tailscale" not in src.lower()
+        assert "trycloudflare" in _role(nb, "tunnel")
+        assert [c["id"] for c in nb["cells"]][-3:] == ["tunnel", "register", "keepalive"]
         assert rp.REGISTER_PATH in src
         assert "Bearer " in src
-        assert not re.search(r'AIDUNGEON_TOKEN\s*=\s*["\']', src)
-        assert not re.search(r'TAILSCALE_AUTH_KEY\s*=\s*["\'][^"\']+["\']', src)
         for banned in (
             "sqlite", "aidungeon.db", "INSERT INTO", "BEGIN PRIVATE",
             "LLM_API_KEY", "api_key", "AUTH_PASSWORD", "/home/caio", "--api-key",
@@ -542,13 +542,16 @@ def test_notebook_contract_and_selected_services():
     assert "7ba6c0774c233540ef6ea0ea3971acf3cbf403f70bd3672af57eaca00c33578e" not in comfy_src
     assert "CIVITAI" not in comfy_src
     assert "6ea2651e7df66d7585f6ffee804b20e92fb38b8a" not in comfy_src
-    assert comfy_vars["comfyui_git_url"] == ""
-    assert comfy_vars["comfyui_git_ref"] == ""
-    assert comfy_vars["comfy_argv"][comfy_vars["comfy_argv"].index("--listen") + 1] == "0.0.0.0"
+    assert comfy_vars["comfyui_git_url"] == rp.COLAB_COMFY_GIT_URL
+    assert comfy_vars["comfyui_git_ref"] == rp.COLAB_COMFY_GIT_REF
+    assert comfy_vars["comfy_nodes"] == []
+    assert "userdata" not in comfy_src
+    assert comfy_vars["comfy_argv"][comfy_vars["comfy_argv"].index("--listen") + 1] == "127.0.0.1"
     assert "8188" in comfy_vars["comfy_argv"]
     assert "--vram-headroom" in comfy_vars["comfy_argv"]
     assert comfy_vars["vram_unspecified"] == ["flux2_klein", "ltxv"]
-    assert "COMFYUI_GIT_REF vazios" in comfy_src
+    assert "PUBLIC_COMFY = open_tunnel" in _role(comfy_only, "tunnel")
+    assert "PUBLIC_LLM" not in _role(comfy_only, "tunnel")
 
     both_src = _src(both)
     both_vars = _variables(both)
@@ -557,18 +560,21 @@ def test_notebook_contract_and_selected_services():
     assert "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d" in both_src
     assert "qwen2.5-3b-instruct-q4_k_m.gguf?download=true" in both_src
     assert "CIVITAI_API_KEY" in both_src
-    assert "userdata.get(\"CIVITAI_API_KEY\")" in both_src
-    assert "6ea2651e7df66d7585f6ffee804b20e92fb38b8a" in both_src
-    assert "umt5_xxl_fp8_e4m3fn_scaled" in both_src
+    assert '_optional_secret("CIVITAI_API_KEY")' in both_src
+    # O H3 pede os dois nodes; só o do vídeo entrava e o projetor ficava sem loader.
+    assert [dep["name"] for dep in both_vars["comfy_nodes"]] == [
+        "ComfyUI-GGUF", "ComfyUI-GGUF-Loader"]
+    assert "mmh3-4b-ClipProj-v3.1-mlp" in both_src
     assert "ltxv-2b-0.9.6-distilled-04-25.safetensors?download=true" not in both_src
     assert both_vars["llm_port"] == 1240
-    assert both_vars["min_ram_mib"] == 6144 + 8918
+    assert both_vars["min_ram_mib"] == 6144 + 8918 + 4634
     assert "narrator_gguf_url" not in both_vars
     assert "CUDA_VISIBLE_DEVICES" in both_src
     assert '"endpoints"' in _role(both, "register")
     assert '"hardware"' in _role(both, "register")
     assert 'comfy_endpoint = ""' in _role(llm_only, "register")
     assert 'llm_endpoint = ""' in _role(comfy_only, "register")
+    assert "comfy_endpoint = PUBLIC_COMFY" in _role(comfy_only, "register")
     local = rp.generate_notebook(_config())
     local_src = _src(local)
     assert local["nbformat"] == 4
@@ -585,7 +591,7 @@ def test_notebook_contract_and_selected_services():
     compile(_role(local, "local"), "local", "exec")
     again = rp.generate_notebook(_config(
         "hybrid", "colab", "local", project_url="https://runtime.example",
-    ))
+    ), register_token="rt.1.abc")
     assert rp.notebook_bytes(again) == rp.notebook_bytes(llm_only)
 
 
@@ -615,7 +621,10 @@ def test_notebook_hardware_and_sha_paths(tmp_path):
     exec(_role(flux, "variables"), flux_ns)
     exec(_role(flux, "helpers"), flux_ns)
     flux_ns["detect_hardware"] = _big_gpu
-    with pytest.raises(SystemExit, match="VRAM mínima não publicada"):
+    # Piso não publicado avisa e segue: executar tudo não pede edição.
+    exec(_role(flux, "hardware"), flux_ns)
+    flux_ns["VARIABLES"]["min_vram_mib_override"] = 99999999
+    with pytest.raises(SystemExit, match="VRAM insuficiente"):
         exec(_role(flux, "hardware"), flux_ns)
 
     digest = hashlib.sha256(b"pinned").hexdigest()
@@ -663,64 +672,43 @@ def test_registration_payload_shape():
         rp.notebook_bytes({"nbformat": 3, "cells": []})
 
 
-def test_colab_project_is_ready_to_run_without_secrets():
-    """O arquivo já traz clone, hashes e o jogo. A senha só nasce na execução."""
-    nb = rp.generate_colab_project()
-    assert nb["nbformat"] == 4
-    assert nb["metadata"]["accelerator"] == "GPU"
-    assert nb["metadata"]["aidungeon_colab_project"]["llm_filename"].endswith(".gguf")
-    assert nb["metadata"]["aidungeon_colab_project"]["comfy_ref"] == rp.COLAB_COMFY_GIT_REF
-    raw = rp.notebook_bytes(nb)
-    assert json.loads(raw)["nbformat"] == 4
-    src = _src(nb)
-    for cell in nb["cells"]:
-        if cell["cell_type"] == "code":
-            compile(_text(cell), cell["id"], "exec")
-    catalog = rp.load_catalog()
-    weights = rp._pinned_artifact(catalog, "llm", rp.COLAB_PLAY_LLM, "weights")
-    flux = rp._pinned_artifact(catalog, "image", rp.COLAB_PLAY_IMAGE, "unet")
-    assert weights["sha256"] in src
-    assert weights["url"] in src
-    assert flux["sha256"] in src
-    assert rp.COLAB_APP_GIT_URL in src
-    assert rp.COLAB_COMFY_GIT_REF in src
-    assert '"npm", "run", "build"' in src
-    assert "uvicorn" in src
-    assert "trycloudflare" in src
-    assert "secrets.token_urlsafe" in src
-    assert "flux2_klein" in src
-    assert "127.0.0.1:1234/v1" in src
-    for banned in (
-        "TAILSCALE_AUTH_KEY", "userdata.get", "AIDUNGEON_TOKEN",
-        "/home/caio", "narrator_gguf_url",
-    ):
-        assert banned not in src
-    assert not re.search(r'AUTH_PASSWORD_HASH\s*=\s*["\'][0-9a-f]{64}["\']', src)
+def test_download_drops_the_key_when_redirected_to_another_host(tmp_path):
+    """O CivitAI redireciona para uma URL assinada; a chave não pode ir junto."""
+    import http.server
+    import threading
 
+    seen = {}
 
-def test_colab_project_accepts_catalog_and_manual_links():
-    catalog = rp.load_catalog()
-    choices = rp.colab_model_choices(catalog)
-    sources = {item["source"] for item in choices}
-    assert "huggingface" in sources
-    assert "civitai" in sources or "mixed" in sources
-    fineview = next(item for item in choices if item["id"] == "image:fineview_qwen")
-    assert fineview["needs_civitai_key"] is True
-    nb = rp.generate_colab_project(
-        catalog,
-        models=["llm:qwen2.5-3b-instruct-q4_k_m", "image:fineview_qwen"],
-        manual=[{
-            "url": "https://huggingface.co/org/model/resolve/main/extra.safetensors",
-            "role": "vae",
-            "filename": "extra.safetensors",
-        }],
-    )
-    src = _src(nb)
-    assert "civitai.com" in src
-    assert "userdata.get(\"CIVITAI_API_KEY\")" in src
-    assert "extra.safetensors" in src
-    assert nb["metadata"]["aidungeon_colab_project"]["image_engine"] == "qwen"
-    with pytest.raises(ValueError, match="https"):
-        rp.resolve_colab_downloads(catalog, [], [{
-            "url": "http://example.com/model.gguf", "role": "llm",
-        }])
+    class Storage(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["auth"] = self.headers.get("Authorization")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"weights")
+
+        def log_message(self, *args):
+            pass
+
+    storage = http.server.HTTPServer(("127.0.0.1", 0), Storage)
+
+    class Site(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["first"] = self.headers.get("Authorization")
+            self.send_response(302)
+            self.send_header("Location", f"http://localhost:{storage.server_port}/signed")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    site = http.server.HTTPServer(("127.0.0.1", 0), Site)
+    for server in (storage, site):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        part = tmp_path / "w.part"
+        rp._download_url(f"http://127.0.0.1:{site.server_port}/api/download", part, "Bearer KEY")
+    finally:
+        storage.shutdown()
+        site.shutdown()
+    assert part.read_bytes() == b"weights"
+    assert seen == {"first": "Bearer KEY", "auth": None}

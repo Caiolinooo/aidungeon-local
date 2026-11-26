@@ -152,7 +152,7 @@
         "engine": "flux2_klein",
         "min_vram_mib": null,
         "min_ram_mib": 0,
-        "min_vram_note": "Pico isolado não publicado. O notebook falha até MIN_VRAM_MIB ser informado; não reduz passos, CFG nem resolução.",
+        "min_vram_note": "Pico isolado não publicado. O notebook avisa e segue; não reduz passos, CFG nem resolução.",
         "artifacts": [
           {
             "role": "unet",
@@ -350,7 +350,7 @@
         "engine": "ltxv",
         "min_vram_mib": null,
         "min_ram_mib": 0,
-        "min_vram_note": "Pico isolado não publicado. O notebook falha até MIN_VRAM_MIB ser informado; não reduz frames, passos nem resolução.",
+        "min_vram_note": "Pico isolado não publicado. O notebook avisa e segue; não reduz frames, passos nem resolução.",
         "artifacts": [
           {
             "role": "checkpoint",

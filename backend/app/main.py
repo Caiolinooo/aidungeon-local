@@ -171,6 +171,7 @@ app.include_router(settings.router, prefix="/api", tags=["settings"],
                    dependencies=_protected)
 app.include_router(runtimes.router, prefix="/api", tags=["settings"],
                    dependencies=_protected)
+app.include_router(runtimes.register_router, prefix="/api", tags=["settings"])
 app.include_router(voice.router, prefix="/api", tags=["voice"],
                    dependencies=_protected)
 app.include_router(health.router, prefix="/api", tags=["health"],

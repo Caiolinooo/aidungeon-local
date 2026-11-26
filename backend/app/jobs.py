@@ -145,7 +145,7 @@ _NUDITY_BAN = npc_assets.NUDITY_BAN
 _SWIMWEAR_BAN = "bikini, swimsuit, swimwear, bathing suit"
 _SWIM_REQUEST = re.compile(
     r"(?i)(?<!\w)(?:bikini|bikinis|swimsuit|swimwear|bathing suit|"
-    r"biqu[ií]ni|mai[oô]|sunga|nadando|swimming)(?!\w)"
+    r"biqu[ií]ni|maiô|sunga|nadando|swimming)(?!\w)"
 )
 _SWIM_REFUSAL = re.compile(
     r"(?i)\bnot\s+(?:a\s+)?(?:bikini|swimsuit|swimwear|bathing suit)\b|\bno\s+swimwear\b"

@@ -134,8 +134,9 @@ def _validate(config, catalog=None, require_colab=False):
     }
 
 
-def _notebook(config, catalog=None):
-    source = json.dumps({"config": config, "catalog": catalog}, ensure_ascii=False)
+def _notebook(config, catalog=None, register_token=""):
+    source = json.dumps({"config": config, "catalog": catalog, "token": register_token},
+                        ensure_ascii=False)
     return {
         "nbformat": 4,
         "nbformat_minor": 5,
@@ -368,8 +369,13 @@ def test_notebook_auth_and_download(client):
     denied = client.get("/api/runtime/notebook")
     assert denied.status_code == 401
     client.headers["Authorization"] = saved
-    resp = client.get("/api/runtime/notebook")
+    # Sem URL salva nem informada o Colab não teria para onde ligar de volta.
+    assert client.get("/api/runtime/notebook").status_code == 400
+    resp = client.get("/api/runtime/notebook", params={"project_url": "https://play.example"})
     assert resp.status_code == 200, resp.text
+    carried = json.loads(resp.json()["cells"][0]["source"][0])
+    assert carried["config"]["project_url"] == "https://play.example"
+    assert auth_core.runtime_token_ok(carried["token"], TEST_AUTH_SECRET)
     disposition = resp.headers["content-disposition"]
     assert disposition.startswith("attachment;")
     assert "aidungeon-runtime.ipynb" in disposition
@@ -455,6 +461,55 @@ def test_register_requires_admin_and_matching_models(client):
     assert applied.status_code == 200, applied.text
     assert client.get("/api/settings/llm").json()["base_url"] == "http://colab-llm.example/v1"
     assert client.get("/api/settings/image").json()["comfyui_base_url"] == "http://colab-comfy.example"
+
+def test_notebook_token_registers_the_runtime_and_nothing_else(client):
+    """O token do notebook registra o Colab sem sessão e não abre mais nada."""
+    client.put("/api/settings/runtime", json={
+        "mode": "hybrid",
+        "placements": {"llm": "local", "comfyui": "colab"},
+    })
+    payload = {
+        "endpoints": {"llm": "", "comfyui": "https://gpu.trycloudflare.com"},
+        "models": {"llm": "qwen3.6-35b-a3b", "image": "flux2_klein", "video": "ltxv"},
+        "hardware": {"gpu": "T4"},
+    }
+    token = auth_core.make_runtime_token(TEST_AUTH_SECRET)
+    client.headers["Authorization"] = f"Bearer {token}"
+    assert client.get("/api/settings/llm").status_code == 401
+    assert client.get("/api/runtime/notebook").status_code == 401
+    registered = client.post("/api/runtime/register", json=payload)
+    assert registered.status_code == 200, registered.text
+    client.headers["Authorization"] = (
+        f"Bearer {auth_core.make_runtime_token(TEST_AUTH_SECRET, ttl_h=-1)}")
+    assert client.post("/api/runtime/register", json=payload).status_code == 401
+    client.headers["Authorization"] = (
+        f"Bearer {auth_core.make_runtime_token('outro-segredo')}")
+    assert client.post("/api/runtime/register", json=payload).status_code == 401
+    del client.headers["Authorization"]
+    assert client.post("/api/runtime/register", json=payload).status_code == 401
+    client.headers["Authorization"] = (
+        f"Bearer {auth_core.make_token('Caio', TEST_AUTH_SECRET, ttl_h=1)}")
+    assert (client.get("/api/settings/image").json()["comfyui_base_url"]
+            == "https://gpu.trycloudflare.com")
+
+
+def test_routing_keeps_a_typed_key_on_the_same_server(client):
+    """Só trocar de máquina apaga a chave; acrescentar /v1 não."""
+    client.put("/api/settings/runtime", json={
+        "mode": "local", "endpoints": {"local_llm": "http://llm.example:1234"}})
+    client.put("/api/settings/llm", json={"api_key": "sk-typed-1234"})
+
+    def stored():
+        with db.session() as conn:
+            return db.get_setting(conn, "llm.api_key")
+
+    client.put("/api/settings/runtime", json={
+        "endpoints": {"local_llm": "http://llm.example:1234/v1"}})
+    assert stored()
+    client.put("/api/settings/runtime", json={
+        "endpoints": {"local_llm": "http://other.example:1234/v1"}})
+    assert not stored()
+
 
 def test_runtime_responses_do_not_leak_secrets(client):
     client.put("/api/settings/llm", json={"api_key": "sk-secret-1234"})

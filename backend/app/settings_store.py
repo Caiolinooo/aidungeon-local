@@ -986,8 +986,10 @@ def _apply_routing(conn: sqlite3.Connection, config: dict) -> None:
     prev_llm_url = str(_get_override(conn, "llm.base_url") or "").strip()
     _set_override(conn, "llm.base_url", new_llm_url)
     _set_override(conn, "image.comfyui_base_url", _endpoint_value(endpoints, comfy_key))
-    if new_llm_url and prev_llm_url and prev_llm_url.rstrip("/") != new_llm_url.rstrip("/"):
-        from app import provider_profiles
+    from app import provider_profiles
+    # Host e porta: acrescentar /v1 na mesma máquina não apaga a chave digitada.
+    if (new_llm_url and prev_llm_url
+            and provider_profiles._url_host(prev_llm_url) != provider_profiles._url_host(new_llm_url)):
         matched_key, _ = provider_profiles.find_api_key_for_url(conn, "llm", new_llm_url)
         if matched_key:
             _set_override(conn, "llm.api_key", matched_key)

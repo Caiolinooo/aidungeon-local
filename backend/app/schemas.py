@@ -595,19 +595,6 @@ class RuntimeRegistrationModels(BaseModel):
     video: str = Field(min_length=1, max_length=200)
 
 
-class ColabManualModel(BaseModel):
-    url: str = Field(min_length=8, max_length=2000)
-    filename: str | None = Field(default=None, max_length=180)
-    sha256: str | None = Field(default=None, max_length=64)
-    role: Literal["llm", "unet", "clip", "vae", "checkpoint", "video"]
-
-
-class ColabProjectRequest(BaseModel):
-    """Lista vazia sem link manual cai no narrador 3B e no FLUX.2 Klein."""
-    models: list[str] = Field(default_factory=list, max_length=24)
-    manual: list[ColabManualModel] = Field(default_factory=list, max_length=12)
-
-
 class RuntimeRegistration(BaseModel):
     """POST /api/runtime/register. Os ids têm de ser os modelos já selecionados."""
     endpoints: RuntimeRegistrationEndpoints
