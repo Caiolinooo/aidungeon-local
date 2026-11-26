@@ -75,7 +75,7 @@ function specKey(spec) {
   return `${spec.variant}|${spec.accelerator}|${spec.shape}`
 }
 
-export default function ColabPanel({ disabledReason, inputCls, labelCls, onChanged, refreshKey }) {
+export default function ColabPanel({ disabledReason, inputCls, labelCls, onChanged, refreshKey, draft, onEstimate }) {
   const toast = useToast()
   const [colab, setColab] = useState(null)
   const [client, setClient] = useState({ client_id: '', client_secret: '' })
@@ -100,6 +100,34 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
   useEffect(() => {
     if (working) watchColab(session, toast)
   }, [working, session, toast])
+
+  // Estimativa ao vivo: refeita a cada mudança na tela, salva ou não.
+  const accelerators = [...new Set((colab?.specs || [])
+    .filter((spec) => spec.variant === 'VARIANT_GPU' && spec.eligible)
+    .map((spec) => spec.accelerator))].join(',')
+  const draftKey = draft ? JSON.stringify(draft) : ''
+  useEffect(() => {
+    if (!draftKey || !accelerators) return undefined
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.estimateColab({ ...JSON.parse(draftKey), accelerators: accelerators.split(',') })
+        setColab((prev) => (prev ? { ...prev, estimates: res.estimates } : prev))
+      } catch {
+        // fica a última estimativa; a próxima mudança tenta de novo
+      }
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [draftKey, accelerators])
+
+  // Os cartões de modelo mostram a nota para a GPU escolhida aqui.
+  const shownGpu = (colab?.specs || [])
+    .filter((spec) => spec.variant === 'VARIANT_GPU' && spec.eligible)
+    .find((spec) => specKey(spec) === picked) || (colab?.specs || []).find((spec) => spec.variant === 'VARIANT_GPU' && spec.eligible)
+  const shownEstimate = shownGpu ? colab?.estimates?.[shownGpu.accelerator] : null
+  const shownKey = shownEstimate ? JSON.stringify(shownEstimate) : ''
+  useEffect(() => {
+    onEstimate?.(shownKey ? JSON.parse(shownKey) : null)
+  }, [shownKey, onEstimate])
 
   const act = async (work, okMessage) => {
     setBusy(true)
@@ -156,6 +184,7 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
 
   const gpus = (colab.specs || []).filter((spec) => spec.variant === 'VARIANT_GPU' && spec.eligible)
   const chosen = gpus.find((spec) => specKey(spec) === picked) || gpus[0]
+  const estimate = chosen ? colab.estimates?.[chosen.accelerator] : null
 
   if (!colab.connected) {
     return (
@@ -256,7 +285,7 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
           </button>
           {disabledReason && <p className="min-w-0 flex-1 text-[11px]">{disabledReason}</p>}
           <div className="basis-full">
-            <Estimate estimate={chosen ? colab.estimates?.[chosen.accelerator] : null} />
+            <Estimate estimate={estimate} />
           </div>
         </div>
       ) : (

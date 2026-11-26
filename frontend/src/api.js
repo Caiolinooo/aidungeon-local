@@ -413,6 +413,7 @@ export const api = {
     method: 'POST', body: { ...spec, project_url: window.location.origin },
   }),
   stopColab: (name = '') => request('/colab/stop', { method: 'POST', body: { name } }),
+  estimateColab: (payload) => request('/colab/estimate', { method: 'POST', body: payload }),
   putColabNotify: (payload) => request('/colab/notify', { method: 'PUT', body: payload }),
   testColabNotify: () => request('/colab/notify/test', { method: 'POST' }),
   putRuntimeSettings: (payload) => request('/settings/runtime', { method: 'PUT', body: payload }),

@@ -197,15 +197,22 @@ def server_context(conn: sqlite3.Connection) -> int:
 
 def estimates(conn: sqlite3.Connection, specs: list[dict]) -> dict:
     """Por GPU que a conta pode pedir: quanto os modelos escolhidos ocupam e como devem render."""
-    config = settings_store.effective_runtime_settings(conn)
+    names = [str(spec.get("accelerator") or "") for spec in specs
+             if spec.get("variant") == "VARIANT_GPU" and spec.get("eligible")]
+    return draft_estimates(conn, names, settings_store.effective_runtime_settings(conn),
+                           server_context(conn))
+
+
+def draft_estimates(conn: sqlite3.Connection, accelerators: list[str], config: dict,
+                    context: int) -> dict:
+    """A mesma conta para uma configuração ainda não salva: a tela chama a cada
+    mudança de modelo, de onde roda ou de contexto. Não fala com o Google."""
     catalog = settings_store.runtime_catalog(conn)
     learned = settings_store._get_override(conn, "colab.gpu_vram")
     learned = learned if isinstance(learned, dict) else {}
-    context = server_context(conn)
     out = {}
-    for spec in specs:
-        name = str(spec.get("accelerator") or "")
-        if spec.get("variant") == "VARIANT_GPU" and spec.get("eligible") and name not in out:
+    for name in accelerators:
+        if name and name not in out:
             out[name] = gpu_estimate.for_gpu(name, learned.get(name), config, catalog, context)
     return out
 

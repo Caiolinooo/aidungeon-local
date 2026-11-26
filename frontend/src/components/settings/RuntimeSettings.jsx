@@ -325,6 +325,8 @@ export default function RuntimeSettings({
   const [library, setLibrary] = useState(null)
   const [keys, setKeys] = useState({ civitai: '', huggingface: '' })
   const [savingKeys, setSavingKeys] = useState(false)
+  // Estimativa da GPU escolhida no bloco do Colab, para a nota em cada cartão.
+  const [gpuEstimate, setGpuEstimate] = useState(null)
   const refresh = useRef(onRefresh)
   refresh.current = onRefresh
 
@@ -503,6 +505,9 @@ export default function RuntimeSettings({
               onLibraryChange={onLibraryChange}
               onInstall={installHere}
               onNarrator={switchNarrator}
+              estimate={gpuEstimate && form.placements[item.service] === 'colab'
+                ? { gpu: gpuEstimate.accelerator, ...(gpuEstimate.items || []).find((row) => row.kind === item.kind) }
+                : null}
               inputCls={inputCls}
               labelCls={labelCls}
             />
@@ -550,7 +555,9 @@ export default function RuntimeSettings({
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Colab</h3>
             <ColabPanel
-              refreshKey={`${llmContext}|${dirty}|${JSON.stringify(form.models)}|${JSON.stringify(form.placements)}`}
+              refreshKey={`${dirty}`}
+              draft={{ placements: form.placements, models: form.models, context: llmContext || 65536 }}
+              onEstimate={setGpuEstimate}
               disabledReason={allLocal ? 'Ponha o narrador ou a imagem no Colab, acima, e salve.' : dirty ? 'Salve antes de ligar.' : ''}
               inputCls={inputCls}
               labelCls={labelCls}

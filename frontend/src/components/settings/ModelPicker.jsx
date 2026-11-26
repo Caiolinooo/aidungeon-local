@@ -24,6 +24,11 @@ const FAMILY_LABEL = {
   lora: 'LoRA',
 }
 
+const RATING_LABEL = { excelente: 'Excelente', bom: 'Bom', ruim: 'Ruim', pessimo: 'Péssimo' }
+const RATING_CLS = {
+  excelente: 'text-emerald-400', bom: 'text-emerald-400', ruim: 'text-warn-300', pessimo: 'text-danger-300',
+}
+
 const CUSTOM_FOLDERS = [
   'checkpoints', 'diffusion_models', 'text_encoders', 'vae', 'loras',
   'clip_vision', 'controlnet', 'upscale_models',
@@ -275,7 +280,7 @@ function CheckpointSampling({ block, onApply, inputCls, labelCls }) {
 }
 
 export default function ModelPicker({
-  kind, title, value, catalog, families, place, library, onPick, onLibraryChange, onInstall, onNarrator, inputCls, labelCls,
+  kind, title, value, catalog, families, place, library, onPick, onLibraryChange, onInstall, onNarrator, estimate, inputCls, labelCls,
 }) {
   const toast = useToast()
   const [panel, setPanel] = useState('')
@@ -354,6 +359,14 @@ export default function ModelPicker({
           {entry.user && typeof entry.source === 'string' && entry.source.startsWith('https://') && (
             <> · <a href={entry.source} target="_blank" rel="noreferrer" className="underline">página do modelo</a></>
           )}
+        </p>
+      )}
+      {estimate?.rating && (
+        <p className="text-[11px] text-secondary">
+          Na {estimate.gpu} do Colab (estimativa):{' '}
+          {estimate.need_gb ? `${estimate.need_gb} GB · ` : ''}{estimate.speed}{' · '}
+          <strong className={RATING_CLS[estimate.rating]}>{RATING_LABEL[estimate.rating]}</strong>
+          {estimate.note ? ` · ${estimate.note}` : ''}
         </p>
       )}
       {kind === 'llm' && place === 'local' && (

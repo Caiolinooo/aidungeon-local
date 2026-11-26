@@ -182,6 +182,27 @@ def post_colab_stop(body: ColabStop,
         return colab_api.stop(conn, body.name, transport=transport)
 
 
+class EstimateDraft(BaseModel):
+    """O que está na tela, salvo ou não."""
+    accelerators: list[str] = Field(default_factory=list, max_length=16)
+    placements: dict[str, str] = Field(default_factory=dict)
+    models: dict[str, str] = Field(default_factory=dict)
+    context: int = Field(default=65536, ge=4096, le=262144)
+
+
+@router.post("/colab/estimate")
+def post_colab_estimate(body: EstimateDraft,
+                        info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        saved = settings_store.effective_runtime_settings(conn)
+        config = {"placements": {**saved["placements"], **body.placements},
+                  "models": {**saved["models"], **body.models}}
+        # No Colab o servidor sobe com o dobro do contexto do jogo, como em `server_context`.
+        context = max(32768, min(262144, 2 * body.context))
+        return {"estimates": colab_api.draft_estimates(
+            conn, [name[:40] for name in body.accelerators], config, context)}
+
+
 class NotifyTopic(BaseModel):
     """Vazio desliga os avisos. `generate` sorteia um tópico novo."""
     topic: str = Field(default="", max_length=64)

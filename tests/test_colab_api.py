@@ -395,3 +395,23 @@ def test_registration_tells_the_phone_the_gpu_is_ready(admin, monkeypatch):
     # A batida de cada minuto não avisa de novo.
     assert admin.post("/api/runtime/register", json=payload).status_code == 200
     assert len(said) == 1
+
+
+def test_estimate_follows_what_is_on_screen_before_saving(admin):
+    """A tela pede a conta a cada mudança; nada é gravado e o Google não é chamado."""
+    google = Google()
+    _connected(admin, google)
+    calls = len(google.calls)
+    body = {"accelerators": ["T4", "A100"], "placements": {"llm": "local", "comfyui": "colab"},
+            "models": {"image": "z_image_turbo", "video": "h3"}, "context": 32768}
+    first = admin.post("/api/colab/estimate", json=body).json()["estimates"]
+    assert set(first) == {"T4", "A100"}
+    assert {row["kind"] for row in first["T4"]["items"]} == {"image", "video"}
+    # Trocar o vídeo por um mais leve muda a conta na hora.
+    lighter = admin.post("/api/colab/estimate", json={
+        **body, "models": {"image": "z_image_turbo", "video": "ltxv"}}).json()["estimates"]
+    assert lighter["T4"]["total_gb"] < first["T4"]["total_gb"]
+    assert len(google.calls) == calls
+    saved = admin.get("/api/settings/runtime").json()["runtime"]["models"]
+    assert saved["video"] != "h3"
+    assert admin.post("/api/colab/estimate", json={**body, "context": 1}).status_code == 422
