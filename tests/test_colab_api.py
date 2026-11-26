@@ -210,3 +210,46 @@ def test_no_machine_available_is_said_in_plain_words(admin, monkeypatch):
     # Insistiu antes de desistir.
     creates = [call for call in google.calls if call == ("POST", "colaboratory.googleapis.com", "/v1beta/runtimes")]
     assert len(creates) == colab_api._CREATE_TRIES
+
+
+@pytest.mark.parametrize("machine_arrives", [False, True])
+def test_turning_off_while_colab_is_still_creating(admin, monkeypatch, machine_arrives):
+    """Visto em produção: desligar durante o pedido deixava a thread antiga
+    viva. Ela seguia pedindo máquina, e a que chegasse rodava sem aparecer na tela."""
+
+    class StoppedMidway(Google):
+        def __call__(self, request):
+            response = super().__call__(request)
+            if request.url.path == "/v1beta/runtimes" and request.method == "POST":
+                # O admin desliga enquanto o Colab ainda responde ao pedido.
+                colab_api._state.clear()
+                colab_api._state.update({"state": "off"})
+            return response
+
+    google = StoppedMidway(create_error=None if machine_arrives else {
+        "code": 9, "message": "x", "details": [{"reason": "NO_RUNTIMES"}]})
+    admin.app.dependency_overrides[deps.get_http_transport] = lambda: httpx.MockTransport(google)
+    with db.session() as conn:
+        colab_api.save_client(conn, "id-123.apps.googleusercontent.com", "secret-123456")
+        colab_api.save_refresh_token(conn, "rt-123456")
+    _use_colab(admin)
+    monkeypatch.setattr(colab_api, "_RETRY_WAIT_S", 0.01)
+    opened = []
+    monkeypatch.setattr("websockets.sync.client.connect",
+                        lambda *args, **kwargs: opened.append(args) or pytest.fail("abriu o kernel"))
+    admin.post("/api/colab/start", json={
+        "variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD",
+        "project_url": "https://play.example"})
+    deleted = ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1")
+    for _ in range(200):
+        if (deleted in google.calls) == machine_arrives and not any(
+                getattr(thread, "_target", None) is colab_api._run and thread.is_alive()
+                for thread in colab_api.threading.enumerate()):
+            break
+        time.sleep(0.02)
+    assert admin.get("/api/colab/status").json() == {"state": "off"}
+    creates = [call for call in google.calls
+               if call == ("POST", "colaboratory.googleapis.com", "/v1beta/runtimes")]
+    assert len(creates) == 1 and opened == []
+    # A máquina que chegou depois do desligar é apagada; sem máquina, nada a apagar.
+    assert (deleted in google.calls) == machine_arrives

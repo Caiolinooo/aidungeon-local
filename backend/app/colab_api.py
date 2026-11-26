@@ -222,15 +222,24 @@ def status() -> dict:
         return {key: value for key, value in _state.items() if not key.startswith("_")}
 
 
-def _set(**fields: Any) -> None:
+def _mine(sid: str | None) -> bool:
+    """A sessão que esta thread começou ainda é a atual. Desligar ou ligar de
+    novo troca o id: a thread antiga para de escrever e larga o que criou."""
     with _lock:
-        _state.update(fields)
+        return sid is None or _state.get("_sid") == sid
 
 
-def _log(text: str) -> None:
+def _set(_sid: str | None = None, **fields: Any) -> None:
+    with _lock:
+        if _sid is None or _state.get("_sid") == _sid:
+            _state.update(fields)
+
+
+def _log(text: str, sid: str | None = None) -> None:
     lines = [line for line in str(text).replace("\r", "\n").split("\n") if line.strip()]
     with _lock:
-        _state["log"] = (_state.get("log", []) + lines)[-_LOG_LINES:]
+        if sid is None or _state.get("_sid") == sid:
+            _state["log"] = (_state.get("log", []) + lines)[-_LOG_LINES:]
 
 
 def _frame(session: str, kind: str, content: dict) -> tuple[str, str]:
@@ -243,7 +252,7 @@ def _frame(session: str, kind: str, content: dict) -> tuple[str, str]:
 
 
 def _execute(connection: Any, cells: list[tuple[str, str]], *, connect: Any = None,
-             transport: Any = None) -> None:
+             transport: Any = None, sid: str | None = None) -> None:
     """Cria um kernel, enfileira as células e acompanha a saída.
 
     `connection()` devolve `(url, token)` atuais: o token do proxy vence em
@@ -295,6 +304,8 @@ def _execute(connection: Any, cells: list[tuple[str, str]], *, connect: Any = No
                     queued = True
                 for raw in ws:
                     msg = json.loads(raw)
+                    if not _mine(sid):
+                        return
                     role = pending.get((msg.get("parent_header") or {}).get("msg_id"))
                     if role is None:
                         continue
@@ -302,12 +313,12 @@ def _execute(connection: Any, cells: list[tuple[str, str]], *, connect: Any = No
                     kind, content = msg.get("msg_type"), msg.get("content") or {}
                     if kind == "status" and content.get("execution_state") == "busy":
                         # A última célula segura a sessão e nunca termina: chegar nela é estar ligado.
-                        _set(state="on" if role == order[-1] else "starting", cell=role,
+                        _set(sid, state="on" if role == order[-1] else "starting", cell=role,
                              step=order.index(role) + 1, steps=len(order))
                     elif kind == "stream":
-                        _log(content.get("text", ""))
+                        _log(content.get("text", ""), sid)
                     elif kind == "error":
-                        _log(f"{content.get('ename')}: {content.get('evalue')}")
+                        _log(f"{content.get('ename')}: {content.get('evalue')}", sid)
                         raise RuntimeError(f"a célula {role} falhou: {content.get('evalue')}")
                     elif kind == "execute_reply" and content.get("status") == "aborted":
                         raise RuntimeError(f"a célula {role} não rodou")
@@ -316,7 +327,8 @@ def _execute(connection: Any, cells: list[tuple[str, str]], *, connect: Any = No
         except Exception:  # queda de rede ou do proxy: o kernel segue com a fila
             pass
         drops += 1
-        if drops > 20 or status().get("state") not in ("creating", "starting", "on"):
+        if (drops > 20 or not _mine(sid)
+                or status().get("state") not in ("creating", "starting", "on")):
             return
         time.sleep(min(30, 3 * drops))
         url, token = connection()
@@ -332,9 +344,12 @@ def _failure(op: dict) -> str:
     return str(error.get("message") or "o Colab recusou a sessão")[:300]
 
 
-def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any) -> None:
+def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any,
+         sid: str | None = None) -> None:
     try:
         for attempt in range(1, _CREATE_TRIES + 1):
+            if not _mine(sid):  # desligaram ou ligaram outra enquanto esta pedia
+                return
             with db.session() as conn:
                 op = _call(conn, "POST", "v1beta/runtimes", body={"runtimeSpec": spec},
                            params={"requestId": str(uuid.uuid4())}, transport=transport)
@@ -349,12 +364,16 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any)
             reasons = {str(item.get("reason")) for item in op["error"].get("details") or []}
             if "NO_RUNTIMES" not in reasons or attempt == _CREATE_TRIES:
                 raise RuntimeError(_failure(op))
-            _set(attempt=attempt + 1, attempts=_CREATE_TRIES)
+            _set(sid, attempt=attempt + 1, attempts=_CREATE_TRIES)
             time.sleep(_RETRY_WAIT_S)
-            if status().get("state") != "creating":  # desligaram enquanto esperava
-                return
         name = (op.get("response") or {}).get("name") or ""
-        _set(runtime=name, state="starting", cell="", step=0, steps=len(cells))
+        if not _mine(sid):
+            # A máquina chegou depois de desligarem: apaga, senão fica gastando sem aparecer.
+            with db.session() as conn:
+                _call(conn, "DELETE", f"v1beta/{name}", params={"allowMissing": "true"},
+                      transport=transport)
+            return
+        _set(sid, runtime=name, state="starting", cell="", step=0, steps=len(cells))
 
         def connection() -> tuple[str, str]:
             with db.session() as conn:
@@ -364,9 +383,9 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any)
                 raise RuntimeError("o Colab criou a sessão sem endereço de conexão")
             return info["url"], info["token"]
 
-        _execute(connection, cells, connect=connect, transport=transport)
+        _execute(connection, cells, connect=connect, transport=transport, sid=sid)
     except Exception as exc:  # a thread não tem quem receba a exceção
-        _set(state="error", error=str(getattr(exc, "message", exc))[:400])
+        _set(sid, state="error", error=str(getattr(exc, "message", exc))[:400])
 
 
 def start(conn: sqlite3.Connection, spec: dict, project_url: str,
@@ -379,9 +398,11 @@ def start(conn: sqlite3.Connection, spec: dict, project_url: str,
     with _lock:
         if _state.get("state") in ("creating", "starting", "on"):
             raise GameError.conflict("colab_running", "o Colab já está ligado ou ligando")
+        sid = uuid.uuid4().hex
         _state.clear()
-        _state.update({"state": "creating", "spec": spec, "log": []})
-    threading.Thread(target=_run, daemon=True, args=(spec, cells, transport, connect)).start()
+        _state.update({"state": "creating", "spec": spec, "log": [], "_sid": sid})
+    threading.Thread(target=_run, daemon=True,
+                     args=(spec, cells, transport, connect, sid)).start()
     return status()
 
 
