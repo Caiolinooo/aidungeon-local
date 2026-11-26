@@ -712,3 +712,27 @@ def test_download_drops_the_key_when_redirected_to_another_host(tmp_path):
         site.shutdown()
     assert part.read_bytes() == b"weights"
     assert seen == {"first": "Bearer KEY", "auth": None}
+
+
+def test_tunnel_cell_ignores_the_cloudflare_api_address(tmp_path, monkeypatch):
+    """Visto num Colab real: o log da Cloudflare cita a API antes do túnel."""
+    nb = rp.generate_notebook(_config(
+        "hybrid", "local", "colab", project_url="https://runtime.example",
+    ), register_token="rt.1.abc")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "cloudflared").write_text("")
+
+    class FakeProcess:
+        def __init__(self, cmd, stdout=None, **kwargs):
+            stdout.write(
+                b"INF Requesting new quick Tunnel on trycloudflare.com...\n"
+                b"ERR failed to request quick Tunnel: Post \"https://api.trycloudflare.com/tunnel\"\n"
+                b"INF |  https://seasonal-deck-organisms-sf.trycloudflare.com  |\n")
+            stdout.flush()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
+    ns = {"ROOT": tmp_path, "Path": Path, "VARIABLES": {"comfy_port": 8188}}
+    exec(_role(nb, "tunnel"), ns)
+    assert ns["PUBLIC_COMFY"] == "https://seasonal-deck-organisms-sf.trycloudflare.com"
