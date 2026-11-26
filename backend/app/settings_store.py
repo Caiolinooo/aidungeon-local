@@ -349,11 +349,16 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
     if not api_key:
         api_key = llm.get("api_key") or None
 
+    stored_url = ov("llm.base_url", llm.get("base_url", ""))
+    live_url = _live_url(conn, "llm", stored_url)
     effective = {
         "provider": llm.get("provider", "llamacpp"),
-        "base_url": _live_url(conn, "llm", ov("llm.base_url", llm.get("base_url", ""))),
+        "base_url": live_url,
         "api_key": api_key or None,
-        "model_alias": ov("llm.model_alias", llm.get("model_alias", "auto")),
+        # Quando a máquina local assume no lugar do Colab, quem responde é o
+        # modelo que ela tem carregado, não o que foi escolhido para o Colab.
+        "model_alias": "auto" if live_url != stored_url
+        else ov("llm.model_alias", llm.get("model_alias", "auto")),
         "context_size": int(ov("llm.context_size", llm.get("context_size", 8192))),
         "max_tokens": int(ov("llm.max_tokens", sampler.get("max_tokens", 300))),
         "streaming": bool(ov("llm.streaming", llm.get("streaming", True))),

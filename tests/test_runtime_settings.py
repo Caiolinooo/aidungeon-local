@@ -252,6 +252,9 @@ def test_colab_without_a_live_runtime_keeps_the_local_machine_serving(client):
     assert runtime["placements"] == {"llm": "colab", "comfyui": "colab"}
     # O Colab ainda não se registrou: a máquina local continua atendendo.
     assert client.get("/api/settings/llm").json()["base_url"] == "http://local-llm.example/v1"
+    with db.session() as conn:
+        # E responde com o modelo que ela tem, não com o nome do modelo do Colab.
+        assert settings_store.effective_llm_settings(conn)["model_alias"] == "auto"
     assert client.get("/api/settings/image").json()["comfyui_base_url"] == "http://local-comfy.example"
 
     hybrid = client.put("/api/settings/runtime", json={
@@ -289,7 +292,11 @@ def test_selected_models_apply_engine_without_sampling_or_resolution(client):
         },
     })
     assert resp.status_code == 200, resp.text
-    assert client.get("/api/settings/llm").json()["model_alias"] == AUX_ALIAS
+    # O modelo escolhido para o Colab fica gravado; enquanto o Colab não liga,
+    # a máquina local responde com o modelo dela.
+    with db.session() as conn:
+        assert json.loads(db.get_setting(conn, "llm.model_alias")) == AUX_ALIAS
+    assert client.get("/api/settings/llm").json()["model_alias"] == "auto"
     assert client.get("/api/settings/llm").json()["temperature"] == sampling["temperature"]
     assert client.get("/api/settings/image").json()["comfyui_width"] == image["comfyui_width"]
     assert client.get("/api/settings/image").json()["comfyui_steps"] == image["comfyui_steps"]
