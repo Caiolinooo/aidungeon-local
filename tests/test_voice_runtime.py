@@ -298,3 +298,35 @@ def test_notebook_tells_the_game_its_gpu_before_downloading(client):
     cell = runtime_provisioning._hardware_cell()
     compile(cell, "hardware", "exec")
     assert "/api/runtime/hardware" in cell
+
+
+def test_this_machine_paints_with_its_own_model_while_covering_for_colab(admin):
+    """O modelo escolhido para o Colab pode não existir nesta máquina: enquanto
+    o Colab não atende, ela pinta com o último modelo que rodou nela."""
+    def image() -> dict:
+        with db.session() as conn:
+            return settings_store.effective_image_settings(conn)
+
+    admin.put("/api/settings/runtime", json={"mode": "local", "models": {"image": "z_image_turbo"}})
+    assert image()["comfyui_engine"] == "z_image_turbo"
+    local_url = image()["comfyui_base_url"]
+    admin.put("/api/settings/runtime", json={
+        "mode": "hybrid", "placements": {"llm": "local", "comfyui": "colab"},
+        "models": {"image": "flux2_klein", "video": "h3"}})
+    waiting = image()
+    # O Colab ainda está baixando os modelos: nada do que é dele vale aqui.
+    assert (waiting["comfyui_engine"], waiting["comfyui_base_url"]) == ("z_image_turbo", local_url)
+    assert waiting["comfyui_video"].get("engine") != "h3"
+    registered = admin.post("/api/runtime/register", json={
+        "endpoints": {"llm": "", "comfyui": "https://gpu.trycloudflare.com"},
+        "models": {**MODELS, "image": "flux2_klein", "video": "h3"},
+        "hardware": {"gpu_name": "Tesla T4", "vram_total_mib": 15360}})
+    assert registered.status_code == 200, registered.text
+    serving = image()
+    assert (serving["comfyui_engine"], serving["comfyui_base_url"]) == (
+        "flux2_klein", "https://gpu.trycloudflare.com")
+    assert serving["comfyui_video"].get("engine") == "h3"
+    # O Colab caiu: esta máquina volta a pintar com o modelo dela.
+    with db.session() as conn:
+        settings_store._set_override(conn, "runtime.registration.last_seen", "2020-01-01T00:00:00Z")
+    assert (image()["comfyui_engine"], image()["comfyui_base_url"]) == ("z_image_turbo", local_url)

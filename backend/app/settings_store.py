@@ -79,6 +79,7 @@ OVERRIDE_KEYS = (
     "voice_runtime.placement", "voice_runtime.fallback", "voice_runtime.tts",
     "voice_runtime.stt", "voice_runtime.key", "voice_runtime.colab_url",
     "voice_runtime.colab_models",
+    "runtime.local_identity.comfyui",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")
@@ -435,8 +436,20 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
     openai = image.get("providers", {}).get("openai_compatible", {})
     prompt_builder = image.get("prompt_builder", {})
 
+    stored_url = _get_override(conn, "image.comfyui_base_url")
+    stored_url = comfyui.get("base_url", "") if stored_url is None else stored_url
+    # Esta máquina cobrindo o Colab pinta com o modelo dela: o escolhido para
+    # o Colab pode nem existir aqui.
+    local_identity = None
+    if _colab_missing(conn, "comfyui", stored_url):
+        snapshot = _get_override(conn, "runtime.local_identity.comfyui")
+        local_identity = snapshot if isinstance(snapshot, dict) else {}
+
+    def identity(key: str) -> Any:
+        return local_identity.get(key) if local_identity is not None else _get_override(conn, key)
+
     def ov(key: str, default: Any) -> Any:
-        value = _get_override(conn, key)
+        value = identity(key) if key in _IMAGE_IDENTITY_KEYS else _get_override(conn, key)
         return default if value is None else value
 
     api_key = _api_key_or_env(
@@ -501,11 +514,11 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
             ov("image.comfyui_engine", None), comfyui.get("engine")),
         "comfyui_flux2": _merge_identity(
             dict(comfyui.get("flux2") or {}),
-            _get_override(conn, "image.comfyui_flux2"),
+            identity("image.comfyui_flux2"),
             _FLUX2_MERGE),
         "comfyui_zimage": _merge_identity(
             _zimage_file_block(comfyui),
-            _get_override(conn, "image.comfyui_zimage"),
+            identity("image.comfyui_zimage"),
             _ZIMAGE_MERGE),
         # Clipe: LTXV no arquivo; Wan é video.engine=wan. Não entra no
         # ImageSettings público e não substitui provider/unet da imagem.
@@ -513,14 +526,16 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         # 20 steps / CFG 5 / 1280×704); auto_scene/auto_portraits ficam no arquivo.
         "comfyui_video": _merge_identity(
             dict(comfyui.get("video") or {}),
-            _get_override(conn, "image.comfyui_video"),
+            identity("image.comfyui_video"),
             _VIDEO_FIELDS),
         # Motores da biblioteca: arquivo completo com amostragem própria, fluxo
         # colado pelo usuário e os LoRAs presos ao modelo de imagem em uso.
-        "comfyui_checkpoint": _dict_override(conn, "image.comfyui_checkpoint"),
-        "comfyui_custom": _dict_override(conn, "image.comfyui_custom"),
+        "comfyui_checkpoint": (
+            value if isinstance(value := identity("image.comfyui_checkpoint"), dict) else {}),
+        "comfyui_custom": (
+            value if isinstance(value := identity("image.comfyui_custom"), dict) else {}),
         "comfyui_loras": [
-            item for item in (_get_override(conn, "image.comfyui_loras") or [])
+            item for item in (identity("image.comfyui_loras") or [])
             if isinstance(item, dict)
         ],
         "prompt_builder": dict(prompt_builder),
@@ -1027,19 +1042,40 @@ def colab_serving(conn: sqlite3.Connection, service: str) -> bool:
             and colab_online(conn))
 
 
-def _live_url(conn: sqlite3.Connection, service: str, stored: Any) -> Any:
-    """URL que atende agora. Colab que ainda não chegou ou parou de bater não
-    derruba o jogo: a máquina local assume até ele voltar.
+# Tudo que `_apply_selected_models` grava para dizer qual modelo o ComfyUI usa.
+_IMAGE_IDENTITY_KEYS = (
+    "image.comfyui_engine", "image.comfyui_unet", "image.comfyui_clip",
+    "image.comfyui_clip_type", "image.comfyui_clip_device", "image.comfyui_vae",
+    "image.comfyui_flux2", "image.comfyui_zimage", "image.comfyui_video",
+    "image.comfyui_checkpoint", "image.comfyui_custom", "image.comfyui_loras",
+)
 
-    URL do Colab digitada à mão não tem batimento para medir e fica como está.
+
+def _colab_missing(conn: sqlite3.Connection, service: str, stored: Any) -> bool:
+    """O serviço foi posto no Colab e o Colab não está atendendo agora.
+
+    URL do Colab digitada à mão não tem batimento para medir e conta como atendendo.
     """
     if _get_override(conn, f"runtime.placements.{service}") != "colab":
-        return stored
+        return False
     registered = _get_override(conn, "runtime.registration.endpoints")
     registered = registered.get(service) if isinstance(registered, dict) else None
-    if stored and (stored != registered or colab_online(conn)):
+    return not (stored and (stored != registered or colab_online(conn)))
+
+
+def _live_url(conn: sqlite3.Connection, service: str, stored: Any) -> Any:
+    """URL que atende agora. Colab que ainda não chegou ou parou de bater não
+    derruba o jogo: a máquina local assume até ele voltar."""
+    if not _colab_missing(conn, service, stored):
         return stored
     return effective_runtime_settings(conn)["endpoints"][f"local_{service}"] or stored
+
+
+def _remember_local_identity(conn: sqlite3.Connection) -> None:
+    """Guarda os modelos de imagem e vídeo aplicados com o ComfyUI nesta
+    máquina. É com eles que ela pinta quando cobre o Colab."""
+    _set_override(conn, "runtime.local_identity.comfyui",
+                  {key: _get_override(conn, key) for key in _IMAGE_IDENTITY_KEYS})
 
 
 def _persist_runtime(conn: sqlite3.Connection, config: dict) -> None:
@@ -1329,6 +1365,8 @@ def apply_runtime_update(conn: sqlite3.Connection, update: dict) -> dict:
     _persist_runtime(conn, config)
     _apply_routing(conn, config)
     _apply_selected_models(conn, config, catalog)
+    if config["placements"]["comfyui"] == "local":
+        _remember_local_identity(conn)
     if any(config["models"][kind] != current["models"][kind] for kind in ("image", "video")):
         # Trocar o modelo aqui é pedir que o ComfyUI pinte com ele.
         _set_override(conn, "image.provider", "comfyui")
