@@ -730,6 +730,9 @@ def test_tunnel_cell_ignores_the_cloudflare_api_address(tmp_path, monkeypatch):
                 b"INF |  https://seasonal-deck-organisms-sf.trycloudflare.com  |\n")
             stdout.flush()
 
+        def poll(self):
+            return None
+
     import subprocess
     monkeypatch.setattr(subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
