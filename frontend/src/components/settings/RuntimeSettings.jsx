@@ -342,6 +342,11 @@ export default function RuntimeSettings({
       try {
         const install = await api.getModelInstall()
         setLibrary((prev) => (prev ? { ...prev, install } : prev))
+        if (install.state === 'done' && install.narrator !== undefined) {
+          // O narrador desta máquina mudou: recarrega qual está em uso e o modelo salvo.
+          setLibrary({ ...(await api.getModelLibrary()), install })
+          await onLibraryChange?.('llm', install.model)
+        }
       } catch {
         // a próxima batida tenta de novo
       }
@@ -369,6 +374,15 @@ export default function RuntimeSettings({
       if (install.state === 'done') toast('Os arquivos deste modelo já estão nesta máquina.', 'ok')
     } catch (e) {
       toast('Não consegui baixar: ' + e.message)
+    }
+  }
+
+  const switchNarrator = async (id) => {
+    try {
+      const install = await api.useNarrator(id)
+      setLibrary((prev) => (prev ? { ...prev, install } : prev))
+    } catch (e) {
+      toast('Não consegui trocar o narrador: ' + e.message)
     }
   }
 
@@ -485,6 +499,7 @@ export default function RuntimeSettings({
               onPick={pick}
               onLibraryChange={onLibraryChange}
               onInstall={installHere}
+              onNarrator={switchNarrator}
               inputCls={inputCls}
               labelCls={labelCls}
             />

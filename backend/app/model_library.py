@@ -26,6 +26,7 @@ import signal
 import sqlite3
 import subprocess
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -715,4 +716,128 @@ def start_install(conn: sqlite3.Connection, kind: str, model_id: str) -> dict:
     if files or nodes:
         threading.Thread(target=_run_install, daemon=True,
                          args=(root, model_id, files, download_keys(conn), nodes)).start()
+    return install_status()
+
+
+# ------------------------------------------------ narrador desta máquina
+# O llama-server é do root. Na preparação da máquina (uma vez, com sudo) ele
+# passa a subir por um iniciador que lê `narrator.conf` e só aceita um .gguf
+# comum da mesma pasta, e o usuário do jogo ganha permissão para três comandos
+# exatos do systemctl. Sem essa preparação os botões não aparecem.
+NARRATOR_STARTER = Path("/usr/local/sbin/llama-narrator-start")
+_SYSTEMCTL = ["sudo", "-n", "/usr/bin/systemctl"]
+
+
+def narrator_state() -> dict:
+    conf = settings_store.NARRATOR_CONF
+    return {"available": NARRATOR_STARTER.is_file() and conf.parent.is_dir(),
+            "active": settings_store.local_narrator_file()}
+
+
+def _narrator_healthy(base_url: str, seconds: float) -> bool:
+    url = base_url.rstrip("/").removesuffix("/v1") + "/health"
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            if httpx.get(url, timeout=5.0).status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(3)
+    return False
+
+
+def _restart_narrator(base_url: str) -> bool:
+    """Reinicia o llama-server com o vigia de slots pausado: carregar um modelo
+    leva mais que os 45 s depois dos quais o vigia reiniciaria de novo."""
+    subprocess.run([*_SYSTEMCTL, "stop", "slot-watchdog.timer"], timeout=60)
+    try:
+        if subprocess.run([*_SYSTEMCTL, "restart", "llama-server.service"],
+                          timeout=180).returncode != 0:
+            raise RuntimeError("esta máquina não deixou o jogo reiniciar o narrador")
+        return _narrator_healthy(base_url, 300)
+    finally:
+        subprocess.run([*_SYSTEMCTL, "start", "slot-watchdog.timer"], timeout=60)
+
+
+def _apply_narrator(model_id: str) -> None:
+    with db.session() as conn:
+        settings_store._set_override(conn, "runtime.models.llm", model_id)
+        settings_store._apply_selected_models(
+            conn, settings_store.effective_runtime_settings(conn),
+            settings_store.runtime_catalog(conn))
+        settings_store._invalidate_llm_discovery()
+
+
+def _run_narrator(model_id: str, art: dict | None, keys: dict, ctx: int, base_url: str) -> None:
+    from app import runtime_provisioning
+    conf = settings_store.NARRATOR_CONF
+    try:
+        if art is None:
+            conf.unlink(missing_ok=True)
+        else:
+            dest = conf.parent / art["filename"]
+            with _install_lock:
+                _install.update({"file": art["filename"], "file_bytes": art.get("bytes"),
+                                 "_part": f"{dest}.part"})
+            secret = keys.get(art.get("auth_secret") or "") or keys.get("HF_TOKEN") or ""
+            runtime_provisioning.fetch_pinned(
+                art["url"], str(dest), art["sha256"], retries=3,
+                expected_bytes=art.get("bytes"),
+                auth_header=f"Bearer {secret}" if secret else None)
+            with _install_lock:
+                _install.update({"file": "reiniciando o narrador", "_part": None})
+            conf.write_text(f"MODEL={dest}\nCTX={ctx}\n", encoding="utf-8")
+        if not _restart_narrator(base_url):
+            if art is None:
+                raise RuntimeError("o narrador padrão não voltou; veja o serviço llama-server")
+            # Não subiu (falta de VRAM é o caso comum): o padrão volta sozinho.
+            conf.unlink(missing_ok=True)
+            _restart_narrator(base_url)
+            raise RuntimeError(
+                "o modelo não subiu nesta máquina (em geral falta VRAM); "
+                "o narrador padrão foi restaurado")
+        _apply_narrator(model_id)
+        with _install_lock:
+            _install.clear()
+            _install.update({"state": "done", "model": model_id, "total": 1,
+                             "narrator": art["filename"] if art else ""})
+    except Exception as exc:  # a thread não tem quem receba a exceção
+        with _install_lock:
+            _install.clear()
+            _install.update({"state": "error", "model": model_id, "error": str(exc)[:300]})
+
+
+def start_narrator(conn: sqlite3.Connection, model_id: str | None) -> dict:
+    """Baixa o GGUF e põe como narrador desta máquina. `None` volta ao padrão do serviço."""
+    if not narrator_state()["available"]:
+        raise GameError.bad_request(
+            "narrator_unavailable", "esta máquina não está preparada para trocar o narrador")
+    catalog = settings_store.runtime_catalog(conn)["models"]["llm"]
+    art = None
+    if model_id is None:
+        model_id = next(key for key, entry in catalog.items()
+                        if not entry.get("user") and entry.get("role") != "fallback")
+    else:
+        entry = catalog.get(model_id)
+        art = next((item for item in (entry or {}).get("artifacts") or []
+                    if item.get("role") == "weights" and item.get("url") and item.get("sha256")),
+                   None)
+        if art is None:
+            raise GameError.bad_request(
+                "validation_error", "este modelo não tem um arquivo GGUF com link e SHA256")
+        dest = settings_store.NARRATOR_CONF.parent / art["filename"]
+        size = int(art.get("bytes") or 0)
+        have = dest.is_file() and (not size or dest.stat().st_size == size)
+        if not have and shutil.disk_usage(dest.parent).free < size + 2 * 1024 ** 3:
+            raise GameError.bad_request("disk_full", "não há espaço em disco para este modelo")
+    runtime = settings_store.effective_runtime_settings(conn)
+    ctx = max(4096, min(131072, int(settings_store.effective_llm_settings(conn)["context_size"])))
+    with _install_lock:
+        if _install.get("state") == "running":
+            raise GameError.conflict("install_running", "já há um download em andamento")
+        _install.clear()
+        _install.update({"state": "running", "model": model_id, "total": 1, "done": 0})
+    threading.Thread(target=_run_narrator, daemon=True, args=(
+        model_id, art, download_keys(conn), ctx, runtime["endpoints"]["local_llm"])).start()
     return install_status()

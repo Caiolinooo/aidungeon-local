@@ -79,6 +79,7 @@ def _state(conn) -> dict:
                  "huggingface": bool(keys["HF_TOKEN"])},
         "comfyui_root": str(root) if root else None,
         "install": model_library.install_status(),
+        "narrator": model_library.narrator_state(),
     }
 
 
@@ -140,6 +141,17 @@ def put_keys(body: DownloadKeys) -> dict:
 def install(body: InstallRequest) -> dict:
     with db.session() as conn:
         return model_library.start_install(conn, body.kind, body.id)
+
+
+class NarratorRequest(BaseModel):
+    """Sem id: volta ao narrador padrão do serviço desta máquina."""
+    id: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/models/narrator")
+def use_narrator(body: NarratorRequest) -> dict:
+    with db.session() as conn:
+        return model_library.start_narrator(conn, body.id)
 
 
 @router.get("/models/install")

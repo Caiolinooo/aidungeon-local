@@ -399,3 +399,79 @@ def test_local_install_adds_the_nodes_of_a_custom_workflow(admin, tmp_path, monk
             break
         time.sleep(0.02)
     assert ran == [] and restarted == []
+
+
+def _narrator_setup(admin, tmp_path, monkeypatch, healthy):
+    folder = tmp_path / "models" / "llm"
+    folder.mkdir(parents=True)
+    starter = tmp_path / "llama-narrator-start"
+    starter.write_text("")
+    monkeypatch.setattr(settings_store, "NARRATOR_CONF", folder / "narrator.conf")
+    monkeypatch.setattr(model_library, "NARRATOR_STARTER", starter)
+    ran = []
+    monkeypatch.setattr(model_library.subprocess, "run", lambda cmd, **kwargs: (
+        # Só os comandos do systemctl interessam; o resto (nvidia-smi) passa em branco.
+        ran.append(cmd[3:]) if cmd[:1] == ["sudo"] else None,
+        type("Done", (), {"returncode": 0 if cmd[:1] == ["sudo"] else 1, "stdout": ""})())[1])
+    answers = list(healthy)
+    monkeypatch.setattr(model_library, "_narrator_healthy", lambda url, seconds: answers.pop(0))
+
+    def fake_fetch(url, dest, sha256, retries=3, expected_bytes=None, auth_header=None):
+        open(dest, "wb").write(b"g" * int(expected_bytes))
+
+    monkeypatch.setattr(rp, "fetch_pinned", fake_fetch)
+    model_id = admin.post("/api/models/library", json={
+        "kind": "llm", "family": "gguf", "label": "Dolphin",
+        "file": _file("dolphin-q4.gguf", "huggingface.co")}).json()["id"]
+    return folder, ran, model_id
+
+
+def _narrator_done(admin):
+    for _ in range(200):
+        state = admin.get("/api/models/install").json()
+        if state["state"] != "running":
+            return state
+        time.sleep(0.02)
+    return state
+
+
+def test_narrator_from_the_search_runs_on_this_machine_and_goes_back(admin, tmp_path, monkeypatch):
+    folder, ran, model_id = _narrator_setup(admin, tmp_path, monkeypatch, [True, True])
+    # Antes da troca, um narrador da busca não pode ser salvo para esta máquina.
+    assert admin.put("/api/settings/runtime", json={"models": {"llm": model_id}}).status_code == 400
+    assert admin.get("/api/models/library").json()["narrator"] == {"available": True, "active": ""}
+    assert admin.post("/api/models/narrator", json={"id": model_id}).status_code == 200
+    assert _narrator_done(admin) == {
+        "state": "done", "model": model_id, "total": 1, "narrator": "dolphin-q4.gguf"}
+    assert (folder / "narrator.conf").read_text().startswith(f"MODEL={folder}/dolphin-q4.gguf\nCTX=")
+    # O vigia para antes do reinício e volta depois.
+    assert ran == [["stop", "slot-watchdog.timer"], ["restart", "llama-server.service"],
+                   ["start", "slot-watchdog.timer"]]
+    assert admin.get("/api/models/library").json()["narrator"]["active"] == "dolphin-q4.gguf"
+    runtime = admin.get("/api/settings/runtime").json()["runtime"]
+    assert runtime["models"]["llm"] == model_id
+    # Em uso aqui: salvar a tela por outro motivo não é mais barrado.
+    assert admin.put("/api/settings/runtime", json={
+        "endpoints": {"local_comfyui": "http://c.example"}}).status_code == 200
+
+    assert admin.post("/api/models/narrator", json={}).status_code == 200
+    assert _narrator_done(admin)["narrator"] == ""
+    assert not (folder / "narrator.conf").exists()
+    assert admin.get("/api/settings/runtime").json()["runtime"]["models"]["llm"] == "qwen3.6-35b-a3b"
+
+
+def test_narrator_that_does_not_load_gives_the_default_back(admin, tmp_path, monkeypatch):
+    folder, ran, model_id = _narrator_setup(admin, tmp_path, monkeypatch, [False, True])
+    before = admin.get("/api/settings/runtime").json()["runtime"]["models"]["llm"]
+    admin.post("/api/models/narrator", json={"id": model_id})
+    state = _narrator_done(admin)
+    assert state["state"] == "error" and "narrador padrão foi restaurado" in state["error"]
+    assert not (folder / "narrator.conf").exists()
+    assert [cmd for cmd in ran if cmd[0] == "restart"] == [["restart", "llama-server.service"]] * 2
+    assert admin.get("/api/settings/runtime").json()["runtime"]["models"]["llm"] == before
+
+
+def test_machine_without_the_starter_does_not_offer_the_switch(admin, tmp_path, monkeypatch):
+    monkeypatch.setattr(model_library, "NARRATOR_STARTER", tmp_path / "nao-existe")
+    assert admin.get("/api/models/library").json()["narrator"]["available"] is False
+    assert admin.post("/api/models/narrator", json={"id": "x"}).status_code == 400

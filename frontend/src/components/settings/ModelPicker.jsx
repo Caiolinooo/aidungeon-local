@@ -275,7 +275,7 @@ function CheckpointSampling({ block, onApply, inputCls, labelCls }) {
 }
 
 export default function ModelPicker({
-  kind, title, value, catalog, families, place, library, onPick, onLibraryChange, onInstall, inputCls, labelCls,
+  kind, title, value, catalog, families, place, library, onPick, onLibraryChange, onInstall, onNarrator, inputCls, labelCls,
 }) {
   const toast = useToast()
   const [panel, setPanel] = useState('')
@@ -356,10 +356,31 @@ export default function ModelPicker({
           )}
         </p>
       )}
-      {kind === 'llm' && entry?.role === 'fallback' && place === 'local' && (
-        <p role="alert" className="text-[11px] text-danger-300">
-          Este narrador só roda no Colab. Nesta máquina o llama-server usa o modelo do serviço dele.
-        </p>
+      {kind === 'llm' && place === 'local' && (
+        <div className="flex flex-wrap items-center gap-2">
+          {entry?.user && library?.narrator?.active && entry.model_alias === library.narrator.active ? (
+            <p className="text-[11px] text-secondary">Este é o narrador em uso nesta máquina.</p>
+          ) : entry?.user && library?.narrator?.available ? (
+            <button type="button" disabled={installing} onClick={() => onNarrator(value)} className="flex min-h-10 items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary disabled:opacity-50">
+              <Download className="h-3.5 w-3.5" />
+              Baixar e usar como narrador nesta máquina
+            </button>
+          ) : entry?.role === 'fallback' ? (
+            <p role="alert" className="text-[11px] text-danger-300">
+              Este narrador só roda no Colab. Esta máquina não está preparada para trocar o narrador dela.
+            </p>
+          ) : null}
+          {library?.narrator?.active && (
+            <button type="button" disabled={installing} onClick={() => onNarrator(null)} className="min-h-10 rounded-xl border border-subtle px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary disabled:opacity-50">
+              Voltar ao narrador padrão desta máquina
+            </button>
+          )}
+          {entry?.user && library?.narrator?.available && (
+            <p className="basis-full text-[11px] text-muted">
+              Trocar reinicia o narrador desta máquina por cerca de um minuto. Se o modelo não couber na placa, o padrão volta sozinho.
+            </p>
+          )}
+        </div>
       )}
       {kind === 'image' && (entry?.engine === 'checkpoint' || entry?.engine === 'custom') && (
         <p className="text-[11px] text-muted">
@@ -442,13 +463,17 @@ export default function ModelPicker({
         )}
         {install?.model === value && install.state === 'running' && (
           <span className="text-[11px] text-secondary">
-            Baixando {install.file} ({(install.done || 0) + 1} de {install.total})
-            {install.file_bytes ? ` · ${Math.floor(((install.file_bytes_done || 0) / install.file_bytes) * 100)}%` : ''}
+            {install.file === 'reiniciando o narrador' ? 'Reiniciando o narrador desta máquina…' : install.file ? (
+              <>
+                Baixando {install.file} ({(install.done || 0) + 1} de {install.total})
+                {install.file_bytes ? ` · ${Math.floor(((install.file_bytes_done || 0) / install.file_bytes) * 100)}%` : ''}
+              </>
+            ) : 'Preparando…'}
           </span>
         )}
         {install?.model === value && install.state === 'done' && (
           <span className="text-[11px] text-secondary">
-            Arquivos nesta máquina.
+            {install.narrator !== undefined ? 'Narrador desta máquina trocado.' : 'Arquivos nesta máquina.'}
             {install.nodes?.length > 0 && (install.restarted
               ? ` Nodes instalados: ${install.nodes.join(', ')}. O ComfyUI está reiniciando; aguarde uns 30 segundos.`
               : ` Nodes instalados: ${install.nodes.join(', ')}. Reinicie o ComfyUI para carregá-los.`)}

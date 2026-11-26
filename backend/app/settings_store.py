@@ -1072,6 +1072,21 @@ def _apply_routing(conn: sqlite3.Connection, config: dict) -> None:
             db.delete_setting(conn, "llm.api_key")
 
 
+# O iniciador do llama-server desta máquina (do root) lê este arquivo.
+NARRATOR_CONF = Path.home() / "models" / "llm" / "narrator.conf"
+
+
+def local_narrator_file() -> str:
+    """Nome do GGUF que o jogo pôs como narrador desta máquina. '' é o padrão do serviço."""
+    try:
+        for line in NARRATOR_CONF.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MODEL="):
+                return Path(line[6:].strip()).name
+    except OSError:
+        pass
+    return ""
+
+
 def user_models(conn: sqlite3.Connection) -> dict:
     """Modelos que o usuário trouxe da busca, no mesmo formato do catálogo."""
     stored = _get_override(conn, "runtime.user_models")
@@ -1128,7 +1143,11 @@ def _apply_selected_models(conn: sqlite3.Connection, config: dict, catalog: dict
     image_entry = _require_catalog_entry(catalog, "image", config["models"]["image"])
     video_entry = _require_catalog_entry(catalog, "video", config["models"]["video"])
     placements = _active_placements(config)
-    if placements["llm"] == "local" and str(llm_entry.get("role") or "") == "fallback":
+    weights = next((str(art.get("filename")) for art in llm_entry.get("artifacts") or []
+                    if art.get("role") == "weights"), "")
+    in_use_here = bool(weights) and weights == local_narrator_file()
+    if (placements["llm"] == "local" and str(llm_entry.get("role") or "") == "fallback"
+            and not in_use_here):
         raise GameError.bad_request(
             "validation_error",
             "fallback llm model requires colab placement or dedicated endpoint")

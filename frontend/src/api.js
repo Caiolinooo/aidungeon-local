@@ -401,6 +401,7 @@ export const api = {
   putModelKeys: (payload) => request('/models/keys', { method: 'PUT', body: payload }),
   installModel: (kind, id) => request('/models/install', { method: 'POST', body: { kind, id } }),
   getModelInstall: () => request('/models/install'),
+  useNarrator: (id = null) => request('/models/narrator', { method: 'POST', body: { id } }),
   // Colab ligado pela API do Google (admin).
   getColab: () => request('/colab'),
   getColabStatus: () => request('/colab/status'),
