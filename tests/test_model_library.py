@@ -129,6 +129,19 @@ def test_checkpoint_from_the_search_paints_with_its_lora(admin):
     assert admin.delete(f"/api/models/library/image/{model_id}").status_code == 200
 
 
+def test_same_file_name_with_other_content_does_not_overwrite(admin):
+    first = admin.post("/api/models/library", json={
+        "kind": "image", "family": "checkpoint", "label": "Um", "file": _file("model.safetensors")})
+    other = {**_file("model.safetensors"), "sha256": "cd" * 32}
+    second = admin.post("/api/models/library", json={
+        "kind": "image", "family": "checkpoint", "label": "Outro", "file": other})
+    catalog = admin.get("/api/settings/runtime").json()["catalog"]["models"]["image"]
+    assert first.json()["id"] == "um" and second.json()["id"] == "outro"
+    assert catalog["um"]["artifacts"][0]["dest"] == "models/checkpoints/model.safetensors"
+    assert catalog["outro"]["artifacts"][0]["dest"] == "models/checkpoints/model-cdcdcdcd.safetensors"
+    assert catalog["outro"]["checkpoint"]["checkpoint"] == "model-cdcdcdcd.safetensors"
+
+
 def test_family_swap_keeps_the_encoder_and_picks_the_loader(admin):
     added = admin.post("/api/models/library", json={
         "kind": "image", "family": "z_image_turbo",

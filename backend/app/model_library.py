@@ -286,11 +286,23 @@ def _checked_file(item: Any) -> dict:
     }
 
 
-def _artifact(role: str, folder: str, checked: dict) -> dict:
+def _artifact(role: str, folder: str, checked: dict, catalog: dict | None = None) -> dict:
+    # "model.safetensors" e "v6.safetensors" existem aos montes. Mesmo destino
+    # com outro conteúdo ganha um pedaço do SHA no nome, senão um apaga o outro.
+    name = checked["filename"]
+    taken = {
+        art.get("dest"): art.get("sha256")
+        for group in ((catalog or {}).get("models") or {}).values()
+        for entry in group.values() for art in entry.get("artifacts") or []
+    }
+    if taken.get(f"{folder}/{name}") not in (None, checked["sha256"]):
+        stem, dot, ext = name.rpartition(".")
+        name = f"{stem}-{checked['sha256'][:8]}{dot}{ext}"
+        checked["filename"] = name
     art = {
         "role": role,
-        "filename": checked["filename"],
-        "dest": f"{folder}/{checked['filename']}",
+        "filename": name,
+        "dest": f"{folder}/{name}",
         "url": checked["url"],
         "sha256": checked["sha256"],
     }
@@ -353,7 +365,8 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
             if folder not in _FOLDERS:
                 raise GameError.bad_request(
                     "validation_error", f"pasta de modelo desconhecida: {folder}")
-            artifacts.append(_artifact(folder.rstrip("s"), f"models/{folder}", _checked_file(item)))
+            artifacts.append(_artifact(
+                folder.rstrip("s"), f"models/{folder}", _checked_file(item), catalog))
         template = models["image"][_TEMPLATES[("image", "flux2_klein")]]
         nodes = []
         for node in body.get("nodes") or []:
@@ -375,7 +388,7 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
         base_id = _slug(label or artifacts[0]["filename"])
     else:
         checked = _checked_file(body.get("file"))
-        base_id = _slug(checked["filename"])
+        base_id = _slug(label or checked["filename"])
         if family == "checkpoint":
             template = models["image"][_TEMPLATES[("image", "flux2_klein")]]
             sampling = dict(CHECKPOINT_DEFAULTS)
@@ -383,7 +396,7 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
                 sampling.update(_CHECKPOINT_FAST)
             entry = {
                 "engine": "checkpoint",
-                "artifacts": [_artifact("checkpoint", "models/checkpoints", checked)],
+                "artifacts": [_artifact("checkpoint", "models/checkpoints", checked, catalog)],
                 "dependencies": [template["dependencies"][0]],
                 "service": copy.deepcopy(template["service"]),
                 "checkpoint": {"checkpoint": checked["filename"], **sampling},
@@ -392,7 +405,7 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
             entry = copy.deepcopy(models[kind][_TEMPLATES[(kind, family)]])
             role = _MAIN_ROLE[family]
             old = next(art for art in entry["artifacts"] if art.get("role") == role)
-            new = _artifact(role, posixpath.dirname(old["dest"]), checked)
+            new = _artifact(role, posixpath.dirname(old["dest"]), checked, catalog)
             entry["artifacts"] = [
                 new if art is old else art for art in entry["artifacts"]
                 # O projetor de visão é do GGUF do molde, não do que foi escolhido.
@@ -465,7 +478,7 @@ def add_lora(conn: sqlite3.Connection, model_id: str, body: dict) -> str:
     entry["loras"] = loras
     entry["artifacts"] = [
         art for art in entry["artifacts"] if art.get("filename") != checked["filename"]
-    ] + [_artifact("lora", "models/loras", checked)]
+    ] + [_artifact("lora", "models/loras", checked, settings_store.runtime_catalog(conn))]
     settings_store.save_user_model(conn, "image", target, entry)
     _reapply(conn, "image", model_id, target)
     return target
