@@ -28,9 +28,10 @@ _IMAGE_SECONDS_T4 = {"flux2_klein": 14, "z_image_turbo": 40, "qwen": 60, "checkp
 _VIDEO_SECONDS_T4 = {"ltxv": 80, "wan": 420, "h3": 260}
 RATINGS = ("excelente", "bom", "ruim", "pessimo")
 # Voz. O OmniVoice carrega o modelo a cada fala: o tempo é carregar (por GB)
-# mais gerar (que escala com a placa). Calibrado numa L4.
-_TTS_LOAD_S_PER_GB = 1.5
-_TTS_SPEECH_S_T4 = 9.0
+# mais gerar (que escala com a placa). Medido numa L4: Q8, frase de 4 s de
+# áudio em 2,7 s; Whisper small, 10 s de fala em 0,47 s. O resto é proporção.
+_TTS_LOAD_S_PER_GB = 1.0
+_TTS_SPEECH_S_T4 = 3.0
 
 
 def _bits(filename: str) -> float:
@@ -105,7 +106,7 @@ def voice_tts(entry: dict, gpu: dict) -> dict:
     """Fala e clonagem: o mesmo modelo faz as duas."""
     size = _tts_gb(entry)
     seconds = size * _TTS_LOAD_S_PER_GB + _TTS_SPEECH_S_T4 / gpu["speed"]
-    rating = _worse(_rate(seconds, (5, 9, 16), higher_is_better=False),
+    rating = _worse(_rate(seconds, (3, 6, 12), higher_is_better=False),
                     str(entry.get("quality") or "bom"))
     return {"need_gb": round(size * 1.15 + 0.5, 1),
             "speed": f"cerca de {seconds:.0f} s por fala curta",
@@ -114,7 +115,7 @@ def voice_tts(entry: dict, gpu: dict) -> dict:
 
 def voice_stt(entry: dict, gpu: dict) -> dict:
     seconds = float(entry.get("t4_seconds") or 1.0) / gpu["speed"]
-    rating = _worse(_rate(seconds, (1.0, 2.5, 5.0), higher_is_better=False),
+    rating = _worse(_rate(seconds, (1.5, 3.5, 7.0), higher_is_better=False),
                     str(entry.get("quality") or "bom"))
     return {"need_gb": float(entry.get("vram_gb") or 0),
             "speed": f"cerca de {seconds:.1f} s para ouvir 10 s de fala".replace(".", ","),
