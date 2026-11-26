@@ -312,6 +312,8 @@ export default function RuntimeSettings({
   onDownload,
   onLibraryChange,
   onRefresh,
+  imageProvider,
+  onUseComfy,
   inputCls,
   labelCls,
 }) {
@@ -428,6 +430,17 @@ export default function RuntimeSettings({
               <>Colab não conectado. Esta máquina atende até o notebook se registrar, e volta a atender se ele cair.</>
             )}
           </p>
+
+          {imageProvider && imageProvider !== 'comfyui' && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-danger-800 bg-danger-950/60 px-4 py-3 text-xs text-danger-300">
+              <p className="min-w-0 flex-1">
+                Hoje as imagens saem por outro provedor ({imageProvider}), escolhido na aba Geração de imagem. Os modelos de imagem e vídeo desta tela só valem com o ComfyUI.
+              </p>
+              <button type="button" onClick={onUseComfy} className="min-h-10 rounded-xl border border-danger-800 px-3 py-1.5 font-semibold">
+                Usar o ComfyUI
+              </button>
+            </div>
+          )}
 
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Onde roda</h3>

@@ -670,6 +670,16 @@ export default function Settings() {
     }
   }
 
+  const useComfyForImages = async () => {
+    try {
+      const saved = await api.putImageSettings({ provider: 'comfyui' })
+      setImageForm((prev) => ({ ...prev, ...saved, provider: 'comfyui', openai_api_key: '' }))
+      toast('As imagens agora saem pelo ComfyUI.', 'ok')
+    } catch (e) {
+      toast('Não consegui trocar o provedor: ' + e.message)
+    }
+  }
+
   // Biblioteca mudou: recarrega o catálogo e marca o modelo no formulário.
   // Quando a edição foi no modelo em uso, o servidor já a aplicou.
   const handleLibraryChange = async (kind, id) => {
@@ -1745,6 +1755,8 @@ export default function Settings() {
                   onDownload={handleDownloadNotebook}
                   onLibraryChange={handleLibraryChange}
                   onRefresh={refreshRuntimeStatus}
+                  imageProvider={imageForm.provider}
+                  onUseComfy={useComfyForImages}
                   inputCls={inputCls}
                   labelCls={labelCls}
                 />
