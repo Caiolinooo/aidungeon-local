@@ -278,3 +278,23 @@ def test_voice_routes_are_for_the_admin(client, auth_token):
              client.put("/api/voice-runtime", json={"bundle": "leve"}).status_code,
              client.post("/api/voice-runtime/install", json={}).status_code}
     assert codes <= {401, 403}
+
+
+def test_notebook_tells_the_game_its_gpu_before_downloading(client):
+    """A API do Colab não informa a memória da placa: o notebook informa no primeiro minuto."""
+    from app import auth as auth_core
+    from conftest import TEST_AUTH_SECRET
+    token = auth_core.make_runtime_token(TEST_AUTH_SECRET)
+    report = {"hardware": {"gpu_name": "NVIDIA A100-SXM4-80GB", "vram_total_mib": 81920}}
+    # Jogador comum não informa hardware; só o admin ou o token do notebook.
+    assert client.post("/api/runtime/hardware", json=report).status_code == 403
+    client.headers["Authorization"] = f"Bearer {token}"
+    assert client.post("/api/runtime/hardware", json=report).json() == {"gpu": "A100"}
+    with db.session() as conn:
+        assert settings_store._get_override(conn, "colab.gpu_vram") == {"A100": 80.0}
+    # Placa desconhecida ou relato torto não grava nada.
+    assert client.post("/api/runtime/hardware", json={"hardware": {"gpu_name": "?"}}).json() == {"gpu": ""}
+    from app import runtime_provisioning
+    cell = runtime_provisioning._hardware_cell()
+    compile(cell, "hardware", "exec")
+    assert "/api/runtime/hardware" in cell

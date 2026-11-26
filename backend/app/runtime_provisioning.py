@@ -790,6 +790,23 @@ def _hardware_cell() -> str:
         "except ValueError as exc:\n"
         "    raise SystemExit(str(exc)) from None\n"
         "print(\"hardware ok\", hardware)\n"
+        "# Diz ao jogo qual placa veio antes de baixar os modelos: a estimativa da\n"
+        "# tela troca a memória de tabela pela real. Falhar aqui não impede nada.\n"
+        "if VARIABLES.get(\"project_url\") and AIDUNGEON_TOKEN:\n"
+        "    import json\n"
+        "    import urllib.request\n"
+        "    base = VARIABLES[\"project_url\"].rstrip(\"/\")\n"
+        "    if base.endswith(VARIABLES[\"register_path\"]):\n"
+        "        base = base[:-len(VARIABLES[\"register_path\"])]\n"
+        "    try:\n"
+        "        urllib.request.urlopen(urllib.request.Request(\n"
+        "            base + \"/api/runtime/hardware\",\n"
+        "            data=json.dumps({\"hardware\": hardware}).encode(\"utf-8\"),\n"
+        "            headers={\"Authorization\": \"Bearer \" + AIDUNGEON_TOKEN,\n"
+        "                     \"Content-Type\": \"application/json\"},\n"
+        "            method=\"POST\"), timeout=20).close()\n"
+        "    except Exception as exc:\n"
+        "        print(\"aviso: não avisei o jogo da placa:\", exc.__class__.__name__)\n"
     )
 
 

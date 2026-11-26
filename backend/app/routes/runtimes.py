@@ -286,6 +286,18 @@ def _require_registrar(request: Request) -> None:
     access.require_admin(auth.require_auth(request))
 
 
+class RuntimeHardware(BaseModel):
+    hardware: dict[str, Any] = Field(default_factory=dict)
+
+
+@register_router.post("/runtime/hardware", dependencies=[Depends(_require_registrar)])
+def post_runtime_hardware(body: RuntimeHardware) -> dict:
+    """O notebook diz qual placa recebeu logo no começo, antes de baixar os
+    modelos: a estimativa da tela passa a usar a memória real dela."""
+    with db.session() as conn:
+        return {"gpu": settings_store.learn_gpu_vram(conn, body.hardware)}
+
+
 @register_router.post("/runtime/register", dependencies=[Depends(_require_registrar)])
 def post_runtime_register(body: RuntimeRegistration,
                           transport: Any = Depends(get_http_transport)) -> dict:

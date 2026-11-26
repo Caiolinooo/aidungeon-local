@@ -1336,6 +1336,22 @@ def apply_runtime_update(conn: sqlite3.Connection, update: dict) -> dict:
     return effective_runtime_settings(conn)
 
 
+def learn_gpu_vram(conn: sqlite3.Connection, hardware: dict) -> str:
+    """Guarda a VRAM real da placa que o Colab entregou: vale mais que a de
+    tabela (a A100 vem com 40 ou 80 GB) e a API do Colab não a informa.
+    Devolve o nome da placa reconhecida."""
+    from app import gpu_estimate
+    gpu_name, vram_mib = str(hardware.get("gpu_name") or ""), hardware.get("vram_total_mib")
+    known = next((key for key in gpu_estimate.GPUS if key in gpu_name.replace(" ", "")), "")
+    if known and isinstance(vram_mib, (int, float)) and not isinstance(vram_mib, bool) and vram_mib > 0:
+        learned = _get_override(conn, "colab.gpu_vram")
+        learned = dict(learned) if isinstance(learned, dict) else {}
+        learned[known] = round(vram_mib / 1024, 1)
+        _set_override(conn, "colab.gpu_vram", learned)
+        return known
+    return ""
+
+
 def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
     """Confere os modelos, grava o Colab e aplica a URL só no placement Colab."""
     current = effective_runtime_settings(conn)
@@ -1371,16 +1387,8 @@ def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
             "validation_error", "colab comfyui endpoint is required when comfyui placement is colab")
     _set_override(conn, "runtime.registration.endpoints",
                   {"llm": colab_llm, "comfyui": colab_comfy})
-    from app import gpu_estimate, notify
-    # A VRAM real da placa que se registrou vale mais que a de tabela (a A100
-    # do Colab vem com 40 ou 80 GB). Serve às estimativas da próxima escolha.
-    gpu_name, vram_mib = str(hardware.get("gpu_name") or ""), hardware.get("vram_total_mib")
-    known = next((key for key in gpu_estimate.GPUS if key in gpu_name.replace(" ", "")), "")
-    if known and isinstance(vram_mib, (int, float)) and vram_mib > 0:
-        learned = _get_override(conn, "colab.gpu_vram")
-        learned = dict(learned) if isinstance(learned, dict) else {}
-        learned[known] = round(vram_mib / 1024, 1)
-        _set_override(conn, "colab.gpu_vram", learned)
+    from app import notify
+    learn_gpu_vram(conn, hardware)
     serving = [name for name, url, key in (("narrador", colab_llm, "llm"),
                                            ("imagem e vídeo", colab_comfy, "comfyui"))
                if url and placements[key] == "colab"]
