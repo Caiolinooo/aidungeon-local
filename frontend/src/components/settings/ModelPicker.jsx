@@ -429,7 +429,7 @@ export default function ModelPicker({
           library?.comfyui_root ? (
             <button type="button" disabled={installing} onClick={() => onInstall(kind, value)} className="flex min-h-10 items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary disabled:opacity-50">
               <Download className="h-3.5 w-3.5" />
-              Baixar nesta máquina o que falta
+              {entry.engine === 'custom' ? 'Baixar nesta máquina e instalar os nodes' : 'Baixar nesta máquina o que falta'}
             </button>
           ) : (
             <span className="text-[11px] text-muted">Pasta do ComfyUI não encontrada nesta máquina: defina COMFYUI_ROOT para baixar por aqui.</span>
@@ -446,7 +446,14 @@ export default function ModelPicker({
             {install.file_bytes ? ` · ${Math.floor(((install.file_bytes_done || 0) / install.file_bytes) * 100)}%` : ''}
           </span>
         )}
-        {install?.model === value && install.state === 'done' && <span className="text-[11px] text-secondary">Arquivos nesta máquina.</span>}
+        {install?.model === value && install.state === 'done' && (
+          <span className="text-[11px] text-secondary">
+            Arquivos nesta máquina.
+            {install.nodes?.length > 0 && (install.restarted
+              ? ` Nodes instalados: ${install.nodes.join(', ')}. O ComfyUI está reiniciando; aguarde uns 30 segundos.`
+              : ` Nodes instalados: ${install.nodes.join(', ')}. Reinicie o ComfyUI para carregá-los.`)}
+          </span>
+        )}
         {install?.model === value && install.state === 'error' && <span role="alert" className="text-[11px] text-danger-300">Download falhou: {install.error}</span>}
       </div>
     </section>

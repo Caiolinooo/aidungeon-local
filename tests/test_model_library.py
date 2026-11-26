@@ -353,3 +353,49 @@ def test_reference_photo_goes_through_flux2_and_changing_the_model_picks_comfyui
     resp = admin.get("/api/runtime/notebook", params={"project_url": "https://play.example"})
     provision = next("".join(c["source"]) for c in resp.json()["cells"] if c["id"] == "provision")
     assert "flux-2-klein-4b-fp8.safetensors" in provision
+
+
+def test_local_install_adds_the_nodes_of_a_custom_workflow(admin, tmp_path, monkeypatch):
+    root = tmp_path / "ComfyUI"
+    (root / "models" / "checkpoints").mkdir(parents=True)
+    (root / "models" / "checkpoints" / "x.safetensors").write_bytes(b"x" * 1048576)
+    monkeypatch.setenv("COMFYUI_ROOT", str(root))
+    model_id = admin.post("/api/models/library", json={
+        "kind": "image", "family": "custom", "label": "Meu fluxo",
+        "graph": {"1": {"class_type": "X", "inputs": {"text": "{{prompt}}"}}},
+        "files": [{**_file("x.safetensors"), "folder": "checkpoints"}],
+        "nodes": [{"git_url": "https://github.com/a/ComfyUI-Extra.git", "git_ref": "abc123"}],
+    }).json()["id"]
+    ran, restarted = [], []
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        ran.append(cmd[:3])
+        if cmd[1] == "clone":
+            (root / "custom_nodes" / "ComfyUI-Extra" / ".git").mkdir(parents=True)
+        return type("Done", (), {"stdout": "new-head\n"})()
+
+    monkeypatch.setattr(model_library.subprocess, "run", fake_run)
+    monkeypatch.setattr(model_library, "_restart_comfy", lambda path: restarted.append(path) or True)
+    admin.post("/api/models/install", json={"kind": "image", "id": model_id})
+    for _ in range(100):
+        state = admin.get("/api/models/install").json()
+        if state["state"] != "running":
+            break
+        time.sleep(0.02)
+    # O arquivo já estava no disco: só o node entra, no commit pedido, e o ComfyUI reinicia.
+    assert state == {"state": "done", "model": model_id, "total": 0,
+                     "nodes": ["ComfyUI-Extra"], "restarted": True}
+    assert ["git", "clone", "https://github.com/a/ComfyUI-Extra.git"] in ran
+    assert ["git", "fetch", "origin"] in ran and ["git", "checkout", "--detach"] in ran
+    assert restarted == [root]
+
+    # Modelo do catálogo fixo não instala node nem reinicia nada nesta máquina.
+    ran.clear()
+    restarted.clear()
+    monkeypatch.setattr(rp, "fetch_pinned", lambda *args, **kwargs: None)
+    admin.post("/api/models/install", json={"kind": "image", "id": "z_image_turbo"})
+    for _ in range(100):
+        if admin.get("/api/models/install").json()["state"] != "running":
+            break
+        time.sleep(0.02)
+    assert ran == [] and restarted == []

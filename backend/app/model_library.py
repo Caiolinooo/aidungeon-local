@@ -22,7 +22,9 @@ import os
 import posixpath
 import re
 import shutil
+import signal
 import sqlite3
+import subprocess
 import threading
 import urllib.parse
 from pathlib import Path
@@ -575,7 +577,65 @@ def install_status() -> dict:
     return status
 
 
-def _run_install(root: Path, model: str, files: list[dict], keys: dict) -> None:
+def _extra_nodes(entry: dict) -> list[dict]:
+    """Nodes que o usuário listou no fluxo próprio. Os dos modelos do catálogo
+    fixo não entram: esta máquina já roda com os dela."""
+    if entry.get("engine") != "custom":
+        return []
+    return [dep for dep in entry.get("dependencies") or []
+            if dep.get("git_url") and dep.get("git_ref")
+            and _SAFE_NAME.fullmatch(str(dep.get("name") or ""))]
+
+
+def _install_nodes(root: Path, nodes: list[dict]) -> list[str]:
+    """Clona cada node no commit pedido e instala o requirements.txt dele no
+    Python do ComfyUI. Devolve os nomes que mudaram."""
+    changed = []
+    python = root / "venv" / "bin" / "python"
+    for dep in nodes:
+        node = root / "custom_nodes" / dep["name"]
+
+        def head() -> str:
+            if not (node / ".git").is_dir():
+                return ""
+            return subprocess.run(["git", "rev-parse", "HEAD"], cwd=node, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+
+        before = head()
+        if not before:
+            subprocess.run(["git", "clone", dep["git_url"], str(node)], check=True, timeout=900)
+        subprocess.run(["git", "fetch", "origin", dep["git_ref"]], cwd=node, check=True, timeout=900)
+        subprocess.run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=node, check=True)
+        if head() == before:
+            continue
+        changed.append(dep["name"])
+        if (node / "requirements.txt").is_file() and python.is_file():
+            subprocess.run([str(python), "-m", "pip", "install", "-r", "requirements.txt"],
+                           cwd=node, check=True, timeout=1800)
+    return changed
+
+
+def _restart_comfy(root: Path) -> bool:
+    """Node novo só carrega com o ComfyUI reiniciado. Sob systemd o processo é
+    morto e o serviço sobe de novo sozinho; fora dele, fica para o usuário."""
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if (proc / "cwd").resolve() != root.resolve():
+                continue
+            if b"main.py" not in (proc / "cmdline").read_bytes():
+                continue
+            if ".service" not in (proc / "cgroup").read_text():
+                return False
+            # Restart=on-failure só reage a morte anormal: SIGTERM não reinicia.
+            os.kill(int(proc.name), signal.SIGKILL)
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def _run_install(root: Path, model: str, files: list[dict], keys: dict,
+                 nodes: list[dict] | None = None) -> None:
     from app import runtime_provisioning
     try:
         for index, art in enumerate(files):
@@ -590,9 +650,17 @@ def _run_install(root: Path, model: str, files: list[dict], keys: dict) -> None:
                 art["url"], str(dest), art["sha256"], retries=3,
                 expected_bytes=art.get("bytes"),
                 auth_header=f"Bearer {secret}" if secret else None)
+        done = {"state": "done", "model": model, "total": len(files)}
+        if nodes:
+            with _install_lock:
+                _install.update({"file": "nodes do fluxo", "done": len(files)})
+            changed = _install_nodes(root, nodes)
+            if changed:
+                done["nodes"] = changed
+                done["restarted"] = _restart_comfy(root)
         with _install_lock:
             _install.clear()
-            _install.update({"state": "done", "model": model, "total": len(files)})
+            _install.update(done)
     except Exception as exc:  # a thread não tem quem receba a exceção
         with _install_lock:
             _install.clear()
@@ -620,9 +688,10 @@ def start_install(conn: sqlite3.Connection, kind: str, model_id: str) -> dict:
         if _install.get("state") == "running":
             raise GameError.conflict("install_running", "já há um download em andamento")
         _install.clear()
-        _install.update({"state": "running" if files else "done", "model": model_id,
-                         "total": len(files), "done": 0})
-    if files:
+        nodes = _extra_nodes(entry)
+        _install.update({"state": "running" if files or nodes else "done",
+                         "model": model_id, "total": len(files), "done": 0})
+    if files or nodes:
         threading.Thread(target=_run_install, daemon=True,
-                         args=(root, model_id, files, download_keys(conn))).start()
+                         args=(root, model_id, files, download_keys(conn), nodes)).start()
     return install_status()
