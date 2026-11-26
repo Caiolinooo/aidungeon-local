@@ -412,13 +412,17 @@ def stop(conn: sqlite3.Connection, name: str = "", *, transport: Any = None) -> 
     `name` serve para a sessão que ficou de antes de o jogo reiniciar: o estado
     daqui é só memória, mas a API lista o que continua ligado na conta.
     """
-    name = name or status().get("runtime") or ""
+    tracked = status().get("runtime") or ""
+    other = bool(name) and name != tracked
+    name = name or tracked
     if name and not name.startswith("runtimes/"):
         raise GameError.bad_request("validation_error", "sessão inválida")
     if name:
         _call(conn, "DELETE", f"v1beta/{name}", params={"allowMissing": "true"},
               transport=transport)
-    with _lock:
-        _state.clear()
-        _state.update({"state": "off"})
+    if not other:
+        # Desligar uma sessão solta pelo nome não mexe na que o jogo acompanha.
+        with _lock:
+            _state.clear()
+            _state.update({"state": "off"})
     return status()

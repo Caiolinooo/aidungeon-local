@@ -65,7 +65,7 @@ class Google:
         if path == "/v1/operations/1":
             return httpx.Response(200, json={"name": "operations/1", "done": True,
                                              "response": {"name": "runtimes/r-1"}})
-        if path == "/v1beta/runtimes/r-1" and request.method == "DELETE":
+        if path.startswith("/v1beta/runtimes/") and request.method == "DELETE":
             return httpx.Response(200, json={})
         if path == "/v1beta/runtimes/r-1":
             return httpx.Response(200, json={"name": "runtimes/r-1", "connectionInfo": {
@@ -188,6 +188,9 @@ def test_start_runs_the_notebook_cells_on_the_session_and_stop_deletes_it(admin,
     colab_api._set(state="on", runtime="runtimes/r-1")
     assert admin.post("/api/colab/start", json={
         **spec, "project_url": "https://play.example"}).status_code == 409
+    # Desligar uma sessão solta da conta não derruba a que o jogo acompanha.
+    assert admin.post("/api/colab/stop", json={"name": "runtimes/r-outra"}).json()["state"] == "on"
+    assert ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-outra") in google.calls
     assert admin.post("/api/colab/stop", json={}).json() == {"state": "off"}
     assert ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1") in google.calls
     assert admin.post("/api/colab/stop", json={"name": "../x"}).status_code == 400
