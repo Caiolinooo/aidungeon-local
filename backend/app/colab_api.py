@@ -36,6 +36,9 @@ SCOPE = "https://www.googleapis.com/auth/colaboratory"
 REDIRECT = "http://localhost:8765"
 PROXY_HEADER = "X-Colab-Runtime-Proxy-Token"
 _TIMEOUT = 30.0
+# "Sem máquina livre" costuma passar em um ou dois minutos: o jogo insiste antes de desistir.
+_CREATE_TRIES = 6
+_RETRY_WAIT_S = 40
 _LOG_LINES = 60
 
 _lock = threading.Lock()
@@ -331,17 +334,25 @@ def _failure(op: dict) -> str:
 
 def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any) -> None:
     try:
-        with db.session() as conn:
-            op = _call(conn, "POST", "v1beta/runtimes", body={"runtimeSpec": spec},
-                       params={"requestId": str(uuid.uuid4())}, transport=transport)
-            deadline = time.time() + 600
-            while not op.get("done"):
-                if time.time() > deadline:
-                    raise RuntimeError("o Colab não entregou a sessão em 10 minutos")
-                time.sleep(3)
-                op = _call(conn, "GET", f"v1/{op['name']}", transport=transport)
-        if op.get("error"):
-            raise RuntimeError(_failure(op))
+        for attempt in range(1, _CREATE_TRIES + 1):
+            with db.session() as conn:
+                op = _call(conn, "POST", "v1beta/runtimes", body={"runtimeSpec": spec},
+                           params={"requestId": str(uuid.uuid4())}, transport=transport)
+                deadline = time.time() + 600
+                while not op.get("done"):
+                    if time.time() > deadline:
+                        raise RuntimeError("o Colab não entregou a sessão em 10 minutos")
+                    time.sleep(3)
+                    op = _call(conn, "GET", f"v1/{op['name']}", transport=transport)
+            if not op.get("error"):
+                break
+            reasons = {str(item.get("reason")) for item in op["error"].get("details") or []}
+            if "NO_RUNTIMES" not in reasons or attempt == _CREATE_TRIES:
+                raise RuntimeError(_failure(op))
+            _set(attempt=attempt + 1, attempts=_CREATE_TRIES)
+            time.sleep(_RETRY_WAIT_S)
+            if status().get("state") != "creating":  # desligaram enquanto esperava
+                return
         name = (op.get("response") or {}).get("name") or ""
         _set(runtime=name, state="starting", cell="", step=0, steps=len(cells))
 

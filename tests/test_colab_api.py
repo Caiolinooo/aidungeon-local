@@ -201,8 +201,12 @@ def test_no_machine_available_is_said_in_plain_words(admin, monkeypatch):
         colab_api.save_client(conn, "id-123.apps.googleusercontent.com", "secret-123456")
         colab_api.save_refresh_token(conn, "rt-123456")
     _use_colab(admin)
+    monkeypatch.setattr(colab_api, "_RETRY_WAIT_S", 0)
     admin.post("/api/colab/start", json={
         "variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD",
         "project_url": "https://play.example"})
     state = _wait(admin, lambda state: state["state"] == "error")
     assert state["state"] == "error" and "não tem máquina livre" in state["error"]
+    # Insistiu antes de desistir.
+    creates = [call for call in google.calls if call == ("POST", "colaboratory.googleapis.com", "/v1beta/runtimes")]
+    assert len(creates) == colab_api._CREATE_TRIES
