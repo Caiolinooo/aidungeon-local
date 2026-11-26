@@ -385,22 +385,25 @@ export default function RuntimeSettings({
     }
   }
 
+  // SettingField aceita um único filho (ele recebe o id do rótulo): o botão fica fora.
   const keyField = (name, label, hint) => (
-    <SettingField label={label} labelClassName={labelCls}>
-      <input
-        type="password"
-        autoComplete="off"
-        value={keys[name]}
-        onChange={(e) => setKeys({ ...keys, [name]: e.target.value })}
-        placeholder={library?.keys?.[name] ? 'Salva. Digite outra para trocar.' : hint}
-        className={inputCls}
-      />
+    <div>
+      <SettingField label={label} labelClassName={labelCls}>
+        <input
+          type="password"
+          autoComplete="off"
+          value={keys[name]}
+          onChange={(e) => setKeys({ ...keys, [name]: e.target.value })}
+          placeholder={library?.keys?.[name] ? 'Salva. Digite outra para trocar.' : hint}
+          className={inputCls}
+        />
+      </SettingField>
       {library?.keys?.[name] && (
         <button type="button" disabled={savingKeys} onClick={() => saveKeys({ [name]: '' })} className="mt-1 text-[11px] text-danger-300 underline disabled:opacity-50">
           Apagar a chave salva
         </button>
       )}
-    </SettingField>
+    </div>
   )
 
   return (
