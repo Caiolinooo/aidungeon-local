@@ -389,6 +389,9 @@ def test_registration_tells_the_phone_the_gpu_is_ready(admin, monkeypatch):
     }
     assert admin.post("/api/runtime/register", json=payload).status_code == 200
     assert said == ["Colab pronto (NVIDIA A100-SXM4-80GB). O jogo já usa essa placa para imagem e vídeo."]
+    # A memória real da placa fica guardada para as estimativas.
+    with db.session() as conn:
+        assert json.loads(db.get_setting(conn, "colab.gpu_vram")) == {"A100": 80.0}
     # A batida de cada minuto não avisa de novo.
     assert admin.post("/api/runtime/register", json=payload).status_code == 200
     assert len(said) == 1
