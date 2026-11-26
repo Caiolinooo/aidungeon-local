@@ -422,7 +422,8 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
                     entry[block][role] = checked["filename"]
             if kind == "llm":
                 entry["model_alias"] = checked["filename"]
-                # Só o llama-server do Colab troca de arquivo; o da VM é do serviço dela.
+                # Nesta máquina só entra pela troca de narrador; o `runtime` gravado
+                # aqui não vale: `settings_store.runtime_catalog` põe o de GPU.
                 entry["role"] = "fallback"
     entry["label"] = label or base_id
     entry["user"] = True

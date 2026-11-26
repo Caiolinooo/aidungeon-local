@@ -829,14 +829,21 @@ def _tunnel_cell(norm: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _llama_command(entry: dict, artifacts: list[dict]) -> list[str]:
+# Contexto do llama-server no Colab quando o jogo não informa o dele.
+DEFAULT_LLM_CONTEXT = 32768
+
+
+def _llama_command(entry: dict, artifacts: list[dict],
+                   context: int = DEFAULT_LLM_CONTEXT) -> list[str]:
     weights_paths = [art["dest"] for art in artifacts if art.get("role") == "weights"]
     if len(weights_paths) != 1:
         raise ValueError("LLM no Colab precisa de exatamente um artefato role=weights")
     weights = weights_paths[0]
     mmproj = next((art["dest"] for art in artifacts if art.get("role") == "mmproj"), None)
     runtime = entry["runtime"]
-    before = _bind_argv(list(runtime["argv_before_model"]))
+    # `{context}` é o contexto do jogo: o servidor não pode aceitar menos do que o jogo manda.
+    before = [str(int(context)) if token == "{context}" else token
+              for token in _bind_argv(list(runtime["argv_before_model"]))]
     after = _bind_argv(list(runtime["argv_after_model"]))
     command = ["{binary}", *before, "-m", weights]
     if mmproj:
@@ -845,7 +852,8 @@ def _llama_command(entry: dict, artifacts: list[dict]) -> list[str]:
     return command
 
 
-def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict]) -> str:
+def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
+                    llm_context: int = DEFAULT_LLM_CONTEXT) -> str:
     lines = [
         "import json",
         "import os",
@@ -932,7 +940,7 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict]) -> str:
         entry = catalog["models"]["llm"][norm["models"]["llm"]]
         command = _llama_command(entry, [
             art for art in artifacts if art["dest"].startswith(f"{COLAB_ROOT}/models/llm/")
-        ])
+        ], llm_context)
         lines.extend(_start_llama_lines(entry, command))
     if norm["placements"]["comfyui"] == "colab":
         lines.extend(_start_comfy_lines())
@@ -1173,7 +1181,8 @@ def _local_notice_cell() -> str:
 
 def generate_notebook(config: dict, catalog: dict | None = None, *,
                       register_token: str = "",
-                      download_keys: dict | None = None) -> dict:
+                      download_keys: dict | None = None,
+                      llm_context: int = DEFAULT_LLM_CONTEXT) -> dict:
     """Notebook nbformat 4. Modo local não instala serviço; Colab sobe só o placement colab.
 
     `register_token` e `download_keys` vão escritos no arquivo: são o que deixa
@@ -1197,7 +1206,7 @@ def generate_notebook(config: dict, catalog: dict | None = None, *,
             _code_cell("secrets", _secrets_cell(artifacts, register_token, download_keys)),
             _code_cell("helpers", _helper_source()),
             _code_cell("hardware", _hardware_cell()),
-            _code_cell("provision", _provision_cell(norm, book, artifacts)),
+            _code_cell("provision", _provision_cell(norm, book, artifacts, llm_context)),
             _code_cell("health", _health_cell(norm)),
             _code_cell("tunnel", _tunnel_cell(norm)),
             _code_cell("register", _register_cell(norm)),

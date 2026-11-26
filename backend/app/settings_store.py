@@ -12,6 +12,7 @@ A `api_key` efetiva NUNCA é logada e só sai da API mascarada (`mask_api_key`).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sqlite3
@@ -1110,6 +1111,49 @@ def delete_user_model(conn: sqlite3.Connection, kind: str, model_id: str) -> Non
     _set_override(conn, "runtime.user_models", models)
 
 
+# Opções que só valem para o modelo do narrador desta máquina (MoE e visão).
+_NARRATOR_ONLY_FLAGS = ("-ncmoe", "--moe-cache-mib", "--image-min-tokens")
+
+
+def _user_narrator_runtime(llm_group: dict, entry: dict) -> dict:
+    """Como um GGUF da busca sobe no Colab: a linha de comando do narrador
+    desta máquina (GPU, 5 slots com KV unificado), sem o que é só daquele
+    modelo, e com o contexto que o jogo usa (`{context}`).
+
+    Vale para toda entrada da biblioteca, nova ou antiga: as primeiras foram
+    gravadas com a configuração do modelo reserva, que é de CPU e 8k.
+    """
+    base = next((item for item in llm_group.values()
+                 if not item.get("user") and item.get("role") != "fallback"
+                 and isinstance(item.get("runtime"), dict)), None)
+    if base is None:
+        return entry
+    runtime = copy.deepcopy(base["runtime"])
+
+    def clean(argv: list) -> list:
+        out, skip = [], False
+        for token in argv:
+            if skip:
+                skip = False
+            elif token in _NARRATOR_ONLY_FLAGS:
+                skip = True
+            else:
+                out.append(token)
+        return out
+
+    before = clean(list(runtime.get("argv_before_model") or []))
+    if "-c" in before:
+        before[before.index("-c") + 1] = "{context}"
+    weights = next((str(art.get("filename")) for art in entry.get("artifacts") or []
+                    if art.get("role") == "weights"), "")
+    runtime["argv_before_model"] = before
+    # O jogo chama o modelo pelo nome do arquivo; sem alias o servidor responde pelo caminho.
+    runtime["argv_after_model"] = clean(list(runtime.get("argv_after_model") or [])) + (
+        ["--alias", weights] if weights else [])
+    return {**entry, "runtime": runtime,
+            "dependencies": copy.deepcopy(base.get("dependencies") or [])}
+
+
 def runtime_catalog(conn: sqlite3.Connection) -> dict:
     """Catálogo do arquivo mais a biblioteca. O id do arquivo vence em colisão."""
     catalog = _provisioning().load_catalog()
@@ -1119,7 +1163,10 @@ def runtime_catalog(conn: sqlite3.Connection) -> dict:
     for kind, group in user_models(conn).items():
         bucket = merged["models"].setdefault(kind, {})
         for model_id, entry in group.items():
-            bucket.setdefault(model_id, entry)
+            if model_id in bucket:
+                continue
+            bucket[model_id] = (_user_narrator_runtime(bucket, entry)
+                                if kind == "llm" else entry)
     return merged
 
 

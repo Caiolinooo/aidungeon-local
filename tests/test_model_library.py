@@ -476,3 +476,38 @@ def test_machine_without_the_starter_does_not_offer_the_switch(admin, tmp_path, 
     monkeypatch.setattr(model_library, "NARRATOR_STARTER", tmp_path / "nao-existe")
     assert admin.get("/api/models/library").json()["narrator"]["available"] is False
     assert admin.post("/api/models/narrator", json={"id": "x"}).status_code == 400
+
+
+def test_narrator_from_the_search_runs_on_the_gpu_with_the_games_context(admin):
+    """Visto num Colab real: o GGUF da busca herdava o modelo reserva (CPU, -c 8192)."""
+    admin.put("/api/settings/llm", json={"context_size": 65536})
+    model_id = admin.post("/api/models/library", json={
+        "kind": "llm", "family": "gguf", "label": "Dolphin",
+        "file": _file("dolphin-q8.gguf", "huggingface.co")}).json()["id"]
+    # Entrada antiga, gravada com a linha de comando de CPU: conserta sozinha.
+    with db.session() as conn:
+        stored = settings_store.user_models(conn)
+        stored["llm"][model_id]["runtime"] = {"cuda": False, "port": 1240, "health_path": "/health",
+                                              "env": {"CUDA_VISIBLE_DEVICES": ""},
+                                              "argv_before_model": ["-ngl", "0", "-c", "8192"],
+                                              "argv_after_model": []}
+        settings_store._set_override(conn, "runtime.user_models", stored)
+    entry = admin.get("/api/settings/runtime").json()["catalog"]["models"]["llm"][model_id]
+    assert entry["runtime"]["cuda"] is True and entry["runtime"]["env"] == {}
+    admin.put("/api/settings/runtime", json={
+        "mode": "hybrid", "placements": {"llm": "colab", "comfyui": "local"},
+        "models": {"llm": model_id}})
+    resp = admin.get("/api/runtime/notebook", params={"project_url": "https://play.example"})
+    assert resp.status_code == 200, resp.text
+    provision = next("".join(c["source"]) for c in resp.json()["cells"] if c["id"] == "provision")
+    line = next(l for l in provision.splitlines() if l.startswith("llama_cmd = json.loads("))
+    args = json.loads(eval(line.split("json.loads(", 1)[1].rsplit(")", 1)[0]))
+    # GPU inteira, o dobro do contexto do jogo num KV unificado, e o nome que o jogo usa.
+    assert args[args.index("-c") + 1] == "131072"
+    assert args[args.index("--n-gpu-layers") + 1] == "99"
+    assert "--kv-unified" in args and args[args.index("-np") + 1] == "5"
+    assert args[args.index("--alias") + 1] == "dolphin-q8.gguf"
+    assert args[args.index("-m") + 1].endswith("/models/llm/dolphin-q8.gguf")
+    for gone in ("-ngl", "-ncmoe", "--moe-cache-mib", "--image-min-tokens", "--mmproj"):
+        assert gone not in args
+    assert '"-DGGML_CUDA=ON"' in provision and "CUDA_VISIBLE_DEVICES" not in provision

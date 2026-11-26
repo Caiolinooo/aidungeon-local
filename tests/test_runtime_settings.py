@@ -134,7 +134,7 @@ def _validate(config, catalog=None, require_colab=False):
     }
 
 
-def _notebook(config, catalog=None, register_token="", download_keys=None):
+def _notebook(config, catalog=None, register_token="", download_keys=None, llm_context=0):
     source = json.dumps({"config": config, "catalog": catalog, "token": register_token},
                         ensure_ascii=False)
     return {

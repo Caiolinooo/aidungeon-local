@@ -207,10 +207,14 @@ def runtime_notebook(conn: sqlite3.Connection, project_url: str) -> dict:
         raise GameError.bad_request(
             "validation_error", "project_url is required so Colab can reach this server")
     # As chaves de download entram depois da limpeza: o notebook precisa delas.
+    # Os 5 slots dividem um KV só: o dobro do contexto do jogo deixa uma narração
+    # longa e as leituras auxiliares caberem juntas, como no narrador desta máquina.
+    game_context = int(settings_store.effective_llm_settings(conn)["context_size"])
     return prov.generate_notebook(
         public, catalog,
         register_token=auth.make_runtime_token(auth.auth_config()["secret"]),
-        download_keys=model_library.download_keys(conn))
+        download_keys=model_library.download_keys(conn),
+        llm_context=max(32768, min(262144, 2 * game_context)))
 
 
 # -------------------------------------------------------------- execução
