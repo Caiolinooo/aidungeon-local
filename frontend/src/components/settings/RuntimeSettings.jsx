@@ -3,6 +3,7 @@ import { Download } from 'lucide-react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
 import { SettingField } from './Controls.jsx'
+import ColabPanel from './ColabPanel.jsx'
 import ModelPicker from './ModelPicker.jsx'
 
 const PLACES = [
@@ -510,12 +511,19 @@ export default function RuntimeSettings({
 
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Colab</h3>
+            <ColabPanel
+              disabledReason={allLocal ? 'Ponha o narrador ou a imagem no Colab, acima, e salve.' : dirty ? 'Salve antes de ligar.' : ''}
+              inputCls={inputCls}
+              labelCls={labelCls}
+              onChanged={onRefresh}
+            />
+            <p className="text-[11px] font-semibold text-muted">Ou rode você mesmo no site do Colab:</p>
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={onDownload}
                 disabled={notebookDisabled}
-                className="flex min-h-11 items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
+                className="flex min-h-11 items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-4 py-2 text-xs font-semibold text-secondary transition hover:text-primary disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>{downloading ? 'Gerando notebook…' : 'Gerar notebook (.ipynb)'}</span>

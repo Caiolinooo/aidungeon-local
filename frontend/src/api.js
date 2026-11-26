@@ -401,6 +401,17 @@ export const api = {
   putModelKeys: (payload) => request('/models/keys', { method: 'PUT', body: payload }),
   installModel: (kind, id) => request('/models/install', { method: 'POST', body: { kind, id } }),
   getModelInstall: () => request('/models/install'),
+  // Colab ligado pela API do Google (admin).
+  getColab: () => request('/colab'),
+  getColabStatus: () => request('/colab/status'),
+  putColabClient: (payload) => request('/colab/client', { method: 'PUT', body: payload }),
+  getColabAuthUrl: () => request('/colab/auth-url'),
+  finishColabAuth: (pasted) => request('/colab/auth', { method: 'POST', body: { pasted } }),
+  disconnectColab: () => request('/colab/auth', { method: 'DELETE' }),
+  startColab: (spec) => request('/colab/start', {
+    method: 'POST', body: { ...spec, project_url: window.location.origin },
+  }),
+  stopColab: (name = '') => request('/colab/stop', { method: 'POST', body: { name } }),
   putRuntimeSettings: (payload) => request('/settings/runtime', { method: 'PUT', body: payload }),
   // .ipynb autenticado. <a href> não envia Bearer — mesmo padrão de downloadExport.
   // text/html aqui é o fallback SPA, não um notebook.

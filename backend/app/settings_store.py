@@ -72,6 +72,8 @@ OVERRIDE_KEYS = (
     # biblioteca de modelos escolhidos na busca e as chaves de download
     "runtime.user_models", "runtime.comfyui_root",
     "downloads.civitai_api_key", "downloads.huggingface_token",
+    # conta Google que liga o Colab pela API
+    "colab.client_id", "colab.client_secret", "colab.refresh_token", "colab.oauth_state",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")

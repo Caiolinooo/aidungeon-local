@@ -14,8 +14,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
-from app import access, auth, db, llm_client, model_library, settings_store
+from app import access, auth, colab_api, db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
@@ -94,27 +95,7 @@ def get_runtime_notebook(project_url: str = "",
                          info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
     prov = _provisioning()
     with db.session() as conn:
-        config = settings_store.effective_runtime_settings(conn)
-        if not config.get("project_url"):
-            # Sem URL salva, o Colab chama de volta o endereço de onde o admin baixou.
-            config = {**config, "project_url": project_url}
-        catalog = _catalog(conn)
-        try:
-            normalized = prov.validate_runtime(config, catalog, require_colab=True)
-        except ValueError as exc:
-            raise GameError.bad_request("validation_error", str(exc)) from exc
-        if not isinstance(normalized, dict):
-            raise GameError.bad_request("validation_error", "runtime config was rejected")
-        public = settings_store.scrub_public(normalized, conn)
-        if not public.get("project_url"):
-            raise GameError.bad_request(
-                "validation_error", "project_url is required so Colab can reach this server")
-        # As chaves de download entram depois da limpeza: o arquivo precisa delas.
-        notebook = prov.generate_notebook(
-            public, catalog,
-            register_token=auth.make_runtime_token(auth.auth_config()["secret"]),
-            download_keys=model_library.download_keys(conn))
-        raw = prov.notebook_bytes(notebook)
+        raw = prov.notebook_bytes(colab_api.runtime_notebook(conn, project_url))
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
         payload = settings_store.scrub_bytes(bytes(raw), conn)
@@ -123,6 +104,87 @@ def get_runtime_notebook(project_url: str = "",
     }
     return Response(content=payload, media_type="application/x-ipynb+json",
                     headers=headers)
+
+
+class ColabClient(BaseModel):
+    """String vazia apaga. Campo omitido fica como está."""
+    client_id: str | None = Field(default=None, max_length=200)
+    client_secret: str | None = Field(default=None, max_length=200)
+
+
+class ColabAuth(BaseModel):
+    pasted: str = Field(min_length=4, max_length=2000)
+
+
+class ColabStart(BaseModel):
+    variant: str = Field(max_length=40)
+    accelerator: str = Field(max_length=40)
+    shape: str = Field(max_length=40)
+    project_url: str = Field(default="", max_length=500)
+
+
+class ColabStop(BaseModel):
+    name: str = Field(default="", max_length=120)
+
+
+@router.get("/colab")
+def get_colab(info: auth.AuthInfo = Depends(access.require_admin),
+              transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        return colab_api.overview(conn, transport=transport)
+
+
+@router.put("/colab/client")
+def put_colab_client(body: ColabClient,
+                     info: auth.AuthInfo = Depends(access.require_admin),
+                     transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        colab_api.save_client(conn, body.client_id, body.client_secret)
+        return colab_api.overview(conn, transport=transport)
+
+
+@router.get("/colab/auth-url")
+def get_colab_auth_url(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        return {"url": colab_api.auth_url(conn), "redirect": colab_api.REDIRECT}
+
+
+@router.post("/colab/auth")
+def post_colab_auth(body: ColabAuth,
+                    info: auth.AuthInfo = Depends(access.require_admin),
+                    transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        colab_api.finish_auth(conn, body.pasted, transport=transport)
+        return colab_api.overview(conn, transport=transport)
+
+
+@router.delete("/colab/auth")
+def delete_colab_auth(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        colab_api.disconnect(conn)
+        return colab_api.overview(conn)
+
+
+@router.post("/colab/start")
+def post_colab_start(body: ColabStart,
+                     info: auth.AuthInfo = Depends(access.require_admin),
+                     transport: Any = Depends(get_http_transport)) -> dict:
+    spec = {"variant": body.variant, "accelerator": body.accelerator, "shape": body.shape}
+    with db.session() as conn:
+        return colab_api.start(conn, spec, body.project_url, transport=transport)
+
+
+@router.post("/colab/stop")
+def post_colab_stop(body: ColabStop,
+                    info: auth.AuthInfo = Depends(access.require_admin),
+                    transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        return colab_api.stop(conn, body.name, transport=transport)
+
+
+@router.get("/colab/status")
+def get_colab_status(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    return colab_api.status()
 
 
 def _require_registrar(request: Request) -> None:
