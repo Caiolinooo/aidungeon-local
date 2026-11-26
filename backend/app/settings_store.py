@@ -975,13 +975,24 @@ def _apply_routing(conn: sqlite3.Connection, config: dict) -> None:
     """A URL escolhida entra no llm e no Comfy mesmo quando vem vazia.
 
     Vazio não cai de volta no outro lado: o health do serviço selecionado fecha.
+    Se a URL do LLM mudar de host, sincroniza a api_key com o perfil daquele host
+    (ou volta para LLM_API_KEY do .env) para não enviar chave de nuvem ao llama-server local.
     """
     placements = _active_placements(config)
     endpoints = config["endpoints"]
     llm_key = "local_llm" if placements["llm"] == "local" else "colab_llm"
     comfy_key = "local_comfyui" if placements["comfyui"] == "local" else "colab_comfyui"
-    _set_override(conn, "llm.base_url", _endpoint_value(endpoints, llm_key))
+    new_llm_url = _endpoint_value(endpoints, llm_key)
+    prev_llm_url = str(_get_override(conn, "llm.base_url") or "").strip()
+    _set_override(conn, "llm.base_url", new_llm_url)
     _set_override(conn, "image.comfyui_base_url", _endpoint_value(endpoints, comfy_key))
+    if new_llm_url and prev_llm_url and prev_llm_url.rstrip("/") != new_llm_url.rstrip("/"):
+        from app import provider_profiles
+        matched_key, _ = provider_profiles.find_api_key_for_url(conn, "llm", new_llm_url)
+        if matched_key:
+            _set_override(conn, "llm.api_key", matched_key)
+        else:
+            db.delete_setting(conn, "llm.api_key")
 
 
 def _catalog_models(catalog: dict, kind: str) -> dict:
