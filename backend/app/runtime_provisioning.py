@@ -858,7 +858,10 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict]) -> str:
         "    # A saída do comando não aparece na célula: guarda e mostra o fim se falhar.",
         "    proc = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)",
         "    if proc.returncode != 0:",
-        "        tail = \"\\n\".join(proc.stdout.strip().splitlines()[-12:])",
+        "        lines = proc.stdout.strip().splitlines()",
+        "        # A causa costuma estar bem antes do fim (um \"CMake Error\" no meio do build).",
+        "        first = next((i for i, line in enumerate(lines) if \"Error\" in line or \"error:\" in line), len(lines))",
+        "        tail = \"\\n\".join(lines[max(0, min(first - 2, len(lines) - 12)):][:40])",
         "        raise SystemExit(\"falhou: \" + \" \".join(str(part) for part in cmd)[:160] + \"\\n\" + tail)",
         "def node_requirements(node):",
         "    # Node costuma listar extras opcionais que não fecham entre si (o GGUF-Loader",
@@ -953,6 +956,10 @@ def _llama_install_lines(entry: dict) -> list[str]:
         "run([",
         "    \"cmake\", \"-S\", str(llama_src), \"-B\", str(llama_src / \"build\"),",
         f"    \"-DGGML_CUDA={cuda}\",",
+        # Sem a interface web embutida: o jogo não a usa, e esta versão do
+        # llama.cpp baixa do Hugging Face a interface mais recente, cujo formato
+        # mudou; a verificação dela abortava a compilação inteira no Colab.
+        "    \"-DLLAMA_USE_PREBUILT_UI=OFF\",",
         "])",
         "run([",
         "    \"cmake\", \"--build\", str(llama_src / \"build\"), \"--target\", \"llama-server\",",

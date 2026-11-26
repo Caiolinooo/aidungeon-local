@@ -521,6 +521,8 @@ def test_notebook_contract_and_selected_services():
     llm_src = _src(llm_only)
     llm_vars = _variables(llm_only)
     assert "llama-server" in llm_src
+    # Visto num Colab real: a interface web baixada quebrava a compilação.
+    assert "-DLLAMA_USE_PREBUILT_UI=OFF" in _role(llm_only, "provision")
     assert "main.py" not in llm_src
     assert "flux-2-klein" not in llm_src
     assert "huggingface.co" not in llm_src
