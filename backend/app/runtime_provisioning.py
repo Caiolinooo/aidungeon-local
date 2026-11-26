@@ -792,7 +792,7 @@ def _hardware_cell() -> str:
         "print(\"hardware ok\", hardware)\n"
         "# Diz ao jogo qual placa veio antes de baixar os modelos: a estimativa da\n"
         "# tela troca a memória de tabela pela real. Falhar aqui não impede nada.\n"
-        "if VARIABLES.get(\"project_url\") and AIDUNGEON_TOKEN:\n"
+        "if VARIABLES.get(\"project_url\") and globals().get(\"AIDUNGEON_TOKEN\"):\n"
         "    import json\n"
         "    import urllib.request\n"
         "    base = VARIABLES[\"project_url\"].rstrip(\"/\")\n"
