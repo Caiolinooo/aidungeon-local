@@ -90,7 +90,12 @@ def _validate_catalog(data: dict) -> None:
     for model_id, entry in models["video"].items():
         if not isinstance(entry, dict) or not str(entry.get("engine") or "").strip():
             raise ValueError(f"vídeo {model_id} sem engine")
-        if not isinstance(entry.get("config"), dict) or not entry["config"]:
+        if entry.get("engine") == "custom":
+            custom = entry.get("custom")
+            if not isinstance(custom, dict) or not isinstance(custom.get("graph"), dict) \
+                    or not custom["graph"]:
+                raise ValueError(f"vídeo {model_id} sem custom.graph")
+        elif not isinstance(entry.get("config"), dict) or not entry["config"]:
             raise ValueError(f"vídeo {model_id} sem config")
         _require_artifacts(model_id, entry)
 

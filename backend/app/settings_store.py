@@ -104,6 +104,7 @@ _ZIMAGE_FILE_DEFAULTS = {
 }
 _QWEN_IDENTITY = ("unet", "clip", "vae", "clip_type", "clip_device")
 _VIDEO_FIELDS = (
+    "graph",
     "engine", "checkpoint", "unet", "clip", "vae", "clip_projection",
     "clip_type", "clip_device", "weight_dtype",
     "frames", "fps", "steps", "cfg", "shift", "timeout_seconds",
@@ -1175,6 +1176,8 @@ def _apply_selected_models(conn: sqlite3.Connection, config: dict, catalog: dict
     if not video_engine:
         raise GameError.bad_request(
             "validation_error", "catalog video entry is missing engine")
+    if video_engine == "custom":
+        video_overlay["graph"] = video_entry["custom"]["graph"]
     video_overlay["engine"] = video_engine
     _set_override(conn, "image.comfyui_video", video_overlay)
 

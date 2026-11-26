@@ -42,7 +42,7 @@ KINDS = ("llm", "image", "video", "lora")
 FAMILIES = {
     "llm": ("gguf",),
     "image": ("checkpoint", "flux2_klein", "z_image_turbo", "qwen", "custom"),
-    "video": ("ltxv", "wan", "h3"),
+    "video": ("ltxv", "wan", "h3", "custom"),
     "lora": ("lora",),
 }
 # Entrada do catálogo fixo que serve de molde: encoder, VAE, serviço e nodes.
@@ -327,7 +327,7 @@ def _free_id(catalog: dict, kind: str, base: str) -> str:
     return candidate
 
 
-def check_graph(graph: Any) -> dict:
+def check_graph(graph: Any, kind: str = "image") -> dict:
     """Fluxo próprio no formato API do ComfyUI, com o marcador do prompt."""
     if not isinstance(graph, dict) or not graph:
         raise GameError.bad_request("validation_error", "cole o fluxo em JSON")
@@ -344,6 +344,9 @@ def check_graph(graph: Any) -> dict:
     if _PLACEHOLDER not in json.dumps(graph):
         raise GameError.bad_request(
             "validation_error", "o fluxo precisa ter {{prompt}} no texto positivo")
+    if kind == "video" and not any(
+            node["inputs"].get("image") == "{{reference_1}}" for node in graph.values()):
+        raise GameError.bad_request("validation_error", "use {{reference_1}} na entrada da imagem do clipe")
     return graph
 
 
@@ -383,7 +386,7 @@ def build_entry(catalog: dict, kind: str, family: str, body: dict) -> tuple[str,
             "artifacts": artifacts,
             "dependencies": [template["dependencies"][0], *nodes],
             "service": copy.deepcopy(template["service"]),
-            "custom": {"graph": check_graph(body.get("graph"))},
+            "custom": {"graph": check_graph(body.get("graph"), kind)},
         }
         base_id = _slug(label or artifacts[0]["filename"])
     else:
@@ -516,7 +519,7 @@ def update_model(conn: sqlite3.Connection, kind: str, model_id: str, body: dict)
             if re.fullmatch(r"[a-z0-9_+]{1,40}", text):
                 block[key] = text
     if body.get("graph") is not None and entry.get("engine") == "custom":
-        entry["custom"] = {"graph": check_graph(body["graph"])}
+        entry["custom"] = {"graph": check_graph(body["graph"], kind)}
     settings_store.save_user_model(conn, kind, target, entry)
     _reapply(conn, kind, model_id, target)
     return target

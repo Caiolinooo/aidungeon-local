@@ -756,6 +756,37 @@ def test_h3_gguf_rejection_names_the_required_pack(tmp_path):
         "ComfyUI-H3-Multishot v2.7.2 is required")
 
 
+def test_custom_video_graph_receives_the_clip_and_sampling_markers(tmp_path):
+    graph = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "motion: {{prompt}}"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_1}}"}},
+        "3": {"class_type": "LTXVImgToVideo", "inputs": {
+            "width": "{{width}}", "height": "{{height}}", "length": "{{frames}}"}},
+        "4": {"class_type": "KSampler", "inputs": {
+            "steps": "{{steps}}", "cfg": "{{cfg}}", "seed": "{{seed}}"}},
+        "5": {"class_type": "SaveVideo", "inputs": {"fps": "{{fps}}"}},
+    }
+    capture: dict = {}
+    result = image_client.generate_clip(
+        _cfg(tmp_path, comfyui_video={
+            "engine": "custom", "graph": graph, "frames": 25, "fps": 12,
+            "steps": 6, "cfg": 2.5, "width": 640, "height": 360,
+        }),
+        "the knight turns", adventure_id="adv-1", image_id="custom-clip",
+        source_png=_png(64, 32), transport=_motion_transport(capture), seed=123,
+    )
+
+    filled = capture["graph"]
+    assert filled["1"]["inputs"]["text"] == "motion: the knight turns"
+    assert filled["2"]["inputs"]["image"] == "source.png"
+    assert filled["3"]["inputs"] == {"width": 640, "height": 360, "length": 25}
+    assert filled["4"]["inputs"] == {"steps": 6, "cfg": 2.5, "seed": 123}
+    assert filled["5"]["inputs"]["fps"] == 12
+    assert graph["3"]["inputs"]["length"] == "{{frames}}"
+    assert result["media_type"] == "video/mp4"
+    assert result["duration_ms"] == 2083
+
+
 def test_unknown_image_engine_fails(tmp_path):
     with pytest.raises(image_client.ImageError, match="image.engine desconhecido"):
         image_client.generate_image(

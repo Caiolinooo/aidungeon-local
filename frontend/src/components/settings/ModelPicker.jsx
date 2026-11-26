@@ -182,7 +182,7 @@ function ModelSearch({ kind, families, onAdd, onCollect, busy, inputCls }) {
   )
 }
 
-function CustomWorkflow({ onCreated, inputCls, labelCls }) {
+function CustomWorkflow({ kind, onCreated, inputCls, labelCls }) {
   const toast = useToast()
   const [label, setLabel] = useState('')
   const [graphText, setGraphText] = useState('')
@@ -204,7 +204,7 @@ function CustomWorkflow({ onCreated, inputCls, labelCls }) {
     })
     setSaving(true)
     try {
-      const res = await api.addLibraryModel({ kind: 'image', family: 'custom', label, graph, files, nodes })
+      const res = await api.addLibraryModel({ kind, family: 'custom', label, graph, files, nodes })
       onCreated(res.id)
     } catch (e) {
       toast('Não consegui salvar o fluxo: ' + e.message)
@@ -216,6 +216,7 @@ function CustomWorkflow({ onCreated, inputCls, labelCls }) {
   return (
     <div className="space-y-3 rounded-xl border border-subtle bg-elevated/40 p-3 text-xs text-secondary">
       <p>{CUSTOM_HELP}</p>
+      {kind === 'video' && <p>Use {"{{reference_1}}"} na imagem inicial e salve o resultado em MP4. Os marcadores {"{{frames}}"}, {"{{fps}}"}, {"{{steps}}"} e {"{{cfg}}"} recebem os valores configurados.</p>}
       <label className="block">
         <span className={labelCls}>Nome</span>
         <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls} placeholder="Meu fluxo" />
@@ -242,7 +243,7 @@ function CustomWorkflow({ onCreated, inputCls, labelCls }) {
           ))}
         </ul>
       </div>
-      <ModelSearch kind="image" families={[]} onCollect={(file) => setFiles((prev) => [...prev, file])} inputCls={inputCls} />
+      <ModelSearch kind={kind} families={[]} onCollect={(file) => setFiles((prev) => [...prev, file])} inputCls={inputCls} />
       <button type="button" onClick={save} disabled={saving || !graphText.trim() || files.length === 0} className="min-h-10 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas hover:bg-accent-hov disabled:opacity-50">
         {saving ? 'Salvando…' : 'Salvar e usar este fluxo'}
       </button>
@@ -329,7 +330,7 @@ export default function ModelPicker({
           <button type="button" onClick={() => setPanel(panel === 'search' ? '' : 'search')} className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary">
             {panel === 'search' ? 'Fechar busca' : 'Buscar outro modelo'}
           </button>
-          {kind === 'image' && (
+          {kind !== 'llm' && (
             <button type="button" onClick={() => setPanel(panel === 'custom' ? '' : 'custom')} className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-secondary hover:text-primary">
               {panel === 'custom' ? 'Fechar fluxo' : 'Colar fluxo próprio'}
             </button>
@@ -416,7 +417,7 @@ export default function ModelPicker({
         <ModelSearch kind="lora" families={['lora']} onAdd={addLora} busy={busy} inputCls={inputCls} />
       )}
       {panel === 'custom' && (
-        <CustomWorkflow
+        <CustomWorkflow kind={kind}
           onCreated={async (id) => { setPanel(''); await onLibraryChange(kind, id); toast('Fluxo salvo. Salve para aplicar.', 'ok') }}
           inputCls={inputCls}
           labelCls={labelCls}

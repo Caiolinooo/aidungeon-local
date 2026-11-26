@@ -201,6 +201,32 @@ def test_custom_workflow_fills_the_markers(admin):
     assert no_prompt.status_code == 400
 
 
+def test_custom_video_workflow_is_saved_and_selected(admin):
+    graph = {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_1}}"}},
+        "3": {"class_type": "LTXVImgToVideo", "inputs": {
+            "width": "{{width}}", "height": "{{height}}", "length": "{{frames}}"}},
+        "4": {"class_type": "SaveVideo", "inputs": {"fps": "{{fps}}"}},
+    }
+    body = {"kind": "video", "family": "custom", "label": "Clipe próprio", "graph": graph,
+            "files": [{**_file("video.safetensors"), "folder": "checkpoints"}]}
+    missing_image = admin.post("/api/models/library", json={
+        **body, "graph": {"1": graph["1"]}})
+    assert missing_image.status_code == 400
+    assert "{{reference_1}}" in missing_image.json()["error"]["message"]
+
+    created = admin.post("/api/models/library", json=body)
+    assert created.status_code == 200, created.text
+    model_id = created.json()["id"]
+    applied = admin.put("/api/settings/runtime", json={"models": {"video": model_id}})
+    assert applied.status_code == 200, applied.text
+    with db.session() as conn:
+        cfg = settings_store.effective_image_settings(conn)
+    assert cfg["comfyui_video"]["engine"] == "custom"
+    assert cfg["comfyui_video"]["graph"] == graph
+
+
 @pytest.mark.parametrize("file", [
     {**_file(), "url": "http://civitai.com/api/download/models/70"},
     {**_file(), "url": "https://evil.example/model.safetensors"},

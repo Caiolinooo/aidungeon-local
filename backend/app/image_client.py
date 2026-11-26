@@ -661,13 +661,14 @@ def _comfy_checkpoint_graph(cfg: dict, prompt: str, *, width: int, height: int) 
 
 
 def _comfy_custom_graph(cfg: dict, prompt: str, image_names: list[str],
-                        *, width: int, height: int) -> dict:
-    """Fluxo do usuário com os marcadores trocados pelo pedido desta imagem.
+                        *, width: int, height: int, video: dict | None = None) -> dict:
+    """Fluxo do usuário com os marcadores trocados pelo pedido desta imagem ou clipe.
 
     Marcador sozinho no campo (`"{{width}}"`) mantém o tipo do valor; dentro de
     um texto maior vira texto. `{{reference_N}}` é o nome do PNG já enviado.
+    Clipes também recebem `{{frames}}`, `{{fps}}`, `{{steps}}` e `{{cfg}}`.
     """
-    raw = cfg.get("comfyui_custom")
+    raw = video if video is not None else cfg.get("comfyui_custom")
     template = raw.get("graph") if isinstance(raw, dict) else None
     if not isinstance(template, dict) or not template:
         raise ImageError("config_error: fluxo próprio vazio")
@@ -676,6 +677,9 @@ def _comfy_custom_graph(cfg: dict, prompt: str, image_names: list[str],
         "{{negative}}": str(cfg.get("negative_prompt") or ""),
         "{{width}}": width, "{{height}}": height, "{{seed}}": _seed(cfg),
     }
+    if video is not None:
+        for key in ("frames", "fps", "steps", "cfg"):
+            values["{{" + key + "}}"] = video[key]
     for index, name in enumerate(image_names):
         values[f"{{{{reference_{index + 1}}}}}"] = name
 
@@ -1544,6 +1548,8 @@ def video_settings(cfg: dict) -> dict:
             elif key == "checkpoint":
                 text = text.strip()
             merged[key] = text
+    if merged["engine"] == "custom":
+        merged["graph"] = raw.get("graph")
     return merged
 
 
@@ -1592,9 +1598,9 @@ def turnaround_video_settings(cfg: dict) -> dict:
 
 
 def _video_engine(video: dict) -> str:
-    """`ltxv` é o default. `wan` e `h3` são opt-in."""
+    """`ltxv` é o default. `wan`, `h3` e o fluxo `custom` são opt-in."""
     engine = str(video.get("engine") or "ltxv").strip().lower() or "ltxv"
-    if engine not in ("ltxv", "wan", "h3"):
+    if engine not in ("ltxv", "wan", "h3", "custom"):
         raise ImageError(f"config_error: video.engine desconhecido: {engine!r}")
     return engine
 
@@ -1994,7 +2000,8 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
     devolve file_path, width, height, provider, media_type e duration_ms.
 
     Sem `engine`, ou com `ltxv`, monta o grafo nativo e exige checkpoint.
-    `engine=wan` é opt-in (TI2V); unet/vae do Wan ficam no bloco. Não muda `cfg`.
+    `engine=wan`/`h3` usam seus grafos nativos; `custom` usa `video.graph`.
+    Não muda `cfg`.
 
     Provider de imagem `sdwebui`: /free, unload do Forge local, upload,
     /prompt, /history, /view, /free — o SDXL precisa da VRAM. Provider
@@ -2029,7 +2036,7 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
         if frames < 9 or (frames - 1) % 8 != 0:
             raise ImageError(
                 "config_error: video.frames do LTXV deve ser 8n+1 (mínimo 9)")
-    elif engine == "h3":
+    elif engine in ("h3", "custom"):
         pass
     else:
         raise ImageError(f"config_error: video.engine desconhecido: {engine!r}")
@@ -2050,7 +2057,10 @@ def generate_clip(cfg: dict, prompt: str, *, adventure_id: str, image_id: str,
                 f"aidungeon-clip-{hashlib.sha256(source_png).hexdigest()[:16]}.png",
             )
             seed = _clip_seed(cfg) if seed is None else int(seed)
-            if engine == "ltxv":
+            if engine == "custom":
+                graph = _comfy_custom_graph(
+                    {**cfg, "seed": seed}, prompt, [name], width=frame_w, height=frame_h, video=video)
+            elif engine == "ltxv":
                 graph = _ltxv_i2v_graph(
                     video, prompt, name, width=frame_w, height=frame_h, seed=seed)
             elif engine == "h3":
