@@ -465,8 +465,6 @@ def enrich_card(conn, adv: dict, card: dict, llm_cfg: dict,
                         if like_info.get("reference_image_path"):
                             likeness_resolved = True
                             desc = str(like_info.get("descriptor") or "").strip()
-                            if desc:
-                                story += f"\n\n[Verified Reference Photo Visuals]: {desc}"
                             page_url = str(like_info.get("page_url") or "").strip()
                             wiki_title = str(existing.get("wiki_title") or card.get("title") or "").strip()
                             if page_url and not any(s.get("url") == page_url for s in (research.get("sources") or [])):
@@ -624,13 +622,13 @@ def regenerate_card(conn, adv: dict, card: dict, llm_cfg: dict, *,
     }
 
 
-def sheet_context(raw_sheet: str) -> str:
+def sheet_context(raw_sheet: str, *, include_identity: bool = True) -> str:
     """Resumo textual da ficha p/ compor prompts de retrato ('' se ausente)."""
     sheet = parse_sheet(raw_sheet)
     if not sheet:
         return ""
-    parts = [f"{key}: {sheet[key]}" for key in
-             ("appearance", "body", "clothing") if sheet.get(key)]
+    keys = ("appearance", "body", "clothing") if include_identity else ("clothing",)
+    parts = [f"{key}: {sheet[key]}" for key in keys if sheet.get(key)]
     if sheet.get("current_outfit"):
         parts.append(f"current outfit: {sheet['current_outfit']}")
     if sheet.get("expression"):
@@ -1801,8 +1799,10 @@ def story_state_bits(card: dict | None, *, limit: int = 80,
     sheet = parse_sheet(card.get("sheet") or "")
     bits = []
     outfit = " ".join(str(sheet.get("current_outfit") or "").split()).strip(" ,.;")
-    if (outfit and is_outfit(outfit) and not is_nude_outfit(outfit)
-            and not _looks_portuguese(outfit)):
+    # Português entra: o job traduz o prompt inteiro antes do Flux. Sem a
+    # frase, a roupa da história (quase sempre gravada em pt-BR) sumia e a
+    # referência vestia a pessoa com a roupa do retrato.
+    if outfit and is_outfit(outfit) and not is_nude_outfit(outfit):
         bits.append(_clip("now wearing " + outfit, limit))
     marks = [
         mark for mark in body_state.visual_marks(sheet.get("body_state"), portrait=False)

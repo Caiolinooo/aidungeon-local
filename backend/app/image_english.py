@@ -129,6 +129,19 @@ _PT_STOPWORDS = {
 _PT_DIACRITIC = re.compile(r"[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]")
 
 
+def _english_only(text: str) -> str:
+    """Tira a frase que o modelo deixou em português e fica com o resto.
+
+    O card do lugar às vezes volta cru. O resto do prompt já está em inglês
+    e é o que a cena precisa.
+    """
+    kept = [
+        sentence for sentence in re.split(r"(?<=[.!?])\s+", text or "")
+        if sentence.strip() and _is_probable_english(sentence)
+    ]
+    return " ".join(kept).strip()
+
+
 def _is_probable_english(text: str) -> bool:
     stripped = re.sub(r"\[\[\d+\]\]", " ", text or "")
     if _PT_DIACRITIC.search(stripped):
@@ -204,36 +217,30 @@ def render_english(text: str, *, transport=None,
                 )
         except llm_client.LlmError:
             if attempt == 1:
-                if partial_reply is not None:
-                    restored = _restore_names(partial_reply, names)
-                    _remember(text, restored)
-                    return restored
-                if allow_passthrough and _is_probable_english(text):
-                    _remember(text, text)
-                    return text
-                _failed()
+                break
             continue
         cleaned = _drop_stray_breaks(masked, _clean_reply(reply or ""))
         if not _accepted(masked, cleaned):
             if attempt == 1:
-                if partial_reply is not None:
-                    restored = _restore_names(partial_reply, names)
-                    _remember(text, restored)
-                    return restored
-                if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
-                    _remember(text, text)
-                    return text
-                _failed()
+                break
             continue
-        if attempt == 0 and not _is_probable_english(masked) and not _is_probable_english(cleaned):
-            if cleaned.strip() != masked.strip():
-                partial_reply = cleaned
+        # A resposta é que tem de estar em inglês. Se a fonte mascarada
+        # parecia inglês, a resposta com "câmera" ainda ia para o Flux.
+        if not _is_probable_english(cleaned):
+            partial_reply = cleaned
+            if attempt == 1:
+                break
             continue
         restored = _restore_names(cleaned, names)
         _remember(text, restored)
         return restored
-    if partial_reply is not None:
+    if partial_reply is not None and _is_probable_english(partial_reply):
         restored = _restore_names(partial_reply, names)
+        _remember(text, restored)
+        return restored
+    salvaged = _english_only(partial_reply or "")
+    if salvaged and _is_probable_english(salvaged):
+        restored = _restore_names(salvaged, names)
         _remember(text, restored)
         return restored
     if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:

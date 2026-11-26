@@ -3,15 +3,38 @@ troca instantânea, captura do setup atual, sincronização e segurança de cred
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
-from app import auth, db, deps, settings_store
+from app import auth, db, deps, provider_profiles, settings_store
 
 
 @pytest.fixture()
 def auth_token(admin_token):
     return admin_token
+
+
+def test_vision_llm_cfg_uses_gemini_when_the_narrator_cannot_see(client):
+    with db.session() as conn:
+        db.set_setting(conn, provider_profiles.PROFILES_KEY, json.dumps([{
+            "id": "google-gemini",
+            "provider_id": "gemini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret-key",
+            "llm": {"model_alias": "models/gemini-3-flash-preview"},
+        }]))
+        cfg = provider_profiles.vision_llm_cfg(
+            conn, current_model="upstage/solar-mini4:free")
+        same = provider_profiles.vision_llm_cfg(
+            conn, current_model="models/gemini-3-flash-preview")
+    assert cfg == {
+        "base_url": "https://example.test/v1",
+        "api_key": "secret-key",
+        "model_alias": "models/gemini-3-flash-preview",
+    }
+    assert same is None
 
 
 def test_non_admin_cannot_modify_profiles(client):

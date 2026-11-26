@@ -14,7 +14,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app import db, events, image_client, jobs, likeness, npc_assets
+from app import db, events, image_client, jobs, likeness, look_lock, npc_assets
 from app.routes.images import _plan_see
 from app.schemas import SeeRequest
 from conftest import add_action, image_english_echo, make_adventure
@@ -92,6 +92,25 @@ def _character(adventure_id: str, title: str, **sheet: object) -> dict:
             triggers=[title], entry="A person in the story.",
             sheet=json.dumps(sheet, ensure_ascii=False) if sheet else "",
         )
+
+
+def test_portrait_face_reference_keeps_a_tiny_detected_face(monkeypatch):
+    source = Image.new("RGB", (400, 800), (0, 0, 255))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+    monkeypatch.setattr(likeness, "_largest_face_box", lambda image: (180, 40, 80, 100))
+    assert likeness.portrait_face_references([raw]) == [raw]
+    monkeypatch.setattr(likeness, "_largest_face_box", lambda image: (40, 40, 220, 260))
+    assert likeness.portrait_face_references([raw]) != [raw]
+
+
+def test_portrait_face_reference_keeps_the_original_when_no_face_is_found():
+    source = Image.new("RGB", (80, 80), (0, 0, 255))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+    assert likeness.portrait_face_references([raw]) == [raw]
 
 
 def test_identity_face_pngs_removes_body_and_clothing_below_shoulders():
@@ -186,6 +205,42 @@ def test_explicit_scene_with_a_minor_is_refused():
     mixed = likeness.decide_frame([clara, adult], explicit=True)
     assert mixed.refusal == "minor"
     assert mixed.cast == []
+
+
+def test_look_reader_uses_the_likeness_photo(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path))
+    photo = tmp_path / "bia.png"
+    photo.write_bytes(PNG_BYTES)
+    card = {"type": "character", "title": "Bia Mare", "sheet": json.dumps({
+        "real_person": True,
+        "likeness": {"reference_image_path": str(photo)},
+    })}
+    source, images = look_lock.reference_images(None, card)
+    assert source == "photo"
+    assert images == [PNG_BYTES]
+
+
+def test_scene_likeness_uses_the_story_name_not_the_wiki_title():
+    """O fundo citava "Iza (cantora)" e "Bia Arantes" enquanto a contagem
+    dizia IZA e Bia Mare. O modelo pintava outra pessoa."""
+    iza = {"type": "character", "title": "IZA", "sheet": json.dumps({
+        "real_person": True,
+        "real_name": "Iza (cantora)",
+        "likeness": {"descriptor": "long dark hair"},
+    })}
+    bia = {"type": "character", "title": "Bia Mare", "sheet": json.dumps({
+        "real_person": True,
+        "real_name": "Bia Arantes",
+        "likeness": {"descriptor": "light eyes"},
+    })}
+    clause = likeness.opening_clause([iza, bia])
+    assert "IZA" in clause
+    assert "Bia Mare" in clause
+    assert "cantora" not in clause
+    assert "Bia Arantes" not in clause
+    prefix = likeness.real_person_prefix(bia)
+    assert prefix.startswith("exact likeness of Bia Mare")
+    assert "Bia Arantes" not in prefix
 
 
 def test_opening_clause_puts_the_real_descriptor_before_the_fictional_face():
@@ -515,6 +570,57 @@ def test_real_person_portrait_payload_includes_the_reference(client, tmp_path, m
     assert len(seen) == 1
     assert seen[0]["init_image"] is None
     assert seen[0]["reference_images"] == [PNG_BYTES]
+
+
+def test_reference_portrait_ignores_conflicting_llm_appearance(client, tmp_path, monkeypatch):
+    """A foto manda no rosto, no cabelo e na roupa da ficha. Só a roupa
+    que a história mudou (current_outfit) entra por cima da foto."""
+    monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    photo = refs / "anitta.png"
+    photo.write_bytes(PNG_BYTES)
+    use_tmp_storage(tmp_path)
+    adv = make_adventure(image_style="golden hour cinematic, anamorphic night lighting")
+    card = _character(
+        adv["id"], "Anitta", real_person=True, real_name="Anitta",
+        appearance="impeccable short black hair",
+        body="upright energetic posture",
+        clothing="vibrant modern stage outfit",
+        current_outfit="black stage jacket",
+        likeness={"reference_image_path": str(photo)},
+    )
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], card["id"], {
+            "portrait_prompt": "A Brazilian pop star with short black hair, bust portrait",
+        })
+        queued = jobs.enqueue_portrait(conn, adv["id"], card["id"])
+    assert queued is not None
+    _use_comfy()
+    seen = _capture_generate(monkeypatch, tmp_path)
+    assert jobs.process_pending(httpx.MockTransport(_unused_echo)) == 1
+
+    prompt = seen[0]["prompt"].lower()
+    assert "short black hair" not in prompt
+    assert "upright energetic posture" not in prompt
+    assert "exact same adult person" in prompt
+    assert "hair length" in prompt
+    assert "vibrant modern stage outfit" not in prompt
+    assert "black stage jacket" in prompt
+    assert "golden hour" not in prompt
+    assert seen[0]["width"] == jobs._PORTRAIT_WIDTH
+    assert seen[0]["height"] == jobs._PORTRAIT_HEIGHT
+    assert seen[0]["reference_images"] == [PNG_BYTES]
+    with db.session() as conn:
+        current = db.get_card(conn, adv["id"], card["id"])
+        anchor_id = current["portrait_anchor_id"] or current["portrait_image_id"]
+        conn.execute(
+            "UPDATE images SET width=1920, height=1072 WHERE id=?", (anchor_id,))
+        again = jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
+    assert again is not None
+    assert jobs.process_pending(httpx.MockTransport(_unused_echo)) == 1
+    assert seen[-1]["width"] == jobs._PORTRAIT_WIDTH
+    assert seen[-1]["height"] == jobs._PORTRAIT_HEIGHT
 
 
 def test_portrait_init_uses_the_reference_until_there_is_an_anchor(tmp_path, monkeypatch):
@@ -937,6 +1043,7 @@ def test_web_enrich_fetches_wiki_photo_refreshes_visuals_and_translates_prompt(t
     assert result["likeness_resolved"] is True
     assert len(result["web_sources"]) >= 1
     assert any("nasceu no Rio de Janeiro" in p for p in seen_enrich_prompts)
+    assert all("[Verified Reference Photo Visuals]" not in p for p in seen_enrich_prompts)
     sheet = json.loads(result["sheet"])
     assert sheet["real_person"] is True
     assert Path(sheet["likeness"]["reference_image_path"]).is_file()

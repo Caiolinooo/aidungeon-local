@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import urllib.parse
@@ -663,9 +664,14 @@ def _variables_cell(variables: dict) -> str:
 def _secrets_cell(variables: dict, artifacts: list[dict]) -> str:
     lines = [
         "from google.colab import userdata",
+        "def _optional_secret(loader):",
+        "    try:",
+        "        return loader() or \"\"",
+        "    except Exception:",
+        "        return \"\"",
         '# AIDUNGEON_TOKEN precisa ser de uma sessão admin (POST /api/runtime/register exige admin).',
-        'AIDUNGEON_TOKEN = userdata.get("AIDUNGEON_TOKEN") or ""',
-        'TAILSCALE_AUTH_KEY = userdata.get("TAILSCALE_AUTH_KEY") or ""',
+        'AIDUNGEON_TOKEN = _optional_secret(lambda: userdata.get("AIDUNGEON_TOKEN"))',
+        'TAILSCALE_AUTH_KEY = _optional_secret(lambda: userdata.get("TAILSCALE_AUTH_KEY"))',
     ]
     secrets = []
     for art in artifacts:
@@ -673,7 +679,7 @@ def _secrets_cell(variables: dict, artifacts: list[dict]) -> str:
         if name and name not in secrets:
             secrets.append(name)
     for name in secrets:
-        lines.append(f'{name} = userdata.get("{name}") or ""')
+        lines.append(f'{name} = _optional_secret(lambda: userdata.get("{name}"))')
     lines.append("print(\"segredos carregados do painel do Colab\")")
     return "\n".join(lines) + "\n"
 
@@ -1073,6 +1079,712 @@ def generate_notebook(config: dict, catalog: dict | None = None) -> dict:
         },
         "cells": cells,
     }
+
+
+COLAB_APP_GIT_URL = "https://github.com/Caiolinooo/aidungeon-local.git"
+COLAB_APP_GIT_REF = "main"
+COLAB_APP_ROOT = "/content/aidungeon-local"
+COLAB_COMFY_GIT_URL = "https://github.com/comfyanonymous/ComfyUI.git"
+COLAB_COMFY_GIT_REF = "v0.46.0"
+COLAB_NODE_TARBALL = (
+    "https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-x64.tar.xz"
+)
+COLAB_PLAY_LLM = "qwen2.5-3b-instruct-q4_k_m"
+COLAB_PLAY_IMAGE = "flux2_klein"
+
+
+def _pinned_artifact(catalog: dict, group: str, model_id: str, role: str) -> dict:
+    """Artefato do catálogo com URL e SHA256. Sem os dois, o Colab não baixa."""
+    try:
+        artifacts = catalog["models"][group][model_id]["artifacts"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"catálogo sem {group}.{model_id}") from exc
+    for art in artifacts:
+        if art.get("role") != role:
+            continue
+        if not art.get("url") or not art.get("sha256"):
+            raise ValueError(f"{group}.{model_id}.{role} sem URL ou SHA256 publicados")
+        return art
+    raise ValueError(f"catálogo sem artefato {role} em {group}.{model_id}")
+
+
+def _llama_pin(catalog: dict) -> dict:
+    deps = catalog["models"]["llm"][COLAB_PLAY_LLM].get("dependencies") or []
+    if not deps or not deps[0].get("git_url") or not deps[0].get("git_ref"):
+        raise ValueError("catálogo do narrador Colab sem git do llama.cpp")
+    return deps[0]
+
+
+def _download_host(url: str) -> str:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host in {"huggingface.co", "hf.co"} or host.endswith(".huggingface.co"):
+        return "huggingface"
+    if (
+        host in {"civitai.com", "redcivit.ai", "redcivit.com"}
+        or host.endswith(".civitai.com")
+        or host.endswith(".redcivit.ai")
+        or host.endswith(".redcivit.com")
+    ):
+        return "civitai"
+    return "link"
+
+
+_EXTRA_COLAB_PRESETS: dict[str, dict[str, dict]] = {
+    "llm": {
+        "qwen2.5-7b-instruct-q4_k_m": {
+            "model_alias": "Qwen2.5-7B-Instruct (GGUF Q4_K_M · Hugging Face)",
+            "artifacts": [
+                {
+                    "role": "weights",
+                    "filename": "qwen2.5-7b-instruct-q4_k_m.gguf",
+                    "dest": "models/llm/qwen2.5-7b-instruct-q4_k_m.gguf",
+                    "url": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true",
+                    "sha256": "",
+                    "bytes": None,
+                }
+            ],
+        },
+        "llama-3.1-8b-lexi-uncensored-v2-q4_k_m": {
+            "model_alias": "Llama-3.1-8B-Lexi-Uncensored-V2 (GGUF Q4_K_M · Hugging Face)",
+            "artifacts": [
+                {
+                    "role": "weights",
+                    "filename": "Llama-3.1-8B-Lexi-Uncensored_V2_Q4.gguf",
+                    "dest": "models/llm/Llama-3.1-8B-Lexi-Uncensored_V2_Q4.gguf",
+                    "url": "https://huggingface.co/Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2-GGUF/resolve/main/Llama-3.1-8B-Lexi-Uncensored_V2_Q4.gguf?download=true",
+                    "sha256": "",
+                    "bytes": None,
+                }
+            ],
+        },
+    },
+}
+
+
+def _merged_colab_section(book: dict, group: str) -> dict:
+    base = dict(((book.get("models") or {}).get(group)) or {})
+    for model_id, entry in (_EXTRA_COLAB_PRESETS.get(group) or {}).items():
+        if model_id not in base:
+            base[model_id] = entry
+    return base
+
+
+def colab_model_choices(catalog: dict | None = None) -> list[dict]:
+    """Modelos do catálogo e presets extras prontos para o Colab baixar."""
+    book = catalog if catalog is not None else load_catalog()
+    choices = []
+    for group in ("llm", "image", "video"):
+        section = _merged_colab_section(book, group)
+        for model_id, entry in section.items():
+            files = []
+            hosts = set()
+            needs_key = False
+            for art in entry.get("artifacts") or []:
+                url = str(art.get("url") or "")
+                sha = str(art.get("sha256") or "")
+                is_extra = model_id in (_EXTRA_COLAB_PRESETS.get(group) or {})
+                if not url or (not sha and not is_extra):
+                    continue
+                hosts.add(_download_host(url))
+                if art.get("auth_secret"):
+                    needs_key = True
+                files.append(art.get("filename") or "")
+            if not files:
+                continue
+            if hosts == {"civitai"}:
+                source = "civitai"
+            elif "civitai" in hosts:
+                source = "mixed"
+            else:
+                source = "huggingface"
+            choices.append({
+                "id": f"{group}:{model_id}",
+                "group": group,
+                "model_id": model_id,
+                "label": str(entry.get("model_alias") or model_id),
+                "source": source,
+                "engine": str(entry.get("engine") or ""),
+                "needs_civitai_key": needs_key,
+                "files": [name for name in files if name],
+            })
+    return choices
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = Path(str(name or "")).name.strip()
+    if not cleaned or cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned:
+        raise ValueError("nome de arquivo inválido")
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", cleaned):
+        raise ValueError("o nome do arquivo só pode ter letras, números, ponto, _ e -")
+    return cleaned
+
+
+def _infer_filename_from_url(parsed: urllib.parse.SplitResult, role: str) -> str:
+    candidate = Path(urllib.parse.unquote(parsed.path or "")).name.strip()
+    if candidate and re.fullmatch(r"[A-Za-z0-9._+-]+", candidate) and "." in candidate:
+        return candidate
+    ext = ".gguf" if role == "llm" else ".safetensors"
+    slug = re.sub(r"[^A-Za-z0-9._+-]+", "-", candidate or f"custom-{role}").strip("-") or f"custom-{role}"
+    if not slug.endswith((".gguf", ".safetensors", ".ckpt", ".pt", ".bin")):
+        slug = f"{slug}{ext}"
+    return _safe_filename(slug)
+
+
+def _manual_download(item: dict) -> dict:
+    if not isinstance(item, dict):
+        raise ValueError("modelo manual inválido")
+    url = str(item.get("url") or "").strip()
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("o link do modelo precisa ser https")
+    role = str(item.get("role") or "").strip()
+    if role not in {"llm", "unet", "clip", "vae", "checkpoint", "video"}:
+        raise ValueError("o tipo do link manual precisa ser llm, unet, clip, vae, checkpoint ou video")
+    raw_name = str(item.get("filename") or "").strip()
+    filename = _safe_filename(raw_name) if raw_name else _infer_filename_from_url(parsed, role)
+    sha = str(item.get("sha256") or "").strip().lower()
+    if sha and not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise ValueError("SHA256 do link manual precisa ter 64 caracteres hexadecimais")
+    folders = {
+        "llm": f"{COLAB_APP_ROOT}/models/llm/{filename}",
+        "unet": f"{COLAB_APP_ROOT}/ComfyUI/models/diffusion_models/{filename}",
+        "video": f"{COLAB_APP_ROOT}/ComfyUI/models/diffusion_models/{filename}",
+        "clip": f"{COLAB_APP_ROOT}/ComfyUI/models/text_encoders/{filename}",
+        "vae": f"{COLAB_APP_ROOT}/ComfyUI/models/vae/{filename}",
+        "checkpoint": f"{COLAB_APP_ROOT}/ComfyUI/models/checkpoints/{filename}",
+    }
+    secret = "CIVITAI_API_KEY" if _download_host(url) == "civitai" else ""
+    return {
+        "filename": filename,
+        "url": url,
+        "sha256": sha,
+        "bytes": None,
+        "dest": folders[role],
+        "auth_secret": secret,
+        "role": "weights" if role == "llm" else role,
+        "group": "llm" if role == "llm" else "manual",
+    }
+
+
+def resolve_colab_downloads(catalog: dict, models: list[str] | None,
+                            manual: list[dict] | None) -> tuple[list[dict], dict]:
+    """Monta a lista de download e o que o jogo liga.
+
+    `models` None usa o narrador 3B e o FLUX.2 Klein. Lista vazia sem link
+    manual não gera notebook.
+    """
+    book = catalog
+    selected = (
+        [f"llm:{COLAB_PLAY_LLM}", f"image:{COLAB_PLAY_IMAGE}"]
+        if models is None else list(models)
+    )
+    downloads: list[dict] = []
+    image_engine = ""
+    video_engine = ""
+    image_files: dict[str, str] = {}
+    video_files: dict[str, str] = {}
+    llm_filename = ""
+    for raw_id in selected:
+        text = str(raw_id or "").strip()
+        if ":" not in text:
+            raise ValueError(f"modelo desconhecido: {text}")
+        group, model_id = text.split(":", 1)
+        if group not in {"llm", "image", "video"}:
+            raise ValueError(f"modelo desconhecido: {text}")
+        section = _merged_colab_section(book, group)
+        if model_id not in section:
+            raise ValueError(f"modelo desconhecido: {text}")
+        entry = section[model_id]
+        is_extra = model_id in (_EXTRA_COLAB_PRESETS.get(group) or {})
+        if group == "image" and not image_engine:
+            image_engine = str(entry.get("engine") or "")
+        if group == "video" and not video_engine:
+            video_engine = str(entry.get("engine") or model_id)
+        for art in entry.get("artifacts") or []:
+            url = str(art.get("url") or "")
+            sha = str(art.get("sha256") or "")
+            if not url or (not sha and not is_extra):
+                continue
+            filename = _safe_filename(art.get("filename") or Path(urllib.parse.urlparse(url).path).name)
+            role = str(art.get("role") or "")
+            if group == "llm":
+                dest = f"{COLAB_APP_ROOT}/models/llm/{filename}"
+                if role == "weights" and not llm_filename:
+                    llm_filename = filename
+            else:
+                rel = str(art.get("dest") or f"models/{filename}")
+                if rel.startswith("/") or ".." in Path(rel).parts:
+                    raise ValueError(f"destino inválido em {text}")
+                dest = f"{COLAB_APP_ROOT}/ComfyUI/{rel}"
+                bucket = image_files if group == "image" else video_files
+                if role in {"unet", "clip", "vae", "checkpoint"} and role not in bucket:
+                    bucket[role] = filename
+            downloads.append({
+                "filename": filename,
+                "url": url,
+                "sha256": sha,
+                "bytes": art.get("bytes"),
+                "dest": dest,
+                "auth_secret": str(art.get("auth_secret") or ""),
+                "role": role,
+                "group": group,
+            })
+    for item in manual or []:
+        spec = _manual_download(item)
+        downloads.append(spec)
+        if spec["role"] == "weights" and not llm_filename:
+            llm_filename = spec["filename"]
+        elif spec["role"] in {"unet", "clip", "vae", "checkpoint"} and spec["role"] not in image_files:
+            image_files[spec["role"]] = spec["filename"]
+            if not image_engine and spec["role"] == "unet":
+                image_engine = "flux2_klein"
+    if not downloads:
+        raise ValueError("escolha ao menos um modelo do catálogo ou um link https")
+    if not llm_filename:
+        raise ValueError("escolha um narrador (GGUF) ou cole o link de um modelo de texto")
+    needs_gguf_node = any(
+        "/ComfyUI/" in item["dest"] and str(item["filename"]).lower().endswith(".gguf")
+        for item in downloads
+    )
+    profile = {
+        "llm_filename": llm_filename,
+        "start_comfy": any("/ComfyUI/" in item["dest"] for item in downloads),
+        "needs_gguf_node": needs_gguf_node,
+        "image_engine": image_engine,
+        "image_files": image_files,
+        "video_engine": video_engine,
+        "video_files": video_files,
+        "needs_civitai_key": any(item.get("auth_secret") == "CIVITAI_API_KEY" for item in downloads),
+    }
+    return downloads, profile
+
+
+def generate_colab_project(catalog: dict | None = None, *,
+                           git_url: str = COLAB_APP_GIT_URL,
+                           git_ref: str = COLAB_APP_GIT_REF,
+                           models: list[str] | None = None,
+                           manual: list[dict] | None = None) -> dict:
+    """Notebook que abre no Colab e sobe o jogo com os modelos escolhidos.
+
+    Sem `models`, baixa o Qwen2.5-3B e o FLUX.2 Klein. Com lista, usa o
+    catálogo (Hugging Face ou CivitAI) e os links manuais. A senha de login
+    nasce na execução e não entra no arquivo. Voz e embeddings ficam desligados.
+    """
+    book = catalog if catalog is not None else load_catalog()
+    llama = _llama_pin(book)
+    downloads, profile = resolve_colab_downloads(book, models, manual)
+    names = ", ".join(item["filename"] for item in downloads)
+    overview = (
+        "# AI Dungeon — projeto Colab (End-to-End · 1 Clique)\n\n"
+        "Abra este arquivo no Colab, escolha uma GPU (T4 ou melhor) em "
+        "Ambiente de execução → Alterar o tipo de ambiente de execução, "
+        "e clique em **Executar tudo** (Run all). Nenhum segredo ou variável manual é exigido.\n\n"
+        f"O notebook clona `{git_url}` em `{git_ref}`, compila o llama-server "
+        f"({llama['git_ref']}) e baixa: {names}.\n\n"
+        "No fim da execução ele imprime um link público `https://...trycloudflare.com/?aidl_token=...` "
+        "que já entra logado em 1 clique (além do usuário `Caio` e senha gerada na hora).\n"
+    )
+    if profile["needs_civitai_key"]:
+        overview += (
+            "\nOpcional: para links privados do CivitAI, você pode definir `CIVITAI_API_KEY` no painel "
+            "Secrets do Colab (se não definir, o notebook tenta o download direto sem falhar).\n"
+        )
+    cells = [
+        _markdown_cell("overview", overview),
+        _code_cell("clone", _colab_clone_cell(git_url, git_ref)),
+        _code_cell("frontend", _colab_frontend_cell()),
+    ]
+    if profile["start_comfy"]:
+        cells.append(_code_cell("comfy", _colab_comfy_cell(needs_gguf_node=profile["needs_gguf_node"])))
+    if profile["needs_civitai_key"]:
+        cells.append(_code_cell("civitai", _colab_civitai_cell()))
+    cells.extend([
+        _code_cell("weights", _colab_weights_cell(downloads)),
+        _code_cell("llama", _colab_llama_cell(llama, profile["llm_filename"])),
+        _code_cell("serve", _colab_serve_cell(profile)),
+        _code_cell("tunnel", _colab_tunnel_cell()),
+    ])
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "accelerator": "GPU",
+            "colab": {"provenance": [], "gpuType": "T4"},
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python", "pygments_lexer": "ipython3"},
+            "aidungeon_colab_project": {
+                "git_url": git_url,
+                "git_ref": git_ref,
+                "llm_filename": profile["llm_filename"],
+                "image_engine": profile["image_engine"],
+                "video_engine": profile["video_engine"],
+                "files": [item["filename"] for item in downloads],
+                "comfy_ref": COLAB_COMFY_GIT_REF,
+            },
+        },
+        "cells": cells,
+    }
+
+
+def _colab_clone_cell(git_url: str, git_ref: str) -> str:
+    return (
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"REPO = Path({COLAB_APP_ROOT!r})\n"
+        f"GIT_URL = {git_url!r}\n"
+        f"GIT_REF = {git_ref!r}\n"
+        "if not (REPO / \".git\").is_dir():\n"
+        "    subprocess.check_call([\"git\", \"clone\", GIT_URL, str(REPO)])\n"
+        "subprocess.check_call([\"git\", \"fetch\", \"origin\", GIT_REF], cwd=REPO)\n"
+        "subprocess.check_call([\"git\", \"checkout\", \"-f\", GIT_REF], cwd=REPO)\n"
+        "subprocess.check_call([\"git\", \"reset\", \"--hard\", f\"origin/{GIT_REF}\"], cwd=REPO)\n"
+        "subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"-r\", \"backend/requirements.txt\"], cwd=REPO)\n"
+        "print(\"repositório\", GIT_REF)\n"
+    )
+
+
+def _colab_frontend_cell() -> str:
+    return (
+        "import os\n"
+        "import subprocess\n"
+        "import tarfile\n"
+        "import urllib.request\n"
+        "from pathlib import Path\n"
+        f"REPO = Path({COLAB_APP_ROOT!r})\n"
+        f"NODE_URL = {COLAB_NODE_TARBALL!r}\n"
+        "archive = Path(\"/tmp/node-colab.tar.xz\")\n"
+        "if not list(Path(\"/usr/local/lib\").glob(\"node-v*-linux-x64\")):\n"
+        "    urllib.request.urlretrieve(NODE_URL, archive)\n"
+        "    with tarfile.open(archive) as bundle:\n"
+        "        bundle.extractall(\"/usr/local/lib\")\n"
+        "extracted = next(Path(\"/usr/local/lib\").glob(\"node-v*-linux-x64\"))\n"
+        "for name in (\"node\", \"npm\", \"npx\"):\n"
+        "    dest = Path(\"/usr/local/bin\") / name\n"
+        "    if dest.exists() or dest.is_symlink():\n"
+        "        dest.unlink()\n"
+        "    dest.symlink_to(extracted / \"bin\" / name)\n"
+        "env = os.environ.copy()\n"
+        "env[\"PATH\"] = str(extracted / \"bin\") + \":/usr/local/bin:\" + env.get(\"PATH\", \"\")\n"
+        "subprocess.check_call([\"npm\", \"ci\"], cwd=REPO / \"frontend\", env=env)\n"
+        "subprocess.check_call([\"npm\", \"run\", \"build\"], cwd=REPO / \"frontend\", env=env)\n"
+        "print(\"frontend\", REPO / \"frontend\" / \"dist\")\n"
+    )
+
+
+def _colab_weights_cell(downloads: list[dict]) -> str:
+    blob = json.dumps(downloads, ensure_ascii=False, indent=2)
+    return (
+        "import hashlib\n"
+        "import json\n"
+        "import time\n"
+        "import urllib.request\n"
+        "from pathlib import Path\n"
+        "DOWNLOADS = json.loads(r\"\"\"\n"
+        + blob
+        + "\n\"\"\")\n"
+        "def _file_sha256(path):\n"
+        "    h = hashlib.sha256()\n"
+        "    with path.open(\"rb\") as f:\n"
+        "        while True:\n"
+        "            chunk = f.read(1024 * 1024)\n"
+        "            if not chunk:\n"
+        "                break\n"
+        "            h.update(chunk)\n"
+        "    return h.hexdigest()\n"
+        "def fetch_one(spec):\n"
+        "    dest = Path(spec[\"dest\"])\n"
+        "    dest.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    expected_sha = (spec.get(\"sha256\") or \"\").strip().lower()\n"
+        "    expected = spec.get(\"bytes\")\n"
+        "    if dest.is_file() and dest.stat().st_size > 0:\n"
+        "        if (not expected or dest.stat().st_size == int(expected)) and (not expected_sha or _file_sha256(dest) == expected_sha):\n"
+        "            print(\"já baixado\", spec[\"filename\"], flush=True)\n"
+        "            return\n"
+        "    part = dest.with_suffix(dest.suffix + \".part\")\n"
+        "    last = None\n"
+        "    for attempt in range(3):\n"
+        "        try:\n"
+        "            headers = {\"User-Agent\": \"aidungeon-colab\"}\n"
+        "            secret_name = spec.get(\"auth_secret\") or \"\"\n"
+        "            if secret_name:\n"
+        "                key = globals().get(secret_name) or \"\"\n"
+        "                if key:\n"
+        "                    headers[\"Authorization\"] = \"Bearer \" + key\n"
+        "            request = urllib.request.Request(spec[\"url\"], headers=headers)\n"
+        "            hasher = hashlib.sha256()\n"
+        "            with urllib.request.urlopen(request, timeout=180) as resp, part.open(\"wb\") as out:\n"
+        "                while True:\n"
+        "                    chunk = resp.read(1024 * 1024)\n"
+        "                    if not chunk:\n"
+        "                        break\n"
+        "                    out.write(chunk)\n"
+        "                    hasher.update(chunk)\n"
+        "            digest = hasher.hexdigest()\n"
+        "            if expected_sha and digest != expected_sha:\n"
+        "                raise ValueError(\"SHA256 divergente em \" + spec[\"filename\"])\n"
+        "            if expected and part.stat().st_size != int(expected):\n"
+        "                raise ValueError(\"tamanho inesperado em \" + spec[\"filename\"])\n"
+        "            part.replace(dest)\n"
+        "            print(\"ok\", spec[\"filename\"], flush=True)\n"
+        "            return\n"
+        "        except Exception as exc:\n"
+        "            last = exc\n"
+        "            time.sleep(2 * (attempt + 1))\n"
+        "    raise SystemExit(str(last))\n"
+        "for spec in DOWNLOADS:\n"
+        "    fetch_one(spec)\n"
+    )
+
+
+def _colab_civitai_cell() -> str:
+    return (
+        "from google.colab import userdata\n"
+        "try:\n"
+        "    CIVITAI_API_KEY = userdata.get(\"CIVITAI_API_KEY\") or \"\"\n"
+        "except Exception:\n"
+        "    CIVITAI_API_KEY = \"\"\n"
+        "print(\"chave CivitAI carregada\" if CIVITAI_API_KEY else \"sem CIVITAI_API_KEY no painel; tentando download direto\")\n"
+    )
+
+
+def _colab_llama_cell(llama: dict, llm_filename: str) -> str:
+    return (
+        "import os\n"
+        "import subprocess\n"
+        "from pathlib import Path\n"
+        f"REPO = Path({COLAB_APP_ROOT!r})\n"
+        f"LLAMA_GIT = {llama['git_url']!r}\n"
+        f"LLAMA_REF = {llama['git_ref']!r}\n"
+        "src = REPO / \"colab\" / \"llama.cpp\"\n"
+        "binary = src / \"build\" / \"bin\" / \"llama-server\"\n"
+        "if not binary.is_file():\n"
+        "    if not (src / \".git\").is_dir():\n"
+        "        src.parent.mkdir(parents=True, exist_ok=True)\n"
+        "        subprocess.check_call([\"git\", \"clone\", LLAMA_GIT, str(src)])\n"
+        "    checkout = subprocess.run([\"git\", \"checkout\", LLAMA_REF], cwd=src)\n"
+        "    if checkout.returncode != 0:\n"
+        "        subprocess.check_call([\"git\", \"fetch\", \"--all\"], cwd=src)\n"
+        "        checkout = subprocess.run([\"git\", \"checkout\", LLAMA_REF], cwd=src)\n"
+        "    if checkout.returncode != 0:\n"
+        "        raise SystemExit(\"git checkout do llama.cpp falhou em \" + LLAMA_REF)\n"
+        "    subprocess.check_call([\"apt-get\", \"update\"])\n"
+        "    subprocess.check_call([\"apt-get\", \"install\", \"-y\", \"build-essential\", \"cmake\", \"git\"])\n"
+        "    subprocess.check_call([\n"
+        "        \"cmake\", \"-S\", str(src), \"-B\", str(src / \"build\"),\n"
+        "        \"-DGGML_CUDA=ON\", \"-DCMAKE_CUDA_ARCHITECTURES=native\",\n"
+        "    ])\n"
+        "    subprocess.check_call([\"cmake\", \"--build\", str(src / \"build\"), \"--target\", \"llama-server\", \"-j\", str(os.cpu_count() or 2)])\n"
+        "if not binary.is_file():\n"
+        "    raise SystemExit(\"llama-server não foi gerado\")\n"
+        f"weights = REPO / \"models\" / \"llm\" / {llm_filename!r}\n"
+        "if not weights.is_file():\n"
+        "    raise SystemExit(\"peso do narrador ausente: \" + weights.name)\n"
+        "log = (REPO / \"colab\")\n"
+        "log.mkdir(parents=True, exist_ok=True)\n"
+        "handle = (log / \"llama-server.log\").open(\"ab\")\n"
+        "subprocess.run([\"pkill\", \"-f\", \"llama-server.*--port 1234\"], check=False)\n"
+        "subprocess.Popen([\n"
+        "    str(binary), \"--host\", \"127.0.0.1\", \"--port\", \"1234\",\n"
+        "    \"-m\", str(weights), \"-ngl\", \"99\", \"-c\", \"8192\", \"-np\", \"1\",\n"
+        "    \"-t\", \"4\", \"-b\", \"512\", \"-ub\", \"512\",\n"
+        "], stdout=handle, stderr=handle, start_new_session=True)\n"
+        "print(\"llama-server\", weights.name)\n"
+    )
+
+
+def _colab_comfy_cell(*, needs_gguf_node: bool = False) -> str:
+    gguf_lines = ""
+    if needs_gguf_node:
+        gguf_lines = (
+            "gguf_node = src / \"custom_nodes\" / \"ComfyUI-GGUF\"\n"
+            "if not (gguf_node / \".git\").is_dir():\n"
+            "    subprocess.check_call([\"git\", \"clone\", \"https://github.com/city96/ComfyUI-GGUF.git\", str(gguf_node)])\n"
+            "subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"-r\", \"requirements.txt\"], cwd=gguf_node)\n"
+        )
+    return (
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"REPO = Path({COLAB_APP_ROOT!r})\n"
+        f"COMFY_GIT = {COLAB_COMFY_GIT_URL!r}\n"
+        f"COMFY_REF = {COLAB_COMFY_GIT_REF!r}\n"
+        "src = REPO / \"ComfyUI\"\n"
+        "if not (src / \".git\").is_dir():\n"
+        "    subprocess.check_call([\"git\", \"clone\", COMFY_GIT, str(src)])\n"
+        "subprocess.check_call([\"git\", \"fetch\", \"origin\", \"tag\", COMFY_REF, \"--no-tags\"], cwd=src)\n"
+        "checkout = subprocess.run([\"git\", \"checkout\", COMFY_REF], cwd=src)\n"
+        "if checkout.returncode != 0:\n"
+        "    raise SystemExit(\"git checkout do ComfyUI falhou em \" + COMFY_REF)\n"
+        "subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"-r\", \"requirements.txt\"], cwd=src)\n"
+        + gguf_lines
+        + "import torch\n"
+        "if not torch.cuda.is_available():\n"
+        "    raise SystemExit(\"PyTorch ficou sem CUDA depois do ComfyUI. Troque o ambiente para GPU e execute de novo.\")\n"
+        "(REPO / \"colab\").mkdir(parents=True, exist_ok=True)\n"
+        "log = (REPO / \"colab\" / \"comfyui.log\").open(\"ab\")\n"
+        "subprocess.run([\"pkill\", \"-f\", \"main.py.*--port 8188\"], check=False)\n"
+        "subprocess.Popen([\n"
+        "    sys.executable, \"main.py\", \"--listen\", \"127.0.0.1\", \"--port\", \"8188\",\n"
+        "], cwd=src, stdout=log, stderr=log, start_new_session=True)\n"
+        "print(\"ComfyUI\", COMFY_REF)\n"
+    )
+
+
+def _colab_serve_cell(profile: dict) -> str:
+    picked = {
+        "start_comfy": bool(profile["start_comfy"]),
+        "image_engine": profile["image_engine"],
+        "image_files": profile["image_files"],
+        "video_engine": profile["video_engine"],
+        "video_files": profile["video_files"],
+    }
+    blob = json.dumps(picked, ensure_ascii=False)
+    return (
+        "import hashlib\n"
+        "import json\n"
+        "import os\n"
+        "import secrets\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        "import urllib.error\n"
+        "import urllib.request\n"
+        "from pathlib import Path\n"
+        f"REPO = Path({COLAB_APP_ROOT!r})\n"
+        "password = secrets.token_urlsafe(12)\n"
+        "auth_secret = secrets.token_hex(32)\n"
+        "env_path = REPO / \".env\"\n"
+        "env_path.write_text(\n"
+        "    \"AUTH_USER=Caio\\n\"\n"
+        "    + \"AUTH_PASSWORD_HASH=\" + hashlib.sha256(password.encode(\"utf-8\")).hexdigest() + \"\\n\"\n"
+        "    + \"AUTH_SECRET=\" + auth_secret + \"\\n\"\n"
+        "    + \"LLM_API_KEY=\\n\",\n"
+        "    encoding=\"utf-8\",\n"
+        ")\n"
+        "settings_path = REPO / \"config\" / \"settings.json\"\n"
+        "settings = json.loads(settings_path.read_text(encoding=\"utf-8\"))\n"
+        "settings[\"llm\"][\"base_url\"] = \"http://127.0.0.1:1234/v1\"\n"
+        "settings[\"llm\"][\"context_size\"] = 8192\n"
+        "settings[\"llm\"][\"model_alias\"] = \"auto\"\n"
+        "settings[\"context\"][\"context_size\"] = 8192\n"
+        "settings[\"context\"][\"budgets\"][\"recent_window\"] = 2048\n"
+        "settings[\"embeddings\"][\"enabled\"] = False\n"
+        "settings[\"voice\"][\"enabled\"] = False\n"
+        f"PROFILE = json.loads({blob!r})\n"
+        "comfy = settings[\"image\"][\"providers\"][\"comfyui\"]\n"
+        "if PROFILE[\"start_comfy\"]:\n"
+        "    comfy[\"base_url\"] = \"http://127.0.0.1:8188\"\n"
+        "    engine = PROFILE[\"image_engine\"]\n"
+        "    if engine:\n"
+        "        comfy[\"engine\"] = engine\n"
+        "    block = comfy\n"
+        "    if engine == \"flux2_klein\":\n"
+        "        block = comfy[\"flux2\"]\n"
+        "    elif engine == \"z_image_turbo\":\n"
+        "        block = comfy[\"zimage\"]\n"
+        "    for role in (\"unet\", \"clip\", \"vae\"):\n"
+        "        filename = PROFILE[\"image_files\"].get(role) or \"\"\n"
+        "        if filename:\n"
+        "            block[role] = filename\n"
+        "    if not engine and not any(PROFILE[\"image_files\"].values()):\n"
+        "        settings[\"image\"][\"enabled\"] = False\n"
+        "    if PROFILE[\"video_engine\"]:\n"
+        "        comfy[\"video\"][\"engine\"] = PROFILE[\"video_engine\"]\n"
+        "    for role in (\"unet\", \"clip\", \"vae\", \"checkpoint\"):\n"
+        "        filename = PROFILE[\"video_files\"].get(role) or \"\"\n"
+        "        if filename:\n"
+        "            comfy[\"video\"][role] = filename\n"
+        "else:\n"
+        "    settings[\"image\"][\"enabled\"] = False\n"
+        "settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + \"\\n\", encoding=\"utf-8\")\n"
+        "def wait_http(url):\n"
+        "    last = None\n"
+        "    for _ in range(60):\n"
+        "        try:\n"
+        "            with urllib.request.urlopen(url, timeout=5) as resp:\n"
+        "                if resp.status < 500:\n"
+        "                    return\n"
+        "                last = resp.status\n"
+        "        except urllib.error.HTTPError as exc:\n"
+        "            if exc.code < 500:\n"
+        "                return\n"
+        "            last = exc.code\n"
+        "        except Exception as exc:\n"
+        "            last = exc.__class__.__name__\n"
+        "        time.sleep(5)\n"
+        "    raise SystemExit(\"health check falhou: \" + url + \" (\" + str(last) + \")\")\n"
+        "print(\"login Caio\")\n"
+        "print(\"senha\", password)\n"
+        "wait_http(\"http://127.0.0.1:1234/health\")\n"
+        "if PROFILE[\"start_comfy\"]:\n"
+        "    wait_http(\"http://127.0.0.1:8188/system_stats\")\n"
+        "app_env = os.environ.copy()\n"
+        "app_env[\"AIDUNGEON_ENV_PATH\"] = str(env_path)\n"
+        "(REPO / \"colab\").mkdir(parents=True, exist_ok=True)\n"
+        "log = (REPO / \"colab\" / \"app.log\").open(\"ab\")\n"
+        "subprocess.run([\"pkill\", \"-f\", \"uvicorn.*app.main:app\"], check=False)\n"
+        "subprocess.Popen(\n"
+        "    [sys.executable, \"-m\", \"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"],\n"
+        "    cwd=REPO / \"backend\", env=app_env, stdout=log, stderr=log, start_new_session=True,\n"
+        ")\n"
+        "wait_http(\"http://127.0.0.1:8000/api/health/llm\")\n"
+        "print(\"jogo em http://127.0.0.1:8000\")\n"
+    )
+
+
+def _colab_tunnel_cell() -> str:
+    return (
+        "import base64\n"
+        "import hashlib\n"
+        "import hmac\n"
+        "import pathlib\n"
+        "import re\n"
+        "import subprocess\n"
+        "import time\n"
+        "import urllib.request\n"
+        "binary = pathlib.Path(\"/tmp/cloudflared\")\n"
+        "if not binary.is_file():\n"
+        "    urllib.request.urlretrieve(\n"
+        "        \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64\",\n"
+        "        binary,\n"
+        "    )\n"
+        "    binary.chmod(0o755)\n"
+        "subprocess.run([\"pkill\", \"-f\", \"cloudflared.*127.0.0.1:8000\"], check=False)\n"
+        "log_path = pathlib.Path(\"/tmp/cloudflared.log\")\n"
+        "log = log_path.open(\"wb\")\n"
+        "subprocess.Popen(\n"
+        "    [str(binary), \"tunnel\", \"--url\", \"http://127.0.0.1:8000\", \"--no-autoupdate\"],\n"
+        "    stdout=log, stderr=subprocess.STDOUT, start_new_session=True,\n"
+        ")\n"
+        "url = \"\"\n"
+        "for _ in range(40):\n"
+        "    text = log_path.read_text(encoding=\"utf-8\", errors=\"replace\") if log_path.exists() else \"\"\n"
+        "    found = re.search(r\"https://[-0-9a-z]+\\.trycloudflare\\.com\", text)\n"
+        "    if found:\n"
+        "        url = found.group(0)\n"
+        "        break\n"
+        "    time.sleep(1)\n"
+        "if not url:\n"
+        "    raise SystemExit(\"o túnel não publicou uma URL\")\n"
+        "env_file = pathlib.Path(\"/content/aidungeon-local/.env\")\n"
+        "secret_val = \"\"\n"
+        "if env_file.is_file():\n"
+        "    for line in env_file.read_text(encoding=\"utf-8\").splitlines():\n"
+        "        if line.startswith(\"AUTH_SECRET=\"):\n"
+        "            secret_val = line.split(\"=\", 1)[1].strip()\n"
+        "if secret_val:\n"
+        "    exp = int(time.time()) + 168 * 3600\n"
+        "    u_b64 = base64.urlsafe_b64encode(b\"Caio\").rstrip(b\"=\").decode(\"ascii\")\n"
+        "    e_b64 = base64.urlsafe_b64encode(str(exp).encode(\"ascii\")).rstrip(b\"=\").decode(\"ascii\")\n"
+        "    sig = hmac.new(secret_val.encode(\"utf-8\"), f\"Caio.{exp}\".encode(\"utf-8\"), hashlib.sha256).hexdigest()\n"
+        "    print(\"abra (1-clique já logado):\", f\"{url}/?aidl_token={u_b64}.{e_b64}.{sig}\")\n"
+        "print(\"abra\", url)\n"
+    )
 
 
 def notebook_bytes(notebook: dict) -> bytes:

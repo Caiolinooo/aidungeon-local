@@ -14,6 +14,30 @@ from app import db, deps, events, image_client, jobs
 from conftest import TEST_AUTH_SECRET, image_english_echo, make_adventure
 from test_v3 import PNG_B64, PNG_BYTES, use_tmp_storage
 
+def test_not_a_bikini_is_a_refusal_not_a_swim_request():
+    assert jobs.asks_for_swimwear("fully clothed, not a bikini, no swimwear") is False
+    assert jobs.asks_for_swimwear("Ana nada de biquíni") is True
+
+
+def test_scene_clip_above_the_proven_frame_shrinks_to_768x448():
+    assert jobs.scene_clip_overrides({"width": 1280, "height": 720}) == {
+        "width": 768, "height": 448, "vertical_width": 448, "vertical_height": 768,
+    }
+    assert jobs.scene_clip_overrides({"width": 768, "height": 448}) == {}
+
+
+def test_wan_scene_clip_uses_the_ltx_path_that_finished_in_about_a_minute():
+    over = jobs.scene_clip_overrides({
+        "engine": "wan", "width": 1280, "height": 720, "steps": 20, "cfg": 5,
+    })
+    fast = image_client._VIDEO_DEFAULTS
+    assert over["engine"] == "ltxv"
+    assert over["steps"] == fast["steps"]
+    assert over["cfg"] == fast["cfg"]
+    assert over["clip"] == fast["clip"]
+    assert (over["width"], over["height"]) == (768, 448)
+
+
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00mp41isom"
 WAN_UNET = "Wan2.2-TI2V-5B-Q8_0.gguf"
 IMAGE_UNET = "fineviewQWEN_qw21TurboFixed_3299367.safetensors"

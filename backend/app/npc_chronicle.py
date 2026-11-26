@@ -350,7 +350,10 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
         )
         cards.append(created)
         if npc_assets.has_visual(created):
-            jobs.enqueue_portrait(conn, adventure_id, created["id"])
+            # Lote da crônica fica atrás do fundo. Quem está no quadro sobe
+            # para a prioridade da cena quando o sync pede o retrato.
+            jobs.enqueue_portrait(conn, adventure_id, created["id"],
+                                  priority=jobs.PRIORITY_BULK_PORTRAIT)
         return "created"
 
     sheet = npc_assets.parse_sheet(card.get("sheet") or "")
@@ -403,7 +406,8 @@ def apply_character(conn, adventure_id: str, cards: list[dict], item: dict,
     if updated:
         card.update(updated)
     if not card.get("portrait_image_id") and npc_assets.has_visual(updated or card):
-        jobs.enqueue_portrait(conn, adventure_id, card["id"])
+        jobs.enqueue_portrait(conn, adventure_id, card["id"],
+                              priority=jobs.PRIORITY_BULK_PORTRAIT)
     elif updated:
         try:
             from app import portrait_sync

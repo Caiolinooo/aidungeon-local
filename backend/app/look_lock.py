@@ -23,7 +23,7 @@ from typing import Any
 
 from PIL import Image, ImageOps
 
-from app import db, likeness, llm_client, npc_assets, settings_store
+from app import db, likeness, llm_client, npc_assets, provider_profiles, settings_store
 
 log = logging.getLogger("aidungeon.look_lock")
 # Leitura que falhou (visão fora do ar, resposta inválida) não é refeita a
@@ -97,6 +97,8 @@ Hair:
   not stretched), measured against the ears, chin and shoulders you can see: "cropped above the ears",
   "ear-length", "chin-length", "shoulder-length", "just past the shoulders", "chest-length", "mid-back" or
   "waist-length".
+- hairstyle: how it is arranged, not where it would end if loose: "worn down", "pulled tightly back",
+  "low ponytail", "bun", "braid". "worn down" when it is not tied. A long ponytail is not "cropped".
 - glasses: frames with thickness, shape, size and ONE colour, e.g. "thin round silver metal wire frames, medium
   size"; "none" if the character does not wear glasses in most images. Never just "yes".
 Skin:
@@ -141,6 +143,12 @@ def reference_images(conn, card: dict) -> tuple[str, list[bytes]]:
     if likeness.is_minor(card):
         return "", []
     photos = likeness.visual_reference_images(card)[:MAX_PHOTOS]
+    if not photos:
+        # A foto da Wikipedia fica em likeness.reference_image_path, não em
+        # sheet.reference. Sem isto a leitura nunca via o rosto da Bia Mare.
+        blob = likeness.reference_bytes(card)
+        if blob:
+            photos = [blob]
     if photos:
         return "photo", photos
     anchor_id = str(card.get("portrait_anchor_id") or card.get("portrait_image_id") or "")
@@ -284,6 +292,29 @@ def description(card: dict | None) -> str:
 # As leituras usam a role `assets` (slot 2, com crônica e resumo). Na role
 # `assistant` elas ocupavam o slot 3 por dezenas de segundos e o juiz do turno
 # (turn_gate, 12 s de prazo) estourava: "adjudicador indisponível".
+def _look_reply(llm_cfg: dict, messages: list[dict], *, transport=None) -> tuple[str, dict]:
+    """Lê a foto. Se o narrador não aceita imagem, tenta o perfil que vê."""
+    try:
+        return llm_client.chat_completion(
+            llm_cfg, messages, role="assets", temperature=0, max_tokens=4000,
+            timeout_s=240, transport=transport,
+        ), llm_cfg
+    except llm_client.LlmError as exc:
+        if "404" not in str(exc):
+            raise
+        with db.session() as conn:
+            fallback = provider_profiles.vision_llm_cfg(
+                conn, current_model=str(llm_cfg.get("model_alias") or ""))
+        if not fallback:
+            raise
+        merged = {**llm_cfg, **fallback}
+        log.warning("look: narrador sem visão; lendo com %s", fallback["model_alias"])
+        return llm_client.chat_completion(
+            merged, messages, role="assets", temperature=0,
+            max_tokens=4000, timeout_s=240, transport=transport,
+        ), merged
+
+
 def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = "") -> dict | None:
     # A descrição do card não entra nesta leitura: com ela no contexto o modelo
     # copiava "cabelo até as costas" e "quadril pronunciado" do texto por cima
@@ -297,13 +328,10 @@ def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = ""
         content.append({"type": "text", "text": f"Image {number}:"})
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+    messages = [{"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": content}]
     try:
-        reply = llm_client.chat_completion(
-            llm_cfg, [{"role": "system", "content": _SYSTEM},
-                      {"role": "user", "content": content}],
-            role="assets", temperature=0, max_tokens=1100, timeout_s=240,
-            transport=transport,
-        )
+        reply, seen_cfg = _look_reply(llm_cfg, messages, transport=transport)
     except Exception as exc:  # visão fora do ar não derruba quem pinta
         log.warning("look: visão indisponível: %s: %s", type(exc).__name__, exc)
         return None
@@ -313,11 +341,11 @@ def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = ""
     # Roupa numa leitura própria só da foto principal: no meio dos traços do
     # rosto e do corpo o modelo dizia "not visible" para a calça e o tênis que
     # o espelho mostra inteiros.
-    clothing = _read_clothing(images[0], transport=transport, llm_cfg=llm_cfg)
+    clothing = _read_clothing(images[0], transport=transport, llm_cfg=seen_cfg)
     for key in CLOTHING_KEYS:
         look[key] = clothing.get(key, "not visible")
     look["top"] = no_text(look["top"])
-    return merge_body(look, _read_body_text(about, transport=transport, llm_cfg=llm_cfg))
+    return merge_body(look, _read_body_text(about, transport=transport, llm_cfg=seen_cfg))
 
 
 def merge_body(look: dict, stated: dict) -> dict:
@@ -589,21 +617,31 @@ def _glasses(look: dict) -> str:
 
 def _hair(look: dict, *, detail: bool) -> str:
     curl = _value(look, "hair_curl") or _value(look, "hair_texture")
-    parts = [_value(look, "hair_length"), curl if detail else (curl.split(",")[0] if curl else ""),
+    style = _value(look, "hairstyle")
+    tied = bool(style and re.search(r"(?i)slicked|pulled|ponytail|bun|braid|updo", style))
+    if tied:
+        # "worn down, slicked back" e "shoulder-length" soltam o cabelo no ombro.
+        style = re.sub(r"(?i)\bworn down\b,?\s*", "", style).strip(" ,")
+        style = f"{style}, pulled off the face, hairline fully visible".strip(" ,")
+    length = "" if tied else _value(look, "hair_length")
+    parts = [length, curl if detail else (curl.split(",")[0] if curl else ""),
              _value(look, "hair_colour")]
     if detail:
         parts.insert(2, _value(look, "hair_volume"))
     hair = ", ".join(part for part in parts if part)
-    if not hair:
+    if not hair and not style:
         return ""
-    hair += " hair"
-    if _value(look, "hair_dye"):
-        hair += f" with {look['hair_dye']}"
-    elif _value(look, "hair_sheen") and detail:
-        # Brilho natural, não tinta: dito como cor, o Flux pintava pontas vinho.
-        hair += f", uniformly dark from roots to ends, only {look['hair_sheen']}"
-    if detail and _value(look, "hair_parting"):
-        hair += f", {look['hair_parting']}"
+    if hair:
+        hair += " hair"
+        if _value(look, "hair_dye"):
+            hair += f" with {look['hair_dye']}"
+        elif _value(look, "hair_sheen") and detail:
+            # Brilho natural, não tinta: dito como cor, o Flux pintava pontas vinho.
+            hair += f", uniformly dark from roots to ends, only {look['hair_sheen']}"
+        if detail and _value(look, "hair_parting"):
+            hair += f", {look['hair_parting']}"
+    if style:
+        hair = f"{hair}, {style}" if hair else style
     return hair
 
 
@@ -712,6 +750,7 @@ def ensure_many(adventure_id: str, cards: list[dict], *, transport=None,
                and now - _failures.get(str(card.get("id")), -_FAILURE_PAUSE_S) >= _FAILURE_PAUSE_S
                and not likeness.is_minor(card)
                and (likeness.visual_reference_images(card)[:1]
+                    or likeness.reference_bytes(card)
                     or card.get("portrait_anchor_id") or card.get("portrait_image_id"))]
     if not pending:
         return cards

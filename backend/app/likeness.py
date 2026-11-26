@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+from PIL import Image
 
 from app import db, llm_client, npc_assets
 from app.errors import GameError
@@ -131,6 +132,16 @@ def display_name(card: dict) -> str:
     return " ".join(str(card.get("title") or "").split()) or "the person"
 
 
+def story_name(card: dict) -> str:
+    """Nome que a narração e a contagem da cena usam.
+
+    O título da Wikipedia ("Iza (cantora)", "Bia Arantes") no mesmo prompt
+    que o card ("IZA", "Bia Mare") faz o modelo pintar outra pessoa.
+    """
+    title = " ".join(str(card.get("title") or "").split())
+    return title or display_name(card)
+
+
 def decide_frame(cast: list[dict], *, explicit: bool) -> FrameDecision:
     """Quem pode ficar no quadro e se a pintura pode ser explícita.
 
@@ -220,7 +231,7 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
     lines = []
     states = npc_assets.cast_state_bits(cards) if state else {}
     for card in cards:
-        name = display_name(card) or str(card.get("title") or "").strip()
+        name = story_name(card)
         animal = npc_assets.animal_kind(card) if state else ""
         if animal and name:
             # A leitura de aparência usa a ficha de gente ("no glasses; face:
@@ -228,7 +239,20 @@ def _look_bits(cards: list[dict], *, compact: bool = False, level: str = "",
             lines.append(f"{name}: a real {animal}, an animal with the body of a {animal}, "
                          "never a person")
             continue
+        kind = npc_assets.creature_kind(card) if state else ""
+        if kind and name:
+            # Salamandra, dragão, sapo: a frase de espécie já diz "creature
+            # body". A leitura do retrato errado ("máscara, cabelo liso,
+            # torso humano") voltava em seguida e o modelo pintava uma pessoa.
+            lines.append(
+                f"{name}: a {kind} with the body of a {kind}, "
+                "not a human face, not human hair, not a humanoid torso"
+            )
+            continue
         if not _has_look(card):
+            now = states.get(str(card.get("id")), [])
+            if now and name:
+                lines.append(f"{name}: " + "; ".join(now))
             continue
         text = look_lock.identity_text(look_lock.current(card), compact=compact, level=level)
         if text and name:
@@ -261,13 +285,14 @@ def _opening_clause(cards: list[dict], *, explicit: bool = False,
         return rest
     bits: list[str] = []
     for card in reals:
+        name = story_name(card)
         if has_reference_image(card):
-            bits.append(display_name(card))
+            bits.append(name)
             continue
         desc = english_descriptor(card)
         if not explicit:
             desc = strip_explicit(desc)
-        bits.append(f"{display_name(card)}: {desc}" if desc else display_name(card))
+        bits.append(f"{name}: {desc}" if desc else name)
     bits.extend(name for name in photo_names if name)
     lead = "exact likeness of " + ", ".join(bits)
     if not rest:
@@ -280,7 +305,7 @@ def real_person_prefix(card: dict) -> str:
     if not is_real_person(card) or is_minor(card):
         return ""
     desc = strip_explicit(english_descriptor(card))
-    name = display_name(card)
+    name = story_name(card)
     if desc:
         return f"exact likeness of {name}, {desc}"
     return f"exact likeness of {name}"
@@ -681,6 +706,44 @@ def _fallback_face_crop(image):
     return image.crop((left, 0, left + width, height))
 
 
+def portrait_face_references(blobs: list[bytes]) -> list[bytes]:
+    """Rosto detectado vira a referência do retrato, já perto de 1 MP.
+
+    A foto inteira da Bia deixa o rosto pequeno no latent e o Flux pinta
+    outro cabelo. Sem detecção, a foto original segue.
+    """
+    found: list[bytes] = []
+    for raw in blobs:
+        try:
+            with Image.open(io.BytesIO(raw)) as source:
+                image = source.convert("RGB")
+        except OSError:
+            found.append(raw)
+            continue
+        box = _largest_face_box(image)
+        if not box:
+            found.append(raw)
+            continue
+        _x, _y, width, height = box
+        # Rosto de 84 px ampliado até 1 MP inventa outra pessoa. A foto
+        # inteira guarda os pixels reais.
+        if min(width, height) < 180:
+            found.append(raw)
+            continue
+        face = _face_only_crop(image, box)
+        pixels = face.width * face.height
+        if pixels < 900_000:
+            scale = (1_000_000 / pixels) ** 0.5
+            face = face.resize(
+                (max(64, int(face.width * scale)), max(64, int(face.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        output = io.BytesIO()
+        face.save(output, format="PNG")
+        found.append(output.getvalue())
+    return found
+
+
 def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
     """Recorta rosto/cabelo; ombros, roupa e pose da referência ficam fora.
 
@@ -692,8 +755,12 @@ def identity_face_pngs(blobs: list[bytes]) -> list[bytes]:
 
     found: list[bytes] = []
     for raw in blobs:
-        with Image.open(io.BytesIO(raw)) as source:
-            image = source.convert("RGB")
+        try:
+            with Image.open(io.BytesIO(raw)) as source:
+                image = source.convert("RGB")
+        except OSError:
+            found.append(raw)
+            continue
         box = _largest_face_box(image)
         face = _face_only_crop(image, box) if box else _fallback_face_crop(image)
         if face is None:

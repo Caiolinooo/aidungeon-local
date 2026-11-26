@@ -185,10 +185,11 @@ _GLUE = {"and", "the", "with", "her", "his", "its", "from", "into", "over"}
 
 
 def moment_for_painter(actions: list[dict], action_seq: int) -> str:
-    """Os dois últimos trechos como ação imediata, com contexto recente antes.
+    """Os dois últimos trechos como ação imediata.
 
-    O modelo de imagem tem de pintar a ação final mantendo a continuidade de
-    quem está presente e onde a cena acontece.
+    Quem está e o lugar já vão em campos próprios. A cena anterior, colada
+    aqui como contexto, fazia o modelo pintar o dragão da abertura quando
+    o agora era a chuva.
     """
     eligible = [
         action for action in actions
@@ -197,10 +198,6 @@ def moment_for_painter(actions: list[dict], action_seq: int) -> str:
         and (action.get("text") or "").strip()
     ]
     lines = []
-    earlier = eligible[:-2][-4:]
-    if earlier:
-        prior = " ".join(action["text"].strip() for action in earlier)[-900:]
-        lines.append("Recent scene context (who is present and where): " + prior)
     for action in eligible[-2:]:
         text = action["text"].strip()
         if action.get("type") in ("do", "say", "story"):
@@ -1263,7 +1260,9 @@ def _build_final_prompt(adv: dict, actions: list[dict], body: SeeRequest,
         llm_cfg=llm_cfg,
         context=f"{sentence}. Place: {location}.",
     ) if order else ""
-    order_lock = _explicit_order_lock(order_en) if explicit else ""
+    # A trava guarda o pedido original. Traduzir antes apagava "sem roupa"
+    # quando o modelo devolvia outra frase em inglês.
+    order_lock = _explicit_order_lock(order) if explicit else ""
     lead_bits = [order_lock] if order_lock else []
     # Trava de sexo antes de tudo. Recusa estabelecida: a frase visual da
     # recusa vem antes do rosto (senão o CLIP pinta o ato recusado). Caso

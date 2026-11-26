@@ -139,6 +139,22 @@ _BACKDROP_NEGATIVE = "person, people, human, face, portrait, character, crowd, f
 # Cena vestida: o fundo recusa nudez. Sem isso a pintura trocava a roupa do
 # card e a fada saía nua no painel enquanto o See mostrava o vestido.
 _NUDITY_BAN = npc_assets.NUDITY_BAN
+# Praia sem pedido de banho: o Flux trata biquíni como roupa e o negativo
+# de nudez não pega. CFG 1 ignora o negativo, então a frase também entra
+# no positivo da cena.
+_SWIMWEAR_BAN = "bikini, swimsuit, swimwear, bathing suit"
+_SWIM_REQUEST = re.compile(
+    r"(?i)(?<!\w)(?:bikini|bikinis|swimsuit|swimwear|bathing suit|"
+    r"biqu[ií]ni|mai[oô]|sunga|nadando|swimming)(?!\w)"
+)
+_SWIM_REFUSAL = re.compile(
+    r"(?i)\bnot\s+(?:a\s+)?(?:bikini|swimsuit|swimwear|bathing suit)\b|\bno\s+swimwear\b"
+)
+
+
+def asks_for_swimwear(text: str) -> bool:
+    """Pedido de banho. A recusa "not a bikini" não conta."""
+    return bool(_SWIM_REQUEST.search(_SWIM_REFUSAL.sub(" ", text or "")))
 # Quando o card tem rosto, a cena PODE ter essa pessoa — e só ela, com essa cara.
 _CAST_NEGATIVE = (
     "extra person, crowd, duplicate face, wrong hair, different outfit, costume change, "
@@ -1305,6 +1321,24 @@ def _portrait_bytes(image: dict) -> bytes:
                         "canonical portrait file is missing") from exc
 
 
+def _clip_reference_look(look: str) -> str:
+    """Roupa curta no retrato com foto. O parágrafo da ficha descrevia outra vida
+    e o Flux trocava o rosto para caber nela."""
+    kept = []
+    for line in (look or "").splitlines():
+        if line.lower().startswith("expression:"):
+            continue
+        text = " ".join(line.split())
+        sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+        if len(sentence) > 180:
+            cut = sentence[:180]
+            space = cut.rfind(" ")
+            sentence = cut[:space] if space > 40 else cut
+        if sentence:
+            kept.append(sentence.rstrip(" ,;"))
+    return " ".join(kept)
+
+
 def _execute_portrait(job: dict, transport: Any) -> dict:
     """Pinta um character_portrait preparado; traduz o prompt final antes do provider."""
     payload = job.get("payload") or {}
@@ -1337,18 +1371,54 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                 raise GameError(503, "generation_failed",
                                 "canonical portrait image is missing")
     state_key = str(payload.get("state_key") or "")
-    prompt = (npc_assets.portrait_variant_prompt(card) if anchor_id
-              else str(card.get("portrait_prompt") or "").strip()
-              or npc_assets.portrait_variant_prompt(card))
-    final = " ".join(p for p in (adv.get("image_style") or "",
-                                 prompt,
-                                 img_cfg["style_suffix"] or "") if p).strip()
-    prefix = (likeness.real_person_prefix(card)
-              if img_cfg.get("provider") in ("sdwebui", "openai_compatible") else "")
+    reference_identity = (
+        likeness.is_real_person(card) and not likeness.is_minor(card)
+        and likeness.has_reference_image(card)
+    )
+    if reference_identity and look_lock.current(card) is None:
+        refreshed = look_lock.ensure_many(
+            adv["id"], [card], transport=transport, llm_cfg=llm_cfg, limit=1)
+        if refreshed:
+            card = refreshed[0]
+    if reference_identity:
+        prompt = (
+            "Upper-body portrait of the exact same adult person shown in the supplied "
+            "reference photo. Preserve their identity, facial structure, eyes, skin tone, "
+            "hair color, hair length, hair texture and hairline exactly. Neutral background."
+        )
+    else:
+        prompt = (npc_assets.portrait_variant_prompt(card) if anchor_id
+                  else str(card.get("portrait_prompt") or "").strip()
+                  or npc_assets.portrait_variant_prompt(card))
+    # O estilo da aventura ("golden hour ou noite") troca a luz da foto
+    # de referência. O retrato com foto fica no estúdio neutro do prompt.
+    scene_style = "" if reference_identity else (adv.get("image_style") or "")
+    if reference_identity:
+        # A ficha de roupa ("roupa de surf") descrevia outra vida e o Flux
+        # trocava a pessoa. Só a roupa que a história mudou entra; o resto é a foto.
+        sheet = npc_assets.parse_sheet(card.get("sheet") or "")
+        outfit = " ".join(str(sheet.get("current_outfit") or "").split())
+        look = ""
+        if (outfit and npc_assets.is_outfit(outfit)
+                and not npc_assets.is_nude_outfit(outfit)):
+            look = _clip_reference_look(f"current outfit: {outfit}")
+    else:
+        look = npc_assets.sheet_context(card.get("sheet") or "")
+    if reference_identity:
+        # A identidade fica por último: o parágrafo de roupa no fim trocava a pessoa.
+        final = ". ".join(part for part in (
+            scene_style, img_cfg["style_suffix"] or "", look, prompt) if part).strip()
+    else:
+        final = " ".join(p for p in (scene_style,
+                                     prompt,
+                                     img_cfg["style_suffix"] or "") if p).strip()
+    prefix = ""
+    if img_cfg.get("provider") in ("sdwebui", "openai_compatible"):
+        prefix = (f"exact likeness of {likeness.story_name(card)}" if reference_identity
+                  else likeness.real_person_prefix(card))
     if prefix:
         final = f"{prefix}, {final}" if final else prefix
-    look = npc_assets.sheet_context(card.get("sheet") or "")
-    if look:
+    if look and not reference_identity:
         if state_key:
             final = f"{final}. Current look, follow the story: {look}"
         else:
@@ -1401,6 +1471,10 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     if img_cfg.get("provider") == "comfyui":
         init_bytes = None
         denoise = 1.0 if references else None
+        # Sem img2img: herdar 1920×1080 da âncora só deixava cada refresh lento.
+        init_width = init_height = None
+        if reference_identity and references:
+            references = likeness.portrait_face_references(references)
     elif force_reference and references:
         init_bytes = references[0]
         denoise = 0.12
@@ -1432,10 +1506,12 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     image_id = db.new_id()
     stale = False
     stored_key = state_key
+    portrait_width = init_width or _PORTRAIT_WIDTH
+    portrait_height = init_height or _PORTRAIT_HEIGHT
     meta = image_client.generate_image(
         img_cfg, final, adventure_id=adv["id"],
         image_id=image_id, transport=transport,
-        width=init_width, height=init_height,
+        width=portrait_width, height=portrait_height,
         init_image=init_bytes,
         denoising_strength=denoise,
         reference_images=(
@@ -1547,6 +1623,11 @@ def _execute_card_assets(job: dict, transport: Any) -> dict:
 # Fundo de cena: bucket SDXL 7:4. A faixa corta o centro; 896×512 ficava mole.
 _BACKDROP_WIDTH = 1344
 _BACKDROP_HEIGHT = 768
+# Busto. 1920×1080 (o canvas da cena) levava ~30 s por retrato no Flux e a
+# fila de personagens novos segurava o fundo. 832×1216 é múltiplo de 16 e
+# tem cerca da metade dos pixels.
+_PORTRAIT_WIDTH = 832
+_PORTRAIT_HEIGHT = 1216
 
 
 def _backdrop_cfg(img_cfg: dict, *, explicit: bool) -> dict:
@@ -1629,6 +1710,8 @@ def _execute_backdrop(job: dict, transport: Any) -> dict:
         ban = _CAST_NEGATIVE_EXPLICIT
     elif payload.get("include_people"):
         ban = _CAST_NEGATIVE
+        if not asks_for_swimwear(prompt):
+            ban = f"{ban}, {_SWIMWEAR_BAN}"
     else:
         ban = _BACKDROP_NEGATIVE
     base_negative = (
@@ -2272,8 +2355,39 @@ def _clip_source_png(job: dict) -> tuple[dict, bytes]:
     return source, raw
 
 
+_SCENE_CLIP_MAX_PIXELS = 768 * 448
+
+
+def scene_clip_overrides(video: dict) -> dict:
+    """Cena no quadro e no motor que terminaram na L4.
+
+    Wan 1280×720 não concluiu. Wan 768×448 levou cerca de 3 min. O LTXV
+    neste quadro, 8 passos, ficava perto de 1 min. O giro 360° não passa
+    aqui: ele manda o próprio bloco Wan.
+    """
+    overrides: dict = {}
+    width = int(video.get("width") or 0)
+    height = int(video.get("height") or 0)
+    if width * height > _SCENE_CLIP_MAX_PIXELS:
+        overrides.update({
+            "width": 768,
+            "height": 448,
+            "vertical_width": 448,
+            "vertical_height": 768,
+        })
+    if str(video.get("engine") or "").strip().lower() == "wan":
+        fast = image_client._VIDEO_DEFAULTS
+        overrides.update({
+            "engine": "ltxv",
+            "steps": int(fast["steps"]),
+            "cfg": float(fast["cfg"]),
+            "clip": str(fast["clip"]),
+        })
+    return overrides
+
+
 def _execute_scene_clip(job: dict, transport: Any) -> dict:
-    """Gera o MP4 Wan e grava kind=clip. Cancelamento não deixa arquivo."""
+    """Gera o MP4 da cena e grava kind=clip. Cancelamento não deixa arquivo."""
     payload = job.get("payload") or {}
     prompt = " ".join(str(payload.get("prompt") or "").split())
     if not prompt:
@@ -2315,7 +2429,8 @@ def _execute_scene_clip(job: dict, transport: Any) -> dict:
         meta = image_client.generate_clip(
             img_cfg, prompt, adventure_id=job["adventure_id"], image_id=image_id,
             source_png=raw, transport=transport,
-            progress=_generation_progress(job, transport, watch_cancel=True))
+            progress=_generation_progress(job, transport, watch_cancel=True),
+            video_overrides=scene_clip_overrides(image_client.video_settings(img_cfg)) or None)
     else:
         image_id = db.new_id()
     try:

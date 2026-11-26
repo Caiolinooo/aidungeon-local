@@ -66,7 +66,7 @@ Ficou para outras tarefas:
 | K3 | Chronicle confiável, retrato automático, `scene_state` (migration 010) | G3 | pendente |
 | K4 | Summarizer em `role=summary` + `tools/backfill_chronicle.py` | K3 | parcial: história que cabe na janela de 106k e no horizonte de 4096 tk agora arquiva pela cena viva de 8 turnos (`archive_horizon_turns`); falta `tools/backfill_chronicle.py` e o aceite de ≥3 memórias nas outras aventuras |
 | K5 | See com elenco presente e prompt em inglês (planejador C4) | K3, G5 | pendente |
-| K6 | Likeness de pessoa real + guardrail SFW (C8) | G6 | feito no código: pessoa real força SFW, cena explícita tira a pessoa ou recusa, menor nunca; Wikipedia e upload em `data/references`. ArcFace/FaceID esperam a G6 |
+| K6 | Likeness de pessoa real + guardrail SFW (C8) | G6 | feito no código: pessoa real força SFW, cena explícita tira a pessoa ou recusa, menor nunca; Wikipedia e upload em `data/references`. Retrato com foto ignora o cabelo inventado pela ficha e o estilo golden hour da aventura; o fundo usa o nome do card (IZA, Bia Mare), não o título da Wikipedia. Roupa em português da ficha entra no prompt e o tradutor não devolve frase em português. ArcFace/FaceID esperam a G6 |
 | K7 | Sampler pt-BR (A/B) | — | pendente |
 | K8 | Frontend via SSE, input livre após `done`, drawer de likeness | G4 | pendente |
 | K9 | e2e Playwright no staging | K5, K6, K8 | pendente |

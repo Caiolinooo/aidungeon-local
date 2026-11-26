@@ -17,11 +17,12 @@ from fastapi.responses import Response
 from app import access, auth, db, llm_client, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
-from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
+from app.schemas import ColabProjectRequest, RuntimeRegistration, RuntimeSettingsUpdate
 
 router = APIRouter()
 
 _NOTEBOOK_NAME = "aidungeon-runtime.ipynb"
+_COLAB_PROJECT_NAME = "aidungeon-colab.ipynb"
 
 
 def _provisioning():
@@ -109,6 +110,52 @@ def get_runtime_notebook(info: auth.AuthInfo = Depends(access.require_admin)) ->
     }
     return Response(content=payload, media_type="application/x-ipynb+json",
                     headers=headers)
+
+
+def _colab_project_response(notebook: dict) -> Response:
+    prov = _provisioning()
+    raw = prov.notebook_bytes(notebook)
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{_COLAB_PROJECT_NAME}"',
+    }
+    return Response(content=raw, media_type="application/x-ipynb+json", headers=headers)
+
+
+@router.get("/runtime/colab-models")
+def get_colab_models(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    """Modelos do catálogo com link público, separados por Hugging Face e CivitAI."""
+    prov = _provisioning()
+    return {"models": prov.colab_model_choices()}
+
+
+@router.get("/runtime/colab-project")
+def get_colab_project(info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
+    """Notebook padrão: Qwen2.5-3B e FLUX.2 Klein."""
+    prov = _provisioning()
+    try:
+        notebook = prov.generate_colab_project()
+    except ValueError as exc:
+        raise GameError.bad_request("validation_error", str(exc)) from exc
+    return _colab_project_response(notebook)
+
+
+@router.post("/runtime/colab-project")
+def post_colab_project(body: ColabProjectRequest,
+                       info: auth.AuthInfo = Depends(access.require_admin)) -> Response:
+    """Notebook com os modelos marcados e os links colados."""
+    prov = _provisioning()
+    manual = [item.model_dump() for item in body.manual]
+    if not body.models and not manual:
+        raise GameError.bad_request(
+            "validation_error", "escolha ao menos um modelo ou cole um link https")
+    try:
+        notebook = prov.generate_colab_project(
+            models=body.models, manual=manual or None)
+    except ValueError as exc:
+        raise GameError.bad_request("validation_error", str(exc)) from exc
+    return _colab_project_response(notebook)
 
 
 @router.post("/runtime/register")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -156,7 +157,16 @@ def image_english_echo(payload: dict) -> str | None:
     system = next((m.get("content") or "" for m in messages if m.get("role") == "system"), "")
     if not str(system).startswith(IMAGE_ENGLISH_SYSTEM_PREFIX):
         return None
-    return next((m.get("content") or "" for m in messages if m.get("role") == "user"), "")
+    user = next((m.get("content") or "" for m in messages if m.get("role") == "user"), "")
+    # O tradutor de produção recusa um eco em português. O mock de teste
+    # devolve inglês estável nesse caso, e o original quando já é inglês.
+    if image_english._is_probable_english(user):
+        return user
+    # A resposta de teste precisa conservar [[0]], senão o tradutor recusa.
+    placeholders = " ".join(re.findall(r"\[\[\d+\]\]", user))
+    breaks = " BREAK" * len(re.findall(r"\bBREAK\b", user))
+    english = "wide cinematic scene, fully clothed, natural light"
+    return f"{english} {placeholders}{breaks}".strip()
 
 
 def sse_body(tokens, reasoning_only: bool = False,

@@ -151,6 +151,8 @@ export default function Settings() {
   const [runtimeLoaded, setRuntimeLoaded] = useState(false)
   const [runtimeLoadError, setRuntimeLoadError] = useState('')
   const [downloadingNotebook, setDownloadingNotebook] = useState(false)
+  const [downloadingProject, setDownloadingProject] = useState(false)
+  const [colabModels, setColabModels] = useState([])
   const contextSizeMax = llmForm.context_size_max ?? 106496
   const contextPresets = [
     { label: '32k', val: 32768 },
@@ -183,7 +185,7 @@ export default function Settings() {
         if (!cancelled && health) setLlmHealth(health)
       }).catch(() => {})
       try {
-        const [llm, img, vce, emb, scr, presetsRes, profilesRes, runtime] = await Promise.all([
+        const [llm, img, vce, emb, scr, presetsRes, profilesRes, runtime, colabModelRes] = await Promise.all([
           api.getLlmSettings().catch(() => ({})),
           api.getImageSettings().catch(() => ({})),
           api.getVoiceSettings().catch(() => ({})),
@@ -195,8 +197,10 @@ export default function Settings() {
             (data) => ({ ok: true, data }),
             (error) => ({ ok: false, error }),
           ),
+          api.listColabModels().catch(() => ({ models: [] })),
         ])
         if (cancelled) return
+        setColabModels(Array.isArray(colabModelRes?.models) ? colabModelRes.models : [])
 
         if (presetsRes?.providers) {
           setProviderPresets((prev) => ({ ...prev, ...presetsRes.providers }))
@@ -688,6 +692,33 @@ export default function Settings() {
       toast('Falha ao gerar o notebook: ' + e.message)
     } finally {
       setDownloadingNotebook(false)
+    }
+  }
+
+  const handleDownloadColabProject = async (selection) => {
+    if (!runtimeLoaded) return
+    const models = selection?.models || []
+    const manual = selection?.manual || []
+    if (models.length === 0 && manual.length === 0) {
+      toast('Escolha um modelo ou cole um link.')
+      return
+    }
+    setDownloadingProject(true)
+    try {
+      const blob = await api.downloadColabProject({ models, manual })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'aidungeon-colab.ipynb'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      toast('Projeto Colab pronto. Abra no Colab, escolha uma GPU e execute tudo.', 'ok')
+    } catch (e) {
+      toast('Falha ao gerar o projeto Colab: ' + e.message)
+    } finally {
+      setDownloadingProject(false)
     }
   }
 
@@ -1719,8 +1750,11 @@ export default function Settings() {
                   loadError={runtimeLoadError}
                   dirty={runtimeDirty}
                   downloading={downloadingNotebook}
+                  downloadingProject={downloadingProject}
+                  colabModels={colabModels}
                   onChange={setRuntimeForm}
                   onDownload={handleDownloadNotebook}
+                  onDownloadProject={handleDownloadColabProject}
                   inputCls={inputCls}
                   labelCls={labelCls}
                 />

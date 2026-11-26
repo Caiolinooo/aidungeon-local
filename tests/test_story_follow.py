@@ -117,10 +117,15 @@ def test_story_state_goes_on_each_persons_own_line():
                  sheet={"current_outfit": "red cape"})
     assert npc_assets.story_state_bits(marina) == [
         "now wearing long yellow hooded raincoat over her clothes", "bandaged right forearm"]
-    assert npc_assets.story_state_bits(bruno) == []     # português não vai ao pintor
+    assert npc_assets.story_state_bits(bruno) == ["now wearing regata branca e jeans"]
     assert npc_assets.story_state_bits(lobo) == []      # bicho não leva roupa
     assert npc_assets.story_state_note([marina, bruno]) == npc_assets.STORY_STATE_NOTE
-    assert npc_assets.story_state_note([bruno]) == ""
+    assert npc_assets.story_state_note([bruno]) == npc_assets.STORY_STATE_NOTE
+    prompt, people = scene._prompt(
+        "the cabin", "A wooden cabin.", "cinematic", "night",
+        [marina, bruno], "Marina and Bruno wait by the fire.")
+    assert people is True
+    assert "Bruno Teste: now wearing regata branca e jeans" in prompt
 
 
 def test_backdrop_paints_the_outfit_the_story_gave(tmp_db):

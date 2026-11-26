@@ -1,5 +1,21 @@
+import { useState } from 'react'
 import { Download } from 'lucide-react'
 import { SettingField } from './Controls.jsx'
+
+const MANUAL_ROLES = [
+  { id: 'llm', label: 'Narrador (GGUF)' },
+  { id: 'unet', label: 'UNET de imagem' },
+  { id: 'clip', label: 'CLIP / text encoder' },
+  { id: 'vae', label: 'VAE' },
+  { id: 'checkpoint', label: 'Checkpoint' },
+  { id: 'video', label: 'Vídeo' },
+]
+
+const SOURCE_LABEL = {
+  huggingface: 'Hugging Face',
+  civitai: 'CivitAI / RedCivit',
+  mixed: 'Hugging Face + CivitAI / RedCivit',
+}
 
 const MODES = [
   { id: 'local', label: 'Local' },
@@ -339,9 +355,20 @@ export default function RuntimeSettings({
   downloading,
   onChange,
   onDownload,
+  onDownloadProject,
+  downloadingProject = false,
+  colabModels = [],
   inputCls,
   labelCls,
 }) {
+  const [picked, setPicked] = useState(() => new Set([
+    'llm:qwen2.5-3b-instruct-q4_k_m',
+    'image:flux2_klein',
+  ]))
+  const [manualUrl, setManualUrl] = useState('')
+  const [manualRole, setManualRole] = useState('llm')
+  const [manualSha, setManualSha] = useState('')
+  const [manualRows, setManualRows] = useState([])
   const allLocal = isAllLocalRuntime(form)
   const notebookDisabled = !loaded || allLocal || dirty || downloading
   let notebookHint = 'Gera o .ipynb da configuração salva. Os segredos continuam só no Colab.'
@@ -353,30 +380,24 @@ export default function RuntimeSettings({
   const rows = hardware ? hardwareRows(hardware).filter((row) => row.key !== 'status') : []
   const reg = registration ? registrationView(registration) : null
 
+  const triggerDownloadColab = () => {
+    onDownloadProject({
+      models: [...picked],
+      manual: manualUrl.trim()
+        ? [...manualRows, { url: manualUrl.trim(), role: manualRole, sha256: manualSha.trim() }]
+        : manualRows,
+    })
+  }
+
   return (
     <div className="space-y-6">
       <div className="border-b border-subtle pb-3">
         <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-          Runtime e Colab
+          Runtime e Colab (End-to-End · 1 Clique)
         </h2>
         <p className="text-xs text-secondary mt-0.5">
-          Escolhe onde o narrador e o ComfyUI rodam. O banco e os arquivos finais permanecem neste projeto.
+          Gere um projeto Colab 100% configurado (sem tokens, sem Tailscale e sem editar variáveis) ou configure onde o narrador e o ComfyUI rodam.
         </p>
-      </div>
-
-      <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-2 text-xs text-secondary">
-        <p>O Colab é computação sem estado. A aventura, o SQLite e os arquivos finais não saem daqui.</p>
-        <p>
-          No Colab, informe você mesmo os segredos <span className="font-mono text-primary">AIDUNGEON_TOKEN</span> (token da conta admin) e <span className="font-mono text-primary">TAILSCALE_AUTH_KEY</span>.
-          Este aplicativo não grava esses segredos.
-          {isFineView(form?.models?.image, catalog?.image?.[form?.models?.image]) && (
-            <>
-              {' '}FineView também pede <span className="font-mono text-primary">CIVITAI_API_KEY</span> só no Colab. Os outros modelos de imagem não usam essa chave.
-            </>
-          )}
-        </p>
-        <p>Trocar o narrador, a imagem ou o vídeo exige reiniciar ou reconectar o runtime correspondente. Imagem e vídeo usam o mesmo ComfyUI.</p>
-        <p>Gravar esta aba exige administrador. A resposta não inclui chave de API.</p>
       </div>
 
       {loadError && (
@@ -387,9 +408,139 @@ export default function RuntimeSettings({
 
       {loaded && (
         <>
+          <div className="rounded-2xl border border-accent-pri/50 bg-surface p-4 space-y-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-accent-pri">
+                  Projeto Colab Completo (End-to-End · Nada Manual)
+                </h3>
+                <p className="text-xs text-secondary mt-1">
+                  Escolha os modelos abaixo (do <strong>Hugging Face</strong>, <strong>CivitAI</strong>, <strong>RedCivit</strong> ou cole qualquer link direto <code>https://</code>) e clique em <strong>Baixar projeto Colab (.ipynb)</strong>.
+                  No Google Colab, basta escolher uma GPU e clicar em <strong>Executar tudo</strong> — ele baixa os modelos, sobe o jogo completo e gera um link público com <strong>login automático em 1 clique</strong>.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={triggerDownloadColab}
+                disabled={!loaded || downloadingProject}
+                className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{downloadingProject ? 'Gerando projeto…' : 'Baixar projeto Colab (.ipynb)'}</span>
+              </button>
+            </div>
+
+            {['huggingface', 'civitai', 'mixed'].map((source) => {
+              const list = colabModels.filter((item) => item.source === source)
+              if (list.length === 0) return null
+              return (
+                <fieldset key={source} className="space-y-2 rounded-xl border border-subtle bg-elevated/40 p-3">
+                  <legend className={labelCls}>{SOURCE_LABEL[source] || source}</legend>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {list.map((item) => (
+                      <label key={item.id} className="flex items-start gap-2 rounded-lg border border-subtle/60 bg-surface px-2.5 py-2 text-xs text-secondary cursor-pointer hover:border-accent-pri/40">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 accent-accent-600"
+                          checked={picked.has(item.id)}
+                          onChange={() => {
+                            const next = new Set(picked)
+                            if (next.has(item.id)) next.delete(item.id)
+                            else next.add(item.id)
+                            setPicked(next)
+                          }}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="font-semibold text-primary break-words">{item.label}</span>
+                          <span className="ml-1.5 rounded bg-elevated px-1.5 py-0.5 text-[10px] font-bold uppercase text-muted">{item.group}</span>
+                          {item.needs_civitai_key ? <span className="ml-1 text-[11px] text-muted">· CivitAI</span> : null}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )
+            })}
+
+            <div className="space-y-2 rounded-xl border border-subtle bg-elevated/40 p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Adicionar link manual (Hugging Face, CivitAI, RedCivit ou link direto HTTPS)
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[10rem_1fr_10rem_auto]">
+                <select value={manualRole} onChange={(e) => setManualRole(e.target.value)} className={inputCls}>
+                  {MANUAL_ROLES.map((role) => (
+                    <option key={role.id} value={role.id}>{role.label}</option>
+                  ))}
+                </select>
+                <input
+                  type="url"
+                  value={manualUrl}
+                  onChange={(e) => setManualUrl(e.target.value)}
+                  placeholder="https://huggingface.co/... ou https://civitai.com/api/download/... ou https://redcivit.ai/..."
+                  className={inputCls}
+                />
+                <input
+                  type="text"
+                  value={manualSha}
+                  onChange={(e) => setManualSha(e.target.value)}
+                  placeholder="SHA256 (opcional)"
+                  className={inputCls}
+                />
+                <button
+                  type="button"
+                  className="min-h-11 rounded-xl border border-subtle bg-surface px-3 text-xs font-semibold text-primary hover:border-accent-pri/50 transition"
+                  onClick={() => {
+                    const url = manualUrl.trim()
+                    if (!url) return
+                    setManualRows((prev) => [...prev, {
+                      url,
+                      role: manualRole,
+                      sha256: manualSha.trim(),
+                    }])
+                    setManualUrl('')
+                    setManualSha('')
+                  }}
+                >
+                  Adicionar link
+                </button>
+              </div>
+              {manualRows.length > 0 && (
+                <ul className="space-y-1.5 pt-1 text-xs text-secondary">
+                  {manualRows.map((row, index) => (
+                    <li key={`${row.url}-${index}`} className="flex items-center justify-between gap-2 rounded-lg border border-subtle bg-surface px-2.5 py-1.5">
+                      <span className="truncate font-mono text-[11px] text-primary">{row.role}: {row.url}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 text-danger-400 hover:underline"
+                        onClick={() => setManualRows((prev) => prev.filter((_, i) => i !== index))}
+                      >
+                        remover
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <p className="text-[11px] text-secondary">
+                Nada manual: você não precisa criar <span className="font-mono">AIDUNGEON_TOKEN</span> nem <span className="font-mono">TAILSCALE_AUTH_KEY</span>.
+              </p>
+              <button
+                type="button"
+                onClick={triggerDownloadColab}
+                disabled={!loaded || downloadingProject}
+                className="flex min-h-11 items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{downloadingProject ? 'Gerando projeto…' : 'Baixar projeto Colab (.ipynb)'}</span>
+              </button>
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Onde a computação roda
+              Onde a computação deste servidor roda
             </h3>
             <fieldset className="space-y-2">
               <legend className={labelCls}>Modo</legend>
@@ -613,14 +764,16 @@ export default function RuntimeSettings({
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={onDownload}
-              disabled={notebookDisabled}
+              onClick={triggerDownloadColab}
+              disabled={!loaded || downloadingProject}
               className="flex min-h-11 items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-4 py-2 text-xs font-semibold text-secondary transition hover:text-primary disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{downloading ? 'Gerando notebook…' : 'Gerar notebook (.ipynb)'}</span>
+              <span>{downloadingProject ? 'Gerando notebook…' : 'Baixar notebook Colab pronto (.ipynb)'}</span>
             </button>
-            <p className="text-[11px] text-secondary">{notebookHint}</p>
+            <p className="text-[11px] text-secondary">
+              Abra no Colab, escolha uma GPU e clique em Executar tudo. Nenhum segredo manual é necessário.
+            </p>
           </div>
         </>
       )}

@@ -440,13 +440,52 @@ def _shrink_look(look: str, limit: int) -> str:
 
 
 _CROWD_NOUN = (r"(?:crowds?|patrons|customers|onlookers|bystanders|passers-?by|pedestrians|"
-               r"shoppers|vendors|merchants|throngs?|people|sailors|drinkers|travellers|travelers)")
+               r"shoppers|vendors|merchants|throngs?|people|sailors|drinkers|travellers|travelers|"
+               r"pessoas|gente|banhistas|frequentadores|multid[aã]o|transeuntes|pedestres|feirantes)")
 _CROWD_FILL = re.compile(
     r"(?i),?\s*\b(?:full of|packed with|crowded with|teeming with|bustling with|thronged with|"
     r"filled with)\s+[^,.;]*")
 _CROWD_SUB = re.compile(r"(?i),?\s*\b(?:where|while|as)\b[^,.;]*\b" + _CROWD_NOUN + r"\b[^,.;]*,?")
 _CROWD_SENTENCE = re.compile(r"(?i)\b" + _CROWD_NOUN + r"\b")
 _CROWD_WORD = re.compile(r"(?i)\b(?:busy|bustling|crowded|packed|teeming|thronged|lively|noisy)\s+")
+
+
+_NIGHT_LIGHT = re.compile(
+    r"(?i)\s+\bonde o sol se p[oõ]e em um horizonte aberto\b"
+    r"|,\s*\bwhere the sun sets\b[^,.]*"
+    r"|\s+luz do p[oô]r do sol\b,?"
+    r"|\bsunset light\b|\bgolden hour\b|\bdaylight\b|\bmorning light\b"
+    r"|\bao entardecer\b|\bde manh[ãa]\b"
+)
+_NIGHT_WITH_THE_LIGHT = re.compile(
+    r"(?i)\s+com a luz do p[oô]r do sol\b,?\s*"
+)
+_DAY_LIGHT = re.compile(
+    r"(?i)\s*(?:,\s*)?(?:luz da lua|ao luar|moonlight|midnight|meia-noite)\b"
+)
+
+
+def place_for_atmosphere(entry: str, atmosphere: str) -> str:
+    """Tira do card do lugar a luz que briga com o clima da narração.
+
+    O card da praia fala de pôr do sol. A narração é noite. As duas frases
+    juntas faziam o fundo pintar o entardecer no escuro.
+    """
+    text = " ".join((entry or "").split())
+    if not text:
+        return ""
+    flags = {part for part in (atmosphere or "").split("+") if part}
+    pattern = _NIGHT_LIGHT if "night" in flags else _DAY_LIGHT if "day" in flags else None
+    if pattern is None:
+        return text
+    if "night" in flags:
+        text = _NIGHT_WITH_THE_LIGHT.sub(" com ", text)
+    text = pattern.sub("", text)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r"(?:,\s*){2,}", ", ", text)
+    text = re.sub(r"\s+([.;])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip(" ,;")
 
 
 def uncrowded(entry: str) -> str:
@@ -550,6 +589,7 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
     e o modelo pintava outra mulher. Nudez e sexo entram no prompt, e a roupa
     do card não volta. Sem visual travado, o fundo continua vazio de gente.
     """
+    entry = place_for_atmosphere(entry, atmosphere)
     has_nude = is_explicit(moment) or bool(npc_assets.nude_names(cast, moment))
     decision = likeness.decide_frame(cast, explicit=has_nude)
     if decision.refusal:
@@ -595,6 +635,8 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
             "scales, hide or fur, not human skin",
         )
     lock = npc_assets.coverage_lock(*cast, explicit=explicit)
+    if lock and not jobs.asks_for_swimwear(f"{moment}\n{entry}"):
+        lock = f"{lock}, everyday clothes, not swimwear, not a bikini"
     if clause:
         beat, _banned = contradicting_looks(moment, clause)
         # O fim da narração é o agora; o corte antigo guardava o começo do
@@ -658,8 +700,11 @@ def _prompt(title: str, entry: str, style: str, atmosphere: str,
         # O animal já está dito duas vezes (frase de espécie e linha própria);
         # uma terceira trava só tirava espaço da aparência de quem é gente.
         people = len(cast) - beasts
+        humans = [card for card in cast if not npc_assets.creature_kind(card)]
         keep = (f"each person with that exact face, hair and age"
-                f"{'' if state_line else ' and clothing'}") if people else ""
+                f"{'' if state_line else ' and clothing'}") if humans else ""
+        if not humans and cast:
+            keep = "each one with the body of its own kind, not a human face or human hair"
         if beasts:
             keep = ", and ".join(bit for bit in (keep, "each animal with its own natural coat and markings")
                                  if bit)

@@ -1209,6 +1209,79 @@ def test_old_jobs_without_the_flag_keep_face_only_references():
     assert jobs._reference_faces({}) is False
 
 
+def test_night_scene_drops_the_sunset_from_the_place_card():
+    """O card da praia descreve o pôr do sol. A narração é noite. O fundo
+    de Horizonte no Emissário pintou as duas luzes ao mesmo tempo."""
+    entry = (
+        "A Praia do Centro é o coração calmo e acolhedor de Rio das Ostras, "
+        "onde o sol se põe em um horizonte aberto entre dunas e mar. "
+        "É a praia onde as pessoas convivem com a luz do pôr do sol, "
+        "o barulho das ondas e o cheiro de areia molhada. "
+        "O local é composto por pavimentos de areia e um calçadão."
+    )
+    quiet = scene.place_for_atmosphere(entry, "night")
+    assert "sol se põe" not in quiet
+    assert "pôr do sol" not in quiet
+    assert "dunas e mar" in quiet
+    assert "convivem com o barulho das ondas" in quiet
+    assert "calçadão" in quiet
+    assert "Ostras, entre dunas e mar" in quiet
+    assert "sol se põe" in scene.place_for_atmosphere(entry, "day")
+    assert scene.place_for_atmosphere(
+        "O Café do Pôr do Sol serve café em xícaras de cerâmica.", "night",
+    ) == "O Café do Pôr do Sol serve café em xícaras de cerâmica."
+    prompt, people = scene._prompt(
+        "Praia do Centro", entry, "photorealistic", "night", [], "",
+    )
+    assert people is False
+    assert "sol se põe" not in prompt
+    assert "calçadão" in prompt
+
+
+def test_salamander_scene_does_not_keep_the_human_mask():
+    """O fundo da Sandra dizia 'creature body' e, na frase seguinte,
+    máscara, cabelo liso e torso humano."""
+    card = {
+        "id": "sandra",
+        "type": "character",
+        "title": "Sandra",
+        "entry": "Salamandra — escamas translúcidas, cauda longa",
+        "portrait_prompt": "salamander with translucent scales",
+        "sheet": "{}",
+    }
+    prompt, people = scene._prompt(
+        "Sala de Reuniões", "mesa de musgo", "photorealistic", "day",
+        [card], "Morning light falls across her translucent scales.",
+    )
+    low = prompt.lower()
+    assert people is True
+    assert "humanoid torso build" not in low
+    assert "smooth hair" not in low
+    assert "not a humanoid torso" in low
+    assert "exact face, hair" not in low
+
+
+def test_clothed_beach_refuses_swimwear_unless_the_moment_asks():
+    card = {
+        "id": "ana",
+        "type": "character",
+        "title": "Ana",
+        "portrait_prompt": "long black hair, green eyes",
+        "sheet": "{}",
+    }
+    prompt, people = scene._prompt(
+        "Praia do Centro", "areia e calçadão", "photorealistic", "night",
+        [card], "Ana stopped by the rocks.",
+    )
+    assert people is True
+    assert "not a bikini" in prompt
+    swimming, _ = scene._prompt(
+        "Praia do Centro", "mar", "photorealistic", "day",
+        [card], "Ana nada de biquíni.",
+    )
+    assert "not a bikini" not in swimming
+
+
 def test_cast_scene_drops_the_crowd_from_the_place_text():
     """Com o elenco no quadro o lugar perde a multidão: "A busy harbour market"
     enchia o fundo de feirantes. O lugar em si continua descrito."""
@@ -1221,6 +1294,14 @@ def test_cast_scene_drops_the_crowd_from_the_place_text():
     assert scene.uncrowded("Sailors drink at every table. The bar is made of driftwood.") == \
         "The bar is made of driftwood."
     assert scene.uncrowded("A bustling inn.") == "An inn."
+    beach = scene.uncrowded(
+        "A Praia do Centro fica entre dunas e mar. "
+        "É a praia onde as pessoas convivem com o barulho das ondas. "
+        "O local tem um calçadão."
+    )
+    assert "pessoas" not in beach
+    assert "dunas e mar" in beach
+    assert "calçadão" in beach
     assert scene.uncrowded("An old lighthouse on a cliff.") == "An old lighthouse on a cliff."
     assert "These 3 are the only people there" in scene._alone_there(3)
     assert scene._alone_there(1).startswith("This person is alone there")

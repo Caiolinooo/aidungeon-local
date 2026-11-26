@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app import db, image_client, npc_assets, npc_chronicle
+from app import db, image_client, jobs, npc_assets, npc_chronicle
 from conftest import add_action, make_adventure
 from test_scene import _face
 from test_v2 import PNG_BYTES, make_v2_transport, override_transport
@@ -69,7 +69,7 @@ def test_chronicle_creates_and_updates_without_replacing_the_face(tmp_db):
             ],
         }, adv["plot_essentials"])
         cards = {card["title"]: card for card in db.list_cards(conn, adv["id"])}
-        jobs = db.list_jobs(conn, adv["id"])
+        queued = db.list_jobs(conn, adv["id"])
 
     assert result == {"created": 1, "updated": 1, "bodies": 0}
     assert "Caio" not in cards
@@ -82,7 +82,11 @@ def test_chronicle_creates_and_updates_without_replacing_the_face(tmp_db):
     mage = cards["Vangerdahast"]
     assert "the mage" in mage["triggers"]
     assert npc_assets.parse_sheet(mage["sheet"])["appearance"].startswith("bald")
-    assert any(job["ref_id"] == mage["id"] and job["type"] == "character_portrait" for job in jobs)
+    portrait = next(
+        job for job in queued
+        if job["ref_id"] == mage["id"] and job["type"] == "character_portrait"
+    )
+    assert portrait["priority"] == jobs.PRIORITY_BULK_PORTRAIT
 
 
 def test_character_canon_overrides_the_scene_prose():

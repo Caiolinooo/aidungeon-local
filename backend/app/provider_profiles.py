@@ -400,6 +400,29 @@ def effective_profile_url(profile: dict[str, Any], kind: str) -> str:
     return str(block.get("base_url") or profile.get("base_url") or "").strip()
 
 
+def vision_llm_cfg(conn: sqlite3.Connection, *, current_model: str) -> dict[str, str] | None:
+    """Perfil com modelo que vê imagem, quando o narrador ativo não vê.
+
+    O narrador de texto responde 404 no pedido com foto. A leitura do rosto
+    usa o primeiro perfil Gemini ou VL que tenha URL, chave e outro modelo.
+    """
+    current = current_model.strip()
+    for profile in _load_raw_profiles(conn):
+        block = profile.get("llm") if isinstance(profile.get("llm"), dict) else {}
+        model = str(block.get("model_alias") or "").strip()
+        folded = model.lower()
+        if not model or model == current:
+            continue
+        if "gemini" not in folded and "-vl" not in folded and "/vl" not in folded:
+            continue
+        url = effective_profile_url(profile, "llm")
+        key = effective_profile_key(profile, "llm")
+        if not url or not key:
+            continue
+        return {"base_url": url, "api_key": key, "model_alias": model}
+    return None
+
+
 def effective_profile_key(profile: dict[str, Any], kind: str) -> str | None:
     """Reaproveita a api_key principal do perfil quando a modalidade não define override."""
     block = profile.get(kind) if isinstance(profile.get(kind), dict) else {}

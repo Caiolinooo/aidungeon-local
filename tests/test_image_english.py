@@ -184,6 +184,35 @@ def test_line_breaks_reach_the_model_as_single_spaces(monkeypatch):
         "retrato de uma mulher ruiva com vestido verde")
 
 
+def test_a_leftover_portuguese_sentence_is_dropped(monkeypatch):
+    """O card da sala voltou em português no meio de um prompt em inglês.
+    A frase cai; a salamandra fica."""
+    source = (
+        "Sandra is a salamander, creature body, not a human. "
+        "A sala de reuniões é o coração do escritório."
+    )
+    install_stub(monkeypatch, [source, source])
+
+    result = image_english.render_english(source, llm_cfg={})
+
+    assert "salamander" in result
+    assert "reuniões" not in result
+    assert image_english._is_probable_english(result)
+
+
+def test_portuguese_echo_on_both_attempts_is_not_sent_to_the_model(monkeypatch):
+    """O 200 que devolve o português não pode ir para o Flux. Foi o que
+    deixou a roupa da Anitta e a praia inteira sem tradução."""
+    install_stub(monkeypatch, [
+        "Ela parou na praia com a luz da lua.",
+        "Ela parou na praia com a luz da lua.",
+    ])
+
+    with pytest.raises(image_client.ImageError):
+        image_english.render_english(
+            "Ela parou na praia com a luz da lua.", llm_cfg={})
+
+
 def test_portuguese_echo_on_first_attempt_retries_to_english(monkeypatch):
     source = "wide shot, A Donzela observa cruzando os braços"
     translated = "wide shot, A Donzela watches with arms crossed"
@@ -194,6 +223,23 @@ def test_portuguese_echo_on_first_attempt_retries_to_english(monkeypatch):
 
     assert image_english.render_english(source, llm_cfg={}) == translated
     assert len(calls) == 2
+
+
+def test_portuguese_sentence_inside_an_english_reply_is_dropped(monkeypatch):
+    """A fonte já estava em inglês, então a resposta mista passava inteira.
+    O fundo das 19:55 levou 'A câmera pendurada' para o Flux."""
+    source = "Caio stands on the beach at night. The moon is up."
+    reply = (
+        "[[0]] stands on the beach at night. "
+        "A câmera pendurada no pescoço. The moon is up."
+    )
+    install_stub(monkeypatch, [reply, reply])
+
+    result = image_english.render_english(source, llm_cfg={})
+
+    assert "câmera" not in result
+    assert "moon" in result
+    assert "beach" in result
 
 
 def test_name_masking_does_not_cross_sentences_or_mask_portuguese_nouns():
@@ -214,7 +260,8 @@ def test_partial_translation_feeds_retry_and_recovers_on_second_attempt_error(mo
     ])
 
     result = image_english.render_english(source, llm_cfg={})
-    assert result == partial
+    assert result == "Natural photography with warm lighting."
+    assert "Cabelos" not in result
     assert len(calls) == 2
     assert calls[1]["messages"][-1]["content"] == partial
 

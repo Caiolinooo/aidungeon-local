@@ -318,6 +318,13 @@ def test_prints_lose_their_letters_and_hair_tint_stays_faint():
     assert "highlights" not in sheen
     dyed = look_lock.identity_text({**LOOK, "hair_dye": "bright copper dyed ends"})
     assert "jet black hair with bright copper dyed ends" in dyed
+    tied = look_lock.identity_text({**LOOK, "hairstyle": "pulled tightly back"})
+    assert "pulled tightly back" in tied
+    mixed = look_lock.identity_text({**LOOK, "hairstyle": "worn down, slicked back"})
+    assert "slicked back" in mixed
+    assert "worn down" not in mixed
+    assert "just past the shoulders" not in mixed
+    assert "pulled off the face" in mixed
     full = look_lock.identity_text(LOOK)
     assert "round face with full cheeks" in full and "thick dark arched eyebrows" in full
     assert "full lips" in full and "eyes: dark brown" in full

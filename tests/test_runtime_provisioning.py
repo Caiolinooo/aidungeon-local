@@ -661,3 +661,66 @@ def test_registration_payload_shape():
         )
     with pytest.raises(ValueError):
         rp.notebook_bytes({"nbformat": 3, "cells": []})
+
+
+def test_colab_project_is_ready_to_run_without_secrets():
+    """O arquivo já traz clone, hashes e o jogo. A senha só nasce na execução."""
+    nb = rp.generate_colab_project()
+    assert nb["nbformat"] == 4
+    assert nb["metadata"]["accelerator"] == "GPU"
+    assert nb["metadata"]["aidungeon_colab_project"]["llm_filename"].endswith(".gguf")
+    assert nb["metadata"]["aidungeon_colab_project"]["comfy_ref"] == rp.COLAB_COMFY_GIT_REF
+    raw = rp.notebook_bytes(nb)
+    assert json.loads(raw)["nbformat"] == 4
+    src = _src(nb)
+    for cell in nb["cells"]:
+        if cell["cell_type"] == "code":
+            compile(_text(cell), cell["id"], "exec")
+    catalog = rp.load_catalog()
+    weights = rp._pinned_artifact(catalog, "llm", rp.COLAB_PLAY_LLM, "weights")
+    flux = rp._pinned_artifact(catalog, "image", rp.COLAB_PLAY_IMAGE, "unet")
+    assert weights["sha256"] in src
+    assert weights["url"] in src
+    assert flux["sha256"] in src
+    assert rp.COLAB_APP_GIT_URL in src
+    assert rp.COLAB_COMFY_GIT_REF in src
+    assert '"npm", "run", "build"' in src
+    assert "uvicorn" in src
+    assert "trycloudflare" in src
+    assert "secrets.token_urlsafe" in src
+    assert "flux2_klein" in src
+    assert "127.0.0.1:1234/v1" in src
+    for banned in (
+        "TAILSCALE_AUTH_KEY", "userdata.get", "AIDUNGEON_TOKEN",
+        "/home/caio", "narrator_gguf_url",
+    ):
+        assert banned not in src
+    assert not re.search(r'AUTH_PASSWORD_HASH\s*=\s*["\'][0-9a-f]{64}["\']', src)
+
+
+def test_colab_project_accepts_catalog_and_manual_links():
+    catalog = rp.load_catalog()
+    choices = rp.colab_model_choices(catalog)
+    sources = {item["source"] for item in choices}
+    assert "huggingface" in sources
+    assert "civitai" in sources or "mixed" in sources
+    fineview = next(item for item in choices if item["id"] == "image:fineview_qwen")
+    assert fineview["needs_civitai_key"] is True
+    nb = rp.generate_colab_project(
+        catalog,
+        models=["llm:qwen2.5-3b-instruct-q4_k_m", "image:fineview_qwen"],
+        manual=[{
+            "url": "https://huggingface.co/org/model/resolve/main/extra.safetensors",
+            "role": "vae",
+            "filename": "extra.safetensors",
+        }],
+    )
+    src = _src(nb)
+    assert "civitai.com" in src
+    assert "userdata.get(\"CIVITAI_API_KEY\")" in src
+    assert "extra.safetensors" in src
+    assert nb["metadata"]["aidungeon_colab_project"]["image_engine"] == "qwen"
+    with pytest.raises(ValueError, match="https"):
+        rp.resolve_colab_downloads(catalog, [], [{
+            "url": "http://example.com/model.gguf", "role": "llm",
+        }])
