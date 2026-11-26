@@ -144,6 +144,7 @@ def test_notebook_brings_the_voice_server_even_with_everything_else_here(admin):
     assert "omnivoice-base-Q4_K_M.gguf" in cells["provision"]
     assert "omnivoice-tokenizer-Q4_K_M.gguf" in cells["provision"]
     assert '"-DGGML_CUDA=ON"' in cells["provision"] and "faster-whisper" in cells["provision"]
+    assert '"git", "apply", str(voice_dir / "omnivoice-ref-rvq.patch")' in cells["provision"]
     assert "PUBLIC_VOICE = open_tunnel" in cells["tunnel"]
     assert "PUBLIC_LLM" not in cells["tunnel"] and "PUBLIC_COMFY" not in cells["tunnel"]
     assert 'payload["endpoints"]["voice"] = PUBLIC_VOICE + "/v1"' in cells["register"]
@@ -237,6 +238,7 @@ def test_install_on_this_machine_writes_the_service_and_takes_the_voice(admin, m
     assert (home / "server" / "voices" / "M1.rvq").is_file()
     assert ["systemctl", "restart", voice_runtime.UNIT] in ran
     assert any(cmd[0] == "git" and "submodule" in cmd for cmd in ran)
+    assert ["git", "apply", str(voice_runtime.PATCH)] in ran
     # Trocar só o Whisper não recompila nem baixa de novo o OmniVoice.
     ran.clear()
     admin.put("/api/voice-runtime", json={"stt": "whisper-small"})

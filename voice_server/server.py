@@ -156,10 +156,11 @@ async def _stream(text: str, voice: str):
     loop = asyncio.get_running_loop()
     deadline = loop.time() + TIMEOUT_S
     proc = None
+    errors = tempfile.TemporaryFile()
     try:
         with _omni_lock:
             proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, env=_child_env())
+                                    stderr=errors, env=_child_env())
             proc.stdin.write(text.encode())
             proc.stdin.close()
             while True:
@@ -176,6 +177,11 @@ async def _stream(text: str, voice: str):
         if proc is not None and proc.poll() is None:
             proc.kill()
             await asyncio.to_thread(proc.wait)
+        elif proc is not None and proc.returncode != 0:
+            # O stream já saiu com 200: o motivo fica no log do servidor.
+            errors.seek(max(0, errors.tell() - 600))
+            print("omnivoice falhou:", errors.read().decode(errors="replace"), file=sys.stderr, flush=True)
+        errors.close()
 
 
 def _pcm(wav: bytes) -> bytes:

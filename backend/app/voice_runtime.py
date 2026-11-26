@@ -35,6 +35,7 @@ from app.errors import GameError
 
 CATALOG_PATH = db.REPO_ROOT / "config" / "voice_models.json"
 SERVER_SRC = db.REPO_ROOT / "voice_server"
+PATCH = SERVER_SRC / "omnivoice-ref-rvq.patch"
 PORT = 8011
 LOCAL_URL = f"http://127.0.0.1:{PORT}/v1"
 UNIT = "aidungeon-voice.service"
@@ -200,6 +201,7 @@ def colab_plan(conn: sqlite3.Connection) -> dict | None:
         "git_ref": book["engine"]["git_ref"],
         "artifacts": [dict(art) for art in book["tts"][chosen["tts"]]["artifacts"]],
         "server_b64": base64.b64encode((SERVER_SRC / "server.py").read_bytes()).decode("ascii"),
+        "patch_b64": base64.b64encode(PATCH.read_bytes()).decode("ascii"),
         "voices_b64": {path.name: base64.b64encode(path.read_bytes()).decode("ascii")
                        for path in sorted(voices.iterdir()) if path.is_file()},
     }
@@ -292,7 +294,10 @@ def _prepare_omnivoice(root: Path) -> Path:
     src = root / "omnivoice.cpp"
     build = src / "build"
     stamp = build / ".built"
-    if stamp.is_file() and stamp.read_text().strip() == engine["git_ref"] \
+    # O jogo guarda cada voz clonada como códigos (.rvq); o omnivoice-tts
+    # original só lê WAV de referência. O patch ensina o --ref-rvq.
+    wanted = engine["git_ref"] + ":" + hashlib.sha256(PATCH.read_bytes()).hexdigest()[:16]
+    if stamp.is_file() and stamp.read_text().strip() == wanted \
             and (build / "omnivoice-tts").is_file() and (build / "omnivoice-codec").is_file():
         return build
     _step("compilando o OmniVoice (uns minutos)")
@@ -301,12 +306,23 @@ def _prepare_omnivoice(root: Path) -> Path:
     _run(["git", "fetch", "origin", engine["git_ref"]], cwd=src, timeout=900)
     _run(["git", "checkout", "--detach", engine["git_ref"]], cwd=src)
     _run(["git", "submodule", "update", "--init", "--recursive"], cwd=src, timeout=900)
-    cuda = "ON" if shutil.which("nvidia-smi") and shutil.which("nvcc") else "OFF"
-    _run(["cmake", "-S", str(src), "-B", str(build), f"-DGGML_CUDA={cuda}",
-          "-DCMAKE_BUILD_TYPE=Release"])
+    _run(["git", "checkout", "--", "tools/omnivoice-tts.cpp"], cwd=src)
+    _run(["git", "apply", str(PATCH)], cwd=src)
+    # O CUDA instalado pela NVIDIA (/usr/local/cuda) vale mais que o do pacote
+    # da distribuição, que costuma ser antigo.
+    nvcc = next((path for path in ("/usr/local/cuda/bin/nvcc", shutil.which("nvcc"))
+                 if path and os.path.isfile(path)), None)
+    configure = ["cmake", "-S", str(src), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release"]
+    if (build / "CMakeCache.txt").is_file():
+        pass  # já configurado: trocar de compilador jogaria a compilação fora
+    elif shutil.which("nvidia-smi") and nvcc:
+        configure += ["-DGGML_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={nvcc}"]
+    else:
+        configure.append("-DGGML_CUDA=OFF")
+    _run(configure)
     _run(["cmake", "--build", str(build), "--target", "omnivoice-tts", "omnivoice-codec",
           "-j", str(max(2, (os.cpu_count() or 4) // 2))], timeout=7200)
-    stamp.write_text(engine["git_ref"])
+    stamp.write_text(wanted)
     return build
 
 

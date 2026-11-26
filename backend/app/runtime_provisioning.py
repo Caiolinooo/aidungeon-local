@@ -973,7 +973,7 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
 def _voice_install_lines(voice: dict) -> list[str]:
     """O servidor de voz do jogo: o arquivo dele e as vozes fixas vão dentro
     do notebook; o OmniVoice é compilado aqui, como o llama-server."""
-    files = {"server.py": voice["server_b64"],
+    files = {"server.py": voice["server_b64"], "omnivoice-ref-rvq.patch": voice["patch_b64"],
              **{f"voices/{name}": data for name, data in voice["voices_b64"].items()}}
     return [
         "import base64",
@@ -993,6 +993,9 @@ def _voice_install_lines(voice: dict) -> list[str]:
         "    run([\"git\", \"clone\", VARIABLES[\"voice\"][\"git_url\"], str(omni_src)])",
         "run([\"git\", \"checkout\", VARIABLES[\"voice\"][\"git_ref\"]], cwd=omni_src)",
         "run([\"git\", \"submodule\", \"update\", \"--init\", \"--recursive\"], cwd=omni_src)",
+        "# O jogo guarda cada voz clonada como códigos (.rvq): o patch ensina o --ref-rvq.",
+        "run([\"git\", \"checkout\", \"--\", \"tools/omnivoice-tts.cpp\"], cwd=omni_src)",
+        "run([\"git\", \"apply\", str(voice_dir / \"omnivoice-ref-rvq.patch\")], cwd=omni_src)",
         "run([",
         "    \"cmake\", \"-S\", str(omni_src), \"-B\", str(omni_src / \"build\"),",
         "    \"-DGGML_CUDA=ON\", \"-DCMAKE_BUILD_TYPE=Release\",",
