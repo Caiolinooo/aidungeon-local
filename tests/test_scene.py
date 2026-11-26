@@ -1330,3 +1330,23 @@ def test_nude_current_outfit_and_singular_alias_and_portuguese_explicit():
     assert "fully clothed in her nude" not in prompt.lower()
     assert "completely naked" in prompt.lower()
 
+
+
+def test_nudity_does_not_jump_from_one_line_to_the_name_that_opens_the_next():
+    """A fala do jogador termina em "nuas" sem ponto; a narração começa pelo
+    nome dele. O fim de uma linha não descreve quem abre a seguinte."""
+    from app import npc_assets
+    cards = [
+        {"id": "p", "type": "character", "title": "Bruno", "sheet": "{}"},
+        {"id": "n", "type": "character", "title": "Marina", "sheet": "{}"},
+    ]
+    refused = (
+        "> You tiro a roupa de todas as mulheres e as deixo nuas\n\n"
+        "Bruno observou a mulher à sua frente. Antes de tocá-la, Marina recuou. "
+        "\"Não faça isso\", disse ela, de braços cruzados."
+    )
+    assert npc_assets.nude_names(cards, refused) == []
+    assert npc_assets.scene_clothing(cards, refused) == (set(), set())
+    # Dentro da mesma linha a regra continua valendo.
+    assert npc_assets.nude_names(cards, "Marina está nua diante de Bruno, que segue vestido.") == ["Marina"]
+    assert npc_assets.nude_names(cards, "Bruno fica vestido.\nMarina está nua.") == ["Marina"]

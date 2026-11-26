@@ -2010,6 +2010,10 @@ def _nude_states(cards: list[dict], text: str, *,
         covered_titles = {titles[index] for index, covered_state in states.items()
                           if covered_state and titles[index]}
         return nude_titles, covered_titles
+    # Quebra de linha separa quem fala de quem é narrado. Sem a marca, o
+    # "\s+" dos padrões colava o fim de uma linha no nome que abre a seguinte:
+    # "…e as deixo nuas" + "Caio observou…" despia o Caio.
+    text = re.sub(r"[ \t]*\n+[ \t]*", " ¶\n", text)
     coordinated_names = "|".join(re.escape(name) for name in everyone)
     coordinated = rf"(?:\s*(?:,|and|e)\s*(?:{coordinated_names}))*"
     nude = (
