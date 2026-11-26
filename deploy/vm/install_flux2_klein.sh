@@ -17,7 +17,7 @@ fetch() {
 }
 
 fetch \
-  'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/main/flux-2-klein-4b-fp8.safetensors?download=true' \
+  'https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors?download=true' \
   "$COMFY/models/diffusion_models/flux-2-klein-4b-fp8.safetensors" \
   97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6
 fetch \
