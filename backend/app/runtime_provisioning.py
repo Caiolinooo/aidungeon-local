@@ -860,7 +860,17 @@ def _tunnel_cell(norm: dict, voice: dict | None = None) -> str:
     if norm["placements"]["comfyui"] == "colab":
         lines.append("PUBLIC_COMFY = open_tunnel(VARIABLES[\"comfy_port\"])")
     if voice:
-        lines.append("PUBLIC_VOICE = open_tunnel(VARIABLES[\"voice\"][\"port\"])")
+        lines.extend([
+            "PUBLIC_VOICE = \"\"",
+            "if VOICE_OK:",
+            "    try:",
+            "        PUBLIC_VOICE = open_tunnel(VARIABLES[\"voice\"][\"port\"])",
+            "    except SystemExit as exc:",
+            "        if not HEALTH_URLS[:-1]:",
+            "            raise",
+            "        print(\"aviso: o túnel da voz não abriu e ela fica de fora:\", exc, flush=True)",
+            "        HEALTH_URLS.pop()",
+        ])
     lines.append("print(\"túnel aberto\")")
     return "\n".join(lines) + "\n"
 
@@ -949,7 +959,14 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
     if norm["placements"]["comfyui"] == "colab":
         lines.extend(_comfy_install_lines())
     if voice:
-        lines.extend(_voice_install_lines(voice))
+        # A voz não derruba o resto: narrador e imagem seguem se ela falhar.
+        lines.extend(["VOICE_OK = True", "try:"])
+        lines.extend("    " + line for line in _voice_install_lines(voice))
+        lines.extend([
+            "except SystemExit as exc:",
+            "    VOICE_OK = False",
+            "    print(\"aviso: a voz não foi instalada e fica de fora:\", exc, flush=True)",
+        ])
     lines.extend([
         "for spec in ARTIFACTS:",
         "    url, sha = resolve_artifact(spec, VARIABLES)",
@@ -983,7 +1000,8 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
     if norm["placements"]["comfyui"] == "colab":
         lines.extend(_start_comfy_lines())
     if voice:
-        lines.extend(_start_voice_lines())
+        lines.append("if VOICE_OK:")
+        lines.extend("    " + line for line in _start_voice_lines())
     return "\n".join(lines) + "\n"
 
 
@@ -995,9 +1013,7 @@ def _voice_install_lines(voice: dict) -> list[str]:
     return [
         "import base64",
         "print(\"instalando a voz\", flush=True)",
-        "VOICE_FILES = json.loads(r\"\"\"",
-        json.dumps(files),
-        "\"\"\")",
+        "VOICE_FILES = json.loads(" + repr(json.dumps(files)) + ")",
         "voice_dir = ROOT / \"voice\"",
         "for name, data in VOICE_FILES.items():",
         "    path = voice_dir / name",
@@ -1167,27 +1183,46 @@ def _health_cell(norm: dict, voice: dict | None = None) -> str:
         lines.append(
             "HEALTH_URLS.append(\"http://127.0.0.1:\" + str(VARIABLES[\"comfy_port\"]) + VARIABLES[\"comfy_health_path\"])"
         )
-    if voice:
-        lines.append(
-            "HEALTH_URLS.append(\"http://127.0.0.1:\" + str(VARIABLES[\"voice\"][\"port\"]) + \"/health\")"
-        )
     lines.extend([
         "for url in HEALTH_URLS:",
         "    wait_http(url)",
-        "print(\"health ok\")",
     ])
     if voice:
-        # Diz se o Whisper entrou na placa ou caiu para a CPU.
+        # Saúde ok não garante que o modelo coube na placa: uma fala de verdade
+        # prova. Voz que falha fica de fora e o resto segue.
         lines.extend([
             "import json",
-            "for _ in range(150):",
-            "    with urllib.request.urlopen(HEALTH_URLS[-1], timeout=5) as resp:",
-            "        voice_health = json.loads(resp.read())",
-            "    if voice_health.get(\"stt_device\"):",
-            "        break",
-            "    time.sleep(2)",
-            "print(\"voz\", voice_health)",
+            "if VOICE_OK:",
+            "    voice_url = \"http://127.0.0.1:\" + str(VARIABLES[\"voice\"][\"port\"])",
+            "    try:",
+            "        wait_http(voice_url + \"/health\")",
+            "        for _ in range(150):",
+            "            with urllib.request.urlopen(voice_url + \"/health\", timeout=5) as resp:",
+            "                voice_health = json.loads(resp.read())",
+            "            if voice_health.get(\"stt_device\"):",
+            "                break",
+            "            time.sleep(2)",
+            "        print(\"voz\", voice_health, flush=True)",
+            "        started = time.time()",
+            "        request = urllib.request.Request(",
+            "            voice_url + \"/v1/audio/speech\",",
+            "            data=json.dumps({\"input\": \"Teste de voz.\", \"voice\": \"M1\", \"response_format\": \"pcm\"}).encode(\"utf-8\"),",
+            "            headers={\"Authorization\": \"Bearer \" + VOICE_KEY, \"Content-Type\": \"application/json\"},",
+            "            method=\"POST\",",
+            "        )",
+            "        with urllib.request.urlopen(request, timeout=180) as resp:",
+            "            spoken = len(resp.read())",
+            "        if spoken < 2000:",
+            "            raise SystemExit(\"a fala de teste voltou vazia\")",
+            "        print(\"fala de teste ok em\", round(time.time() - started, 1), \"s\", flush=True)",
+            "        HEALTH_URLS.append(voice_url + \"/health\")",
+            "    except (SystemExit, OSError) as exc:",
+            "        VOICE_OK = False",
+            "        print(\"aviso: a voz não subiu e fica de fora:\", exc, flush=True)",
+            "if not HEALTH_URLS:",
+            "    raise SystemExit(\"a voz não subiu e não há outro serviço neste notebook\")",
         ])
+    lines.append("print(\"health ok\")")
     return "\n".join(lines) + "\n"
 
 
@@ -1217,8 +1252,9 @@ def _register_cell(norm: dict, voice: dict | None = None) -> str:
         "        \"hardware\": detect_hardware(),\n"
         "    }\n"
         + (
-            "    payload[\"endpoints\"][\"voice\"] = PUBLIC_VOICE + \"/v1\"\n"
-            "    payload[\"voice_models\"] = {\"tts\": VARIABLES[\"voice\"][\"tts\"], "
+            "    if PUBLIC_VOICE:\n"
+            "        payload[\"endpoints\"][\"voice\"] = PUBLIC_VOICE + \"/v1\"\n"
+            "        payload[\"voice_models\"] = {\"tts\": VARIABLES[\"voice\"][\"tts\"], "
             "\"stt\": VARIABLES[\"voice\"][\"stt\"]}\n"
             if voice else ""
         ) +

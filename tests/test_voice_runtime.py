@@ -153,6 +153,9 @@ def test_notebook_brings_the_voice_server_even_with_everything_else_here(admin):
     assert "PUBLIC_VOICE = open_tunnel" in cells["tunnel"]
     assert "PUBLIC_LLM" not in cells["tunnel"] and "PUBLIC_COMFY" not in cells["tunnel"]
     assert 'payload["endpoints"]["voice"] = PUBLIC_VOICE + "/v1"' in cells["register"]
+    # A voz que falha fica de fora sem derrubar o resto, e só entra depois de falar de verdade.
+    assert "aviso: a voz não foi instalada e fica de fora" in cells["provision"]
+    assert "fala de teste ok em" in cells["health"] and "if PUBLIC_VOICE:" in cells["register"]
     assert "voz (omnivoice-q4 + whisper-small)" in cells["overview"]
     for name, source in cells.items():
         if name != "overview":
