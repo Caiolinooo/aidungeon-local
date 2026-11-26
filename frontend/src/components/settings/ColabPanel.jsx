@@ -180,7 +180,7 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
         <div className="flex flex-wrap items-center gap-3">
           <p role="status" className="min-w-0 flex-1 text-primary">
             {session.state === 'creating' && (session.attempt ? `O Colab está sem máquina livre; tentativa ${session.attempt} de ${session.attempts}…` : 'Pedindo a máquina ao Colab…')}
-            {session.state === 'starting' && `Passo ${session.step || 1} de ${session.steps || '?'}: ${CELL[session.cell] || 'preparando'}…`}
+            {session.state === 'starting' && (session.resumed ? 'O Colab está subindo (o jogo reiniciou e retomou esta sessão)…' : `Passo ${session.step || 1} de ${session.steps || '?'}: ${CELL[session.cell] || 'preparando'}…`)}
             {session.state === 'on' && `Colab ligado${session.spec?.accelerator ? ` (${session.spec.accelerator})` : ''}.`}
           </p>
           <button

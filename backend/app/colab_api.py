@@ -155,16 +155,12 @@ def _call(conn: sqlite3.Connection, method: str, path: str, *, body: Any = None,
 
 def overview(conn: sqlite3.Connection, *, transport: Any = None) -> dict:
     """O que a tela mostra: conta conectada, plano, GPUs que dá para pedir e a sessão."""
-    session = status()
-    if session.get("state") == "starting" and settings_store.colab_online(conn):
-        # O acompanhamento pode ter caído; o batimento do notebook é a prova de que ligou.
-        session["state"] = "on"
     out = {
         "client_saved": bool(_secret(conn, "colab.client_id")
                              and _secret(conn, "colab.client_secret")),
         "connected": bool(_secret(conn, "colab.refresh_token")),
         "redirect": REDIRECT,
-        "session": session,
+        "session": session_view(conn),
         "tier": None, "specs": [], "runtimes": [], "error": None,
     }
     if not out["connected"]:
@@ -181,6 +177,7 @@ def overview(conn: sqlite3.Connection, *, transport: Any = None) -> dict:
             {"name": item.get("name"), **(item.get("runtimeSpec") or {})}
             for item in runtimes.get("runtimes") or []
         ]
+        out["session"] = session_view(conn, out["runtimes"])
     except GameError as exc:
         out["error"] = exc.message
     return out
@@ -220,6 +217,35 @@ def runtime_notebook(conn: sqlite3.Connection, project_url: str) -> dict:
 def status() -> dict:
     with _lock:
         return {key: value for key, value in _state.items() if not key.startswith("_")}
+
+
+def _remember(session: dict | None) -> None:
+    """Grava qual sessão o jogo criou. O estado daqui é só memória: sem isto um
+    reinício do jogo esquecia a sessão, que seguia ligada sem aparecer na tela."""
+    with db.session() as conn:
+        if session:
+            settings_store._set_override(conn, "colab.session", session)
+        else:
+            db.delete_setting(conn, "colab.session")
+
+
+def session_view(conn: sqlite3.Connection, runtimes: list[dict] | None = None) -> dict:
+    """Estado para a tela. Depois de um reinício do jogo, a sessão gravada é
+    retomada: ligada se o notebook já bate, subindo se ainda não."""
+    session = status()
+    if session.get("state") == "starting" and settings_store.colab_online(conn):
+        # O acompanhamento pode ter caído; o batimento do notebook é a prova de que ligou.
+        session["state"] = "on"
+    if session.get("state") != "off":
+        return session
+    saved = settings_store._get_override(conn, "colab.session")
+    if not isinstance(saved, dict) or not saved.get("runtime"):
+        return session
+    if runtimes is not None and saved["runtime"] not in {item.get("name") for item in runtimes}:
+        db.delete_setting(conn, "colab.session")  # a sessão acabou por fora
+        return session
+    return {"state": "on" if settings_store.colab_online(conn) else "starting",
+            "runtime": saved["runtime"], "spec": saved.get("spec"), "log": [], "resumed": True}
 
 
 def _mine(sid: str | None) -> bool:
@@ -374,6 +400,7 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any,
                       transport=transport)
             return
         _set(sid, runtime=name, state="starting", cell="", step=0, steps=len(cells))
+        _remember({"runtime": name, "spec": spec})
 
         def connection() -> tuple[str, str]:
             with db.session() as conn:
@@ -385,7 +412,17 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any,
 
         _execute(connection, cells, connect=connect, transport=transport, sid=sid)
     except Exception as exc:  # a thread não tem quem receba a exceção
-        _set(sid, state="error", error=str(getattr(exc, "message", exc))[:400])
+        failed = status().get("runtime") if _mine(sid) else ""
+        _set(sid, state="error", error=str(getattr(exc, "message", exc))[:400], runtime="")
+        if failed:
+            # Uma subida que falhou não serve para nada e segue gastando créditos: apaga.
+            try:
+                with db.session() as conn:
+                    _call(conn, "DELETE", f"v1beta/{failed}", params={"allowMissing": "true"},
+                          transport=transport)
+                _remember(None)
+            except Exception:
+                pass  # a tela lista a sessão que sobrou, com o botão de desligar
 
 
 def start(conn: sqlite3.Connection, spec: dict, project_url: str,
@@ -395,6 +432,8 @@ def start(conn: sqlite3.Connection, spec: dict, project_url: str,
     cells = [(cell["id"], "".join(cell["source"]))
              for cell in notebook["cells"] if cell["cell_type"] == "code"]
     _access_token(conn, transport)
+    if session_view(conn).get("state") != "off":
+        raise GameError.conflict("colab_running", "o Colab já está ligado ou ligando")
     with _lock:
         if _state.get("state") in ("creating", "starting", "on"):
             raise GameError.conflict("colab_running", "o Colab já está ligado ou ligando")
@@ -412,7 +451,8 @@ def stop(conn: sqlite3.Connection, name: str = "", *, transport: Any = None) -> 
     `name` serve para a sessão que ficou de antes de o jogo reiniciar: o estado
     daqui é só memória, mas a API lista o que continua ligado na conta.
     """
-    tracked = status().get("runtime") or ""
+    saved = settings_store._get_override(conn, "colab.session")
+    tracked = status().get("runtime") or (saved or {}).get("runtime") or ""
     other = bool(name) and name != tracked
     name = name or tracked
     if name and not name.startswith("runtimes/"):
@@ -425,4 +465,5 @@ def stop(conn: sqlite3.Connection, name: str = "", *, transport: Any = None) -> 
         with _lock:
             _state.clear()
             _state.update({"state": "off"})
-    return status()
+        db.delete_setting(conn, "colab.session")
+    return session_view(conn)

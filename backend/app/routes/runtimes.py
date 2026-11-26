@@ -184,7 +184,8 @@ def post_colab_stop(body: ColabStop,
 
 @router.get("/colab/status")
 def get_colab_status(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
-    return colab_api.status()
+    with db.session() as conn:
+        return colab_api.session_view(conn)
 
 
 def _require_registrar(request: Request) -> None:

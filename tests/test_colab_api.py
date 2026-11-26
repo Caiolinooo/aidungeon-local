@@ -26,9 +26,10 @@ def admin(client, admin_token):
 class Google:
     """Google de mentira: troca de token, API do Colab e o Jupyter da sessão."""
 
-    def __init__(self, create_error=None):
+    def __init__(self, create_error=None, listed=()):
         self.calls = []
         self.create_error = create_error
+        self.listed = list(listed)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -54,7 +55,8 @@ class Google:
                 {"key": {"variant": "VARIANT_GPU", "accelerator": "H100", "shape": "SHAPE_STANDARD"}},
             ]})
         if path == "/v1beta/runtimes" and request.method == "GET":
-            return httpx.Response(200, json={})
+            return httpx.Response(200, json={"runtimes": [
+                {"name": name, "runtimeSpec": {"accelerator": "T4"}} for name in self.listed]})
         if path == "/v1beta/runtimes":
             assert json.loads(request.content) == {"runtimeSpec": {
                 "variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD"}}
@@ -256,3 +258,65 @@ def test_turning_off_while_colab_is_still_creating(admin, monkeypatch, machine_a
     assert len(creates) == 1 and opened == []
     # A máquina que chegou depois do desligar é apagada; sem máquina, nada a apagar.
     assert (deleted in google.calls) == machine_arrives
+
+
+def _connected(admin, google):
+    admin.app.dependency_overrides[deps.get_http_transport] = lambda: httpx.MockTransport(google)
+    with db.session() as conn:
+        colab_api.save_client(conn, "id-123.apps.googleusercontent.com", "secret-123456")
+        colab_api.save_refresh_token(conn, "rt-123456")
+    _use_colab(admin)
+
+
+def test_session_is_remembered_across_a_game_restart(admin):
+    """Visto em produção: um deploy no meio da subida fazia a tela esquecer a sessão."""
+    google = Google(listed=["runtimes/r-1"])
+    _connected(admin, google)
+    spec = {"variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD"}
+    with db.session() as conn:
+        db.set_setting(conn, "colab.session", json.dumps({"runtime": "runtimes/r-1", "spec": spec}))
+    # A memória do processo está vazia, como depois de um reinício.
+    session = admin.get("/api/colab").json()["session"]
+    assert (session["state"], session["runtime"], session["resumed"]) == ("starting", "runtimes/r-1", True)
+    assert admin.get("/api/colab/status").json()["state"] == "starting"
+    assert admin.post("/api/colab/start", json={**spec, "project_url": "https://play.example"}).status_code == 409
+    assert admin.post("/api/colab/stop", json={}).json() == {"state": "off"}
+    assert ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1") in google.calls
+
+    # Sessão gravada que já não existe na conta: some sozinha.
+    google.listed = []
+    with db.session() as conn:
+        db.set_setting(conn, "colab.session", json.dumps({"runtime": "runtimes/r-9", "spec": spec}))
+    assert admin.get("/api/colab").json()["session"] == {"state": "off"}
+    with db.session() as conn:
+        assert db.get_setting(conn, "colab.session") is None
+
+
+def test_a_failed_startup_turns_the_machine_off(admin, monkeypatch):
+    """Sem isto a sessão que falhou numa célula seguia ligada, gastando sem aparecer."""
+    google = Google()
+    _connected(admin, google)
+
+    class Failing(Kernel):
+        def send(self, frame):
+            msg = json.loads(frame)
+            parent = {"msg_id": msg["header"]["msg_id"]}
+            if msg["header"]["msg_type"] == "kernel_info_request":
+                self.out.append({"msg_type": "kernel_info_reply", "parent_header": parent, "content": {}})
+            elif not any(item["msg_type"] == "error" for item in self.out):
+                self.out.append({"msg_type": "error", "parent_header": parent,
+                                 "content": {"ename": "SystemExit", "evalue": "VRAM insuficiente"}})
+
+    monkeypatch.setattr("websockets.sync.client.connect", lambda *args, **kwargs: Failing([]))
+    admin.post("/api/colab/start", json={
+        "variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD",
+        "project_url": "https://play.example"})
+    state = _wait(admin, lambda state: state["state"] == "error")
+    assert "VRAM insuficiente" in state["error"]
+    for _ in range(100):
+        if ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1") in google.calls:
+            break
+        time.sleep(0.02)
+    assert ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1") in google.calls
+    with db.session() as conn:
+        assert db.get_setting(conn, "colab.session") is None
