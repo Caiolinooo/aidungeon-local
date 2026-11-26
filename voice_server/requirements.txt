@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 python-multipart
-faster-whisper
+faster-whisper==1.2.1
+# O faster-whisper 1.2.1 abre o áudio com um argumento que o PyAV 18 tirou.
+av>=14,<18
 nvidia-cublas-cu12
 nvidia-cudnn-cu12>=9,<10

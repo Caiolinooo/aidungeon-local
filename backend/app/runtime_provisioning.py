@@ -1006,7 +1006,9 @@ def _voice_install_lines(voice: dict) -> list[str]:
         "])",
         "run([",
         "    sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"fastapi\", \"uvicorn\",",
-        "    \"python-multipart\", \"faster-whisper\", \"nvidia-cublas-cu12\", \"nvidia-cudnn-cu12>=9,<10\",",
+        # O faster-whisper 1.2.1 abre o áudio com um argumento que o PyAV 18 tirou.
+        "    \"python-multipart\", \"faster-whisper==1.2.1\", \"av>=14,<18\",",
+        "    \"nvidia-cublas-cu12\", \"nvidia-cudnn-cu12>=9,<10\",",
         "])",
     ]
 
