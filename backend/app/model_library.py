@@ -747,9 +747,27 @@ def _narrator_healthy(base_url: str, seconds: float) -> bool:
     return False
 
 
+def _wait_narrator_idle(base_url: str, seconds: float = 120) -> None:
+    """Espera o narrador terminar o que está respondendo antes de reiniciá-lo.
+    Sem resposta de /slots (outra chave, servidor fora) segue adiante."""
+    key = settings_store.resolve_env_value("LLM_API_KEY") or ""
+    url = base_url.rstrip("/").removesuffix("/v1") + "/slots"
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            resp = httpx.get(url, timeout=5.0, headers={"Authorization": f"Bearer {key}"})
+            slots = resp.json() if resp.status_code == 200 else []
+        except (httpx.HTTPError, ValueError):
+            return
+        if not any(slot.get("is_processing") for slot in slots if isinstance(slot, dict)):
+            return
+        time.sleep(3)
+
+
 def _restart_narrator(base_url: str) -> bool:
     """Reinicia o llama-server com o vigia de slots pausado: carregar um modelo
     leva mais que os 45 s depois dos quais o vigia reiniciaria de novo."""
+    _wait_narrator_idle(base_url)
     subprocess.run([*_SYSTEMCTL, "stop", "slot-watchdog.timer"], timeout=60)
     try:
         if subprocess.run([*_SYSTEMCTL, "restart", "llama-server.service"],

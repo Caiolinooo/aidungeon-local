@@ -415,6 +415,7 @@ def _narrator_setup(admin, tmp_path, monkeypatch, healthy):
         type("Done", (), {"returncode": 0 if cmd[:1] == ["sudo"] else 1, "stdout": ""})())[1])
     answers = list(healthy)
     monkeypatch.setattr(model_library, "_narrator_healthy", lambda url, seconds: answers.pop(0))
+    monkeypatch.setattr(model_library, "_wait_narrator_idle", lambda url, seconds=120: None)
 
     def fake_fetch(url, dest, sha256, retries=3, expected_bytes=None, auth_header=None):
         open(dest, "wb").write(b"g" * int(expected_bytes))
