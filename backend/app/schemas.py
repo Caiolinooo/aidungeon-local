@@ -319,7 +319,8 @@ class ImageSettingsUpdate(BaseModel):
     denoising_strength: float | None = Field(default=None, ge=0.0, le=1.0)
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
     sd_model_checkpoint: str | None = Field(default=None, max_length=300)
-    comfyui_engine: Literal["qwen", "flux2_klein", "z_image_turbo"] | None = None
+    comfyui_engine: Literal[
+        "qwen", "flux2_klein", "z_image_turbo", "checkpoint", "custom"] | None = None
     flux2_steps: int | None = Field(default=None, ge=1, le=8)
     flux2_cfg: float | None = Field(default=None, ge=1.0, le=2.0)
     flux2_sampler: Literal["euler", "res_multistep"] | None = None

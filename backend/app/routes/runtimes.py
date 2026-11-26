@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from app import access, auth, db, llm_client, settings_store
+from app import access, auth, db, llm_client, model_library, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
@@ -32,8 +32,8 @@ def _provisioning():
     return runtime_provisioning
 
 
-def _catalog() -> dict:
-    catalog = _provisioning().load_catalog()
+def _catalog(conn) -> dict:
+    catalog = settings_store.runtime_catalog(conn)
     if not isinstance(catalog, dict):
         raise GameError.bad_request("validation_error", "runtime catalog is unavailable")
     return settings_store.strip_secrets(catalog)
@@ -52,7 +52,7 @@ def _local_hardware() -> dict:
 def _runtime_response(conn) -> dict:
     return settings_store.scrub_public({
         "runtime": settings_store.effective_runtime_settings(conn),
-        "catalog": _catalog(),
+        "catalog": _catalog(conn),
         "local_hardware": _local_hardware(),
         "registration": settings_store.runtime_registration(conn),
     }, conn)
@@ -98,7 +98,7 @@ def get_runtime_notebook(project_url: str = "",
         if not config.get("project_url"):
             # Sem URL salva, o Colab chama de volta o endereço de onde o admin baixou.
             config = {**config, "project_url": project_url}
-        catalog = _catalog()
+        catalog = _catalog(conn)
         try:
             normalized = prov.validate_runtime(config, catalog, require_colab=True)
         except ValueError as exc:
@@ -109,9 +109,11 @@ def get_runtime_notebook(project_url: str = "",
         if not public.get("project_url"):
             raise GameError.bad_request(
                 "validation_error", "project_url is required so Colab can reach this server")
+        # As chaves de download entram depois da limpeza: o arquivo precisa delas.
         notebook = prov.generate_notebook(
             public, catalog,
-            register_token=auth.make_runtime_token(auth.auth_config()["secret"]))
+            register_token=auth.make_runtime_token(auth.auth_config()["secret"]),
+            download_keys=model_library.download_keys(conn))
         raw = prov.notebook_bytes(notebook)
         if isinstance(raw, str):
             raw = raw.encode("utf-8")

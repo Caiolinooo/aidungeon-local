@@ -398,6 +398,18 @@ streaming e `/sdapi/v1/txt2img` ou `/v1/images/generations`. Trocar de runtime �
 **uma URL** na aba Config (ou em `config/settings.json`), ou provisionar dinamicamente
 via túneis e notebooks Colab/Vast na aba Runtime (`/api/settings/runtime`):
 
+- **Runtime e modelos** (aba de mesmo nome): escolhe se o narrador e o ComfyUI rodam
+  nesta máquina ou no Colab e qual modelo cada um usa. A busca lê ao vivo o CivitAI, o
+  CivitAI Red e o Hugging Face (`/api/models/search`); o arquivo escolhido vira uma
+  entrada do catálogo do runtime, com SHA256. Entram: variações de Flux.2 Klein,
+  Z-Image Turbo, Qwen 2.1, LTXV, Wan 2.2 5B e H3; qualquer arquivo completo
+  (SDXL, Pony, Illustrious, SD 1.5) pelo motor `checkpoint`, com LoRA; e um fluxo do
+  ComfyUI colado em JSON (motor `custom`, marcadores `{{prompt}}`, `{{negative}}`,
+  `{{width}}`, `{{height}}`, `{{seed}}`, `{{reference_N}}`). `checkpoint` e `custom`
+  pintam só por texto. As chaves de download ficam no servidor e vão escritas no
+  notebook do Colab, que se registra sozinho e bate a cada 60 s; sem batida por 3 min,
+  o jogo volta a usar a máquina local.
+
 - **LLM**: padrão atual é o `llama.cpp` da VM (`http://vm.groupabz.com:1234/v1`, modelo
   descoberto em runtime via `GET /models`). Vale KoboldCpp, Ollama, LM Studio ou
   qualquer servidor OpenAI-compatível — local ou remoto. KoboldCpp continua sendo a

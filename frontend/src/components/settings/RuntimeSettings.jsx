@@ -1,15 +1,37 @@
+import { useEffect, useRef, useState } from 'react'
 import { Download } from 'lucide-react'
+import { api } from '../../api.js'
+import { useToast } from '../Toast.jsx'
 import { SettingField } from './Controls.jsx'
+import ModelPicker from './ModelPicker.jsx'
 
-const MODES = [
-  { id: 'local', label: 'Local' },
-  { id: 'hybrid', label: 'Híbrido' },
+const PLACES = [
+  { id: 'local', label: 'Esta máquina' },
   { id: 'colab', label: 'Colab' },
 ]
 
-const PLACES = [
-  { id: 'local', label: 'Neste projeto' },
-  { id: 'colab', label: 'Colab' },
+const SERVICES = [
+  { key: 'llm', label: 'Narrador' },
+  { key: 'comfyui', label: 'Imagem e vídeo' },
+]
+
+const KINDS = [
+  { kind: 'llm', title: 'Narrador', service: 'llm' },
+  { kind: 'image', title: 'Imagem', service: 'comfyui' },
+  { kind: 'video', title: 'Vídeo', service: 'comfyui' },
+]
+
+const DEFAULT_FAMILIES = {
+  llm: ['gguf'],
+  image: ['checkpoint', 'flux2_klein', 'z_image_turbo', 'qwen', 'custom'],
+  video: ['ltxv', 'wan', 'h3'],
+}
+
+const ENDPOINTS = [
+  { key: 'local_llm', label: 'Narrador nesta máquina' },
+  { key: 'local_comfyui', label: 'ComfyUI nesta máquina' },
+  { key: 'colab_llm', label: 'Narrador no Colab (o notebook preenche)' },
+  { key: 'colab_comfyui', label: 'ComfyUI no Colab (o notebook preenche)' },
 ]
 
 const SENSITIVE_KEY = /token|secret|password|api[_-]?key|authorization|auth[_-]?key|credential/i
@@ -130,22 +152,6 @@ export function normalizeRuntimeConfig(data) {
   }
 }
 
-export function applyRuntimeMode(form, mode) {
-  const base = normalizeRuntimeConfig(form)
-  if (mode === 'local' || mode === 'colab') {
-    return {
-      ...base,
-      mode,
-      placements: { llm: mode, comfyui: mode },
-    }
-  }
-  const placements = { ...base.placements }
-  if (placements.llm === placements.comfyui) {
-    placements.comfyui = placements.llm === 'local' ? 'colab' : 'local'
-  }
-  return { ...base, mode: 'hybrid', placements }
-}
-
 export function applyRuntimePlacement(form, key, place) {
   const base = normalizeRuntimeConfig(form)
   if (key !== 'llm' && key !== 'comfyui') return base
@@ -262,31 +268,6 @@ function hardwareRows(hardware) {
     .filter((row) => row.value)
 }
 
-function optionLabel(id, meta) {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return id
-  const role = meta.role === 'narrator' ? 'narrador' : meta.role === 'fallback' ? 'reserva' : ''
-  const engine = typeof meta.engine === 'string' && meta.engine !== id ? meta.engine : ''
-  const hint = [role, engine].filter(Boolean).join(' · ')
-  return hint ? `${id} · ${hint}` : id
-}
-
-function ModelSelect({ label, value, catalog, excludeRole, onChange, inputCls, labelCls }) {
-  const ids = Object.keys(catalog || {}).filter(
-    (id) => !excludeRole || catalog?.[id]?.role !== excludeRole,
-  )
-  const options = !value || ids.includes(value) ? ids : [value, ...ids]
-  return (
-    <SettingField label={label} labelClassName={labelCls}>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className={inputCls}>
-        <option value="">{ids.length ? 'Selecione um modelo' : 'Catálogo vazio'}</option>
-        {options.map((id) => (
-          <option key={id} value={id}>{optionLabel(id, catalog?.[id])}</option>
-        ))}
-      </select>
-    </SettingField>
-  )
-}
-
 function formatWhen(value) {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     const parsed = new Date(value < 1e12 ? value * 1000 : value)
@@ -318,16 +299,6 @@ function registrationView(registration) {
   }
 }
 
-function placeLabel(place) {
-  return place === 'colab' ? 'Colab' : 'neste projeto'
-}
-
-function isFineView(modelId, meta) {
-  if (String(modelId || '').toLowerCase().includes('fineview')) return true
-  if (!meta || typeof meta !== 'object') return false
-  return /fineview/i.test(`${meta.label || ''} ${meta.name || ''} ${meta.engine || ''}`)
-}
-
 export default function RuntimeSettings({
   form,
   catalog,
@@ -339,44 +310,105 @@ export default function RuntimeSettings({
   downloading,
   onChange,
   onDownload,
+  onLibraryChange,
+  onRefresh,
   inputCls,
   labelCls,
 }) {
+  const toast = useToast()
+  const [library, setLibrary] = useState(null)
+  const [keys, setKeys] = useState({ civitai: '', huggingface: '' })
+  const [savingKeys, setSavingKeys] = useState(false)
+  const refresh = useRef(onRefresh)
+  refresh.current = onRefresh
+
+  useEffect(() => {
+    api.getModelLibrary().then(setLibrary).catch(() => setLibrary(null))
+  }, [])
+
+  // O Colab bate a cada 60 s; a tela confere a cada 20 s quem está atendendo.
+  useEffect(() => {
+    const timer = setInterval(() => refresh.current?.(), 20000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const installing = library?.install?.state === 'running'
+  useEffect(() => {
+    if (!installing) return undefined
+    const timer = setInterval(async () => {
+      try {
+        const install = await api.getModelInstall()
+        setLibrary((prev) => (prev ? { ...prev, install } : prev))
+      } catch {
+        // a próxima batida tenta de novo
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [installing])
+
   const allLocal = isAllLocalRuntime(form)
   const notebookDisabled = !loaded || allLocal || dirty || downloading
-  let notebookHint = 'Abra o .ipynb no Colab, escolha uma GPU e clique em Executar tudo. Ele se registra sozinho aqui.'
-  if (!loaded) notebookHint = 'O notebook fica indisponível até a configuração carregar.'
-  else if (allLocal) notebookHint = 'Notebook desativado: narrador e ComfyUI estão neste projeto.'
-  else if (dirty) notebookHint = 'Salve a configuração antes de gerar o notebook.'
+  let notebookHint = 'Abra o arquivo no Colab, escolha uma GPU e clique em Executar tudo. Ele baixa os modelos e se liga a este jogo sozinho.'
+  if (allLocal) notebookHint = 'Ponha o narrador ou a imagem no Colab, acima, para gerar o notebook.'
+  else if (dirty) notebookHint = 'Salve antes de gerar o notebook.'
 
   const hardwareUnavailable = hardware?.status === 'unavailable'
   const rows = hardware ? hardwareRows(hardware).filter((row) => row.key !== 'status') : []
   const reg = registration ? registrationView(registration) : null
+  const gpu = registration?.hardware?.gpu_name || registration?.hardware?.gpu
+
+  const pick = (kind, id) => onChange({ ...form, models: { ...form.models, [kind]: id } })
+
+  const installHere = async (kind, id) => {
+    try {
+      const install = await api.installModel(kind, id)
+      setLibrary((prev) => (prev ? { ...prev, install } : prev))
+      if (install.state === 'done') toast('Os arquivos deste modelo já estão nesta máquina.', 'ok')
+    } catch (e) {
+      toast('Não consegui baixar: ' + e.message)
+    }
+  }
+
+  const saveKeys = async (payload) => {
+    setSavingKeys(true)
+    try {
+      setLibrary(await api.putModelKeys(payload))
+      setKeys({ civitai: '', huggingface: '' })
+      toast('Chaves de download atualizadas.', 'ok')
+    } catch (e) {
+      toast('Não consegui salvar as chaves: ' + e.message)
+    } finally {
+      setSavingKeys(false)
+    }
+  }
+
+  const keyField = (name, label, hint) => (
+    <SettingField label={label} labelClassName={labelCls}>
+      <input
+        type="password"
+        autoComplete="off"
+        value={keys[name]}
+        onChange={(e) => setKeys({ ...keys, [name]: e.target.value })}
+        placeholder={library?.keys?.[name] ? 'Salva. Digite outra para trocar.' : hint}
+        className={inputCls}
+      />
+      {library?.keys?.[name] && (
+        <button type="button" disabled={savingKeys} onClick={() => saveKeys({ [name]: '' })} className="mt-1 text-[11px] text-danger-300 underline disabled:opacity-50">
+          Apagar a chave salva
+        </button>
+      )}
+    </SettingField>
+  )
 
   return (
     <div className="space-y-6">
       <div className="border-b border-subtle pb-3">
         <h2 className="text-sm font-bold uppercase tracking-wider text-primary">
-          Runtime e Colab
+          Runtime e modelos
         </h2>
         <p className="text-xs text-secondary mt-0.5">
-          Escolhe onde o narrador e o ComfyUI rodam. O banco e os arquivos finais permanecem neste projeto.
+          Onde cada parte roda e qual modelo ela usa. As aventuras, o banco e as imagens ficam sempre neste servidor.
         </p>
-      </div>
-
-      <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-2 text-xs text-secondary">
-        <p>O Colab é computação sem estado. A aventura, o SQLite e os arquivos finais não saem daqui.</p>
-        <p>
-          O notebook não pede segredo: ele abre um túnel e se registra aqui com um token que só faz esse registro e vale 30 dias. Não compartilhe o arquivo.
-          {isFineView(form?.models?.image, catalog?.image?.[form?.models?.image]) && (
-            <>
-              {' '}FineView é a exceção: pede <span className="font-mono text-primary">CIVITAI_API_KEY</span> no painel Secrets do Colab.
-            </>
-          )}
-        </p>
-        <p>Quando a sessão do Colab acabar, volte o serviço para local aqui. O jogo não troca sozinho.</p>
-        <p>Trocar o narrador, a imagem ou o vídeo exige reiniciar ou reconectar o runtime correspondente. Imagem e vídeo usam o mesmo ComfyUI.</p>
-        <p>Gravar esta aba exige administrador. A resposta não inclui chave de API.</p>
       </div>
 
       {loadError && (
@@ -387,241 +419,153 @@ export default function RuntimeSettings({
 
       {loaded && (
         <>
-          <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Onde a computação roda
-            </h3>
-            <fieldset className="space-y-2">
-              <legend className={labelCls}>Modo</legend>
-              <div role="radiogroup" aria-label="Modo do runtime" className="flex flex-wrap gap-1.5">
-                {MODES.map((mode) => {
-                  const active = form.mode === mode.id
-                  return (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      onClick={() => onChange(applyRuntimeMode(form, mode.id))}
-                      className={`min-h-11 rounded-lg px-3.5 py-2 text-xs font-semibold transition ${
-                        active
-                          ? 'bg-accent-pri text-canvas'
-                          : 'border border-subtle bg-elevated text-secondary hover:text-primary'
-                      }`}
-                    >
-                      {mode.label}
-                    </button>
-                  )
-                })}
+          <p role="status" className="rounded-2xl border border-subtle bg-surface px-4 py-3 text-xs text-secondary">
+            {allLocal && 'Tudo roda nesta máquina.'}
+            {!allLocal && registration?.online && (
+              <>Colab conectado{gpu ? ` (${gpu})` : ''}. Última batida: {reg?.when || 'agora'}.</>
+            )}
+            {!allLocal && !registration?.online && (
+              <>Colab não conectado. Esta máquina atende até o notebook se registrar, e volta a atender se ele cair.</>
+            )}
+          </p>
+
+          <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Onde roda</h3>
+            {SERVICES.map((service) => (
+              <div key={service.key} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-primary">{service.label}</span>
+                <div role="radiogroup" aria-label={`Onde roda: ${service.label}`} className="flex gap-1.5">
+                  {PLACES.map((place) => {
+                    const active = form.placements[service.key] === place.id
+                    return (
+                      <button
+                        key={place.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => onChange(applyRuntimePlacement(form, service.key, place.id))}
+                        className={`min-h-10 rounded-xl border px-4 py-1.5 text-xs font-semibold transition ${active ? 'border-accent-pri bg-elevated text-primary' : 'border-subtle text-secondary hover:text-primary'}`}
+                      >
+                        {place.label}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </fieldset>
+            ))}
+          </section>
+
+          {KINDS.map((item) => (
+            <ModelPicker
+              key={item.kind}
+              kind={item.kind}
+              title={item.title}
+              value={form.models[item.kind]}
+              catalog={catalog?.[item.kind]}
+              families={library?.families?.[item.kind] || DEFAULT_FAMILIES[item.kind]}
+              place={form.placements[item.service]}
+              library={library}
+              onPick={pick}
+              onLibraryChange={onLibraryChange}
+              onInstall={installHere}
+              inputCls={inputCls}
+              labelCls={labelCls}
+            />
+          ))}
+
+          <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Chaves de download</h3>
             <p className="text-[11px] text-secondary">
-              Narrador: {placeLabel(form.placements.llm)}. ComfyUI (imagem e vídeo): {placeLabel(form.placements.comfyui)}.
-              Local mantém os dois aqui. Colab envia os dois ao notebook. Híbrido deixa um em cada lado.
+              Ficam salvas neste servidor e vão escritas no notebook, para o Colab baixar sem você colar nada. O CivitAI pede chave na maioria dos downloads; o Hugging Face só em repositório fechado.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <SettingField label="Onde o narrador roda" labelClassName={labelCls}>
-                <select
-                  value={form.placements.llm}
-                  onChange={(e) => onChange(applyRuntimePlacement(form, 'llm', e.target.value))}
-                  className={inputCls}
-                >
-                  {PLACES.map((place) => (
-                    <option key={place.id} value={place.id}>{place.label}</option>
-                  ))}
-                </select>
-              </SettingField>
-              <SettingField label="Onde o ComfyUI roda" labelClassName={labelCls}>
-                <select
-                  value={form.placements.comfyui}
-                  onChange={(e) => onChange(applyRuntimePlacement(form, 'comfyui', e.target.value))}
-                  className={inputCls}
-                >
-                  {PLACES.map((place) => (
-                    <option key={place.id} value={place.id}>{place.label}</option>
-                  ))}
-                </select>
-              </SettingField>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {keyField('civitai', 'CivitAI e CivitAI Red', 'Chave da sua conta')}
+              {keyField('huggingface', 'Hugging Face', 'Token (opcional)')}
             </div>
-          </div>
-
-          <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Modelos</h3>
-              <p className="text-[11px] text-secondary mt-0.5">
-                Identificadores do catálogo do servidor. A lista não é preenchida com modelos inventados.
-                O narrador não traz URL nem SHA: isso fica nas variáveis do notebook.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <ModelSelect
-                label="Narrador"
-                value={form.models.llm}
-                catalog={catalog?.llm}
-                excludeRole={form.placements.llm === 'local' ? 'fallback' : undefined}
-                onChange={(llm) => onChange({ ...form, models: { ...form.models, llm } })}
-                inputCls={inputCls}
-                labelCls={labelCls}
-              />
-              <ModelSelect
-                label="Imagem"
-                value={form.models.image}
-                catalog={catalog?.image}
-                onChange={(image) => onChange({ ...form, models: { ...form.models, image } })}
-                inputCls={inputCls}
-                labelCls={labelCls}
-              />
-              <ModelSelect
-                label="Vídeo"
-                value={form.models.video}
-                catalog={catalog?.video}
-                onChange={(video) => onChange({ ...form, models: { ...form.models, video } })}
-                inputCls={inputCls}
-                labelCls={labelCls}
-              />
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Endpoints</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <SettingField label="URL local do narrador" labelClassName={labelCls}>
-                <input
-                  type="text"
-                  value={form.endpoints.local_llm}
-                  onChange={(e) => onChange({
-                    ...form,
-                    endpoints: { ...form.endpoints, local_llm: e.target.value },
-                  })}
-                  placeholder="http://127.0.0.1:1234/v1"
-                  className={inputCls}
-                  autoComplete="off"
-                />
-              </SettingField>
-              <SettingField label="URL local do ComfyUI" labelClassName={labelCls}>
-                <input
-                  type="text"
-                  value={form.endpoints.local_comfyui}
-                  onChange={(e) => onChange({
-                    ...form,
-                    endpoints: { ...form.endpoints, local_comfyui: e.target.value },
-                  })}
-                  placeholder="http://127.0.0.1:8188"
-                  className={inputCls}
-                  autoComplete="off"
-                />
-              </SettingField>
-              <SettingField label="URL do narrador no Colab" labelClassName={labelCls}>
-                <input
-                  type="text"
-                  value={form.endpoints.colab_llm}
-                  onChange={(e) => onChange({
-                    ...form,
-                    endpoints: { ...form.endpoints, colab_llm: e.target.value },
-                  })}
-                  placeholder="http://host-tailscale:1234/v1"
-                  className={inputCls}
-                  autoComplete="off"
-                />
-              </SettingField>
-              <SettingField label="URL do ComfyUI no Colab" labelClassName={labelCls}>
-                <input
-                  type="text"
-                  value={form.endpoints.colab_comfyui}
-                  onChange={(e) => onChange({
-                    ...form,
-                    endpoints: { ...form.endpoints, colab_comfyui: e.target.value },
-                  })}
-                  placeholder="http://host-tailscale:8188"
-                  className={inputCls}
-                  autoComplete="off"
-                />
-              </SettingField>
-            </div>
-            <p className="text-[11px] text-secondary">
-              Uma URL de Colab vazia também é gravada. Com essa colocação no Colab, ela passa a ser a URL do narrador ou do ComfyUI.
-            </p>
-            <SettingField label="URL de retorno do projeto" labelClassName={labelCls}>
-              <input
-                type="text"
-                value={form.project_url}
-                onChange={(e) => onChange({ ...form, project_url: e.target.value })}
-                placeholder="https://projeto.exemplo"
-                className={inputCls}
-                autoComplete="off"
-              />
-            </SettingField>
-          </div>
-
-          <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Hardware local</h3>
-              <p className="text-[11px] text-secondary mt-0.5">
-                Leitura enviada pelo servidor deste projeto. Não é uma sonda de saúde do Colab.
-              </p>
-            </div>
-            {hardwareUnavailable && (
-              <p className="text-xs text-secondary">Sonda do hardware local indisponível.</p>
-            )}
-            {rows.length > 0 && (
-              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-                {rows.map((row) => (
-                  <div key={row.key} className="min-w-0">
-                    <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted">{row.label}</dt>
-                    <dd className="break-words font-mono text-xs text-primary">{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-            {!hardwareUnavailable && rows.length === 0 && (
-              <p className="text-xs text-secondary">O servidor não informou o hardware local.</p>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-subtle bg-surface p-4 space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Último registro do Colab</h3>
-            <p className="text-[11px] text-secondary">
-              Estado gravado na última vez que um notebook se registrou. Não é uma verificação ao vivo.
-            </p>
-            {(!reg || !reg.hasRecord) && (
-              <p className="text-xs text-secondary">Nenhum registro do Colab recebido.</p>
-            )}
-            {reg?.hasRecord && (
-              <div className="space-y-2 text-xs text-secondary">
-                <p>
-                  Último contato: <span className="font-mono text-primary">{reg.when}</span>
-                </p>
-                {reg.models.length > 0 && (
-                  <p className="break-words">
-                    Modelos no registro: {reg.models.map((row) => `${row.key}=${row.value}`).join(', ')}
-                  </p>
-                )}
-                {reg.endpoints.length > 0 && (
-                  <p className="break-words">
-                    Endpoints no registro: {reg.endpoints.map((row) => `${row.key}=${row.value}`).join(', ')}
-                  </p>
-                )}
-                {reg.hardware.length > 0 && (
-                  <p className="break-words">
-                    Hardware no registro: {reg.hardware.map((row) => `${row.key}=${row.value}`).join(', ')}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onClick={onDownload}
-              disabled={notebookDisabled}
-              className="flex min-h-11 items-center gap-1.5 rounded-xl border border-subtle bg-elevated px-4 py-2 text-xs font-semibold text-secondary transition hover:text-primary disabled:opacity-50"
+              disabled={savingKeys || (!keys.civitai.trim() && !keys.huggingface.trim())}
+              onClick={() => saveKeys({
+                ...(keys.civitai.trim() ? { civitai: keys.civitai.trim() } : {}),
+                ...(keys.huggingface.trim() ? { huggingface: keys.huggingface.trim() } : {}),
+              })}
+              className="min-h-10 rounded-xl border border-subtle bg-elevated px-4 py-2 text-xs font-semibold text-primary disabled:opacity-50"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>{downloading ? 'Gerando notebook…' : 'Gerar notebook (.ipynb)'}</span>
+              {savingKeys ? 'Salvando…' : 'Salvar chaves'}
             </button>
-            <p className="text-[11px] text-secondary">{notebookHint}</p>
-          </div>
+          </section>
+
+          <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Colab</h3>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={onDownload}
+                disabled={notebookDisabled}
+                className="flex min-h-11 items-center gap-1.5 rounded-xl bg-accent-pri px-4 py-2 text-xs font-semibold text-canvas shadow hover:bg-accent-hov transition disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{downloading ? 'Gerando notebook…' : 'Gerar notebook (.ipynb)'}</span>
+              </button>
+              <p className="min-w-0 flex-1 text-[11px] text-secondary">{notebookHint}</p>
+            </div>
+            <p className="text-[11px] text-muted">
+              O arquivo leva um token que só registra o runtime (vale 30 dias) e as chaves de download acima. Não compartilhe o arquivo. Trocou de modelo? Gere o notebook de novo.
+            </p>
+            {reg?.hasRecord && (
+              <details className="text-xs text-secondary">
+                <summary className="cursor-pointer font-semibold text-primary">Último registro: {reg.when}</summary>
+                <div className="mt-2 space-y-1">
+                  {reg.endpoints.length > 0 && (
+                    <p className="break-all">Endereços: {reg.endpoints.map((row) => `${row.key}=${row.value}`).join(', ')}</p>
+                  )}
+                  {reg.models.length > 0 && (
+                    <p className="break-words">Modelos: {reg.models.map((row) => `${row.key}=${row.value}`).join(', ')}</p>
+                  )}
+                  {reg.hardware.length > 0 && (
+                    <p className="break-words">Hardware: {reg.hardware.map((row) => `${row.key}=${row.value}`).join(', ')}</p>
+                  )}
+                </div>
+              </details>
+            )}
+          </section>
+
+          <details className="rounded-2xl border border-subtle bg-surface p-4 text-xs text-secondary">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-muted">
+              Avançado: endereços e hardware
+            </summary>
+            <div className="mt-3 space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {ENDPOINTS.map((endpoint) => (
+                  <SettingField key={endpoint.key} label={endpoint.label} labelClassName={labelCls}>
+                    <input
+                      type="url"
+                      value={form.endpoints[endpoint.key]}
+                      onChange={(e) => onChange({ ...form, endpoints: { ...form.endpoints, [endpoint.key]: e.target.value } })}
+                      className={inputCls}
+                    />
+                  </SettingField>
+                ))}
+              </div>
+              <SettingField label="Endereço público deste jogo (o Colab liga de volta para ele)" labelClassName={labelCls}>
+                <input
+                  type="url"
+                  value={form.project_url}
+                  onChange={(e) => onChange({ ...form, project_url: e.target.value })}
+                  placeholder="Em branco: o endereço em que você está agora"
+                  className={inputCls}
+                />
+              </SettingField>
+              <div>
+                <span className={labelCls}>Hardware desta máquina</span>
+                {hardwareUnavailable || rows.length === 0 ? (
+                  <p>Não detectado.</p>
+                ) : (
+                  <p className="break-words">{rows.map((row) => `${row.label}: ${row.value}`).join(' · ')}</p>
+                )}
+              </div>
+            </div>
+          </details>
         </>
       )}
     </div>

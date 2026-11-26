@@ -542,12 +542,157 @@ _FLUX2_DEFAULTS = {
 }
 
 
+_IMAGE_ENGINES = ("qwen", "flux2_klein", "z_image_turbo", "checkpoint", "custom")
+
+
 def _comfy_image_engine(cfg: dict) -> str:
-    """`engine` omisso ou vazio é `qwen`. `flux2_klein` e `z_image_turbo` são opt-in."""
+    """`engine` omisso ou vazio é `qwen`. Os outros são opt-in.
+
+    `checkpoint` abre um arquivo completo (SDXL, Pony, Illustrious, SD 1.5).
+    `custom` roda o fluxo que o usuário colou.
+    """
     engine = str(cfg.get("comfyui_engine") or "qwen").strip().lower() or "qwen"
-    if engine not in ("qwen", "flux2_klein", "z_image_turbo"):
+    if engine not in _IMAGE_ENGINES:
         raise ImageError(f"config_error: image.engine desconhecido: {engine!r}")
     return engine
+
+
+def _unet_loader(name: str, weight_dtype: str = "default") -> dict:
+    """GGUF pede o loader do node; safetensors usa o nativo."""
+    if str(name).lower().endswith(".gguf"):
+        return {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": name}}
+    return {"class_type": "UNETLoader", "inputs": {
+        "unet_name": name, "weight_dtype": weight_dtype or "default"}}
+
+
+def _loras(cfg: dict) -> list[dict]:
+    return [
+        {"name": str(item["name"]).strip(), "strength": float(item.get("strength", 1.0))}
+        for item in cfg.get("comfyui_loras") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+
+
+def _with_loras(graph: dict, cfg: dict, *, model: list, clip: list | None = None) -> dict:
+    """Encadeia os LoRAs depois do loader e religa quem lia o modelo (e o CLIP)."""
+    loras = _loras(cfg)
+    if not loras:
+        return graph
+    last_model, last_clip = list(model), list(clip) if clip else None
+    added: dict = {}
+    for index, lora in enumerate(loras):
+        node_id = f"lora{index + 1}"
+        inputs = {"model": last_model, "lora_name": lora["name"],
+                  "strength_model": lora["strength"]}
+        if last_clip:
+            inputs.update({"clip": last_clip, "strength_clip": lora["strength"]})
+            last_clip = [node_id, 1]
+        added[node_id] = {
+            "class_type": "LoraLoader" if clip else "LoraLoaderModelOnly", "inputs": inputs}
+        last_model = [node_id, 0]
+    for node in graph.values():
+        for key, value in node["inputs"].items():
+            if value == model:
+                node["inputs"][key] = last_model
+            elif clip and value == clip:
+                node["inputs"][key] = last_clip
+    graph.update(added)
+    return graph
+
+
+_CHECKPOINT_DEFAULTS = {
+    "checkpoint": "", "steps": 28, "cfg": 6.0, "sampler": "euler_ancestral",
+    "scheduler": "normal", "megapixels": 1.0,
+}
+
+
+def checkpoint_settings(cfg: dict) -> dict:
+    raw = cfg.get("comfyui_checkpoint")
+    merged = dict(_CHECKPOINT_DEFAULTS)
+    for key, default in _CHECKPOINT_DEFAULTS.items():
+        value = raw.get(key) if isinstance(raw, dict) else None
+        if value is None or value == "":
+            continue
+        merged[key] = type(default)(value)
+    return merged
+
+
+def _checkpoint_canvas(width: int, height: int, megapixels: float) -> tuple[int, int]:
+    """Múltiplos de 8, dentro da área em que o modelo foi treinado.
+
+    O canvas de cena do jogo é 1920×1080; um SDXL nesse tamanho repete gente
+    e membros. `megapixels` 0 desliga o teto.
+    """
+    limit = float(megapixels) * 1024 * 1024
+    if limit > 0 and width * height > limit:
+        scale = (limit / (width * height)) ** 0.5
+        width, height = int(width * scale), int(height * scale)
+    return max(64, width // 8 * 8), max(64, height // 8 * 8)
+
+
+def _seed(cfg: dict) -> int:
+    value = cfg.get("seed")
+    return random.randint(0, 2**31 - 1) if value is None or int(value) < 0 else int(value)
+
+
+def _comfy_checkpoint_graph(cfg: dict, prompt: str, *, width: int, height: int) -> dict:
+    """Arquivo completo: modelo, CLIP e VAE saem do mesmo loader. Só texto."""
+    ck = checkpoint_settings(cfg)
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {
+            "ckpt_name": ck["checkpoint"]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["1", 1], "text": prompt}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {
+            "clip": ["1", 1], "text": str(cfg.get("negative_prompt") or "")}},
+        "6": {"class_type": "EmptyLatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+            "latent_image": ["6", 0], "seed": _seed(cfg),
+            "steps": int(ck["steps"]), "cfg": float(ck["cfg"]),
+            "sampler_name": ck["sampler"], "scheduler": ck["scheduler"], "denoise": 1}},
+        "9": {"class_type": "VAEDecode", "inputs": {
+            "samples": ["8", 0], "vae": ["1", 2]}},
+        "10": {"class_type": "SaveImage", "inputs": {
+            "images": ["9", 0], "filename_prefix": "aidungeon"}},
+    }
+    return _with_loras(graph, cfg, model=["1", 0], clip=["1", 1])
+
+
+def _comfy_custom_graph(cfg: dict, prompt: str, image_names: list[str],
+                        *, width: int, height: int) -> dict:
+    """Fluxo do usuário com os marcadores trocados pelo pedido desta imagem.
+
+    Marcador sozinho no campo (`"{{width}}"`) mantém o tipo do valor; dentro de
+    um texto maior vira texto. `{{reference_N}}` é o nome do PNG já enviado.
+    """
+    raw = cfg.get("comfyui_custom")
+    template = raw.get("graph") if isinstance(raw, dict) else None
+    if not isinstance(template, dict) or not template:
+        raise ImageError("config_error: fluxo próprio vazio")
+    values: dict = {
+        "{{prompt}}": prompt,
+        "{{negative}}": str(cfg.get("negative_prompt") or ""),
+        "{{width}}": width, "{{height}}": height, "{{seed}}": _seed(cfg),
+    }
+    for index, name in enumerate(image_names):
+        values[f"{{{{reference_{index + 1}}}}}"] = name
+
+    def fill(value):
+        if isinstance(value, str):
+            if value in values:
+                return values[value]
+            for marker, real in values.items():
+                value = value.replace(marker, str(real))
+            return value
+        if isinstance(value, list):
+            return [fill(item) for item in value]
+        if isinstance(value, dict):
+            return {key: fill(item) for key, item in value.items()}
+        return value
+
+    return fill(template)
 
 
 def reference_capable_cfg(cfg: dict, init_image: bytes | None = None,
@@ -655,9 +800,7 @@ def _comfy_qwen_graph(cfg: dict, prompt: str, image_names: list[str],
     noise_seed = (random.randint(0, 2**31 - 1)
                   if seed_value is None or int(seed_value) < 0 else int(seed_value))
     graph = {
-        "1": {"class_type": "UNETLoader", "inputs": {
-            "unet_name": cfg.get("comfyui_unet") or "",
-            "weight_dtype": "default"}},
+        "1": _unet_loader(cfg.get("comfyui_unet") or ""),
         "2": {"class_type": "CLIPLoader", "inputs": {
             "clip_name": cfg.get("comfyui_clip") or "",
             "type": cfg.get("comfyui_clip_type") or "qwen_image",
@@ -694,7 +837,7 @@ def _comfy_qwen_graph(cfg: dict, prompt: str, image_names: list[str],
         graph[node_id] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
         graph["4"]["inputs"].setdefault("images", {})[
             f"image_{index + 1}"] = [node_id, 0]
-    return graph
+    return _with_loras(graph, cfg, model=["1", 0])
 
 
 def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
@@ -724,9 +867,7 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
         negative_node = {"class_type": "ConditioningZeroOut", "inputs": {
             "conditioning": ["4", 0]}}
     graph: dict = {
-        "1": {"class_type": "UNETLoader", "inputs": {
-            "unet_name": flux["unet"],
-            "weight_dtype": flux["weight_dtype"] or "default"}},
+        "1": _unet_loader(flux["unet"], flux["weight_dtype"]),
         "2": {"class_type": "CLIPLoader", "inputs": {
             "clip_name": flux["clip"],
             "type": flux["clip_type"] or "flux2",
@@ -775,7 +916,7 @@ def _comfy_flux2_klein_graph(cfg: dict, prompt: str, image_names: list[str],
         negative = [ref_neg, 0]
     graph["10"]["inputs"]["positive"] = positive
     graph["10"]["inputs"]["negative"] = negative
-    return graph
+    return _with_loras(graph, cfg, model=["1", 0])
 
 
 _ZIMAGE_DEFAULTS = {
@@ -840,9 +981,8 @@ def _comfy_zimage_graph(cfg: dict, prompt: str, *, width: int, height: int) -> d
         negative = {"class_type": "CLIPTextEncode", "inputs": {
             "clip": ["2", 0],
             "text": str(cfg.get("negative_prompt") or "")}}
-    return {
-        "1": {"class_type": "UnetLoaderGGUF", "inputs": {
-            "unet_name": zimage["unet"]}},
+    return _with_loras({
+        "1": _unet_loader(zimage["unet"]),
         "2": {"class_type": "CLIPLoader", "inputs": {
             "clip_name": zimage["clip"],
             "type": zimage["clip_type"] or "lumina2",
@@ -866,7 +1006,7 @@ def _comfy_zimage_graph(cfg: dict, prompt: str, *, width: int, height: int) -> d
             "samples": ["8", 0], "vae": ["3", 0]}},
         "10": {"class_type": "SaveImage", "inputs": {
             "images": ["9", 0], "filename_prefix": "aidungeon"}},
-    }
+    }, cfg, model=["1", 0])
 
 
 def _comfy_upload(client: httpx.Client, base: str, content: bytes,
@@ -1017,6 +1157,14 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
     cfg = reference_capable_cfg(cfg, init_image, reference_images)
     width, height = _flux2_canvas(width, height, cfg)
     engine = _comfy_image_engine(cfg)
+    if engine == "checkpoint":
+        ck = checkpoint_settings(cfg)
+        if not ck["checkpoint"]:
+            raise ImageError("config_error: nenhum checkpoint escolhido")
+        width, height = _checkpoint_canvas(width, height, ck["megapixels"])
+        graph = _comfy_checkpoint_graph(cfg, prompt, width=width, height=height)
+        content = _comfy_run(cfg, client, graph, progress=progress)
+        return content, width, height
     if engine == "z_image_turbo":
         width, height = _zimage_canvas(width, height)
         zimage = zimage_settings(cfg)
@@ -1052,6 +1200,8 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
     if engine == "flux2_klein":
         graph = _comfy_flux2_klein_graph(
             cfg, prompt, names, width=width, height=height)
+    elif engine == "custom":
+        graph = _comfy_custom_graph(cfg, prompt, names, width=width, height=height)
     else:
         graph = _comfy_qwen_graph(
             cfg, prompt, names, width=width, height=height,
@@ -1215,7 +1365,19 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
     elif provider == "comfyui":
         cfg = reference_capable_cfg(cfg, init_image, reference_images)
         image_engine = _comfy_image_engine(cfg)
-        if image_engine == "z_image_turbo":
+        if image_engine == "checkpoint":
+            ck = checkpoint_settings(cfg)
+            model = ck["checkpoint"]
+            size = list(_checkpoint_canvas(
+                *_flux2_canvas(width, height, cfg), ck["megapixels"]))
+            extra = {"engine": "checkpoint", **ck}
+        elif image_engine == "custom":
+            graph = (cfg.get("comfyui_custom") or {}).get("graph") or {}
+            model = "custom:" + hashlib.sha256(
+                json.dumps(graph, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+            size = list(_flux2_canvas(width, height, cfg))
+            extra = {"engine": "custom"}
+        elif image_engine == "z_image_turbo":
             zimage = zimage_settings(cfg)
             model = zimage["unet"]
             size = list(_zimage_canvas(*_flux2_canvas(width, height, cfg)))
@@ -1265,6 +1427,9 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
                 }
         if cfg.get("seed") is not None:
             extra["seed"] = int(cfg["seed"])
+        if _loras(cfg):
+            # Só entra quando há LoRA: as chaves já gravadas continuam valendo.
+            extra["loras"] = _loras(cfg)
     else:
         model = cfg.get("openai_model") or ""
         size = cfg.get("openai_size") or ""
@@ -1281,7 +1446,7 @@ def request_key(cfg: dict, prompt: str, *, width: int | None = None,
     }
     image_engine = (
         _comfy_image_engine(cfg) if provider == "comfyui" else "")
-    if image_engine == "z_image_turbo":
+    if image_engine in ("z_image_turbo", "checkpoint"):
         payload["init"] = ""
     elif image_engine == "flux2_klein":
         used = _flux2_used_references(
@@ -2048,7 +2213,11 @@ def health(cfg: dict, transport: httpx.BaseTransport | None = None) -> dict:
                 engine = _comfy_image_engine(cfg)
                 _get_json(client, f"{base}/system_stats",
                           {"Accept": "application/json"}, "system_stats")
-                if engine == "flux2_klein":
+                if engine == "checkpoint":
+                    result["unet"] = checkpoint_settings(cfg)["checkpoint"] or None
+                elif engine == "custom":
+                    result["unet"] = "fluxo próprio"
+                elif engine == "flux2_klein":
                     result["unet"] = flux2_settings(cfg)["unet"] or None
                 elif engine == "z_image_turbo":
                     result["unet"] = zimage_settings(cfg)["unet"] or None

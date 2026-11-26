@@ -134,7 +134,7 @@ def _validate(config, catalog=None, require_colab=False):
     }
 
 
-def _notebook(config, catalog=None, register_token=""):
+def _notebook(config, catalog=None, register_token="", download_keys=None):
     source = json.dumps({"config": config, "catalog": catalog, "token": register_token},
                         ensure_ascii=False)
     return {
@@ -200,6 +200,7 @@ def test_get_runtime_defaults(client):
     assert body["local_hardware"] == {"gpu": "Test", "vram_mib": 8192}
     assert body["registration"] == {
         "endpoints": None, "hardware": None, "last_seen": None, "models": None,
+        "online": False,
     }
     assert "sk-catalog-secret" not in resp.text
     assert "api_key" not in resp.text
@@ -227,7 +228,7 @@ def test_put_requires_admin(client):
     assert client.get("/api/settings/runtime").json()["runtime"] == before
 
 
-def test_modes_route_the_selected_endpoint_even_when_blank(client):
+def test_colab_without_a_live_runtime_keeps_the_local_machine_serving(client):
     drafted = client.put("/api/settings/runtime", json={
         "mode": "local",
         "endpoints": {
@@ -249,8 +250,9 @@ def test_modes_route_the_selected_endpoint_even_when_blank(client):
     runtime = forced.json()["runtime"]
     assert runtime["mode"] == "colab"
     assert runtime["placements"] == {"llm": "colab", "comfyui": "colab"}
-    assert client.get("/api/settings/llm").json()["base_url"] == ""
-    assert client.get("/api/settings/image").json()["comfyui_base_url"] == ""
+    # O Colab ainda não se registrou: a máquina local continua atendendo.
+    assert client.get("/api/settings/llm").json()["base_url"] == "http://local-llm.example/v1"
+    assert client.get("/api/settings/image").json()["comfyui_base_url"] == "http://local-comfy.example"
 
     hybrid = client.put("/api/settings/runtime", json={
         "mode": "hybrid",
@@ -509,6 +511,40 @@ def test_routing_keeps_a_typed_key_on_the_same_server(client):
     client.put("/api/settings/runtime", json={
         "endpoints": {"local_llm": "http://other.example:1234/v1"}})
     assert not stored()
+
+
+def test_colab_heartbeat_decides_who_serves(client):
+    """Registrado e batendo, o Colab atende. Três batidas perdidas e volta a máquina local."""
+    client.put("/api/settings/runtime", json={
+        "mode": "hybrid",
+        "placements": {"llm": "local", "comfyui": "colab"},
+        "endpoints": {"local_comfyui": "http://local-comfy.example"},
+    })
+    payload = {
+        "endpoints": {"llm": "", "comfyui": "https://gpu.trycloudflare.com"},
+        "models": {"llm": "qwen3.6-35b-a3b", "image": "flux2_klein", "video": "ltxv"},
+        "hardware": {"gpu_name": "T4"},
+    }
+
+    def serving():
+        return client.get("/api/settings/image").json()["comfyui_base_url"]
+
+    assert client.post("/api/runtime/register", json=payload).status_code == 200
+    assert serving() == "https://gpu.trycloudflare.com"
+    assert client.get("/api/settings/runtime").json()["registration"]["online"] is True
+    with db.session() as conn:
+        db.set_setting(conn, "runtime.registration.last_seen", json.dumps("2020-01-01T00:00:00.000Z"))
+    assert serving() == "http://local-comfy.example"
+    assert client.get("/api/settings/runtime").json()["registration"]["online"] is False
+    # A batida seguinte devolve o serviço ao Colab sem reaplicar nada.
+    assert client.post("/api/runtime/register", json=payload).status_code == 200
+    assert serving() == "https://gpu.trycloudflare.com"
+    # URL digitada à mão não tem batimento: fica como está.
+    client.put("/api/settings/runtime", json={
+        "endpoints": {"colab_comfyui": "https://typed.example"}})
+    with db.session() as conn:
+        db.set_setting(conn, "runtime.registration.last_seen", json.dumps("2020-01-01T00:00:00.000Z"))
+    assert serving() == "https://typed.example"
 
 
 def test_runtime_responses_do_not_leak_secrets(client):

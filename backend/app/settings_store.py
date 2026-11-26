@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,10 @@ OVERRIDE_KEYS = (
     "image.comfyui_engine", "image.comfyui_unet", "image.comfyui_clip",
     "image.comfyui_clip_type", "image.comfyui_clip_device", "image.comfyui_vae",
     "image.comfyui_flux2", "image.comfyui_zimage", "image.comfyui_video",
+    "image.comfyui_checkpoint", "image.comfyui_custom", "image.comfyui_loras",
+    # biblioteca de modelos escolhidos na busca e as chaves de download
+    "runtime.user_models", "runtime.comfyui_root",
+    "downloads.civitai_api_key", "downloads.huggingface_token",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")
@@ -343,7 +348,7 @@ def effective_llm_settings(conn: sqlite3.Connection) -> dict:
 
     effective = {
         "provider": llm.get("provider", "llamacpp"),
-        "base_url": ov("llm.base_url", llm.get("base_url", "")),
+        "base_url": _live_url(conn, "llm", ov("llm.base_url", llm.get("base_url", ""))),
         "api_key": api_key or None,
         "model_alias": ov("llm.model_alias", llm.get("model_alias", "auto")),
         "context_size": int(ov("llm.context_size", llm.get("context_size", 8192))),
@@ -437,7 +442,8 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         "sdwebui_steps": int(ov("image.sdwebui_steps", sdwebui.get("steps", 20))),
         "sdwebui_width": int(ov("image.sdwebui_width", sdwebui.get("width", 512))),
         "sdwebui_height": int(ov("image.sdwebui_height", sdwebui.get("height", 512))),
-        "comfyui_base_url": ov("image.comfyui_base_url", comfyui.get("base_url", "")),
+        "comfyui_base_url": _live_url(
+            conn, "comfyui", ov("image.comfyui_base_url", comfyui.get("base_url", ""))),
         "comfyui_steps": comfyui_steps,
         "comfyui_width": int(ov("image.comfyui_width", comfyui.get("width", 1024))),
         "comfyui_height": int(ov("image.comfyui_height", comfyui.get("height", 1024))),
@@ -496,6 +502,14 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
             dict(comfyui.get("video") or {}),
             _get_override(conn, "image.comfyui_video"),
             _VIDEO_FIELDS),
+        # Motores da biblioteca: arquivo completo com amostragem própria, fluxo
+        # colado pelo usuário e os LoRAs presos ao modelo de imagem em uso.
+        "comfyui_checkpoint": _dict_override(conn, "image.comfyui_checkpoint"),
+        "comfyui_custom": _dict_override(conn, "image.comfyui_custom"),
+        "comfyui_loras": [
+            item for item in (_get_override(conn, "image.comfyui_loras") or [])
+            if isinstance(item, dict)
+        ],
         "prompt_builder": dict(prompt_builder),
     }
 
@@ -784,6 +798,11 @@ def _zimage_file_block(comfyui: dict) -> dict:
     return base
 
 
+def _dict_override(conn: sqlite3.Connection, key: str) -> dict:
+    value = _get_override(conn, key)
+    return value if isinstance(value, dict) else {}
+
+
 def _merge_identity(base: dict, overlay: Any, allowed: tuple[str, ...]) -> dict:
     """Completa o bloco do arquivo com as chaves permitidas do override."""
     merged = dict(base)
@@ -952,7 +971,37 @@ def runtime_registration(conn: sqlite3.Connection) -> dict:
         "hardware": hardware if isinstance(hardware, dict) else None,
         "last_seen": last_seen if isinstance(last_seen, str) and last_seen else None,
         "models": models if isinstance(models, dict) else None,
+        "online": colab_online(conn),
     }
+
+
+# O notebook repete o registro a cada 60 s. Três batidas perdidas e o Colab
+# é dado por desligado.
+_COLAB_STALE_S = 180
+
+
+def colab_online(conn: sqlite3.Connection) -> bool:
+    last_seen = _get_override(conn, "runtime.registration.last_seen")
+    try:
+        seen = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - seen).total_seconds() < _COLAB_STALE_S
+
+
+def _live_url(conn: sqlite3.Connection, service: str, stored: Any) -> Any:
+    """URL que atende agora. Colab que ainda não chegou ou parou de bater não
+    derruba o jogo: a máquina local assume até ele voltar.
+
+    URL do Colab digitada à mão não tem batimento para medir e fica como está.
+    """
+    if _get_override(conn, f"runtime.placements.{service}") != "colab":
+        return stored
+    registered = _get_override(conn, "runtime.registration.endpoints")
+    registered = registered.get(service) if isinstance(registered, dict) else None
+    if stored and (stored != registered or colab_online(conn)):
+        return stored
+    return effective_runtime_settings(conn)["endpoints"][f"local_{service}"] or stored
 
 
 def _persist_runtime(conn: sqlite3.Connection, config: dict) -> None:
@@ -997,6 +1046,42 @@ def _apply_routing(conn: sqlite3.Connection, config: dict) -> None:
             db.delete_setting(conn, "llm.api_key")
 
 
+def user_models(conn: sqlite3.Connection) -> dict:
+    """Modelos que o usuário trouxe da busca, no mesmo formato do catálogo."""
+    stored = _get_override(conn, "runtime.user_models")
+    stored = stored if isinstance(stored, dict) else {}
+    return {
+        kind: {key: value for key, value in (stored.get(kind) or {}).items()
+               if isinstance(value, dict)}
+        for kind in _RUNTIME_MODEL_KINDS
+    }
+
+
+def save_user_model(conn: sqlite3.Connection, kind: str, model_id: str, entry: dict) -> None:
+    models = user_models(conn)
+    models[kind][model_id] = entry
+    _set_override(conn, "runtime.user_models", models)
+
+
+def delete_user_model(conn: sqlite3.Connection, kind: str, model_id: str) -> None:
+    models = user_models(conn)
+    models[kind].pop(model_id, None)
+    _set_override(conn, "runtime.user_models", models)
+
+
+def runtime_catalog(conn: sqlite3.Connection) -> dict:
+    """Catálogo do arquivo mais a biblioteca. O id do arquivo vence em colisão."""
+    catalog = _provisioning().load_catalog()
+    merged = {**catalog, "models": {
+        kind: dict(group) for kind, group in (catalog.get("models") or {}).items()
+    }}
+    for kind, group in user_models(conn).items():
+        bucket = merged["models"].setdefault(kind, {})
+        for model_id, entry in group.items():
+            bucket.setdefault(model_id, entry)
+    return merged
+
+
 def _catalog_models(catalog: dict, kind: str) -> dict:
     models = catalog.get("models") if isinstance(catalog, dict) else None
     bucket = models.get(kind) if isinstance(models, dict) else None
@@ -1032,8 +1117,29 @@ def _apply_selected_models(conn: sqlite3.Connection, config: dict, catalog: dict
         raise GameError.bad_request(
             "validation_error", "catalog image entry is missing engine")
     _set_override(conn, "image.comfyui_engine", engine)
+    loras = [
+        {"name": str(item["name"]), "strength": float(item.get("strength", 1.0))}
+        for item in image_entry.get("loras") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    if loras:
+        _set_override(conn, "image.comfyui_loras", loras)
+    else:
+        db.delete_setting(conn, "image.comfyui_loras")
+    for key, block in (("image.comfyui_checkpoint", "checkpoint"),
+                       ("image.comfyui_custom", "custom")):
+        if engine == block and isinstance(image_entry.get(block), dict):
+            _set_override(conn, key, image_entry[block])
+        else:
+            db.delete_setting(conn, key)
     image_src = _first_dict(image_entry, ("flux2", "quality"))
-    if engine == "qwen":
+    if engine in ("checkpoint", "custom"):
+        # Os blocos acima já levam tudo; o resto volta ao arquivo.
+        for key in _QWEN_OVERRIDE_KEYS.values():
+            db.delete_setting(conn, key)
+        db.delete_setting(conn, "image.comfyui_flux2")
+        db.delete_setting(conn, "image.comfyui_zimage")
+    elif engine == "qwen":
         db.delete_setting(conn, "image.comfyui_flux2")
         db.delete_setting(conn, "image.comfyui_zimage")
         identity = _identity_from(image_src, _QWEN_IDENTITY)
@@ -1107,7 +1213,7 @@ def apply_runtime_update(conn: sqlite3.Connection, update: dict) -> dict:
     current = effective_runtime_settings(conn)
     merged = _merge_runtime_update(current, update or {})
     prov = _provisioning()
-    catalog = strip_secrets(prov.load_catalog())
+    catalog = strip_secrets(runtime_catalog(conn))
     try:
         normalized = prov.validate_runtime(merged, catalog, require_colab=False)
     except ValueError as exc:
@@ -1139,6 +1245,12 @@ def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
     if not isinstance(hardware, dict):
         hardware = {}
     saved_models = {kind: selected[kind] for kind in _RUNTIME_MODEL_KINDS}
+    if ({"llm": colab_llm, "comfyui": colab_comfy}
+            == _get_override(conn, "runtime.registration.endpoints")
+            and saved_models == _get_override(conn, "runtime.registration.models")):
+        # Batimento: mesmo túnel, mesmos modelos. Só a hora muda.
+        _set_override(conn, "runtime.registration.last_seen", db.utcnow())
+        return effective_runtime_settings(conn)
     placements = _active_placements(current)
     if placements["llm"] == "colab" and not colab_llm:
         raise GameError.bad_request(

@@ -386,6 +386,21 @@ export const api = {
   getScriptingSettings: () => request('/settings/scripting'),
   putScriptingSettings: (payload) => request('/settings/scripting', { method: 'PUT', body: payload }),
   getRuntimeSettings: () => request('/settings/runtime'),
+  // Biblioteca dinâmica de modelos (admin): busca nos catálogos e download.
+  getModelLibrary: () => request('/models/library'),
+  searchModels: (source, kind, q) =>
+    request(`/models/search?source=${encodeURIComponent(source)}&kind=${encodeURIComponent(kind)}&q=${encodeURIComponent(q)}`),
+  listRepoFiles: (repo) => request(`/models/files?repo=${encodeURIComponent(repo)}`),
+  addLibraryModel: (payload) => request('/models/library', { method: 'POST', body: payload }),
+  updateLibraryModel: (kind, id, payload) =>
+    request(`/models/library/${kind}/${encodeURIComponent(id)}`, { method: 'PATCH', body: payload }),
+  deleteLibraryModel: (kind, id) =>
+    request(`/models/library/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  addModelLora: (id, payload) =>
+    request(`/models/library/image/${encodeURIComponent(id)}/loras`, { method: 'POST', body: payload }),
+  putModelKeys: (payload) => request('/models/keys', { method: 'PUT', body: payload }),
+  installModel: (kind, id) => request('/models/install', { method: 'POST', body: { kind, id } }),
+  getModelInstall: () => request('/models/install'),
   putRuntimeSettings: (payload) => request('/settings/runtime', { method: 'PUT', body: payload }),
   // .ipynb autenticado. <a href> não envia Bearer — mesmo padrão de downloadExport.
   // text/html aqui é o fallback SPA, não um notebook.

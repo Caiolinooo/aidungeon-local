@@ -45,7 +45,7 @@ const TABS = [
   { id: 'image', label: 'Geração de imagem', icon: ImageIcon },
   { id: 'voice', label: 'Voz e fala', icon: Volume2 },
   { id: 'memory', label: 'Memória e scripts', icon: Brain },
-  { id: 'runtime', label: 'Runtime e Colab', icon: Server },
+  { id: 'runtime', label: 'Runtime e modelos', icon: Server },
 ]
 
 export default function Settings() {
@@ -578,8 +578,8 @@ export default function Settings() {
             }
           }
           toast(
-            modelsChanged
-              ? 'Configurações de runtime salvas. Reinicie ou reconecte o runtime para aplicar os modelos.'
+            modelsChanged && !isAllLocalRuntime(form)
+              ? 'Salvo. Gere o notebook de novo para o Colab baixar o modelo novo.'
               : 'Configurações de runtime salvas.',
             'ok',
           )
@@ -661,6 +661,28 @@ export default function Settings() {
   }
 
   const runtimeDirty = JSON.stringify(runtimeForm) !== JSON.stringify(runtimeSaved)
+
+  const refreshRuntimeStatus = async () => {
+    try {
+      setRuntimeRegistration(extractRegistration(await api.getRuntimeSettings()))
+    } catch {
+      // a próxima conferência tenta de novo
+    }
+  }
+
+  // Biblioteca mudou: recarrega o catálogo e marca o modelo no formulário.
+  // Quando a edição foi no modelo em uso, o servidor já a aplicou.
+  const handleLibraryChange = async (kind, id) => {
+    const data = await api.getRuntimeSettings()
+    const server = normalizeRuntimeConfig(data)
+    setRuntimeCatalog(extractCatalog(data))
+    setRuntimeRegistration(extractRegistration(data))
+    setRuntimeSaved((prev) => ({ ...prev, models: server.models }))
+    setRuntimeForm((prev) => ({
+      ...prev,
+      models: { ...prev.models, [kind]: id || server.models[kind] },
+    }))
+  }
 
   const handleDownloadNotebook = async () => {
     if (!runtimeLoaded || isAllLocalRuntime(runtimeForm)) return
@@ -1721,6 +1743,8 @@ export default function Settings() {
                   downloading={downloadingNotebook}
                   onChange={setRuntimeForm}
                   onDownload={handleDownloadNotebook}
+                  onLibraryChange={handleLibraryChange}
+                  onRefresh={refreshRuntimeStatus}
                   inputCls={inputCls}
                   labelCls={labelCls}
                 />

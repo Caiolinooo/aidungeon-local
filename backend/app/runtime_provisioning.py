@@ -556,18 +556,29 @@ def _bind_argv(argv: list[str]) -> list[str]:
     return [COLAB_BIND_HOST if token == "{listen_host}" else token for token in argv]
 
 
+# Motores só de texto. Com foto de referência no pedido o jogo pinta no
+# Flux.2 Klein (`image_client.reference_capable_cfg`), então ele vai junto.
+_REFERENCE_FALLBACK = {"z_image_turbo": "flux2_klein"}
+
+
 def _selected_artifacts(norm: dict, catalog: dict) -> list[dict]:
-    items: list[dict] = []
+    items: dict[str, dict] = {}
     if norm["placements"]["llm"] == "colab":
         entry = catalog["models"]["llm"][norm["models"]["llm"]]
         for art in entry["artifacts"]:
-            items.append({**art, "dest": f"{COLAB_ROOT}/{art['dest']}"})
+            items.setdefault(art["dest"], {**art, "dest": f"{COLAB_ROOT}/{art['dest']}"})
     if norm["placements"]["comfyui"] == "colab":
-        for kind in ("image", "video"):
-            entry = catalog["models"][kind][norm["models"][kind]]
+        images = catalog["models"]["image"]
+        image = images[norm["models"]["image"]]
+        entries = [image, catalog["models"]["video"][norm["models"]["video"]]]
+        companion = images.get(_REFERENCE_FALLBACK.get(str(image.get("engine")), ""))
+        if companion:
+            entries.append(companion)
+        for entry in entries:
             for art in entry["artifacts"]:
-                items.append({**art, "dest": f"{COLAB_ROOT}/ComfyUI/{art['dest']}"})
-    return items
+                items.setdefault(
+                    art["dest"], {**art, "dest": f"{COLAB_ROOT}/ComfyUI/{art['dest']}"})
+    return list(items.values())
 
 
 def _variables(norm: dict, catalog: dict, requirements: dict) -> dict:
@@ -650,14 +661,15 @@ def _overview(norm: dict, artifacts: list[dict]) -> str:
         "servidor do jogo.\n\n"
         "A última célula fica rodando: é ela que segura a sessão do Colab. Quando a sessão "
         "acabar, troque o serviço de volta para local nas configurações do jogo.\n\n"
-        "Este arquivo leva um token que só registra o runtime e vale 30 dias. "
-        "Não compartilhe o arquivo. VRAM ou RAM abaixo do piso aborta; não há troca de "
+        "Este arquivo leva um token que só registra o runtime e vale 30 dias, e as "
+        "chaves de download salvas no jogo. Não compartilhe o arquivo. VRAM ou RAM abaixo do piso aborta; não há troca de "
         "modelo, passos ou resolução.\n"
     )
     secrets = sorted({art["auth_secret"] for art in artifacts if art.get("auth_secret")})
     if secrets:
         names = ", ".join(f"`{name}`" for name in secrets)
-        text += f"\nEste modelo pede no painel Secrets do Colab: {names}.\n"
+        text += (f"\nEste modelo pede {names}. Se a chave não estiver salva no jogo, "
+                 "crie o secret com esse nome no painel do Colab.\n")
     return text
 
 
@@ -680,17 +692,22 @@ def _variables_cell(variables: dict) -> str:
     )
 
 
-def _secrets_cell(artifacts: list[dict], register_token: str) -> str:
+def _secrets_cell(artifacts: list[dict], register_token: str,
+                  download_keys: dict | None = None) -> str:
+    keys = download_keys or {}
     lines = [
         "# Só registra este runtime no jogo. Não abre sessão nem lê aventura.",
         f"AIDUNGEON_TOKEN = {register_token!r}",
+        "# Opcional: só repositório fechado do Hugging Face precisa dele.",
+        f"HF_TOKEN = {str(keys.get('HF_TOKEN') or '')!r}",
     ]
     secrets = []
     for art in artifacts:
         name = art.get("auth_secret")
         if name and name not in secrets:
             secrets.append(name)
-    if secrets:
+    missing = [name for name in secrets if not keys.get(name)]
+    if missing:
         lines.extend([
             "from google.colab import userdata",
             "def _optional_secret(name):",
@@ -700,7 +717,10 @@ def _secrets_cell(artifacts: list[dict], register_token: str) -> str:
             "        return \"\"",
         ])
     for name in secrets:
-        lines.append(f'{name} = _optional_secret("{name}")')
+        if keys.get(name):
+            lines.append(f"{name} = {str(keys[name])!r}")
+        else:
+            lines.append(f'{name} = _optional_secret("{name}")')
     return "\n".join(lines) + "\n"
 
 
@@ -845,10 +865,12 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict]) -> str:
         "        secret = globals().get(secret_name) or \"\"",
         "        if not secret:",
         "            raise SystemExit(",
-        "                spec[\"filename\"] + \" exige o secret \" + secret_name +",
-        "                \" do Colab. A chave não vai no notebook.\"",
+        "                spec[\"filename\"] + \" pede a chave \" + secret_name +",
+        "                \". Salve a chave nas configurações do jogo e baixe o notebook de novo.\"",
         "            )",
         "        header = \"Bearer \" + secret",
+        "    elif HF_TOKEN and url.startswith(\"https://huggingface.\"):",
+        "        header = \"Bearer \" + HF_TOKEN",
         "    print(\"baixando\", spec[\"filename\"], flush=True)",
         "    try:",
         "        fetch_pinned(",
@@ -1003,22 +1025,13 @@ def _register_cell(norm: dict) -> str:
         "import json\n"
         "import urllib.error\n"
         "import urllib.request\n"
-        "if not VARIABLES[\"project_url\"]:\n"
-        "    print(\"registro omitido: project_url vazio\")\n"
-        "elif not AIDUNGEON_TOKEN:\n"
-        "    print(\"registro omitido: notebook sem token de registro\")\n"
-        "else:\n"
+        "def register():\n"
         f"    llm_endpoint = {llm_expr}\n"
         f"    comfy_endpoint = {comfy_expr}\n"
-        "    hardware = detect_hardware()\n"
         "    payload = {\n"
         "        \"endpoints\": {\"llm\": llm_endpoint, \"comfyui\": comfy_endpoint},\n"
-        "        \"models\": {\n"
-        "            \"llm\": VARIABLES[\"models\"][\"llm\"],\n"
-        "            \"image\": VARIABLES[\"models\"][\"image\"],\n"
-        "            \"video\": VARIABLES[\"models\"][\"video\"],\n"
-        "        },\n"
-        "        \"hardware\": hardware,\n"
+        "        \"models\": dict(VARIABLES[\"models\"]),\n"
+        "        \"hardware\": detect_hardware(),\n"
         "    }\n"
         "    target = VARIABLES[\"project_url\"].rstrip(\"/\")\n"
         "    suffix = VARIABLES[\"register_path\"]\n"
@@ -1046,22 +1059,30 @@ def _register_cell(norm: dict) -> str:
         "        raise SystemExit(\"registro recusado: HTTP \" + str(exc.code) + hint) from None\n"
         "    except urllib.error.URLError as exc:\n"
         "        raise SystemExit(\"o Colab não alcançou o jogo em \" + target + \": \" + str(exc.reason)) from None\n"
+        "REGISTER = bool(VARIABLES[\"project_url\"] and AIDUNGEON_TOKEN)\n"
+        "if REGISTER:\n"
+        "    register()\n"
         "    print(\"registro ok: o jogo já usa esta GPU\")\n"
+        "else:\n"
+        "    print(\"registro omitido: notebook sem project_url ou sem token de registro\")\n"
     )
 
 
 def _keepalive_cell() -> str:
     # Com todas as células paradas o Colab dá a sessão por ociosa e desliga a GPU.
+    # O registro repetido é o batimento: sem ele o jogo volta a usar a própria máquina.
     return (
         "import time\n"
         "print(\"GPU ligada ao jogo. Deixe esta célula rodando.\")\n"
         "while True:\n"
         "    time.sleep(60)\n"
-        "    for url in HEALTH_URLS:\n"
-        "        try:\n"
+        "    try:\n"
+        "        for url in HEALTH_URLS:\n"
         "            wait_http(url, attempts=1, pause=0)\n"
-        "        except SystemExit as exc:\n"
-        "            print(time.strftime(\"%H:%M\"), exc)\n"
+        "        if REGISTER:\n"
+        "            register()\n"
+        "    except SystemExit as exc:\n"
+        "        print(time.strftime(\"%H:%M\"), exc)\n"
     )
 
 
@@ -1098,11 +1119,12 @@ def _local_notice_cell() -> str:
 
 
 def generate_notebook(config: dict, catalog: dict | None = None, *,
-                      register_token: str = "") -> dict:
+                      register_token: str = "",
+                      download_keys: dict | None = None) -> dict:
     """Notebook nbformat 4. Modo local não instala serviço; Colab sobe só o placement colab.
 
-    `register_token` vai escrito no arquivo: é o que deixa o Colab se registrar
-    no jogo sem ninguém colar segredo.
+    `register_token` e `download_keys` vão escritos no arquivo: são o que deixa
+    o Colab baixar os pesos e se registrar no jogo sem ninguém colar segredo.
     """
     book = catalog if catalog is not None else load_catalog()
     norm = validate_runtime(config, book, require_colab=False)
@@ -1119,7 +1141,7 @@ def generate_notebook(config: dict, catalog: dict | None = None, *,
         cells = [
             _markdown_cell("overview", _overview(norm, artifacts)),
             _code_cell("variables", _variables_cell(variables)),
-            _code_cell("secrets", _secrets_cell(artifacts, register_token)),
+            _code_cell("secrets", _secrets_cell(artifacts, register_token, download_keys)),
             _code_cell("helpers", _helper_source()),
             _code_cell("hardware", _hardware_cell()),
             _code_cell("provision", _provision_cell(norm, book, artifacts)),
