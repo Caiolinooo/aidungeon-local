@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app import access, auth, colab_api, db, llm_client, settings_store
+from app import access, auth, colab_api, db, llm_client, notify, settings_store
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
@@ -180,6 +180,32 @@ def post_colab_stop(body: ColabStop,
                     transport: Any = Depends(get_http_transport)) -> dict:
     with db.session() as conn:
         return colab_api.stop(conn, body.name, transport=transport)
+
+
+class NotifyTopic(BaseModel):
+    """Vazio desliga os avisos. `generate` sorteia um tópico novo."""
+    topic: str = Field(default="", max_length=64)
+    generate: bool = False
+
+
+@router.put("/colab/notify")
+def put_colab_notify(body: NotifyTopic,
+                     info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        topic = notify.set_topic(conn, notify.new_topic() if body.generate else body.topic)
+        return {"notify_topic": topic}
+
+
+@router.post("/colab/notify/test")
+def post_colab_notify_test(info: auth.AuthInfo = Depends(access.require_admin),
+                           transport: Any = Depends(get_http_transport)) -> dict:
+    with db.session() as conn:
+        sent = notify.send("Aviso de teste: é aqui que o jogo avisa quando o Colab liga.",
+                           tags="bell", transport=transport, conn=conn)
+    if not sent:
+        raise GameError.bad_request(
+            "notify_failed", "o ntfy não aceitou o aviso; confira o tópico e a internet do servidor")
+    return {"ok": True}
 
 
 @router.get("/colab/status")

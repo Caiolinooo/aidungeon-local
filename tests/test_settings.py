@@ -52,7 +52,8 @@ def test_api_key_is_masked_and_never_plain(client):
     assert "sk-secret-1234" not in json.dumps(again)
 
 
-def test_stored_masked_voice_key_falls_through_to_env(monkeypatch):
+def test_stored_masked_voice_key_falls_through_to_env(tmp_db, monkeypatch):
+    # Sem `tmp_db` o teste gravava no banco real da máquina (e falhava onde não há um).
     monkeypatch.setenv("VOICE_API_KEY", "sk-real-voice-key-9999")
     with db.session() as conn:
         db.set_setting(conn, "voice.api_key", json.dumps("sk-…9999"))

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Download } from 'lucide-react'
 import { api } from '../../api.js'
 import { useToast } from '../Toast.jsx'
@@ -315,6 +315,9 @@ export default function RuntimeSettings({
   onRefresh,
   imageProvider,
   onUseComfy,
+  llmContext,
+  llmContextMax,
+  onLlmContext,
   inputCls,
   labelCls,
 }) {
@@ -487,8 +490,8 @@ export default function RuntimeSettings({
           </section>
 
           {KINDS.map((item) => (
+            <Fragment key={item.kind}>
             <ModelPicker
-              key={item.kind}
               kind={item.kind}
               title={item.title}
               value={form.models[item.kind]}
@@ -503,6 +506,23 @@ export default function RuntimeSettings({
               inputCls={inputCls}
               labelCls={labelCls}
             />
+            {item.kind === 'llm' && onLlmContext && (
+              <section className="space-y-2 rounded-2xl border border-subtle bg-surface p-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Parâmetros do narrador</h3>
+                <SettingField label="Contexto que o jogo usa (tokens)" labelClassName={labelCls}>
+                  <select value={llmContext} onChange={(e) => onLlmContext(Number(e.target.value))} className={inputCls}>
+                    {[...new Set([16384, 32768, 65536, llmContextMax, llmContext])]
+                      .filter((value) => value && value <= Math.max(llmContextMax, llmContext))
+                      .sort((a, b) => a - b)
+                      .map((value) => <option key={value} value={value}>{value.toLocaleString('pt-BR')}</option>)}
+                  </select>
+                </SettingField>
+                <p className="text-[11px] text-secondary">
+                  No Colab o narrador sobe com o dobro disso ({Math.max(32768, Math.min(262144, 2 * llmContext)).toLocaleString('pt-BR')} tokens), dividido entre 5 conversas ao mesmo tempo. Mais contexto pede mais memória da placa: a estimativa no bloco do Colab já considera este valor. Com o Colab ligado, a mudança só vale depois de ligar de novo.
+                </p>
+              </section>
+            )}
+            </Fragment>
           ))}
 
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
@@ -530,6 +550,7 @@ export default function RuntimeSettings({
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Colab</h3>
             <ColabPanel
+              refreshKey={`${llmContext}|${dirty}|${JSON.stringify(form.models)}|${JSON.stringify(form.placements)}`}
               disabledReason={allLocal ? 'Ponha o narrador ou a imagem no Colab, acima, e salve.' : dirty ? 'Salve antes de ligar.' : ''}
               inputCls={inputCls}
               labelCls={labelCls}

@@ -413,6 +413,8 @@ export const api = {
     method: 'POST', body: { ...spec, project_url: window.location.origin },
   }),
   stopColab: (name = '') => request('/colab/stop', { method: 'POST', body: { name } }),
+  putColabNotify: (payload) => request('/colab/notify', { method: 'PUT', body: payload }),
+  testColabNotify: () => request('/colab/notify/test', { method: 'POST' }),
   putRuntimeSettings: (payload) => request('/settings/runtime', { method: 'PUT', body: payload }),
   // .ipynb autenticado. <a href> não envia Bearer — mesmo padrão de downloadExport.
   // text/html aqui é o fallback SPA, não um notebook.

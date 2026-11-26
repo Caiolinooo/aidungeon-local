@@ -675,6 +675,16 @@ export default function Settings() {
     }
   }
 
+  const handleLlmContext = async (value) => {
+    try {
+      const updated = await api.putLlmSettings({ context_size: value })
+      setLlmForm((prev) => ({ ...prev, context_size: updated.context_size }))
+      toast('Contexto do narrador salvo.', 'ok')
+    } catch (e) {
+      toast('Não consegui salvar o contexto: ' + e.message)
+    }
+  }
+
   const useComfyForImages = async () => {
     try {
       const saved = await api.putImageSettings({ provider: 'comfyui' })
@@ -1761,6 +1771,9 @@ export default function Settings() {
                   onLibraryChange={handleLibraryChange}
                   onRefresh={refreshRuntimeStatus}
                   imageProvider={imageForm.provider}
+                  llmContext={llmForm.context_size}
+                  llmContextMax={contextSizeMax}
+                  onLlmContext={handleLlmContext}
                   onUseComfy={useComfyForImages}
                   inputCls={inputCls}
                   labelCls={labelCls}

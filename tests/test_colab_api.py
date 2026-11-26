@@ -45,6 +45,8 @@ class Google:
         if request.url.host == "jupyter.example":
             assert request.headers[colab_api.PROXY_HEADER] == "proxy-token"
             return httpx.Response(201, json={"id": "kernel-1"})
+        if request.url.host != "colaboratory.googleapis.com":
+            return httpx.Response(404)  # o jogo também consulta o narrador por este transporte
         assert request.headers["Authorization"] == "Bearer at"
         if path == "/v1beta/subscription":
             return httpx.Response(200, json={"tier": "SUBSCRIPTION_TIER_PRO"})
@@ -320,3 +322,73 @@ def test_a_failed_startup_turns_the_machine_off(admin, monkeypatch):
     assert ("DELETE", "colaboratory.googleapis.com", "/v1beta/runtimes/r-1") in google.calls
     with db.session() as conn:
         assert db.get_setting(conn, "colab.session") is None
+
+
+def test_estimates_say_what_fits_and_how_fast(admin):
+    google = Google()
+    _connected(admin, google)
+    library = admin.post("/api/models/library", json={
+        "kind": "llm", "family": "gguf", "label": "Dolphin 24B",
+        "file": {"name": "Dolphin-24B-Q8_0.gguf", "sha256": "ab" * 32, "bytes": 25_000_000_000,
+                 "url": "https://huggingface.co/x/y/resolve/main/Dolphin-24B-Q8_0.gguf"}}).json()["id"]
+    admin.put("/api/settings/llm", json={"context_size": 65536})
+    admin.put("/api/settings/runtime", json={
+        "mode": "colab", "placements": {"llm": "colab", "comfyui": "colab"},
+        "models": {"llm": library}})
+    t4 = admin.get("/api/colab").json()["estimates"]["T4"]
+    narrator = next(item for item in t4["items"] if item["kind"] == "llm")
+    # 25 GB de pesos mais o KV de 131072 tokens: longe de caber em 15 GB.
+    assert narrator["need_gb"] > 35 and "tokens por segundo" in narrator["speed"]
+    assert narrator["note"] == "qualidade máxima"
+    assert (t4["fits"], t4["rating"], t4["vram_measured"]) == (False, "pessimo", False)
+    assert {item["kind"] for item in t4["items"]} == {"llm", "image", "video"}
+    # A placa entregue de verdade tinha 80 GB: o medido vale mais que a tabela.
+    with db.session() as conn:
+        db.set_setting(conn, "colab.gpu_vram", json.dumps({"T4": 80.0}))
+    measured = admin.get("/api/colab").json()["estimates"]["T4"]
+    assert (measured["vram_gb"], measured["vram_measured"], measured["fits"]) == (80.0, True, True)
+    # Só o que vai para o Colab entra na conta.
+    assert admin.put("/api/settings/runtime", json={
+        "mode": "hybrid", "placements": {"llm": "local", "comfyui": "colab"},
+        "models": {"llm": "qwen3.6-35b-a3b"}}).status_code == 200
+    only_images = admin.get("/api/colab").json()["estimates"]["T4"]
+    assert {item["kind"] for item in only_images["items"]} == {"image", "video"}
+
+
+def test_phone_notifications_go_through_ntfy(admin):
+    """O aviso sai do servidor: chega com o jogo fechado no telefone."""
+    sent = []
+
+    def ntfy(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ntfy.sh":
+            sent.append((request.url.path, request.content.decode(), request.headers.get("Tags")))
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    admin.app.dependency_overrides[deps.get_http_transport] = lambda: httpx.MockTransport(ntfy)
+    # Sem tópico o teste diz que não enviou, e nada quebra.
+    assert admin.post("/api/colab/notify/test").status_code == 400
+    assert admin.put("/api/colab/notify", json={"topic": "x"}).status_code == 400
+    topic = admin.put("/api/colab/notify", json={"generate": True}).json()["notify_topic"]
+    assert topic.startswith("aidungeon-") and len(topic) >= 20
+    assert admin.get("/api/colab").json()["notify_topic"] == topic
+    assert admin.post("/api/colab/notify/test").json() == {"ok": True}
+    assert sent[0][0] == f"/{topic}" and "teste" in sent[0][1] and sent[0][2] == "bell"
+    assert admin.put("/api/colab/notify", json={"topic": ""}).json() == {"notify_topic": ""}
+
+
+def test_registration_tells_the_phone_the_gpu_is_ready(admin, monkeypatch):
+    from app import notify
+    said = []
+    monkeypatch.setattr(notify, "send", lambda message, **kwargs: said.append(message) or True)
+    _use_colab(admin)
+    payload = {
+        "endpoints": {"llm": "", "comfyui": "https://gpu.trycloudflare.com"},
+        "models": {"llm": "qwen3.6-35b-a3b", "image": "flux2_klein", "video": "ltxv"},
+        "hardware": {"gpu_name": "NVIDIA A100-SXM4-80GB", "vram_total_mib": 81920},
+    }
+    assert admin.post("/api/runtime/register", json=payload).status_code == 200
+    assert said == ["Colab pronto (NVIDIA A100-SXM4-80GB). O jogo já usa essa placa para imagem e vídeo."]
+    # A batida de cada minuto não avisa de novo.
+    assert admin.post("/api/runtime/register", json=payload).status_code == 200
+    assert len(said) == 1

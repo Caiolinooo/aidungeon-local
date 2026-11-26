@@ -330,8 +330,12 @@ def test_see_does_not_borrow_nudity_from_unresolved_player(client, tmp_path, mon
     assert "elara is fully clothed" in prompt.casefold()
 
 
-def test_previous_nudity_does_not_reactivate_explicit_outside_minor_guard(
+def test_narrated_nudity_of_a_minor_refuses_the_see_turns_later(
         client, tmp_path, monkeypatch):
+    """A narração disse que a menor está nua e ela está no quadro: o Ver recusa,
+    mesmo que o pedido seja de turnos depois. Antes o teste esperava a pintura
+    "vestida", mas o Flux ignora o negativo com CFG 1 e a recusa é o único
+    resultado que não depende do modelo obedecer."""
     adv = make_adventure()
     with db.session() as conn:
         db.set_setting(conn, "image.storage_dir", json.dumps(str(tmp_path / "imgs")))
@@ -357,11 +361,8 @@ def test_previous_nudity_does_not_reactivate_explicit_outside_minor_guard(
         )
     finally:
         client.app.dependency_overrides.clear()
-    assert response.status_code == 200, response.text
-    with db.session() as conn:
-        image = db.get_image(conn, response.json()["id"])
-    assert "nude" in image["negative_prompt"].lower()
-    assert "fully clothed" in response.json()["prompt"].lower()
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "minor"
 
 
 def test_fifth_person_cannot_reenter_see_without_frame_validation(

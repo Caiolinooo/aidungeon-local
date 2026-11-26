@@ -13,6 +13,7 @@ devolve em `connectionInfo`, com o token no cabeçalho
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -23,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from app import auth, db, model_library, settings_store
+from app import auth, db, gpu_estimate, model_library, notify, settings_store
 from app.errors import GameError
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -36,8 +37,9 @@ SCOPE = "https://www.googleapis.com/auth/colaboratory"
 REDIRECT = "http://localhost:8765"
 PROXY_HEADER = "X-Colab-Runtime-Proxy-Token"
 _TIMEOUT = 30.0
-# "Sem máquina livre" costuma passar em um ou dois minutos: o jogo insiste antes de desistir.
-_CREATE_TRIES = 6
+# "Sem máquina livre" costuma passar em um ou dois minutos, mas placa disputada
+# (A100) pode levar bem mais: o jogo insiste por cerca de uma hora e avisa quando consegue.
+_CREATE_TRIES = 80
 _RETRY_WAIT_S = 40
 _LOG_LINES = 60
 
@@ -161,7 +163,8 @@ def overview(conn: sqlite3.Connection, *, transport: Any = None) -> dict:
         "connected": bool(_secret(conn, "colab.refresh_token")),
         "redirect": REDIRECT,
         "session": session_view(conn),
-        "tier": None, "specs": [], "runtimes": [], "error": None,
+        "tier": None, "specs": [], "runtimes": [], "error": None, "estimates": {},
+        "notify_topic": notify.topic(conn),
     }
     if not out["connected"]:
         return out
@@ -178,9 +181,47 @@ def overview(conn: sqlite3.Connection, *, transport: Any = None) -> dict:
             for item in runtimes.get("runtimes") or []
         ]
         out["session"] = session_view(conn, out["runtimes"])
+        out["estimates"] = estimates(conn, out["specs"])
     except GameError as exc:
         out["error"] = exc.message
     return out
+
+
+def server_context(conn: sqlite3.Connection) -> int:
+    """Contexto do llama-server no Colab. Os 5 slots dividem um KV só: o dobro
+    do contexto do jogo deixa uma narração longa e as leituras auxiliares
+    caberem juntas, como no narrador desta máquina."""
+    game = int(settings_store.effective_llm_settings(conn)["context_size"])
+    return max(32768, min(262144, 2 * game))
+
+
+def estimates(conn: sqlite3.Connection, specs: list[dict]) -> dict:
+    """Por GPU que a conta pode pedir: quanto os modelos escolhidos ocupam e como devem render."""
+    config = settings_store.effective_runtime_settings(conn)
+    catalog = settings_store.runtime_catalog(conn)
+    learned = settings_store._get_override(conn, "colab.gpu_vram")
+    learned = learned if isinstance(learned, dict) else {}
+    context = server_context(conn)
+    out = {}
+    for spec in specs:
+        name = str(spec.get("accelerator") or "")
+        if spec.get("variant") == "VARIANT_GPU" and spec.get("eligible") and name not in out:
+            out[name] = gpu_estimate.for_gpu(name, learned.get(name), config, catalog, context)
+    return out
+
+
+def _learn_vram(text: str) -> None:
+    """A célula de hardware imprime a VRAM real da placa entregue. Guardar por
+    nome troca o valor de tabela pelo medido (a A100 do Colab vem com 40 ou 80 GB)."""
+    found = re.search(r"'vram_total_mib': (\d+)", text)
+    accelerator = str((status().get("spec") or {}).get("accelerator") or "")
+    if not found or not accelerator:
+        return
+    with db.session() as conn:
+        learned = settings_store._get_override(conn, "colab.gpu_vram")
+        learned = dict(learned) if isinstance(learned, dict) else {}
+        learned[accelerator] = round(int(found.group(1)) / 1024, 1)
+        settings_store._set_override(conn, "colab.gpu_vram", learned)
 
 
 # ------------------------------------------------------- notebook do runtime
@@ -207,14 +248,11 @@ def runtime_notebook(conn: sqlite3.Connection, project_url: str) -> dict:
         raise GameError.bad_request(
             "validation_error", "project_url is required so Colab can reach this server")
     # As chaves de download entram depois da limpeza: o notebook precisa delas.
-    # Os 5 slots dividem um KV só: o dobro do contexto do jogo deixa uma narração
-    # longa e as leituras auxiliares caberem juntas, como no narrador desta máquina.
-    game_context = int(settings_store.effective_llm_settings(conn)["context_size"])
     return prov.generate_notebook(
         public, catalog,
         register_token=auth.make_runtime_token(auth.auth_config()["secret"]),
         download_keys=model_library.download_keys(conn),
-        llm_context=max(32768, min(262144, 2 * game_context)))
+        llm_context=server_context(conn))
 
 
 # -------------------------------------------------------------- execução
@@ -347,6 +385,8 @@ def _execute(connection: Any, cells: list[tuple[str, str]], *, connect: Any = No
                              step=order.index(role) + 1, steps=len(order))
                     elif kind == "stream":
                         _log(content.get("text", ""), sid)
+                        if "vram_total_mib" in str(content.get("text")) and _mine(sid):
+                            _learn_vram(str(content.get("text")))
                     elif kind == "error":
                         _log(f"{content.get('ename')}: {content.get('evalue')}", sid)
                         raise RuntimeError(f"a célula {role} falhou: {content.get('evalue')}")
@@ -405,6 +445,8 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any,
             return
         _set(sid, runtime=name, state="starting", cell="", step=0, steps=len(cells))
         _remember({"runtime": name, "spec": spec})
+        notify.send(f"O Colab entregou a GPU {spec.get('accelerator')}. Instalando e baixando "
+                    "os modelos; aviso de novo quando estiver pronto.", tags="hourglass_flowing_sand")
 
         def connection() -> tuple[str, str]:
             with db.session() as conn:
@@ -417,6 +459,9 @@ def _run(spec: dict, cells: list[tuple[str, str]], transport: Any, connect: Any,
         _execute(connection, cells, connect=connect, transport=transport, sid=sid)
     except Exception as exc:  # a thread não tem quem receba a exceção
         failed = status().get("runtime") if _mine(sid) else ""
+        if _mine(sid):
+            notify.send(f"O Colab não ligou: {str(getattr(exc, 'message', exc))[:200]}",
+                        tags="x")
         _set(sid, state="error", error=str(getattr(exc, "message", exc))[:400], runtime="")
         if failed:
             # Uma subida que falhou não serve para nada e segue gastando créditos: apaga.

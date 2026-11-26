@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Power } from 'lucide-react'
 import { api } from '../../api.js'
+import { askToNotify, onColabStatus, watchColab } from '../../colabWatch.js'
 import { useToast } from '../Toast.jsx'
 import { SettingField } from './Controls.jsx'
 
@@ -24,16 +25,57 @@ const CELL = {
   keepalive: 'ligado',
 }
 
-function specLabel(spec) {
+const RATING = {
+  excelente: { label: 'Excelente', cls: 'text-emerald-400' },
+  bom: { label: 'Bom', cls: 'text-emerald-400' },
+  ruim: { label: 'Ruim', cls: 'text-warn-300' },
+  pessimo: { label: 'Péssimo', cls: 'text-danger-300' },
+}
+
+const KIND = { llm: 'Narrador', image: 'Imagem', video: 'Vídeo' }
+
+function specLabel(spec, estimate) {
   const memory = spec.shape === 'SHAPE_HIGHMEM' ? ' · mais memória RAM' : ''
-  return `${spec.accelerator}${memory}`
+  const vram = estimate?.vram_gb ? ` · ${estimate.vram_gb} GB` : ''
+  const rating = RATING[estimate?.rating]?.label
+  return `${spec.accelerator}${vram}${memory}${rating ? ` · ${rating}` : ''}`
+}
+
+function Estimate({ estimate }) {
+  if (!estimate) return null
+  if (!estimate.items?.length) {
+    return estimate.note ? <p className="text-[11px] text-muted">{estimate.note}</p> : null
+  }
+  return (
+    <div className="space-y-1 rounded-lg border border-subtle bg-surface p-2.5">
+      <p className="text-[11px] text-secondary">
+        Estimativa para a {estimate.accelerator} ({estimate.vram_gb} GB{estimate.vram_measured ? ', medidos' : ', de tabela'}):{' '}
+        os modelos escolhidos pedem cerca de {estimate.total_gb} GB.{' '}
+        <strong className={estimate.fits ? 'text-emerald-400' : 'text-danger-300'}>
+          {estimate.fits ? 'Cabe.' : 'Não cabe nesta placa.'}
+        </strong>
+      </p>
+      <ul className="space-y-0.5">
+        {estimate.items.map((item) => (
+          <li key={item.kind} className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-secondary">
+            <span className="w-16 font-semibold text-primary">{KIND[item.kind]}</span>
+            {item.need_gb ? <span>{item.need_gb} GB</span> : null}
+            {item.speed ? <span>{item.speed}</span> : null}
+            {item.rating ? <strong className={RATING[item.rating].cls}>{RATING[item.rating].label}</strong> : null}
+            {item.note ? <span className="text-muted">{item.note}</span> : null}
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] text-muted">São contas aproximadas, não medições. A memória da placa passa a ser a real depois da primeira vez que ela liga.</p>
+    </div>
+  )
 }
 
 function specKey(spec) {
   return `${spec.variant}|${spec.accelerator}|${spec.shape}`
 }
 
-export default function ColabPanel({ disabledReason, inputCls, labelCls, onChanged }) {
+export default function ColabPanel({ disabledReason, inputCls, labelCls, onChanged, refreshKey }) {
   const toast = useToast()
   const [colab, setColab] = useState(null)
   const [client, setClient] = useState({ client_id: '', client_secret: '' })
@@ -41,25 +83,23 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
   const [picked, setPicked] = useState('')
   const [busy, setBusy] = useState(false)
 
+  // refreshKey muda quando o que está salvo muda (modelos, onde roda, contexto):
+  // as estimativas por GPU são calculadas no servidor a partir disso.
   useEffect(() => {
     api.getColab().then(setColab).catch(() => setColab(null))
-  }, [])
+  }, [refreshKey])
 
   const session = colab?.session || { state: 'off' }
   const working = session.state === 'creating' || session.state === 'starting'
+  // O acompanhamento mora fora deste componente: continua avisando se o admin
+  // sair desta tela para jogar enquanto o Colab sobe.
+  useEffect(() => onColabStatus((next) => {
+    setColab((prev) => (prev ? { ...prev, session: next } : prev))
+    if (next.state === 'on') onChanged?.()
+  }), [onChanged])
   useEffect(() => {
-    if (!working) return undefined
-    const timer = setInterval(async () => {
-      try {
-        const next = await api.getColabStatus()
-        setColab((prev) => (prev ? { ...prev, session: next } : prev))
-        if (next.state === 'on') onChanged?.()
-      } catch {
-        // a próxima conferência tenta de novo
-      }
-    }, 3000)
-    return () => clearInterval(timer)
-  }, [working, onChanged])
+    if (working) watchColab(session, toast)
+  }, [working, session, toast])
 
   const act = async (work, okMessage) => {
     setBusy(true)
@@ -75,6 +115,44 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
   }
 
   if (!colab) return null
+
+  const setTopic = (payload, okMessage) => act(async () => {
+    const res = await api.putColabNotify(payload)
+    return { ...colab, notify_topic: res.notify_topic }
+  }, okMessage)
+  const phone = (
+    <div className="space-y-1.5 rounded-lg border border-subtle bg-surface p-2.5 text-[11px] text-secondary">
+      <p className="font-semibold text-primary">Avisos no celular</p>
+      {colab.notify_topic ? (
+        <>
+          <p>
+            Ligados. No iPhone ou Android, instale o app <strong>ntfy</strong>, toque em + e assine o tópico{' '}
+            <code className="select-all break-all rounded bg-elevated px-1 py-0.5 font-mono text-primary">{colab.notify_topic}</code>.
+            O servidor avisa quando o Colab entrega a GPU, quando fica pronto e se falhar, mesmo com o jogo fechado.
+          </p>
+          <p className="text-muted">Quem souber o tópico lê os avisos; eles só falam do Colab, nunca da aventura.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy} onClick={() => act(async () => { await api.testColabNotify(); return null }, 'Aviso de teste enviado.')} className="min-h-9 rounded-lg border border-subtle px-3 font-semibold text-primary disabled:opacity-50">
+              Enviar aviso de teste
+            </button>
+            <button type="button" disabled={busy} onClick={() => setTopic({ generate: true }, 'Tópico novo. Assine-o no app.')} className="min-h-9 rounded-lg border border-subtle px-3 font-semibold text-secondary disabled:opacity-50">
+              Trocar o tópico
+            </button>
+            <button type="button" disabled={busy} onClick={() => setTopic({ topic: '' }, 'Avisos no celular desligados.')} className="min-h-9 rounded-lg border border-subtle px-3 font-semibold text-danger-300 disabled:opacity-50">
+              Desligar
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p>Para ser avisado no telefone com o jogo fechado (o aviso do navegador só chega com a página aberta), o servidor usa o serviço ntfy.sh.</p>
+          <button type="button" disabled={busy} onClick={() => setTopic({ generate: true }, 'Avisos ligados. Assine o tópico no app ntfy.')} className="min-h-9 rounded-lg border border-subtle px-3 font-semibold text-primary disabled:opacity-50">
+            Ligar avisos no celular
+          </button>
+        </>
+      )}
+    </div>
+  )
 
   const gpus = (colab.specs || []).filter((spec) => spec.variant === 'VARIANT_GPU' && spec.eligible)
   const chosen = gpus.find((spec) => specKey(spec) === picked) || gpus[0]
@@ -137,6 +215,7 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
             </div>
           </>
         )}
+        {phone}
       </div>
     )
   }
@@ -159,13 +238,14 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
           <SettingField label="GPU" labelClassName={labelCls}>
             <select value={chosen ? specKey(chosen) : ''} onChange={(e) => setPicked(e.target.value)} className={inputCls} disabled={gpus.length === 0}>
               {gpus.length === 0 && <option value="">Nenhuma GPU liberada para esta conta</option>}
-              {gpus.map((spec) => <option key={specKey(spec)} value={specKey(spec)}>{specLabel(spec)}</option>)}
+              {gpus.map((spec) => <option key={specKey(spec)} value={specKey(spec)}>{specLabel(spec, colab.estimates?.[spec.accelerator])}</option>)}
             </select>
           </SettingField>
           <button
             type="button"
             disabled={busy || !chosen || Boolean(disabledReason)}
             onClick={() => act(async () => {
+              askToNotify()
               const next = await api.startColab({ variant: chosen.variant, accelerator: chosen.accelerator, shape: chosen.shape })
               return { ...colab, session: next }
             })}
@@ -175,11 +255,14 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
             Ligar o Colab
           </button>
           {disabledReason && <p className="min-w-0 flex-1 text-[11px]">{disabledReason}</p>}
+          <div className="basis-full">
+            <Estimate estimate={chosen ? colab.estimates?.[chosen.accelerator] : null} />
+          </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <p role="status" className="min-w-0 flex-1 text-primary">
-            {session.state === 'creating' && (session.attempt ? `O Colab está sem máquina livre; tentativa ${session.attempt} de ${session.attempts}…` : 'Pedindo a máquina ao Colab…')}
+            {session.state === 'creating' && (session.attempt ? `O Colab está sem essa GPU livre. O jogo segue pedindo (tentativa ${session.attempt}) e avisa quando conseguir.` : 'Pedindo a máquina ao Colab…')}
             {session.state === 'starting' && (session.resumed ? 'O Colab está subindo (o jogo reiniciou e retomou esta sessão)…' : `Passo ${session.step || 1} de ${session.steps || '?'}: ${CELL[session.cell] || 'preparando'}…`)}
             {session.state === 'on' && `Colab ligado${session.spec?.accelerator ? ` (${session.spec.accelerator})` : ''}.`}
           </p>
@@ -213,6 +296,7 @@ export default function ColabPanel({ disabledReason, inputCls, labelCls, onChang
           ))}
         </div>
       )}
+      {phone}
       <p className="text-[11px] text-muted">
         Desligue quando terminar: sessão ligada gasta créditos do Colab. Sem batida por 3 minutos, o jogo volta a usar esta máquina sozinho.
       </p>

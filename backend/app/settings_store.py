@@ -74,7 +74,7 @@ OVERRIDE_KEYS = (
     "runtime.user_models", "runtime.comfyui_root",
     "downloads.civitai_api_key", "downloads.huggingface_token",
     # conta Google que liga o Colab pela API
-    "colab.client_id", "colab.client_secret", "colab.refresh_token", "colab.oauth_state", "colab.session",
+    "colab.client_id", "colab.client_secret", "colab.refresh_token", "colab.oauth_state", "colab.session", "colab.gpu_vram", "notify.ntfy_topic",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")
@@ -1357,6 +1357,14 @@ def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
             "validation_error", "colab comfyui endpoint is required when comfyui placement is colab")
     _set_override(conn, "runtime.registration.endpoints",
                   {"llm": colab_llm, "comfyui": colab_comfy})
+    from app import notify
+    serving = [name for name, url, key in (("narrador", colab_llm, "llm"),
+                                           ("imagem e vídeo", colab_comfy, "comfyui"))
+               if url and placements[key] == "colab"]
+    if serving:
+        gpu = str(hardware.get("gpu_name") or "GPU")
+        notify.send(f"Colab pronto ({gpu}). O jogo já usa essa placa para "
+                    f"{' e '.join(serving)}.", tags="white_check_mark", conn=conn)
     _set_override(conn, "runtime.registration.hardware", hardware)
     _set_override(conn, "runtime.registration.last_seen", db.utcnow())
     _set_override(conn, "runtime.registration.models", saved_models)
