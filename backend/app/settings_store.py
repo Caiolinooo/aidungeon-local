@@ -437,7 +437,7 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
     if len(comfyui_sigmas) != comfyui_steps + 1:
         raise ValueError("comfyui.sigmas deve conter comfyui.steps + 1 valores")
 
-    return {
+    settings = {
         # ---- shape público (ImageSettings) ----
         "enabled": bool(ov("image.enabled", image.get("enabled", True))),
         "provider": ov("image.provider", image.get("provider", "sdwebui")),
@@ -515,6 +515,15 @@ def effective_image_settings(conn: sqlite3.Connection) -> dict:
         ],
         "prompt_builder": dict(prompt_builder),
     }
+    if colab_serving(conn, "comfyui"):
+        hardware = _get_override(conn, "runtime.registration.hardware")
+        vram = int((hardware if isinstance(hardware, dict) else {}).get("vram_total_mib") or 0)
+        if vram >= 14000:
+            # Na VM o codificador de texto fica na CPU para caber ao lado do
+            # narrador. No Colab a placa é só do ComfyUI e há 2 núcleos de CPU:
+            # medido numa T4, a CPU levava a imagem de 28 s para 84 s.
+            settings["comfyui_zimage"] = {**settings["comfyui_zimage"], "clip_device": "default"}
+    return settings
 
 
 def apply_image_update(conn: sqlite3.Connection, update: dict) -> set[str]:
@@ -990,6 +999,15 @@ def colab_online(conn: sqlite3.Connection) -> bool:
     except ValueError:
         return False
     return (datetime.now(timezone.utc) - seen).total_seconds() < _COLAB_STALE_S
+
+
+def colab_serving(conn: sqlite3.Connection, service: str) -> bool:
+    """O Colab registrado está atendendo este serviço agora."""
+    if _get_override(conn, f"runtime.placements.{service}") != "colab":
+        return False
+    registered = _get_override(conn, "runtime.registration.endpoints")
+    return (isinstance(registered, dict) and bool(registered.get(service))
+            and colab_online(conn))
 
 
 def _live_url(conn: sqlite3.Connection, service: str, stored: Any) -> Any:

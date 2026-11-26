@@ -532,9 +532,20 @@ def test_colab_heartbeat_decides_who_serves(client):
     assert client.post("/api/runtime/register", json=payload).status_code == 200
     assert serving() == "https://gpu.trycloudflare.com"
     assert client.get("/api/settings/runtime").json()["registration"]["online"] is True
+    # Placa pequena ou não informada: o codificador de texto continua na CPU.
+    with db.session() as conn:
+        assert settings_store.effective_image_settings(conn)["comfyui_zimage"]["clip_device"] == "cpu"
+    client.post("/api/runtime/register", json={
+        **payload, "hardware": {"gpu_name": "T4", "vram_total_mib": 15360}})
+    with db.session() as conn:
+        db.set_setting(conn, "runtime.registration.hardware",
+                       json.dumps({"gpu_name": "T4", "vram_total_mib": 15360}))
+        assert settings_store.effective_image_settings(conn)["comfyui_zimage"]["clip_device"] == "default"
     with db.session() as conn:
         db.set_setting(conn, "runtime.registration.last_seen", json.dumps("2020-01-01T00:00:00.000Z"))
     assert serving() == "http://local-comfy.example"
+    with db.session() as conn:
+        assert settings_store.effective_image_settings(conn)["comfyui_zimage"]["clip_device"] == "cpu"
     assert client.get("/api/settings/runtime").json()["registration"]["online"] is False
     # A batida seguinte devolve o serviço ao Colab sem reaplicar nada.
     assert client.post("/api/runtime/register", json=payload).status_code == 200
