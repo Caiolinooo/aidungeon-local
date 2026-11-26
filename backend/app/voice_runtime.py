@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from app import db, settings_store
+from app import db, gpu_estimate, settings_store
 from app.errors import GameError
 
 CATALOG_PATH = db.REPO_ROOT / "config" / "voice_models.json"
@@ -357,6 +357,22 @@ def _write_service(root: Path, python: Path, build: Path, tts: dict, stt_model: 
         "[Install]\nWantedBy=default.target\n")
 
 
+def _test_speech(voice_key: str) -> str:
+    """Uma fala de verdade: saúde ok não garante que o modelo coube na placa."""
+    try:
+        resp = httpx.post(f"{LOCAL_URL}/audio/speech", timeout=180,
+                          headers={"Authorization": f"Bearer {voice_key}"},
+                          json={"input": "Teste de voz.", "voice": "M1", "response_format": "pcm"})
+    except httpx.HTTPError as exc:
+        return f"o servidor de voz não respondeu ({exc.__class__.__name__})"
+    if resp.status_code == 200 and len(resp.content) > 2000:
+        return ""
+    try:
+        return str(resp.json()["error"]["message"])[:200]
+    except (ValueError, KeyError, TypeError):
+        return f"a fala de teste falhou (HTTP {resp.status_code})"
+
+
 def _run_install(tts_id: str, stt_id: str, voice_key: str, hf_token: str, activate: bool) -> None:
     from app import runtime_provisioning
     book = catalog()
@@ -381,6 +397,8 @@ def _run_install(tts_id: str, stt_id: str, voice_key: str, hf_token: str, activa
               "import sys; from faster_whisper import download_model; download_model(sys.argv[1])",
               stt["model"]], timeout=3600)
         _step("ligando o servidor de voz")
+        env_file = root / "voice.env"
+        previous = env_file.read_text() if env_file.is_file() else None
         _write_service(root, python, build, tts, stt["model"], voice_key)
         for args in (("daemon-reload",), ("enable", UNIT), ("restart", UNIT)):
             done = _systemctl(*args)
@@ -401,6 +419,14 @@ def _run_install(tts_id: str, stt_id: str, voice_key: str, hf_token: str, activa
             time.sleep(2)
         else:
             raise RuntimeError("o servidor de voz não respondeu depois de ligado")
+        _step("testando uma fala")
+        failure = _test_speech(voice_key)
+        if failure:
+            if previous and previous != env_file.read_text():
+                env_file.write_text(previous)
+                _systemctl("restart", UNIT)
+                failure += ". O servidor voltou para os modelos de antes"
+            raise RuntimeError(failure)
         if activate:
             with db.session() as conn:
                 settings_store._set_override(conn, "voice_runtime.placement", "local")
@@ -452,6 +478,8 @@ def view(conn: sqlite3.Connection) -> dict:
     health = local_health()
     configured = settings_store.configured_voice_settings(conn)
     colab_models = settings_store._get_override(conn, "voice_runtime.colab_models")
+    from app import runtime_provisioning
+    free_mib = runtime_provisioning.detect_hardware().get("vram_free_mib")
     return {
         **chosen,
         "bundle": bundle_of(chosen["tts"], chosen["stt"]),
@@ -462,8 +490,11 @@ def view(conn: sqlite3.Connection) -> dict:
         "stt_models": {name: {"label": item["label"], "note": item["note"], "gb": item["disk_gb"]}
                        for name, item in book["stt"].items()},
         "server_url": str(configured.get("base_url") or ""),
+        # O que os modelos escolhidos pedem da placa e o que esta máquina tem livre agora.
+        "need_gb": gpu_estimate.voice_need_gb(book["tts"][chosen["tts"]], book["stt"][chosen["stt"]]),
         "local": {"running": bool(health), **_running_ids(health),
-                  "stt_device": (health or {}).get("stt_device") or ""},
+                  "stt_device": (health or {}).get("stt_device") or "",
+                  "vram_free_gb": round(free_mib / 1024, 1) if free_mib is not None else None},
         "colab": {"serving": colab_serving(conn),
                   "models": colab_models if isinstance(colab_models, dict) else None},
         "install": install_status(),

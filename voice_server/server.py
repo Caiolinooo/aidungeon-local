@@ -137,6 +137,14 @@ def _omni_args(voice: str, out: str) -> list[str]:
             "--ref-rvq", str(rvq), "--ref-text", str(ref), "--seed", "42", "-o", out]
 
 
+def _reason(stderr: bytes) -> str:
+    text = stderr.decode(errors="replace")
+    if "out of memory" in text:
+        return "a placa não tem memória livre para este modelo de voz"
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    return "omnivoice falhou: " + (lines[-1][-200:] if lines else "sem saída")
+
+
 def _synthesize(text: str, voice: str) -> bytes:
     """WAV inteiro (24 kHz mono, 16 bits)."""
     with tempfile.TemporaryDirectory() as folder:
@@ -146,7 +154,7 @@ def _synthesize(text: str, voice: str) -> bytes:
             proc = subprocess.run(args, input=text.encode(), capture_output=True,
                                   timeout=TIMEOUT_S, env=_child_env())
         if proc.returncode != 0 or not os.path.isfile(out) or not os.path.getsize(out):
-            raise RuntimeError("omnivoice falhou: " + proc.stderr.decode(errors="replace")[-300:])
+            raise RuntimeError(_reason(proc.stderr[-4000:]))
         return Path(out).read_bytes()
 
 
@@ -155,33 +163,40 @@ async def _stream(text: str, voice: str):
     args = _omni_args(voice, "-")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + TIMEOUT_S
+    # O lock é de thread e isto roda no laço de eventos: esperar por ele
+    # bloqueando travaria o servidor inteiro, inclusive quem o segura.
+    while not _omni_lock.acquire(blocking=False):
+        if loop.time() > deadline:
+            raise RuntimeError("a fila de fala não andou")
+        await asyncio.sleep(0.05)
     proc = None
     errors = tempfile.TemporaryFile()
     try:
-        with _omni_lock:
-            proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=errors, env=_child_env())
-            proc.stdin.write(text.encode())
-            proc.stdin.close()
-            while True:
-                left = deadline - loop.time()
-                if left <= 0:
-                    raise RuntimeError("omnivoice demorou demais")
-                # read1 entrega o que já existe; read(n) seguraria o áudio até encher o buffer.
-                chunk = await asyncio.wait_for(asyncio.to_thread(proc.stdout.read1, 65536), left)
-                if not chunk:
-                    break
-                yield chunk
+        proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=errors, env=_child_env())
+        proc.stdin.write(text.encode())
+        proc.stdin.close()
+        sent = False
+        while True:
+            left = deadline - loop.time()
+            if left <= 0:
+                raise RuntimeError("omnivoice demorou demais")
+            # read1 entrega o que já existe; read(n) seguraria o áudio até encher o buffer.
+            chunk = await asyncio.wait_for(asyncio.to_thread(proc.stdout.read1, 65536), left)
+            if not chunk:
+                break
+            sent = True
+            yield chunk
+        if await asyncio.to_thread(proc.wait) != 0 or not sent:
+            errors.seek(0)
+            raise RuntimeError(_reason(errors.read()[-4000:]))
     finally:
         # Um filho abandonado segura a placa e a trava: sempre morre aqui.
         if proc is not None and proc.poll() is None:
             proc.kill()
             await asyncio.to_thread(proc.wait)
-        elif proc is not None and proc.returncode != 0:
-            # O stream já saiu com 200: o motivo fica no log do servidor.
-            errors.seek(max(0, errors.tell() - 600))
-            print("omnivoice falhou:", errors.read().decode(errors="replace"), file=sys.stderr, flush=True)
         errors.close()
+        _omni_lock.release()
 
 
 def _pcm(wav: bytes) -> bytes:
@@ -231,7 +246,20 @@ async def speech(req: Speech):
     try:
         if req.response_format == "wav":
             _omni_args(voice, "-")  # voz ausente vira 404 antes de abrir o stream
-            return StreamingResponse(_stream(text, voice), media_type="audio/wav")
+            stream = _stream(text, voice)
+            # Só responde 200 com o primeiro áudio na mão: modelo que não
+            # carrega vira erro, não um áudio vazio.
+            first = await anext(stream)
+
+            async def body():
+                try:
+                    yield first
+                    async for chunk in stream:
+                        yield chunk
+                finally:
+                    await stream.aclose()
+
+            return StreamingResponse(body(), media_type="audio/wav")
         wav = await asyncio.to_thread(_synthesize, text, voice)
         if req.response_format == "mp3":
             return Response(await asyncio.to_thread(_mp3, wav), media_type="audio/mpeg")

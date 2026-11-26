@@ -131,7 +131,7 @@ export default function VoiceRuntime({ estimate, onSelection, inputCls, labelCls
           <>Usa o servidor da aba Voz{data.server_url ? ` (${data.server_url})` : ''}. Os modelos abaixo só valem nesta máquina e no Colab.</>
         )}
         {placement === 'local' && local.running && (
-          <>Ligado nesta máquina: {data.tts_models[local.tts]?.label || 'outro modelo'} e {data.stt_models[local.stt]?.label || 'outro Whisper'}{local.stt_device === 'cpu' ? ' (o Whisper está na CPU)' : ''}.</>
+          <>Ligado nesta máquina: {data.tts_models[local.tts]?.label || 'outro modelo'} e {data.stt_models[local.stt]?.label || 'outro Whisper'}.{local.stt_device === 'cpu' ? ' O Whisper não coube na placa e está na CPU, mais lento.' : ''}</>
         )}
         {placement === 'local' && !local.running && 'O servidor de voz desta máquina não está respondendo.'}
         {placement === 'colab' && data.colab?.serving && 'O Colab está atendendo a voz.'}
@@ -192,6 +192,11 @@ export default function VoiceRuntime({ estimate, onSelection, inputCls, labelCls
       )}
       {data.install?.state === 'error' && (
         <p role="alert" className="text-[11px] text-danger-300">A instalação falhou: {data.install.error}</p>
+      )}
+      {!installing && !localMatches && local.vram_free_gb != null && (
+        <p className={`text-[11px] ${data.need_gb > local.vram_free_gb ? 'text-warn-300' : 'text-secondary'}`}>
+          Estes modelos pedem cerca de {gb(data.need_gb)} GB da placa. Esta máquina tem {gb(local.vram_free_gb)} GB livres agora{data.need_gb > local.vram_free_gb ? ': não cabem enquanto o narrador e a imagem ocuparem a placa.' : '.'}
+        </p>
       )}
       {!installing && !localMatches && (
         <div className="flex flex-wrap items-center gap-3">

@@ -91,9 +91,19 @@ def _worse(*ratings: str) -> str:
     return max(ratings, key=RATINGS.index)
 
 
+def _tts_gb(entry: dict) -> float:
+    return sum(int(art.get("bytes") or 0) for art in entry.get("artifacts") or []) / 1e9
+
+
+def voice_need_gb(tts: dict, stt: dict) -> float:
+    """Memória da placa que a voz pede: o Whisper fica carregado e o
+    OmniVoice entra a cada fala."""
+    return round(_tts_gb(tts) * 1.15 + 0.5 + float(stt.get("vram_gb") or 0), 1)
+
+
 def voice_tts(entry: dict, gpu: dict) -> dict:
     """Fala e clonagem: o mesmo modelo faz as duas."""
-    size = sum(int(art.get("bytes") or 0) for art in entry.get("artifacts") or []) / 1e9
+    size = _tts_gb(entry)
     seconds = size * _TTS_LOAD_S_PER_GB + _TTS_SPEECH_S_T4 / gpu["speed"]
     rating = _worse(_rate(seconds, (5, 9, 16), higher_is_better=False),
                     str(entry.get("quality") or "bom"))

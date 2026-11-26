@@ -20,6 +20,9 @@ def admin(client, admin_token, monkeypatch, tmp_path):
     # Nenhum teste fala com um servidor de voz de verdade nesta máquina.
     monkeypatch.setattr(voice_runtime, "local_health", lambda: None)
     monkeypatch.setattr(notify, "send", lambda *args, **kwargs: True)
+    monkeypatch.setattr(voice_runtime, "_test_speech", lambda key: "")
+    from app import runtime_provisioning
+    monkeypatch.setattr(runtime_provisioning, "detect_hardware", lambda: {"vram_free_mib": 3072})
     voice_runtime._install.clear()
     voice_runtime._install.update({"state": "idle"})
     client.put("/api/settings/voice", json={"base_url": ABZ, "api_key": "chave-do-servidor-abz"})
@@ -73,7 +76,9 @@ def test_this_machine_only_after_its_server_answers(admin, monkeypatch):
     _running(monkeypatch)
     view = admin.put("/api/voice-runtime", json={"placement": "local"}).json()
     assert view["local"] == {"running": True, "tts": "omnivoice-q8", "stt": "whisper-small",
-                             "stt_device": "cuda"}
+                             "stt_device": "cuda", "vram_free_gb": 3.0}
+    # Q8 (0,95 GB de arquivos) mais o Whisper small: cabe nos 3 GB livres.
+    assert 2.0 < view["need_gb"] < 3.0
     cfg = _effective()
     assert cfg["base_url"] == voice_runtime.LOCAL_URL
     assert (cfg["tts_model"], cfg["stt_model"]) == ("omnivoice", "whisper-1")
@@ -250,6 +255,21 @@ def test_install_on_this_machine_writes_the_service_and_takes_the_voice(admin, m
     assert "VOICE_STT_MODEL=small" in (home / "voice.env").read_text()
     # A chave é da máquina: reinstalar não a troca debaixo de quem já usa.
     assert f"VOICE_API_KEY={first_key}" in (home / "voice.env").read_text()
+    # Modelo que não cabe na placa: a fala de teste falha e o servidor volta ao que funcionava.
+    monkeypatch.setattr(voice_runtime, "_test_speech",
+                        lambda key: "a placa não tem memória livre para este modelo de voz")
+    ran.clear()
+    admin.put("/api/voice-runtime", json={"tts": "omnivoice-f32"})
+    monkeypatch.setattr(voice_runtime, "local_health", lambda: {
+        "status": "ok", "tts": "omnivoice-base-F32.gguf", "stt": "small", "stt_device": "cuda"})
+    admin.post("/api/voice-runtime/install", json={})
+    queued.pop()()
+    failed = admin.get("/api/voice-runtime").json()["install"]
+    assert failed["state"] == "error"
+    assert failed["error"] == ("a placa não tem memória livre para este modelo de voz. "
+                               "O servidor voltou para os modelos de antes")
+    assert "omnivoice-base-Q8_0.gguf" in (home / "voice.env").read_text()
+    assert ran.count(["systemctl", "restart", voice_runtime.UNIT]) == 2
 
 
 def test_voice_routes_are_for_the_admin(client, auth_token):
