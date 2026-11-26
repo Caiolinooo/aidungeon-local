@@ -372,7 +372,7 @@ def test_local_install_adds_the_nodes_of_a_custom_workflow(admin, tmp_path, monk
         ran.append(cmd[:3])
         if cmd[1] == "clone":
             (root / "custom_nodes" / "ComfyUI-Extra" / ".git").mkdir(parents=True)
-        return type("Done", (), {"stdout": "new-head\n"})()
+        return type("Done", (), {"stdout": "new-head\n", "returncode": 0})()
 
     monkeypatch.setattr(model_library.subprocess, "run", fake_run)
     monkeypatch.setattr(model_library, "_restart_comfy", lambda path: restarted.append(path) or True)

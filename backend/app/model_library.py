@@ -609,10 +609,31 @@ def _install_nodes(root: Path, nodes: list[dict]) -> list[str]:
         if head() == before:
             continue
         changed.append(dep["name"])
-        if (node / "requirements.txt").is_file() and python.is_file():
-            subprocess.run([str(python), "-m", "pip", "install", "-r", "requirements.txt"],
-                           cwd=node, check=True, timeout=1800)
+        _node_requirements(python, node)
     return changed
+
+
+def _node_requirements(python: Path, node: Path) -> None:
+    """Instala o requirements.txt do node no Python do ComfyUI.
+
+    Node costuma listar extras opcionais que não fecham entre si. Se o
+    conjunto falha, entra linha a linha, preso às versões já instaladas: o
+    que não couber fica de fora e o ComfyUI não tem pacote trocado.
+    """
+    req = node / "requirements.txt"
+    if not req.is_file() or not python.is_file():
+        return
+    pip = [str(python), "-m", "pip", "install", "-q"]
+    if subprocess.run(pip + ["-r", str(req)], timeout=1800).returncode == 0:
+        return
+    frozen = node / ".comfy-constraints.txt"
+    frozen.write_text(subprocess.run(
+        [str(python), "-m", "pip", "freeze", "--exclude-editable"],
+        capture_output=True, text=True, timeout=300).stdout)
+    for line in req.read_text().splitlines():
+        spec = line.split("#")[0].strip()
+        if spec:
+            subprocess.run(pip + ["-c", str(frozen), spec], timeout=1800)
 
 
 def _restart_comfy(root: Path) -> bool:
