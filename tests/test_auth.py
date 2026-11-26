@@ -193,6 +193,15 @@ def test_spa_static_public_without_token(raw_client):
     assert "text/html" in res.headers["content-type"]
 
 
+def test_missing_asset_does_not_receive_the_spa_html(raw_client):
+    dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    if not (dist / "index.html").is_file():
+        pytest.skip("frontend/dist não existe (rode npm run build)")
+    res = raw_client.get("/assets/Settings-expired-deadbeef.js")
+    assert res.status_code == 404
+    assert "text/html" not in res.headers.get("content-type", "")
+
+
 # --------------------------------------------------------- não configurado
 def test_auth_not_configured_fail_closed(raw_client, monkeypatch):
     monkeypatch.delenv("AUTH_USER", raising=False)

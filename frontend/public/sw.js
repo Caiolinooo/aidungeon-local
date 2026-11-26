@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aidungeon-local-v3';
+const CACHE_NAME = 'aidungeon-local-v4';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -85,7 +85,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+          const contentType = networkResponse.headers.get('content-type') || '';
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic'
+              && !contentType.toLowerCase().includes('text/html')) {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
           }

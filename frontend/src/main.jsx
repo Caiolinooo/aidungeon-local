@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import { installPreloadRecovery } from './preloadRecovery.js'
 import './index.css'
 
 // 100dvh does not shrink when the virtual keyboard opens. On iOS the
@@ -60,6 +61,8 @@ if ('serviceWorker' in navigator && !window.location.hostname.includes('localhos
     })
   })
 }
+
+installPreloadRecovery()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

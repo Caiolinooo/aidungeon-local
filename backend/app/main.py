@@ -200,8 +200,9 @@ class _SpaStaticFiles(StaticFiles):
         try:
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404 and not path.startswith("api/"):
+            if exc.status_code == 404 and not path.startswith(("api/", "assets/")):
                 # SPA fallback: client routes such as /play/:id serve index.html.
+                # Missing hashed assets must stay 404, never become JavaScript HTML.
                 served = "index.html"
                 response = await super().get_response(served, scope)
             else:
