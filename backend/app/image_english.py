@@ -39,7 +39,8 @@ _NON_NAME_SINGLE_WORDS = {
     "túnica", "máscara", "lágrimas", "lábios", "cílios", "silêncio",
 }
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
-_CACHE: OrderedDict[str, str] = OrderedDict()
+_CacheKey = tuple[str, str, bool]
+_CACHE: OrderedDict[_CacheKey, str] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 # O llama-server admite uma auxiliar por slot. Sem esta trava, dois jobs
 # visuais disputam o mesmo slot e o segundo estoura o prazo de 20 s mesmo com
@@ -90,7 +91,7 @@ def _accepted(masked: str, reply: str) -> bool:
     return all(placeholder in reply for placeholder in placeholders)
 
 
-def _cached(text: str) -> str | None:
+def _cached(text: _CacheKey) -> str | None:
     with _CACHE_LOCK:
         value = _CACHE.get(text)
         if value is not None:
@@ -98,7 +99,7 @@ def _cached(text: str) -> str | None:
         return value
 
 
-def _remember(text: str, translated: str) -> None:
+def _remember(text: _CacheKey, translated: str) -> None:
     with _CACHE_LOCK:
         _CACHE[text] = translated
         _CACHE.move_to_end(text)
@@ -173,7 +174,9 @@ def render_english(text: str, *, transport=None,
         return ""
     if not text.strip():
         return text
-    cached = _cached(text)
+    context = " ".join((context or "").split())[:1800]
+    cache_key = (text, context, allow_passthrough)
+    cached = _cached(cache_key)
     if cached is not None:
         return cached
 
@@ -192,7 +195,7 @@ def render_english(text: str, *, transport=None,
             system_prompt
             + "\n\nStory context, for meaning only; never translate, repeat "
             "or output it:\n"
-            + " ".join(context.split())[:1800]
+            + context
         )
     messages.append({"role": "user", "content": masked})
 
@@ -206,7 +209,7 @@ def render_english(text: str, *, transport=None,
             attempt_messages[-1]["content"] = partial_reply
         try:
             with IMAGE_LLM_LOCK:
-                cached = _cached(text)
+                cached = _cached(cache_key)
                 if cached is not None:
                     return cached
                 reply = llm_client.chat_completion(
@@ -232,18 +235,18 @@ def render_english(text: str, *, transport=None,
                 break
             continue
         restored = _restore_names(cleaned, names)
-        _remember(text, restored)
+        _remember(cache_key, restored)
         return restored
     if partial_reply is not None and _is_probable_english(partial_reply):
         restored = _restore_names(partial_reply, names)
-        _remember(text, restored)
+        _remember(cache_key, restored)
         return restored
     salvaged = _english_only(partial_reply or "")
     if salvaged and _is_probable_english(salvaged):
         restored = _restore_names(salvaged, names)
-        _remember(text, restored)
+        _remember(cache_key, restored)
         return restored
     if allow_passthrough and _is_probable_english(text) and "BREAK" not in masked:
-        _remember(text, text)
+        _remember(cache_key, text)
         return text
     _failed()

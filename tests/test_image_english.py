@@ -132,6 +132,26 @@ def test_scene_context_is_private_and_order_stays_the_user_message(monkeypatch):
     assert messages[1] == {"role": "user", "content": "ela tira o vestido"}
 
 
+def test_cache_does_not_reuse_a_translation_across_different_scene_contexts(monkeypatch):
+    calls = install_stub(monkeypatch, [
+        "she opens the wooden door",
+        "she closes the wooden door",
+    ])
+    source = "ela abre ou fecha a porta"
+
+    first = image_english.render_english(
+        source, llm_cfg={}, context="The player ordered her to open the door.")
+    second = image_english.render_english(
+        source, llm_cfg={}, context="The player ordered her to close the door.")
+    cached = image_english.render_english(
+        source, llm_cfg={}, context="The player ordered her to open the door.")
+
+    assert first == "she opens the wooden door"
+    assert second == "she closes the wooden door"
+    assert cached == first
+    assert len(calls) == 2
+
+
 def test_break_invented_for_a_source_without_break_is_dropped(monkeypatch):
     source = "appearance: dark hair\nbody: broad shoulders\nclothing: navy shirt"
     reply = "appearance: dark hair BREAK body: broad shoulders BREAK clothing: navy shirt"
