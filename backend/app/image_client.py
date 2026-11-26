@@ -46,6 +46,7 @@ import base64
 import binascii
 import hashlib
 import json
+import re
 import logging
 import random
 import time
@@ -660,6 +661,23 @@ def _comfy_checkpoint_graph(cfg: dict, prompt: str, *, width: int, height: int) 
     return _with_loras(graph, cfg, model=["1", 0], clip=["1", 1])
 
 
+def _neutral_png() -> bytes:
+    import io
+
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 64), (128, 128, 128)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _custom_reference_slots(cfg: dict) -> int:
+    """Maior `{{reference_N}}` do fluxo próprio. Zero: o fluxo não lê foto."""
+    raw = cfg.get("comfyui_custom")
+    graph = raw.get("graph") if isinstance(raw, dict) else None
+    found = re.findall(r"\{\{reference_(\d+)\}\}", json.dumps(graph or {}))
+    return max((int(number) for number in found), default=0)
+
+
 def _comfy_custom_graph(cfg: dict, prompt: str, image_names: list[str],
                         *, width: int, height: int, video: dict | None = None) -> dict:
     """Fluxo do usuário com os marcadores trocados pelo pedido desta imagem ou clipe.
@@ -682,6 +700,10 @@ def _comfy_custom_graph(cfg: dict, prompt: str, image_names: list[str],
             values["{{" + key + "}}"] = video[key]
     for index, name in enumerate(image_names):
         values[f"{{{{reference_{index + 1}}}}}"] = name
+    if image_names and video is None:
+        # Fluxo com mais marcadores que fotos: os que sobram repetem a última.
+        for index in range(len(image_names), _custom_reference_slots(cfg)):
+            values[f"{{{{reference_{index + 1}}}}}"] = image_names[-1]
 
     def fill(value):
         if isinstance(value, str):
@@ -715,7 +737,12 @@ def reference_capable_cfg(cfg: dict, init_image: bytes | None = None,
         return cfg
     if init_image is None and not any(reference_images or []):
         return cfg
-    if _comfy_image_engine(cfg) != "z_image_turbo":
+    engine = _comfy_image_engine(cfg)
+    # Arquivo completo e fluxo próprio sem marcador de referência também só
+    # leem texto: a foto do personagem entra pelo Flux.2 Klein.
+    if engine not in ("z_image_turbo", "checkpoint", "custom"):
+        return cfg
+    if engine == "custom" and _custom_reference_slots(cfg):
         return cfg
     flux = flux2_settings(cfg)
     if not all(str(flux.get(label) or "").strip() for label in ("unet", "clip", "vae")):
@@ -1193,6 +1220,9 @@ def _generate_comfyui(cfg: dict, client: httpx.Client, prompt: str,
             ([init_image] if init_image is not None else [])
             + list(reference_images or [])
         )[:_MAX_REFERENCES]
+        if engine == "custom" and not references and _custom_reference_slots(cfg):
+            # O fluxo lê foto e este pedido não tem: um cinza neutro fecha o grafo.
+            references = [_neutral_png()]
     base = _comfy_base(cfg)
     names = [
         _comfy_upload(

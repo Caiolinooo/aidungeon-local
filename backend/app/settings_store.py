@@ -1227,6 +1227,9 @@ def apply_runtime_update(conn: sqlite3.Connection, update: dict) -> dict:
     _persist_runtime(conn, config)
     _apply_routing(conn, config)
     _apply_selected_models(conn, config, catalog)
+    if any(config["models"][kind] != current["models"][kind] for kind in ("image", "video")):
+        # Trocar o modelo aqui é pedir que o ComfyUI pinte com ele.
+        _set_override(conn, "image.provider", "comfyui")
     _invalidate_llm_discovery()
     return effective_runtime_settings(conn)
 

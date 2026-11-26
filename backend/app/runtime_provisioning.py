@@ -563,7 +563,9 @@ def _bind_argv(argv: list[str]) -> list[str]:
 
 # Motores só de texto. Com foto de referência no pedido o jogo pinta no
 # Flux.2 Klein (`image_client.reference_capable_cfg`), então ele vai junto.
-_REFERENCE_FALLBACK = {"z_image_turbo": "flux2_klein"}
+_REFERENCE_FALLBACK = {
+    "z_image_turbo": "flux2_klein", "checkpoint": "flux2_klein", "custom": "flux2_klein",
+}
 
 
 def _selected_artifacts(norm: dict, catalog: dict) -> list[dict]:
@@ -577,7 +579,8 @@ def _selected_artifacts(norm: dict, catalog: dict) -> list[dict]:
         image = images[norm["models"]["image"]]
         entries = [image, catalog["models"]["video"][norm["models"]["video"]]]
         companion = images.get(_REFERENCE_FALLBACK.get(str(image.get("engine")), ""))
-        if companion:
+        # Fluxo próprio que já lê a foto ({{reference_N}}) não precisa do Flux.2.
+        if companion and "{{reference_" not in json.dumps(image.get("custom") or {}):
             entries.append(companion)
         for entry in entries:
             for art in entry["artifacts"]:

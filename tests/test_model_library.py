@@ -314,3 +314,42 @@ def test_local_install_downloads_only_what_is_missing(admin, tmp_path, monkeypat
     assert len(fetched) == 1
     assert admin.post("/api/models/install", json={
         "kind": "image", "id": "nao-existe"}).status_code == 404
+
+
+def test_reference_photo_goes_through_flux2_and_changing_the_model_picks_comfyui(admin):
+    admin.put("/api/settings/image", json={"provider": "openai_compatible"})
+    model_id = admin.post("/api/models/library", json={
+        "kind": "image", "family": "checkpoint", "file": _file()}).json()["id"]
+    # Salvar sem trocar de modelo não mexe no provedor; trocar, sim.
+    admin.put("/api/settings/runtime", json={"endpoints": {"local_comfyui": "http://c.example"}})
+    assert admin.get("/api/settings/image").json()["provider"] == "openai_compatible"
+    admin.put("/api/settings/runtime", json={"models": {"image": model_id}})
+    assert admin.get("/api/settings/image").json()["provider"] == "comfyui"
+
+    with db.session() as conn:
+        cfg = settings_store.effective_image_settings(conn)
+    assert image_client.reference_capable_cfg(cfg)["comfyui_engine"] == "checkpoint"
+    assert image_client.reference_capable_cfg(
+        cfg, reference_images=[b"png"])["comfyui_engine"] == "flux2_klein"
+
+    plain = {**cfg, "comfyui_engine": "custom", "comfyui_custom": {"graph": {
+        "1": {"class_type": "X", "inputs": {"text": "{{prompt}}"}}}}}
+    assert image_client.reference_capable_cfg(
+        plain, reference_images=[b"png"])["comfyui_engine"] == "flux2_klein"
+    reads_photo = {**plain, "comfyui_custom": {"graph": {
+        "1": {"class_type": "X", "inputs": {"text": "{{prompt}}"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_1}}"}},
+        "3": {"class_type": "LoadImage", "inputs": {"image": "{{reference_2}}"}}}}}
+    assert image_client.reference_capable_cfg(
+        reads_photo, reference_images=[b"png"])["comfyui_engine"] == "custom"
+    # Dois marcadores e uma foto: o segundo repete a única que veio.
+    filled = image_client._comfy_custom_graph(
+        reads_photo, "a knight", ["a.png"], width=832, height=1216)
+    assert filled["3"]["inputs"]["image"] == "a.png"
+
+    # O notebook leva o Flux.2 Klein junto com o checkpoint.
+    admin.put("/api/settings/runtime", json={
+        "mode": "hybrid", "placements": {"llm": "local", "comfyui": "colab"}})
+    resp = admin.get("/api/runtime/notebook", params={"project_url": "https://play.example"})
+    provision = next("".join(c["source"]) for c in resp.json()["cells"] if c["id"] == "provision")
+    assert "flux-2-klein-4b-fp8.safetensors" in provision

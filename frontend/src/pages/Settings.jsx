@@ -561,6 +561,11 @@ export default function Settings() {
           const sent = runtimePayload(runtimeForm)
           const modelsChanged = JSON.stringify(sent.models) !== JSON.stringify(runtimePayload(runtimeSaved).models)
           const updated = await api.putRuntimeSettings(sent)
+          const before = runtimePayload(runtimeSaved).models
+          if (sent.models.image !== before.image || sent.models.video !== before.video) {
+            // O servidor passa a pintar pelo ComfyUI quando o modelo muda aqui.
+            setImageForm((prev) => ({ ...prev, provider: 'comfyui' }))
+          }
           const form = configFromRuntimeResponse(sent, updated)
           setRuntimeForm(form)
           setRuntimeSaved(normalizeRuntimeConfig(form))

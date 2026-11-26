@@ -363,7 +363,7 @@ export default function ModelPicker({
       )}
       {kind === 'image' && (entry?.engine === 'checkpoint' || entry?.engine === 'custom') && (
         <p className="text-[11px] text-muted">
-          Este motor pinta só pelo texto: a foto de referência do personagem não entra. Para manter um rosto, use um LoRA do personagem.
+          Este modelo pinta pelo texto. Quando o pedido leva a foto de um personagem, quem pinta é o Flux.2 Klein, para manter o rosto. Um fluxo próprio com {'{{reference_1}}'} recebe a foto direto.
         </p>
       )}
 
