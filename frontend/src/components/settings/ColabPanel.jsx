@@ -18,7 +18,7 @@ const CELL = {
   secrets: 'preparando',
   helpers: 'preparando',
   hardware: 'conferindo a GPU',
-  provision: 'instalando o ComfyUI e baixando os modelos',
+  provision: 'instalando os serviços e baixando os modelos',
   health: 'esperando os serviços subirem',
   tunnel: 'abrindo o túnel',
   register: 'registrando no jogo',
@@ -32,7 +32,7 @@ const RATING = {
   pessimo: { label: 'Péssimo', cls: 'text-danger-300' },
 }
 
-const KIND = { llm: 'Narrador', image: 'Imagem', video: 'Vídeo' }
+const KIND = { llm: 'Narrador', image: 'Imagem', video: 'Vídeo', tts: 'Fala', stt: 'Escuta' }
 
 function specLabel(spec, estimate) {
   const memory = spec.shape === 'SHAPE_HIGHMEM' ? ' · mais memória RAM' : ''

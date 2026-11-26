@@ -5,6 +5,7 @@ import { useToast } from '../Toast.jsx'
 import { SettingField } from './Controls.jsx'
 import ColabPanel from './ColabPanel.jsx'
 import ModelPicker from './ModelPicker.jsx'
+import VoiceRuntime from './VoiceRuntime.jsx'
 
 const PLACES = [
   { id: 'local', label: 'Esta máquina' },
@@ -327,6 +328,8 @@ export default function RuntimeSettings({
   const [savingKeys, setSavingKeys] = useState(false)
   // Estimativa da GPU escolhida no bloco do Colab, para a nota em cada cartão.
   const [gpuEstimate, setGpuEstimate] = useState(null)
+  // O que o cartão da voz tem escolhido: entra na estimativa e no notebook.
+  const [voice, setVoice] = useState(null)
   const refresh = useRef(onRefresh)
   refresh.current = onRefresh
 
@@ -359,10 +362,11 @@ export default function RuntimeSettings({
     return () => clearInterval(timer)
   }, [installing])
 
-  const allLocal = isAllLocalRuntime(form)
+  // Só a voz no Colab já é motivo para ligar o Colab.
+  const allLocal = isAllLocalRuntime(form) && voice?.placement !== 'colab'
   const notebookDisabled = !loaded || allLocal || dirty || downloading
   let notebookHint = 'Abra o arquivo no Colab, escolha uma GPU e clique em Executar tudo. Ele baixa os modelos e se liga a este jogo sozinho.'
-  if (allLocal) notebookHint = 'Ponha o narrador ou a imagem no Colab, acima, para gerar o notebook.'
+  if (allLocal) notebookHint = 'Ponha o narrador, a imagem ou a voz no Colab, acima, para gerar o notebook.'
   else if (dirty) notebookHint = 'Salve antes de gerar o notebook.'
 
   const hardwareUnavailable = hardware?.status === 'unavailable'
@@ -530,6 +534,13 @@ export default function RuntimeSettings({
             </Fragment>
           ))}
 
+          <VoiceRuntime
+            estimate={gpuEstimate}
+            onSelection={setVoice}
+            inputCls={inputCls}
+            labelCls={labelCls}
+          />
+
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Chaves de download</h3>
             <p className="text-[11px] text-secondary">
@@ -555,10 +566,10 @@ export default function RuntimeSettings({
           <section className="rounded-2xl border border-subtle bg-surface p-4 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Colab</h3>
             <ColabPanel
-              refreshKey={`${dirty}`}
-              draft={{ placements: form.placements, models: form.models, context: llmContext || 65536 }}
+              refreshKey={`${dirty}|${voice?.placement}|${voice?.tts}|${voice?.stt}`}
+              draft={{ placements: form.placements, models: form.models, context: llmContext || 65536, voice: voice || {} }}
               onEstimate={setGpuEstimate}
-              disabledReason={allLocal ? 'Ponha o narrador ou a imagem no Colab, acima, e salve.' : dirty ? 'Salve antes de ligar.' : ''}
+              disabledReason={allLocal ? 'Ponha o narrador, a imagem ou a voz no Colab, acima, e salve.' : dirty ? 'Salve antes de ligar.' : ''}
               inputCls={inputCls}
               labelCls={labelCls}
               onChanged={onRefresh}

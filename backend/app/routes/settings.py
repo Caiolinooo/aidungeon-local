@@ -112,7 +112,7 @@ def _resolve_discover_credentials(
             saved_url = str(cfg.get("openai_base_url") or "")
             saved_key = cfg.get("openai_api_key")
     elif kind == "voice":
-        cfg = settings_store.effective_voice_settings(conn)
+        cfg = settings_store.configured_voice_settings(conn)
         saved_url = str(cfg.get("base_url") or "")
         saved_key = cfg.get("api_key")
     elif kind == "embeddings":

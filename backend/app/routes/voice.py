@@ -63,8 +63,16 @@ async def _await_until_disconnect(request: Request, operation: Coroutine[Any, An
 
 # ------------------------------------------------------------ settings/voice
 def _voice_settings_response(conn) -> dict:
-    """Shape VoiceSettings do openapi (api_key SEMPRE mascarada)."""
-    cfg = settings_store.effective_voice_settings(conn)
+    """Shape VoiceSettings do openapi (api_key SEMPRE mascarada).
+
+    É o servidor configurado, que o formulário edita. Quem atende agora
+    (o do jogo nesta máquina ou o do Colab) aparece em `serving`."""
+    cfg = settings_store.configured_voice_settings(conn)
+    from app import voice_runtime
+    chosen = voice_runtime.selection(conn)
+    serving = chosen["placement"]
+    if serving == "colab" and not voice_runtime.colab_serving(conn):
+        serving = chosen["fallback"]
     return {
         "enabled": cfg["enabled"],
         "base_url": cfg["base_url"],
@@ -79,6 +87,7 @@ def _voice_settings_response(conn) -> dict:
         "api_key_set": bool(cfg["api_key"]),
         "drama3_model": cfg["drama3_model"],
         "drama3_enabled": cfg["drama3_enabled"],
+        "serving": serving,
     }
 
 

@@ -502,7 +502,7 @@ def _current_key_for_kind(conn: sqlite3.Connection, kind: str) -> str | None:
     if kind == "image":
         return settings_store._usable_secret(settings_store.effective_image_settings(conn).get("openai_api_key"))
     if kind == "voice":
-        return settings_store._usable_secret(settings_store.effective_voice_settings(conn).get("api_key"))
+        return settings_store._usable_secret(settings_store.configured_voice_settings(conn).get("api_key"))
     if kind == "embeddings":
         return settings_store._usable_secret(settings_store.effective_embeddings_settings(conn).get("api_key"))
     return None
@@ -791,7 +791,7 @@ def capture_current_as_profile(
 
     llm_cfg = settings_store.effective_llm_settings(conn) if "llm" in target_kinds else None
     img_cfg = settings_store.effective_image_settings(conn) if "image" in target_kinds else None
-    voice_cfg = settings_store.effective_voice_settings(conn) if "voice" in target_kinds else None
+    voice_cfg = settings_store.configured_voice_settings(conn) if "voice" in target_kinds else None
     emb_cfg = settings_store.effective_embeddings_settings(conn) if "embeddings" in target_kinds else None
 
     keys_by_kind: dict[str, str | None] = {}

@@ -583,8 +583,9 @@ class RuntimeSettingsUpdate(BaseModel):
 class RuntimeRegistrationEndpoints(BaseModel):
     llm: str = ""
     comfyui: str = ""
+    voice: str = Field(default="", max_length=500)
 
-    @field_validator("llm", "comfyui")
+    @field_validator("llm", "comfyui", "voice")
     @classmethod
     def _strip_endpoint(cls, value: str) -> str:
         return value.strip()
@@ -601,6 +602,7 @@ class RuntimeRegistration(BaseModel):
     endpoints: RuntimeRegistrationEndpoints
     models: RuntimeRegistrationModels
     hardware: dict[str, Any] = Field(default_factory=dict)
+    voice_models: dict[str, str] = Field(default_factory=dict)
 
 
 class AdventureScriptsUpdate(BaseModel):

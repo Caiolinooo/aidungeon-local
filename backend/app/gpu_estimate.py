@@ -27,6 +27,10 @@ _KV_KB_PER_TOKEN_PER_B = 5.0
 _IMAGE_SECONDS_T4 = {"flux2_klein": 14, "z_image_turbo": 40, "qwen": 60, "checkpoint": 26}
 _VIDEO_SECONDS_T4 = {"ltxv": 80, "wan": 420, "h3": 260}
 RATINGS = ("excelente", "bom", "ruim", "pessimo")
+# Voz. O OmniVoice carrega o modelo a cada fala: o tempo é carregar (por GB)
+# mais gerar (que escala com a placa). Calibrado numa L4.
+_TTS_LOAD_S_PER_GB = 1.5
+_TTS_SPEECH_S_T4 = 9.0
 
 
 def _bits(filename: str) -> float:
@@ -83,12 +87,37 @@ def _diffusion(entry: dict, gpu: dict, table: dict, unit: str,
             "rating": _rate(seconds, steps, higher_is_better=False)}
 
 
+def _worse(*ratings: str) -> str:
+    return max(ratings, key=RATINGS.index)
+
+
+def voice_tts(entry: dict, gpu: dict) -> dict:
+    """Fala e clonagem: o mesmo modelo faz as duas."""
+    size = sum(int(art.get("bytes") or 0) for art in entry.get("artifacts") or []) / 1e9
+    seconds = size * _TTS_LOAD_S_PER_GB + _TTS_SPEECH_S_T4 / gpu["speed"]
+    rating = _worse(_rate(seconds, (5, 9, 16), higher_is_better=False),
+                    str(entry.get("quality") or "bom"))
+    return {"need_gb": round(size * 1.15 + 0.5, 1),
+            "speed": f"cerca de {seconds:.0f} s por fala curta",
+            "rating": rating, "note": str(entry.get("note") or "")}
+
+
+def voice_stt(entry: dict, gpu: dict) -> dict:
+    seconds = float(entry.get("t4_seconds") or 1.0) / gpu["speed"]
+    rating = _worse(_rate(seconds, (1.0, 2.5, 5.0), higher_is_better=False),
+                    str(entry.get("quality") or "bom"))
+    return {"need_gb": float(entry.get("vram_gb") or 0),
+            "speed": f"cerca de {seconds:.1f} s para ouvir 10 s de fala".replace(".", ","),
+            "rating": rating, "note": str(entry.get("note") or "")}
+
+
 def for_gpu(accelerator: str, vram_gb: float | None, config: dict, catalog: dict,
-            context: int) -> dict:
+            context: int, voice: dict | None = None) -> dict:
     """O que cada modelo escolhido pede desta placa e como deve se sair nela.
 
-    Só entram os serviços que a configuração põe no Colab. Narrador e
-    ComfyUI dividem a mesma placa; imagem e vídeo não rodam juntos.
+    Só entram os serviços que a configuração põe no Colab. Narrador, ComfyUI
+    e voz dividem a mesma placa; imagem e vídeo não rodam juntos. `voice`
+    traz as entradas de TTS e STT quando a voz vai para o Colab.
     """
     known = GPUS.get(accelerator)
     measured = vram_gb is not None
@@ -112,6 +141,12 @@ def for_gpu(accelerator: str, vram_gb: float | None, config: dict, catalog: dict
             items.append({"kind": kind, **item})
             diffusion = max(diffusion, item.get("need_gb") or 0)
     total += diffusion
+    if voice:
+        for kind, work in (("tts", voice_tts), ("stt", voice_stt)):
+            item = (work(voice[kind], gpu) if known
+                    else {"rating": None, "note": "sem estimativa"})
+            items.append({"kind": kind, **item})
+            total += item.get("need_gb") or 0
     fits = total <= gpu["vram_gb"] if items else None
     rated = [item["rating"] for item in items if item.get("rating")]
     worst = max(rated, key=RATINGS.index) if rated else None

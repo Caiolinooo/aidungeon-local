@@ -402,6 +402,11 @@ export const api = {
   installModel: (kind, id) => request('/models/install', { method: 'POST', body: { kind, id } }),
   getModelInstall: () => request('/models/install'),
   useNarrator: (id = null) => request('/models/narrator', { method: 'POST', body: { id } }),
+  // Voz: onde roda e com quais modelos (admin).
+  getVoiceRuntime: () => request('/voice-runtime'),
+  putVoiceRuntime: (payload) => request('/voice-runtime', { method: 'PUT', body: payload }),
+  installVoiceRuntime: (activate = false) =>
+    request('/voice-runtime/install', { method: 'POST', body: { activate } }),
   // Colab ligado pela API do Google (admin).
   getColab: () => request('/colab'),
   getColabStatus: () => request('/colab/status'),

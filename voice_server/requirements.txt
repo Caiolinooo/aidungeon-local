@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+faster-whisper
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9,<10

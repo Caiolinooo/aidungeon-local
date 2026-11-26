@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from app import auth, db, gpu_estimate, model_library, notify, settings_store
+from app import auth, db, gpu_estimate, model_library, notify, settings_store, voice_runtime
 from app.errors import GameError
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -204,16 +204,18 @@ def estimates(conn: sqlite3.Connection, specs: list[dict]) -> dict:
 
 
 def draft_estimates(conn: sqlite3.Connection, accelerators: list[str], config: dict,
-                    context: int) -> dict:
+                    context: int, voice: dict | None = None) -> dict:
     """A mesma conta para uma configuração ainda não salva: a tela chama a cada
     mudança de modelo, de onde roda ou de contexto. Não fala com o Google."""
     catalog = settings_store.runtime_catalog(conn)
     learned = settings_store._get_override(conn, "colab.gpu_vram")
     learned = learned if isinstance(learned, dict) else {}
+    voice_models = voice_runtime.estimate_entries(conn, voice)
     out = {}
     for name in accelerators:
         if name and name not in out:
-            out[name] = gpu_estimate.for_gpu(name, learned.get(name), config, catalog, context)
+            out[name] = gpu_estimate.for_gpu(name, learned.get(name), config, catalog, context,
+                                             voice_models)
     return out
 
 
@@ -244,8 +246,10 @@ def runtime_notebook(conn: sqlite3.Connection, project_url: str) -> dict:
         # Sem URL salva, o Colab chama de volta o endereço de onde o admin está.
         config = {**config, "project_url": project_url}
     catalog = settings_store.strip_secrets(settings_store.runtime_catalog(conn))
+    voice = voice_runtime.colab_plan(conn)
     try:
-        normalized = prov.validate_runtime(config, catalog, require_colab=True)
+        # Só a voz no Colab também vale: narrador e imagem podem ficar aqui.
+        normalized = prov.validate_runtime(config, catalog, require_colab=voice is None)
     except ValueError as exc:
         raise GameError.bad_request("validation_error", str(exc)) from exc
     if not isinstance(normalized, dict):
@@ -259,7 +263,7 @@ def runtime_notebook(conn: sqlite3.Connection, project_url: str) -> dict:
         public, catalog,
         register_token=auth.make_runtime_token(auth.auth_config()["secret"]),
         download_keys=model_library.download_keys(conn),
-        llm_context=server_context(conn))
+        llm_context=server_context(conn), voice=voice)
 
 
 # -------------------------------------------------------------- execução

@@ -34,7 +34,7 @@ BACKUPS="${DEPLOY_BACKUPS:-/home/caio/aidungeon-backups}"
 ENV_FILE="${DEPLOY_ENV_FILE:-/home/caio/aidungeon/.env}"
 VENV="${DEPLOY_VENV:-/home/caio/aidungeon/backend/venv}"
 PY="${DEPLOY_PY:-python3}"
-CODE=(backend/app backend/memory backend/migrations backend/schema.sql
+CODE=(backend/app backend/memory backend/migrations backend/schema.sql voice_server
       backend/requirements.txt backend/exporter.py backend/importer.py config)
 
 TARGET="" REF="" ROLLBACK="" FRONTEND=0 WITH_DB=0

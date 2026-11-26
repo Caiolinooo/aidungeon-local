@@ -75,6 +75,10 @@ OVERRIDE_KEYS = (
     "downloads.civitai_api_key", "downloads.huggingface_token",
     # conta Google que liga o Colab pela API
     "colab.client_id", "colab.client_secret", "colab.refresh_token", "colab.oauth_state", "colab.session", "colab.gpu_vram", "notify.ntfy_topic",
+    # voz do jogo: onde roda, modelos e o servidor que o Colab registrou
+    "voice_runtime.placement", "voice_runtime.fallback", "voice_runtime.tts",
+    "voice_runtime.stt", "voice_runtime.key", "voice_runtime.colab_url",
+    "voice_runtime.colab_models",
 )
 
 _RUNTIME_MODES = ("local", "hybrid", "colab")
@@ -676,6 +680,13 @@ def _apply_video_choice(conn: sqlite3.Connection, update: dict) -> bool:
 
 # --------------------------------------------------------- config de voz (v4)
 def effective_voice_settings(conn: sqlite3.Connection) -> dict:
+    """Voz com o endereço de quem atende agora: o servidor configurado, o do
+    jogo nesta máquina ou o do Colab (`voice_runtime`)."""
+    from app import voice_runtime
+    return voice_runtime.route(conn, configured_voice_settings(conn))
+
+
+def configured_voice_settings(conn: sqlite3.Connection) -> dict:
     """Config efetiva de voz TTS/STT (arquivo + overrides + env/.env).
 
     As chaves públicas seguem o schema VoiceSettings do openapi.yaml; as
@@ -1342,9 +1353,12 @@ def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
     if not isinstance(hardware, dict):
         hardware = {}
     saved_models = {kind: selected[kind] for kind in _RUNTIME_MODEL_KINDS}
+    from app import voice_runtime
+    new_voice = voice_runtime.register(conn, incoming.get("voice"), report.get("voice_models"))
     if ({"llm": colab_llm, "comfyui": colab_comfy}
             == _get_override(conn, "runtime.registration.endpoints")
-            and saved_models == _get_override(conn, "runtime.registration.models")):
+            and saved_models == _get_override(conn, "runtime.registration.models")
+            and not new_voice):
         # Batimento: mesmo túnel, mesmos modelos. Só a hora muda.
         _set_override(conn, "runtime.registration.last_seen", db.utcnow())
         return effective_runtime_settings(conn)
@@ -1370,6 +1384,8 @@ def apply_runtime_registration(conn: sqlite3.Connection, report: dict) -> dict:
     serving = [name for name, url, key in (("narrador", colab_llm, "llm"),
                                            ("imagem e vídeo", colab_comfy, "comfyui"))
                if url and placements[key] == "colab"]
+    if new_voice and voice_runtime.selection(conn)["placement"] == "colab":
+        serving.append("voz")
     if serving:
         gpu = str(hardware.get("gpu_name") or "GPU")
         notify.send(f"Colab pronto ({gpu}). O jogo já usa essa placa para "
@@ -1407,7 +1423,9 @@ def secret_values(conn: sqlite3.Connection) -> set[str]:
     found: set[str] = set()
     llm_key = effective_llm_settings(conn).get("api_key")
     image_key = effective_image_settings(conn).get("openai_api_key")
-    voice_key = effective_voice_settings(conn).get("api_key")
+    # A chave do servidor de voz do próprio jogo vai escrita no notebook e
+    # não entra aqui: só a do servidor configurado.
+    voice_key = configured_voice_settings(conn).get("api_key")
     for value in (llm_key, image_key, voice_key):
         if isinstance(value, str) and len(value) >= 8:
             found.add(value)

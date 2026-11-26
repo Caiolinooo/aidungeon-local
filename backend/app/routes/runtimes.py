@@ -10,13 +10,13 @@ já selecionados.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app import access, auth, colab_api, db, llm_client, notify, settings_store
+from app import access, auth, colab_api, db, llm_client, notify, settings_store, voice_runtime
 from app.deps import get_http_transport
 from app.errors import GameError
 from app.schemas import RuntimeRegistration, RuntimeSettingsUpdate
@@ -188,6 +188,8 @@ class EstimateDraft(BaseModel):
     placements: dict[str, str] = Field(default_factory=dict)
     models: dict[str, str] = Field(default_factory=dict)
     context: int = Field(default=65536, ge=4096, le=262144)
+    # Voz da tela: placement, tts e stt.
+    voice: dict[str, str] = Field(default_factory=dict)
 
 
 @router.post("/colab/estimate")
@@ -200,7 +202,47 @@ def post_colab_estimate(body: EstimateDraft,
         # No Colab o servidor sobe com o dobro do contexto do jogo, como em `server_context`.
         context = max(32768, min(262144, 2 * body.context))
         return {"estimates": colab_api.draft_estimates(
-            conn, [name[:40] for name in body.accelerators], config, context)}
+            conn, [name[:40] for name in body.accelerators], config, context, body.voice)}
+
+
+# ------------------------------------------------------------------- voz
+class VoiceRuntimeUpdate(BaseModel):
+    """Onde a voz roda e com quais modelos. `bundle` escolhe TTS e STT de uma vez."""
+    placement: Literal["server", "local", "colab"] | None = None
+    tts: str | None = Field(default=None, max_length=80)
+    stt: str | None = Field(default=None, max_length=80)
+    bundle: str | None = Field(default=None, max_length=80)
+
+
+class VoiceInstall(BaseModel):
+    # Passa a voz para esta máquina quando a instalação terminar.
+    activate: bool = False
+
+
+@router.get("/voice-runtime")
+def get_voice_runtime(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        return voice_runtime.view(conn)
+
+
+@router.put("/voice-runtime")
+def put_voice_runtime(body: VoiceRuntimeUpdate,
+                      info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        return voice_runtime.save(conn, body.model_dump(exclude_unset=True))
+
+
+@router.post("/voice-runtime/install")
+def post_voice_install(body: VoiceInstall,
+                       info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    with db.session() as conn:
+        voice_runtime.start_install(conn, body.activate)
+        return voice_runtime.view(conn)
+
+
+@router.get("/voice-runtime/install")
+def get_voice_install(info: auth.AuthInfo = Depends(access.require_admin)) -> dict:
+    return voice_runtime.install_status()
 
 
 class NotifyTopic(BaseModel):

@@ -589,7 +589,8 @@ def _selected_artifacts(norm: dict, catalog: dict) -> list[dict]:
     return list(items.values())
 
 
-def _variables(norm: dict, catalog: dict, requirements: dict) -> dict:
+def _variables(norm: dict, catalog: dict, requirements: dict,
+               voice: dict | None = None) -> dict:
     variables: dict = {
         "mode": norm["mode"],
         "placements": dict(norm["placements"]),
@@ -601,8 +602,17 @@ def _variables(norm: dict, catalog: dict, requirements: dict) -> dict:
         "vram_unspecified": list(requirements["vram_unspecified"]),
         "min_vram_mib_override": None,
     }
-    if norm["mode"] != "local":
+    if norm["mode"] != "local" or voice:
         variables["register_path"] = REGISTER_PATH
+    if voice:
+        # Sem a chave: ela vai na célula de segredos.
+        variables["voice"] = {
+            "port": int(voice["port"]), "tts": voice["tts"], "stt": voice["stt"],
+            "stt_model": voice["stt_model"],
+            "git_url": voice["git_url"], "git_ref": voice["git_ref"],
+            "model_file": voice["artifacts"][0]["filename"],
+            "codec_file": voice["artifacts"][1]["filename"],
+        }
     if norm["placements"]["llm"] == "colab":
         entry = catalog["models"]["llm"][norm["models"]["llm"]]
         runtime = entry["runtime"]
@@ -645,7 +655,7 @@ def _variables(norm: dict, catalog: dict, requirements: dict) -> dict:
     return variables
 
 
-def _overview(norm: dict, artifacts: list[dict]) -> str:
+def _overview(norm: dict, artifacts: list[dict], voice: dict | None = None) -> str:
     selected = []
     if norm["placements"]["llm"] == "colab":
         selected.append(f"llama-server ({norm['models']['llm']})")
@@ -653,6 +663,8 @@ def _overview(norm: dict, artifacts: list[dict]) -> str:
         selected.append(
             f"ComfyUI ({norm['models']['image']} + {norm['models']['video']})"
         )
+    if voice:
+        selected.append(f"voz ({voice['tts']} + {voice['stt']})")
     if not selected:
         return (
             "# AI Dungeon — runtime local\n\n"
@@ -701,7 +713,7 @@ def _variables_cell(variables: dict) -> str:
 
 
 def _secrets_cell(artifacts: list[dict], register_token: str,
-                  download_keys: dict | None = None) -> str:
+                  download_keys: dict | None = None, voice: dict | None = None) -> str:
     keys = download_keys or {}
     lines = [
         "# Só registra este runtime no jogo. Não abre sessão nem lê aventura.",
@@ -709,6 +721,11 @@ def _secrets_cell(artifacts: list[dict], register_token: str,
         "# Opcional: só repositório fechado do Hugging Face precisa dele.",
         f"HF_TOKEN = {str(keys.get('HF_TOKEN') or '')!r}",
     ]
+    if voice:
+        lines.extend([
+            "# O servidor de voz só atende quem manda esta chave: o jogo.",
+            f"VOICE_KEY = {str(voice['key'])!r}",
+        ])
     secrets = []
     for art in artifacts:
         name = art.get("auth_secret")
@@ -776,7 +793,7 @@ def _hardware_cell() -> str:
     )
 
 
-def _tunnel_cell(norm: dict) -> str:
+def _tunnel_cell(norm: dict, voice: dict | None = None) -> str:
     lines = [
         "import re",
         "import subprocess",
@@ -825,6 +842,8 @@ def _tunnel_cell(norm: dict) -> str:
         lines.append("PUBLIC_LLM = open_tunnel(VARIABLES[\"llm_port\"])")
     if norm["placements"]["comfyui"] == "colab":
         lines.append("PUBLIC_COMFY = open_tunnel(VARIABLES[\"comfy_port\"])")
+    if voice:
+        lines.append("PUBLIC_VOICE = open_tunnel(VARIABLES[\"voice\"][\"port\"])")
     lines.append("print(\"túnel aberto\")")
     return "\n".join(lines) + "\n"
 
@@ -853,7 +872,7 @@ def _llama_command(entry: dict, artifacts: list[dict],
 
 
 def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
-                    llm_context: int = DEFAULT_LLM_CONTEXT) -> str:
+                    llm_context: int = DEFAULT_LLM_CONTEXT, voice: dict | None = None) -> str:
     lines = [
         "import json",
         "import os",
@@ -912,6 +931,8 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
         lines.extend(_llama_install_lines(catalog["models"]["llm"][norm["models"]["llm"]]))
     if norm["placements"]["comfyui"] == "colab":
         lines.extend(_comfy_install_lines())
+    if voice:
+        lines.extend(_voice_install_lines(voice))
     lines.extend([
         "for spec in ARTIFACTS:",
         "    url, sha = resolve_artifact(spec, VARIABLES)",
@@ -944,7 +965,70 @@ def _provision_cell(norm: dict, catalog: dict, artifacts: list[dict],
         lines.extend(_start_llama_lines(entry, command))
     if norm["placements"]["comfyui"] == "colab":
         lines.extend(_start_comfy_lines())
+    if voice:
+        lines.extend(_start_voice_lines())
     return "\n".join(lines) + "\n"
+
+
+def _voice_install_lines(voice: dict) -> list[str]:
+    """O servidor de voz do jogo: o arquivo dele e as vozes fixas vão dentro
+    do notebook; o OmniVoice é compilado aqui, como o llama-server."""
+    files = {"server.py": voice["server_b64"],
+             **{f"voices/{name}": data for name, data in voice["voices_b64"].items()}}
+    return [
+        "import base64",
+        "print(\"instalando a voz\", flush=True)",
+        "VOICE_FILES = json.loads(r\"\"\"",
+        json.dumps(files),
+        "\"\"\")",
+        "voice_dir = ROOT / \"voice\"",
+        "for name, data in VOICE_FILES.items():",
+        "    path = voice_dir / name",
+        "    path.parent.mkdir(parents=True, exist_ok=True)",
+        "    path.write_bytes(base64.b64decode(data))",
+        "run([\"apt-get\", \"update\"])",
+        "run([\"apt-get\", \"install\", \"-y\", \"build-essential\", \"cmake\", \"git\", \"ffmpeg\"])",
+        "omni_src = ROOT / \"omnivoice.cpp\"",
+        "if not (omni_src / \".git\").is_dir():",
+        "    run([\"git\", \"clone\", VARIABLES[\"voice\"][\"git_url\"], str(omni_src)])",
+        "run([\"git\", \"checkout\", VARIABLES[\"voice\"][\"git_ref\"]], cwd=omni_src)",
+        "run([\"git\", \"submodule\", \"update\", \"--init\", \"--recursive\"], cwd=omni_src)",
+        "run([",
+        "    \"cmake\", \"-S\", str(omni_src), \"-B\", str(omni_src / \"build\"),",
+        "    \"-DGGML_CUDA=ON\", \"-DCMAKE_BUILD_TYPE=Release\",",
+        "])",
+        "run([",
+        "    \"cmake\", \"--build\", str(omni_src / \"build\"),",
+        "    \"--target\", \"omnivoice-tts\", \"omnivoice-codec\", \"-j\", str(os.cpu_count() or 2),",
+        "])",
+        "run([",
+        "    sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"fastapi\", \"uvicorn\",",
+        "    \"python-multipart\", \"faster-whisper\", \"nvidia-cublas-cu12\", \"nvidia-cudnn-cu12>=9,<10\",",
+        "])",
+    ]
+
+
+def _start_voice_lines() -> list[str]:
+    return [
+        "voice_models = ROOT / \"models\" / \"voice\"",
+        "voice_env = os.environ.copy()",
+        "voice_env.update({",
+        "    \"VOICE_API_KEY\": VOICE_KEY,",
+        "    \"VOICE_STT_MODEL\": VARIABLES[\"voice\"][\"stt_model\"],",
+        "    \"VOICE_HOST\": \"127.0.0.1\",",
+        "    \"VOICE_PORT\": str(VARIABLES[\"voice\"][\"port\"]),",
+        "    \"OMNI_BIN\": str(omni_src / \"build\" / \"omnivoice-tts\"),",
+        "    \"OMNI_CODEC_BIN\": str(omni_src / \"build\" / \"omnivoice-codec\"),",
+        "    \"OMNI_MODEL\": str(voice_models / VARIABLES[\"voice\"][\"model_file\"]),",
+        "    \"OMNI_CODEC\": str(voice_models / VARIABLES[\"voice\"][\"codec_file\"]),",
+        "    \"VOICE_DIR\": str(voice_dir / \"voices\"),",
+        "})",
+        "log_dir = ROOT / \"logs\"",
+        "log_dir.mkdir(parents=True, exist_ok=True)",
+        "voice_log = (log_dir / \"voice.log\").open(\"ab\")",
+        "subprocess.Popen([sys.executable, str(voice_dir / \"server.py\")], env=voice_env, stdout=voice_log, stderr=voice_log, start_new_session=True)",
+        "print(\"servidor de voz iniciado na porta\", VARIABLES[\"voice\"][\"port\"])",
+    ]
 
 
 def _llama_install_lines(entry: dict) -> list[str]:
@@ -1035,7 +1119,7 @@ def _start_comfy_lines() -> list[str]:
     ]
 
 
-def _health_cell(norm: dict) -> str:
+def _health_cell(norm: dict, voice: dict | None = None) -> str:
     lines = [
         "import time",
         "import urllib.request",
@@ -1061,15 +1145,31 @@ def _health_cell(norm: dict) -> str:
         lines.append(
             "HEALTH_URLS.append(\"http://127.0.0.1:\" + str(VARIABLES[\"comfy_port\"]) + VARIABLES[\"comfy_health_path\"])"
         )
+    if voice:
+        lines.append(
+            "HEALTH_URLS.append(\"http://127.0.0.1:\" + str(VARIABLES[\"voice\"][\"port\"]) + \"/health\")"
+        )
     lines.extend([
         "for url in HEALTH_URLS:",
         "    wait_http(url)",
         "print(\"health ok\")",
     ])
+    if voice:
+        # Diz se o Whisper entrou na placa ou caiu para a CPU.
+        lines.extend([
+            "import json",
+            "for _ in range(150):",
+            "    with urllib.request.urlopen(HEALTH_URLS[-1], timeout=5) as resp:",
+            "        voice_health = json.loads(resp.read())",
+            "    if voice_health.get(\"stt_device\"):",
+            "        break",
+            "    time.sleep(2)",
+            "print(\"voz\", voice_health)",
+        ])
     return "\n".join(lines) + "\n"
 
 
-def _register_cell(norm: dict) -> str:
+def _register_cell(norm: dict, voice: dict | None = None) -> str:
     llm_local = norm["placements"]["llm"] != "colab"
     comfy_local = norm["placements"]["comfyui"] != "colab"
     llm_expr = (
@@ -1094,6 +1194,12 @@ def _register_cell(norm: dict) -> str:
         "        \"models\": dict(VARIABLES[\"models\"]),\n"
         "        \"hardware\": detect_hardware(),\n"
         "    }\n"
+        + (
+            "    payload[\"endpoints\"][\"voice\"] = PUBLIC_VOICE + \"/v1\"\n"
+            "    payload[\"voice_models\"] = {\"tts\": VARIABLES[\"voice\"][\"tts\"], "
+            "\"stt\": VARIABLES[\"voice\"][\"stt\"]}\n"
+            if voice else ""
+        ) +
         "    target = VARIABLES[\"project_url\"].rstrip(\"/\")\n"
         "    suffix = VARIABLES[\"register_path\"]\n"
         "    if not target.endswith(suffix):\n"
@@ -1182,8 +1288,12 @@ def _local_notice_cell() -> str:
 def generate_notebook(config: dict, catalog: dict | None = None, *,
                       register_token: str = "",
                       download_keys: dict | None = None,
-                      llm_context: int = DEFAULT_LLM_CONTEXT) -> dict:
+                      llm_context: int = DEFAULT_LLM_CONTEXT,
+                      voice: dict | None = None) -> dict:
     """Notebook nbformat 4. Modo local não instala serviço; Colab sobe só o placement colab.
+
+    `voice` (de `voice_runtime.colab_plan`) sobe também o servidor de voz do
+    jogo, mesmo com narrador e imagem nesta máquina.
 
     `register_token` e `download_keys` vão escritos no arquivo: são o que deixa
     o Colab baixar os pesos e se registrar no jogo sem ninguém colar segredo.
@@ -1191,9 +1301,13 @@ def generate_notebook(config: dict, catalog: dict | None = None, *,
     book = catalog if catalog is not None else load_catalog()
     norm = validate_runtime(config, book, require_colab=False)
     requirements = hardware_requirements(norm, book)
-    variables = _variables(norm, book, requirements)
+    variables = _variables(norm, book, requirements, voice)
     artifacts = _selected_artifacts(norm, book)
-    if norm["mode"] == "local":
+    if voice:
+        artifacts = artifacts + [
+            {**art, "dest": f"{COLAB_ROOT}/models/voice/{art['filename']}"}
+            for art in voice["artifacts"]]
+    if norm["mode"] == "local" and not voice:
         cells = [
             _markdown_cell("overview", _overview(norm, artifacts)),
             _code_cell("variables", _variables_cell(variables)),
@@ -1201,15 +1315,15 @@ def generate_notebook(config: dict, catalog: dict | None = None, *,
         ]
     else:
         cells = [
-            _markdown_cell("overview", _overview(norm, artifacts)),
+            _markdown_cell("overview", _overview(norm, artifacts, voice)),
             _code_cell("variables", _variables_cell(variables)),
-            _code_cell("secrets", _secrets_cell(artifacts, register_token, download_keys)),
+            _code_cell("secrets", _secrets_cell(artifacts, register_token, download_keys, voice)),
             _code_cell("helpers", _helper_source()),
             _code_cell("hardware", _hardware_cell()),
-            _code_cell("provision", _provision_cell(norm, book, artifacts, llm_context)),
-            _code_cell("health", _health_cell(norm)),
-            _code_cell("tunnel", _tunnel_cell(norm)),
-            _code_cell("register", _register_cell(norm)),
+            _code_cell("provision", _provision_cell(norm, book, artifacts, llm_context, voice)),
+            _code_cell("health", _health_cell(norm, voice)),
+            _code_cell("tunnel", _tunnel_cell(norm, voice)),
+            _code_cell("register", _register_cell(norm, voice)),
             _code_cell("keepalive", _keepalive_cell()),
         ]
     return {

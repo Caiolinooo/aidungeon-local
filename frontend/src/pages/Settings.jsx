@@ -1390,6 +1390,12 @@ export default function Settings() {
                       <span>Ativar o motor de voz</span>
                     </label>
 
+                    {voiceForm.serving && voiceForm.serving !== 'server' && (
+                      <p role="status" className="rounded-xl border border-subtle bg-surface px-3 py-2 text-xs text-secondary">
+                        Hoje a voz é atendida pelo servidor de voz do jogo ({voiceForm.serving === 'colab' ? 'no Colab' : 'nesta máquina'}), escolhido em Runtime e modelos. O endereço e os modelos abaixo são os do servidor configurado e voltam a valer quando você escolher ele lá.
+                      </p>
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <SettingField label="URL base do serviço de voz" labelClassName={labelCls}>
                         <input
