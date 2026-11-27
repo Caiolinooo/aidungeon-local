@@ -594,6 +594,30 @@ def test_identity_bits_use_the_vampire_face_not_the_dress():
     assert "cabelos" not in bits
 
 
+def test_a_card_with_a_reference_photo_keeps_the_photo_look(tmp_db):
+    """Card com foto enviada e ainda sem retrato: a prosa não grava roupa nem
+    aparência por cima da foto."""
+    adv = make_adventure(plot_essentials="[Name: Caio]")
+    with db.session() as conn:
+        db.insert_card(
+            conn, adv["id"], type="character", title="Luiza", triggers=["Luiza"],
+            entry="A dancer.",
+            sheet=json.dumps({"reference": {"image_path": "data/references/luiza.png",
+                                            "source": "upload"}}),
+        )
+        npc_chronicle.apply_chronicle(conn, adv["id"], {
+            "characters": [{
+                "name": "Luiza", "existing_title": "Luiza",
+                "appearance": "short dark hair", "clothing": "a suit, probably black",
+                "facts": ["Luiza waits by the door."],
+            }],
+        }, adv["plot_essentials"])
+        card = next(c for c in db.list_cards(conn, adv["id"]) if c["title"] == "Luiza")
+        sheet = npc_assets.parse_sheet(card["sheet"])
+    assert not sheet.get("current_outfit") and not sheet.get("clothing")
+    assert sheet.get("appearance") != "short dark hair"
+
+
 def test_current_outfit_text_skips_portuguese_sheet_for_english_portrait():
     card = {
         "sheet": json.dumps({"clothing": "um terno escuro"}),
