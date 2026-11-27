@@ -548,6 +548,22 @@ def test_staged_explicit_action_gives_the_nude_woman_a_full_body_stance():
     )
 
 
+def test_staged_explicit_action_needs_an_action_of_the_nude_person_alone():
+    """Frase neutra com os dois como sujeito não é encenada: saía "his arms
+    raised as he A Donzela da Noite are together in the room"."""
+    from app.routes.images import _staged_explicit_action
+
+    predicates = {"Caio": "completely naked, natural skin",
+                  "A Donzela da Noite": "fully clothed in her black lace dress"}
+    pronouns = {"Caio": "his", "A Donzela da Noite": "her"}
+    assert _staged_explicit_action(
+        "Caio and A Donzela da Noite are together in the neon-lit room",
+        ["Caio"], ["A Donzela da Noite"], predicates, pronouns) == ""
+    assert _staged_explicit_action(
+        "Caio and the Donzela da Noite are together in the neon-lit room",
+        ["Caio"], ["A Donzela da Noite"], predicates, pronouns) == ""
+
+
 def test_action_core_drops_the_nude_predicate_and_keeps_only_the_verb():
     from app.routes.images import _action_core
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from app import db, image_client, jobs, likeness, look_lock, outfit_lock
+from app import db, image_client, jobs, likeness, look_lock, outfit_lock, settings_store
 from conftest import add_action, make_adventure
 from test_likeness import _capture_generate
 from test_scene import _face, pipeline_transport
@@ -264,8 +264,9 @@ def test_face_crop_is_large_and_centred_on_the_face(monkeypatch):
 def test_turnaround_references_drop_the_anchor_when_there_is_a_photo():
     refs = jobs._turnaround_references
     faces, primary, master, anchor = [b"f1", b"f2"], [b"p"], b"m", b"a"
+    # a foto principal inteira acompanha os rostos: é dela que vem a roupa
     assert refs("master", faces=faces, primary=primary, photos=[], anchor=anchor, master=b"") \
-        == [b"f1", b"f2"]
+        == [b"f1", b"f2", b"p"]
     assert refs("master", faces=[], primary=primary, photos=[], anchor=anchor, master=b"") == [b"p"]
     assert refs("face", faces=faces, primary=primary, photos=[], anchor=anchor, master=master) \
         == [b"f1", b"f2", b"m"]
@@ -527,3 +528,74 @@ def test_backdrop_worker_reads_the_looks_its_cast_is_missing(tmp_db, monkeypatch
         raise RuntimeError("vision offline")
     monkeypatch.setattr(look_lock, "ensure_many", broken)
     jobs._read_missing_looks(job, None, {})     # leitura quebrada não derruba o fundo
+
+
+def test_a_narrator_that_cannot_see_hands_the_photo_to_this_machine(tmp_db, tmp_path, monkeypatch):
+    """O llama-server do Colab sem mmproj responde 500 ao pedido com imagem.
+    A leitura ia embora e o turnaround inventava a roupa; agora quem lê é o
+    narrador desta máquina."""
+    adv = make_adventure()
+    card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10))
+    calls: list = []
+    hosts: list[str] = []
+    seeing = _vision_transport(json.dumps(LOOK), calls)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            hosts.append(request.url.host)
+            if request.url.host == "colab.test":
+                return httpx.Response(500, json={"error": {"code": 500, "message": (
+                    "image input is not supported - hint: if this is unexpected, "
+                    "you may need to provide the mmproj")}})
+        return seeing.handle_request(request)
+
+    with db.session() as conn:
+        settings_store._set_override(conn, "runtime.endpoints.local_llm", "http://local.test/v1")
+    with db.session() as conn:
+        llm_cfg = {**settings_store.effective_llm_settings(conn),
+                   "base_url": "http://colab.test/v1"}
+        look = look_lock.ensure(conn, card, transport=httpx.MockTransport(handler),
+                                llm_cfg=llm_cfg)
+    assert look and look["glasses"] == LOOK["glasses"]
+    assert hosts[0] == "colab.test" and set(hosts[1:]) == {"local.test"}
+    assert len(calls) == 2                            # traços e roupa, os dois na máquina local
+
+
+def test_portrait_of_a_photo_card_is_painted_from_the_photo(tmp_db, tmp_path, monkeypatch):
+    """Card com foto enviada (não é pessoa real): o retrato sai da foto, com as
+    mesmas referências do mestre do 360°, e não do texto da ficha."""
+    use_tmp_storage(tmp_path)
+    adv = make_adventure()
+    card = _photo_card(adv["id"], tmp_path, monkeypatch, (10, 10, 10), (200, 150, 120))
+    sheet = json.loads(card["sheet"])
+    sheet["look_lock"] = {**LOOK, "face_images": [2], "version": look_lock.LOOK_VERSION,
+                          "basis_hash": "x", "source": "photo"}
+    with db.session() as conn:
+        db.set_setting(conn, "image.provider", json.dumps("comfyui"))
+        db.update_card(conn, adv["id"], card["id"], {
+            "sheet": json.dumps(sheet), "portrait_prompt": "a pirate queen with green hair, bust"})
+        card = db.get_card(conn, adv["id"], card["id"])
+        jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
+    seen = _capture_generate(monkeypatch, tmp_path)
+    jobs.process_pending(pipeline_transport())
+    call = seen[-1]
+    assert "exact same adult person shown in the supplied reference photo" in call["prompt"]
+    assert "exactly as worn in the reference photo" in call["prompt"]
+    assert "pirate queen" not in call["prompt"]
+    # rosto escolhido pela leitura (foto 2) e a foto principal inteira (foto 1)
+    expected = jobs._photo_references(card)
+    assert len(expected) == 2 and call["reference_images"] == expected
+    master = jobs._turnaround_references(
+        "master", faces=expected[:1], primary=expected[1:], photos=[], anchor=b"a", master=b"")
+    assert master == expected                          # retrato e 360° partem da mesma foto
+
+    # a história trocou a roupa: só o rosto entra e o texto veste
+    sheet["current_outfit"] = "a red raincoat"
+    with db.session() as conn:
+        db.update_card(conn, adv["id"], card["id"], {"sheet": json.dumps(sheet)})
+        jobs.enqueue_portrait(conn, adv["id"], card["id"], replace=True)
+    jobs.process_pending(pipeline_transport())
+    call = seen[-1]
+    assert call["reference_images"] == expected[:1]
+    assert "a red raincoat" in call["prompt"]
+    assert "as worn in the reference photo" not in call["prompt"]

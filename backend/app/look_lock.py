@@ -292,27 +292,58 @@ def description(card: dict | None) -> str:
 # As leituras usam a role `assets` (slot 2, com crônica e resumo). Na role
 # `assistant` elas ocupavam o slot 3 por dezenas de segundos e o juiz do turno
 # (turn_gate, 12 s de prazo) estourava: "adjudicador indisponível".
+def _cannot_see(exc: Exception) -> bool:
+    """O servidor disse que este modelo não recebe imagem.
+
+    O narrador de nuvem responde 404; o llama-server sem mmproj (o do Colab)
+    responde 500 "image input is not supported".
+    """
+    text = str(exc).lower()
+    return "404" in text or "image input is not supported" in text or "mmproj" in text
+
+
+def _seeing_cfgs(llm_cfg: dict) -> list[dict]:
+    """Quem lê a foto quando o narrador ativo não vê: o narrador desta máquina
+    (se o ativo é outro, como o do Colab) e depois o perfil com visão."""
+    with db.session() as conn:
+        local = str(settings_store.effective_runtime_settings(conn)["endpoints"]
+                    .get("local_llm") or "").strip()
+        profile = provider_profiles.vision_llm_cfg(
+            conn, current_model=str(llm_cfg.get("model_alias") or ""))
+    found = []
+    if local and local.rstrip("/") != str(llm_cfg.get("base_url") or "").rstrip("/"):
+        found.append({**llm_cfg, "base_url": local, "model_alias": "auto"})
+    if profile:
+        found.append({**llm_cfg, **profile})
+    return found
+
+
 def _look_reply(llm_cfg: dict, messages: list[dict], *, transport=None) -> tuple[str, dict]:
-    """Lê a foto. Se o narrador não aceita imagem, tenta o perfil que vê."""
+    """Lê a foto. Se o narrador não aceita imagem, tenta quem vê.
+
+    Sem isto, o narrador do Colab (sem mmproj) deixava o card sem leitura e a
+    roupa do turnaround era inventada pelo texto.
+    """
     try:
         return llm_client.chat_completion(
             llm_cfg, messages, role="assets", temperature=0, max_tokens=4000,
             timeout_s=240, transport=transport,
         ), llm_cfg
     except llm_client.LlmError as exc:
-        if "404" not in str(exc):
+        if not _cannot_see(exc):
             raise
-        with db.session() as conn:
-            fallback = provider_profiles.vision_llm_cfg(
-                conn, current_model=str(llm_cfg.get("model_alias") or ""))
-        if not fallback:
-            raise
-        merged = {**llm_cfg, **fallback}
-        log.warning("look: narrador sem visão; lendo com %s", fallback["model_alias"])
-        return llm_client.chat_completion(
-            merged, messages, role="assets", temperature=0,
-            max_tokens=4000, timeout_s=240, transport=transport,
-        ), merged
+        failure = exc
+    for cfg in _seeing_cfgs(llm_cfg):
+        log.warning("look: narrador sem visão; lendo com %s (%s)",
+                    cfg["model_alias"], cfg["base_url"])
+        try:
+            return llm_client.chat_completion(
+                cfg, messages, role="assets", temperature=0,
+                max_tokens=4000, timeout_s=240, transport=transport,
+            ), cfg
+        except llm_client.LlmError as exc:
+            failure = exc
+    raise failure
 
 
 def _read(images: list[bytes], *, transport=None, llm_cfg: dict, about: str = "") -> dict | None:
