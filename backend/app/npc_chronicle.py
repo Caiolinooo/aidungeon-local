@@ -214,12 +214,6 @@ def _look_locked(card: dict, sheet: dict) -> bool:
         return True
     if " ".join(str(card.get("portrait_prompt") or "").split()):
         return True
-    # Foto enviada é o visual do personagem desde o primeiro turno. Sem isto,
-    # a prosa gravava uma roupa ("um terno, provavelmente preto") antes de o
-    # retrato existir, e o retrato saía com ela no lugar da roupa da foto.
-    reference = sheet.get("reference")
-    if isinstance(reference, dict) and (reference.get("image_path") or reference.get("images")):
-        return True
     return bool(card.get("portrait_image_id"))
 
 

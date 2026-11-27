@@ -398,14 +398,6 @@ def test_uploaded_photo_leads_the_master_and_every_view(client, tmp_path, monkey
     for call in view_calls[:3]:
         assert call["reference_images"] == [photo_png, master_call["content"]]
     assert view_calls[3]["reference_images"] == [photo_png, master_call["content"]]
-    # A visão não leu a foto (o narrador do teste não vê): nenhuma roupa é
-    # inventada nem gravada; a roupa é a da foto, em todo prompt.
-    assert "wears in the reference photo" in master_call["prompt"]
-    for call in (master_call, *view_calls):
-        assert "Default outfit" not in call["prompt"]
-    with db.session() as conn:
-        saved = json.loads(db.get_card(conn, adv["id"], card["id"])["sheet"])
-    assert "outfit_lock" not in saved
 
 
 def test_cancel_cleans_every_unpublished_file_and_interrupts_comfy(

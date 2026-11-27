@@ -9,7 +9,6 @@ import httpx
 import pytest
 
 from app import db, image_client, jobs, likeness
-from app import turnaround
 from conftest import add_action, image_english_echo, make_adventure
 from test_v2 import PNG_BYTES, override_transport
 from test_scene import _face, pipeline_transport
@@ -198,8 +197,7 @@ def test_new_image_from_photo_uses_identity_not_img2img(client, tmp_path, monkey
     assert jobs.process_pending(_unused_transport()) == 1
     assert len(seen) == 1
     assert seen[0]["init_image"] is None
-    # a foto vai como PNG já ampliado (miniatura chegava ao modelo em blocos)
-    assert seen[0]["reference_images"] == [turnaround.reference_photo_png(PNG_BYTES)]
+    assert seen[0]["reference_images"] == [PNG_BYTES]
 
 def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypatch):
     monkeypatch.setenv("AIDUNGEON_REFERENCES_DIR", str(tmp_path / "refs"))
@@ -228,9 +226,7 @@ def test_multiple_reference_photos_are_kept_and_sent(client, tmp_path, monkeypat
     seen = _capture_generate(monkeypatch, tmp_path)
     assert jobs.process_pending(_unused_transport()) == 1
     assert seen[0]["init_image"] is None
-    # Sem leitura que escolha outro rosto, o retrato sai da foto principal;
-    # a segunda foto (ilegível aqui) fica guardada e não vai ao pintor.
-    assert seen[0]["reference_images"] == [turnaround.reference_photo_png(PNG_BYTES)]
+    assert seen[0]["reference_images"] == [PNG_BYTES, other]
 
 
 def test_sdwebui_multiple_reference_photos_use_primary_controlnet(

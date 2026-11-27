@@ -1371,11 +1371,9 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
                 raise GameError(503, "generation_failed",
                                 "canonical portrait image is missing")
     state_key = str(payload.get("state_key") or "")
-    # Foto enviada ou pessoa real com foto: a foto manda no retrato. Antes só a
-    # pessoa real entrava aqui, e o card com foto enviada era pintado pelo
-    # texto da ficha, no estilo da aventura: outra pessoa, diferente do 360°.
     reference_identity = (
-        not likeness.is_minor(card) and likeness.has_reference_image(card)
+        likeness.is_real_person(card) and not likeness.is_minor(card)
+        and likeness.has_reference_image(card)
     )
     if reference_identity and look_lock.current(card) is None:
         refreshed = look_lock.ensure_many(
@@ -1395,7 +1393,6 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     # O estilo da aventura ("golden hour ou noite") troca a luz da foto
     # de referência. O retrato com foto fica no estúdio neutro do prompt.
     scene_style = "" if reference_identity else (adv.get("image_style") or "")
-    photo_references: list[bytes] = []
     if reference_identity:
         # A ficha de roupa ("roupa de surf") descrevia outra vida e o Flux
         # trocava a pessoa. Só a roupa que a história mudou entra; o resto é a foto.
@@ -1405,9 +1402,6 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         if (outfit and npc_assets.is_outfit(outfit)
                 and not npc_assets.is_nude_outfit(outfit)):
             look = _clip_reference_look(f"current outfit: {outfit}")
-        # Roupa da foto: a foto principal entra inteira como referência. Se a
-        # história trocou a roupa, entram só os rostos e o texto veste.
-        photo_references = _photo_references(card, with_primary=not look)
     else:
         look = npc_assets.sheet_context(card.get("sheet") or "")
     if reference_identity:
@@ -1441,8 +1435,6 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
     # turnaround, que já traduz com ele).
     if not _card_sheet(card).get("current_outfit") and not _scene_explicit(final):
         visible = outfit_lock.visible_text(outfit_lock.current(card))
-        if not visible and reference_identity and photo_references:
-            visible = _PHOTO_OUTFIT_BUST
         if visible:
             final = f"{final}. {visible}"
     portrait_ban = ""
@@ -1481,11 +1473,7 @@ def _execute_portrait(job: dict, transport: Any) -> dict:
         denoise = 1.0 if references else None
         # Sem img2img: herdar 1920×1080 da âncora só deixava cada refresh lento.
         init_width = init_height = None
-        if reference_identity and photo_references:
-            # As mesmas referências do mestre do 360°: os dois saem da mesma
-            # foto. A âncora (um retrato já pintado) fica de fora.
-            references = photo_references
-        elif reference_identity and references:
+        if reference_identity and references:
             references = likeness.portrait_face_references(references)
     elif force_reference and references:
         init_bytes = references[0]
@@ -1855,33 +1843,6 @@ def _turnaround_identity(card: dict, *, with_look: bool = True) -> str:
     return identity
 
 
-# Foto de referência que a visão não conseguiu ler: a roupa vem dos pixels.
-# O narrador escrevia uma roupa qualquer ("blusa azul, jeans") e o mestre saía
-# com ela em vez da roupa da foto.
-_PHOTO_OUTFIT = (
-    "Outfit: exactly the garments, colours, footwear and accessories this person "
-    "wears in the reference photo, nothing added and nothing changed. Same outfit "
-    "in every view."
-)
-_PHOTO_OUTFIT_BUST = "Clothing and accessories exactly as worn in the reference photo"
-
-
-def _photo_references(card: dict, *, with_primary: bool = True) -> list[bytes]:
-    """Referências de uma carta com foto enviada: recortes de rosto e a foto
-    principal inteira (roupa e corpo). Vazio sem foto ou para menor."""
-    if likeness.is_minor(card):
-        return []
-    blobs = list(look_lock.face_references(card))
-    if with_primary:
-        blobs.append(look_lock.primary_photo(card) or b"")
-    found: list[bytes] = []
-    for blob in blobs:
-        png = turnaround.reference_photo_png(blob) if blob else b""
-        if png and png not in found:
-            found.append(png)
-    return found[:4]
-
-
 _TURNAROUND_SIDES = (
     "Keep every distinctive and asymmetrical detail on the character's own "
     "LEFT or RIGHT side exactly as shown; never mirror or move it."
@@ -1928,16 +1889,13 @@ _TURNAROUND_VIEWS = {
 
 
 def _turnaround_prompts(card: dict, lock: dict | None = None, *,
-                        identity: str | None = None,
-                        photo_outfit: bool = False) -> dict[str, str]:
+                        identity: str | None = None) -> dict[str, str]:
     """Mestre, as quatro vistas e o giro, com a mesma identidade e a roupa
     travada repetida literalmente.
 
     `identity` (nome e texto do card, já traduzidos) vem do executor; sem ela
     sai do card, como no enqueue. Os traços da referência entram por pintura:
     tudo no mestre e no close-up, o que distingue de longe nas vistas e no giro.
-    `photo_outfit`: há foto e ela não pôde ser lida; a roupa é a da foto de
-    referência, sem nenhuma peça escrita (texto aqui seria invenção).
     """
     if identity is None:
         identity = _turnaround_identity(card, with_look=False)
@@ -1947,11 +1905,9 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
         look = likeness._look_bits([_default_look(card)], level=level)
         return f"{base}. {look}" if look else base
 
-    if photo_outfit:
-        lock = None
-    elif lock is None:
+    if lock is None:
         lock = outfit_lock.current(_default_look(card))
-    outfit = _PHOTO_OUTFIT if photo_outfit else outfit_lock.full_text(lock)
+    outfit = outfit_lock.full_text(lock)
     outfit = f" {outfit}" if outfit else ""
     keep = f"Keep {who('views')}, body, outfit and accessories exactly identical to the references."
     prompts = {
@@ -1963,7 +1919,7 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
             f"{_TURNAROUND_STUDIO}"
         ),
     }
-    visible = _PHOTO_OUTFIT_BUST if photo_outfit else outfit_lock.visible_text(lock)
+    visible = outfit_lock.visible_text(lock)
     visible = f" {visible}." if visible else ""
     studio = _TURNAROUND_STUDIO
     if look_lock.has_lettering((lock or {}).get("top") or ""):
@@ -1981,7 +1937,7 @@ def _turnaround_prompts(card: dict, lock: dict | None = None, *,
             continue
         view_outfit, view_studio = outfit, studio
         top = (lock or {}).get("top") or ""
-        if kind == "back" and lock and look_lock.has_print(top):
+        if kind == "back" and look_lock.has_print(top):
             # De costas a estampa do peito não aparece: com a peça descrita
             # inteira, a vista de costas saía com "OCEAN CLUB" nas costas.
             plain = {**lock, "top": f"{look_lock.without_print(top)}, plain back with no print"}
@@ -2524,15 +2480,14 @@ def _turnaround_references(kind: str, *, faces: list[bytes], primary: list[bytes
                            photos: list[bytes], anchor: bytes, master: bytes) -> list[bytes]:
     """Referências de cada pintura do turnaround, na ordem (a primeira pesa mais).
 
-    Com foto: mestre = recortes de rosto + a foto principal inteira (só com os
-    rostos e o texto, a roupa era a que o texto dissesse: quando a leitura da
-    foto falhava, saía outra roupa; com a foto, a roupa dela volta mesmo sem
-    leitura); close-up = rostos + mestre; vistas de corpo inteiro = o primeiro
-    rosto + o mestre. Sem foto: o caminho antigo, com a âncora.
+    Com foto: mestre = recortes de rosto (a roupa vem do texto travado; a foto
+    principal só entra sem recorte, porque a estampa com letras dela voltava
+    como texto ilegível); close-up = rostos + mestre; vistas de corpo inteiro
+    = o primeiro rosto + o mestre. Sem foto: o caminho antigo, com a âncora.
     """
     if faces or primary:
         if kind == "master":
-            refs = [*faces, *primary]
+            refs = [*faces] if faces else [*primary]
         elif kind == "face":
             refs = [*faces, master]
         else:
@@ -2571,20 +2526,11 @@ def _execute_turnaround(job: dict, transport: Any) -> dict:
     with db.session() as conn:
         look_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
         card = db.get_card(conn, job["adventure_id"], card_id) or card
-        # Foto sem leitura (visão fora do ar): nada de roupa escrita pelo
-        # narrador, nem gravada; a foto veste o mestre.
-        photo_outfit = (look_lock.current(card) is None
-                        and look_lock.primary_photo(card) is not None)
-        lock = None
-        if photo_outfit:
-            log.warning("job %s: foto de %s sem leitura; a roupa vem da foto",
-                        job["id"], card_id)
-        else:
-            lock = outfit_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
-            card = db.get_card(conn, job["adventure_id"], card_id) or card
+        lock = outfit_lock.ensure(conn, card, transport=transport, llm_cfg=llm_cfg)
+        card = db.get_card(conn, job["adventure_id"], card_id) or card
     identity = image_english.render_english(
         _turnaround_identity(card, with_look=False), transport=transport, llm_cfg=llm_cfg)
-    prompts = _turnaround_prompts(card, lock, identity=identity, photo_outfit=photo_outfit)
+    prompts = _turnaround_prompts(card, lock, identity=identity)
     source, raw = _clip_source_png(job)
     reference_cfg = {**img_cfg, "provider": "comfyui"}
     created_paths: list[str] = []

@@ -566,11 +566,6 @@ def _staged_explicit_action(
     core = _action_core(main_clause, nude_name)
     if not core:
         return ""
-    # "Caio and A Donzela are together in the room": os dois são o sujeito e
-    # não há ação só da pessoa nua. Encenado, virava "his arms raised as he A
-    # Donzela da Noite are together in the room".
-    if _name_pattern(clothed_name).match(core):
-        return ""
     if _POSTURE_ACTION.search(main_clause):
         return ""
     stance = _STANCE_AND_ACTION.match(core)
