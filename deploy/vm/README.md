@@ -18,7 +18,7 @@ O backend é FastAPI + SQLite **persistente** e serve também o build do fronten
 | LLM | `llama-server.service` na porta 1234, 5 slots (seção abaixo) |
 | Watchdog | `slot-watchdog.timer` (a cada 10 s) reinicia o llama-server com slot preso |
 | Embeddings | `llama-embeddings.service` (`--n-gpu-layers 0 --device none`, `CUDA_VISIBLE_DEVICES=`; 0 MiB de VRAM) na porta 8091 |
-| Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; Z-Image Q4_K_M é o perfil compacto, H3 UD-Q2 o vídeo alternativo. FineView e Forge/epiCRealism continuam disponíveis para rollback |
+| Imagem | ComfyUI/FLUX.2 Klein 4B distilled em `127.0.0.1:8188`; Z-Image Q4_K_M é o perfil compacto, H3 UD-Q2 o vídeo alternativo. FineView continua disponível para rollback. O Forge/epiCRealism está desligado desde 27 nov 2026 (ver "Imagem: Forge Neo") |
 | Voz | `abz-voice-audio.service` em `https://vm.groupabz.com/voice/v1`. O jogo pede `omnivoice` (OmniVoice Q8 na GPU). Supertonic permanece para `tts-1` e `supertonic-3`. Drama-3 não cabe nesta L4: `drama3.md` |
 | Staging | `aidungeon-staging.service`, `127.0.0.1:2123`, código em `/home/caio/aidungeon-staging` |
 | Backups | `/home/caio/aidungeon-backups/` (banco e código de antes de cada deploy) |
@@ -154,6 +154,18 @@ No app principal (2122), só chamadas que não gravam (estado, `/choices`,
 `/api/health/llm`): o replay escreve turnos na história.
 
 ## Imagem: Forge Neo
+
+> **27 nov 2026:** `sd-webui-forge.service` foi parado e desabilitado
+> (`systemctl disable --now`). Ele não era o provider ativo e segurava 5,9 GB
+> de RAM e 392 MiB de VRAM, que passaram para o narrador em 4 bits (seção
+> llama-server). Para abrir disco saíram o `venv` (6,3 GB) e os adaptadores de
+> `models/ControlNet` e `models/ControlNetPreprocessor` (9,7 GB); código,
+> `config.json`, `ui-config.json` e `webui-user.sh` seguem em
+> `/home/caio/sd-webui-forge-neo`, com a lista do que saiu em
+> `REMOVIDO-20261127-*.txt`. Os checkpoints SDXL ficam na pasta do A1111, que
+> não foi tocada. Para voltar: recriar o venv, baixar os adaptadores da lista e
+> `sudo systemctl enable --now sd-webui-forge.service`. Enquanto isso, o
+> provider `sdwebui` não responde.
 
 Desde 19 out 2026 o app principal e o staging falam com o Forge Neo
 (`Haoming02/sd-webui-forge-classic`, branch `neo`) em
@@ -523,14 +535,19 @@ em `/home/caio/llama.cpp-upstream` (worktree do clone
 ExecStart=/home/caio/llama.cpp-upstream/build/bin/llama-server --host 0.0.0.0 --port 1234 \
   -t 8 --threads-batch 16 -np 5 --kv-unified -cram 0 --ctx-checkpoints 8 --metrics \
   -c 131072 -ctk q8_0 -ctv q8_0 -b 2048 -ub 1024 --api-key <chave> -rea auto -fa on \
-  --tools all --jinja -m /home/caio/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf \
+  --tools all --jinja -m /home/caio/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ4_XS.gguf \
   --mmproj /home/caio/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf \
-  --n-gpu-layers 99 -ncmoe 32 --moe-cache-mib 2048 -lm none --image-min-tokens 1024
+  --n-gpu-layers 99 -cmoe --moe-cache-mib 4096 -lm none --image-min-tokens 1024
 ```
+
+A unit chama `/usr/local/sbin/llama-narrator-start` (do root), que monta essa
+linha. O starter anterior, com o `IQ2_M` e `-ncmoe 32 --moe-cache-mib 2048`,
+está em `/usr/local/sbin/llama-narrator-start.iq2.bak`, e o arquivo `IQ2_M`
+continua em `/home/caio`: voltar é copiar o `.bak` por cima e reiniciar a unit.
 
 | Flag | Por quê |
 |---|---|
-| `-ncmoe 32 --moe-cache-mib 2048` | experts de 32 camadas na RAM e um cache de 2 GiB na GPU para os mais usados (`docs/moe-cache.md` do llama.cpp). Mesma VRAM do `-ncmoe 24` sem cache (~10,6 GB) e 2,4× a geração. Só existe no upstream |
+| `-cmoe --moe-cache-mib 4096` | todos os experts na RAM (16,5 GB pinados com o `IQ4_XS`) e um cache de 4 GiB na GPU para os mais usados (`docs/moe-cache.md` do llama.cpp). É o que deixa o modelo de 4 bits ocupar a mesma VRAM do `IQ2_M` (tabela de 27 nov abaixo). Só existe no upstream |
 | `-lm none` | substitui o `--no-mmap`, que o upstream removeu. Sem mmap os experts ficam em memória pinada e o upload para o cache usa a banda toda do barramento |
 | `-np 5 --kv-unified` | slots 0–3 do app (contrato C1) e o 4 para clientes sem `id_slot`; o KV unificado divide os 131072 tokens entre eles |
 | `-cram 0` | sem prompt cache no servidor: era ele que disparava o livelock #28280; também libera ~7 GB de RAM |
@@ -570,6 +587,31 @@ enquanto os lotes de prompt das auxiliares ocupam a GPU. O turno inteiro
 termina antes, como na tabela acima. O `-cmoe --moe-cache-mib 2048` é a opção
 para devolver ~2 GB de VRAM ao ComfyUI com a mesma geração e o prompt de antes.
 O RSS do llama-server sobe de 7,9 GB para 9,8 GB com 32 camadas na RAM.
+
+**27 nov 2026: narrador em 4 bits (`IQ4_XS`).** Mesmo modelo, arquivo de
+17,4 GiB no lugar do `IQ2_M` de 10,9 GiB. Medido na L4 com ComfyUI e voz
+carregados, contexto 131072, mesmo prompt e método da tabela de 11 nov:
+
+| Arquivo e flags | VRAM | geração | prompt | experts na RAM | RAM disponível |
+|---|---:|---:|---:|---:|---:|
+| `IQ2_M`, `-ncmoe 32 --moe-cache-mib 2048` (anterior) | 8746 MiB | 64,0 tok/s | 1007 tok/s | 8,3 GB | 14,9 GB |
+| `IQ4_XS`, `-cmoe --moe-cache-mib 2048` | 7102 MiB | 43,9 tok/s | 556 tok/s | 16,5 GB | 6,5 GB |
+| **`IQ4_XS`, `-cmoe --moe-cache-mib 4096`** | 9150 MiB | 57,7 tok/s | 627 tok/s | 16,5 GB | 7,2 GB |
+| `IQ4_XS`, `-ncmoe 32 --moe-cache-mib 2048` | 10364 MiB | 47,0 tok/s | 665 tok/s | 13,3 GB | 10,6 GB |
+
+O cache de 4 GiB compensa os experts maiores: com 2 GiB cabem menos deles na
+placa e a geração cai para 44 tok/s. O prompt sem cache fica ~38% mais lento
+que no `IQ2_M` (cada lote sobe experts maiores para a GPU). A RAM para os
+16,5 GB pinados veio do Forge desligado. O `Q4_K_M` (19,7 GiB) pediria mais
+~2,3 GB pinados e deixaria menos de 5 GB disponíveis com o ComfyUI no ar; não
+foi adotado. `--moe-cache-cpu-share` não foi ajustado: com `-lm none` os
+experts já ficam pinados e a própria documentação diz que a parcela de CPU
+raramente ajuda nesse caso.
+
+Carga no staging com o `IQ4_XS` no ar: giro 360° (mestre e vistas) em 60 s
+com pico de 22,5 GB na placa inteira, clipe Wan com pico de 21,8 GB e RAM
+disponível nunca abaixo de 7,1 GB; nenhum job falhou por memória. Narração
+pedida durante a geração de imagem: 29,8 tok/s.
 Embeddings: cosseno 0,9994 a 0,9996 contra o build anterior, mesma dimensão.
 Rollback: copiar o backup por cima, `sudo systemctl daemon-reload` e
 `sudo systemctl restart llama-server` (~30 s para carregar o modelo). Reinicie
