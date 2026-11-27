@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -357,7 +358,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_url(url: str, part: Path, auth_header: str | None) -> None:
+def _download_url(url: str, part: Path, auth_header: str | None, pause: float = 5.0) -> None:
     headers = {"User-Agent": "aidungeon-runtime-provisioning"}
     if auth_header:
         headers["Authorization"] = auth_header
@@ -371,10 +372,34 @@ def _download_url(url: str, part: Path, auth_header: str | None) -> None:
                 new.headers.pop("Authorization", None)
             return new
 
-    request = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(_DropAuthOnOtherHost)
-    with opener.open(request, timeout=120) as response, part.open("wb") as handle:
-        shutil.copyfileobj(response, handle, length=1024 * 1024)
+    # O storage às vezes fecha a conexão no meio de um arquivo grande e o urllib
+    # não avisa (visto num Colab: 20,7 GB de 22,9 GB). O download continua de
+    # onde parou, pedindo a URL assinada de novo, em vez de recomeçar do zero.
+    done, total, stalls = 0, None, 0
+    while True:
+        ranged = dict(headers, Range=f"bytes={done}-") if done else headers
+        try:
+            with opener.open(urllib.request.Request(url, headers=ranged), timeout=120) as response:
+                resumed = bool(done) and response.status == 206
+                if not resumed:
+                    length = str(response.headers.get("Content-Length") or "")
+                    total = int(length) if length.isdigit() else None
+                with part.open("ab" if resumed else "wb") as handle:
+                    shutil.copyfileobj(response, handle, length=1024 * 1024)
+        except Exception:
+            if not (total and part.exists() and part.stat().st_size):
+                raise
+        size = part.stat().st_size
+        if total is None or size >= total:
+            return
+        stalls = 0 if size > done else stalls + 1
+        if stalls > 4:
+            return  # sem avanço: quem chamou confere o tamanho e acusa
+        if stalls:
+            time.sleep(pause)
+        print(f"  conexão fechada em {size} de {total} bytes; continuando", flush=True)
+        done = size
 
 
 def fetch_pinned(
@@ -763,6 +788,7 @@ def _helper_source() -> str:
         "import os",
         "import shutil",
         "import subprocess",
+        "import time",
         "import urllib.request",
         "from pathlib import Path",
         "",

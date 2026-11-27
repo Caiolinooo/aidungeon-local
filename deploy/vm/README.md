@@ -542,8 +542,11 @@ ExecStart=/home/caio/llama.cpp-upstream/build/bin/llama-server --host 0.0.0.0 --
 
 A unit chama `/usr/local/sbin/llama-narrator-start` (do root), que monta essa
 linha. O starter anterior, com o `IQ2_M` e `-ncmoe 32 --moe-cache-mib 2048`,
-está em `/usr/local/sbin/llama-narrator-start.iq2.bak`, e o arquivo `IQ2_M`
-continua em `/home/caio`: voltar é copiar o `.bak` por cima e reiniciar a unit.
+está em `/usr/local/sbin/llama-narrator-start.iq2.bak`, e o arquivo
+`Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf` continua em
+`/home/caio`: voltar é copiar o `.bak` por cima e reiniciar a unit. O catálogo
+do jogo (`config/runtime_models.json`) segue com o `IQ2_M` como narrador padrão
+para as outras máquinas; o `IQ4_XS` é escolha desta VM.
 
 | Flag | Por quê |
 |---|---|

@@ -716,6 +716,76 @@ def test_download_drops_the_key_when_redirected_to_another_host(tmp_path):
     assert seen == {"first": "Bearer KEY", "auth": None}
 
 
+def _cutting_server(payload, *, cut_at, honour_range=True, always_cut=False):
+    """Servidor que anuncia o arquivo inteiro e fecha a conexão no meio."""
+    import http.server
+    import threading
+
+    seen = {"ranges": []}
+
+    class Storage(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            asked = self.headers.get("Range")
+            seen["ranges"].append(asked)
+            start = int(asked[6:-1]) if asked and honour_range else 0
+            body = payload[start:]
+            self.send_response(206 if start else 200)
+            if start:
+                self.send_header("Content-Range", f"bytes {start}-{len(payload) - 1}/{len(payload)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            first = len(seen["ranges"]) == 1
+            if always_cut:
+                body = b""
+            elif first:
+                body = body[:cut_at]
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Storage)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_download_cut_midway_continues_from_where_it_stopped(tmp_path):
+    """Visto num Colab real: 20,7 GB de 22,9 GB chegaram e a conexão fechou sem erro."""
+    payload = bytes(range(256)) * 400
+    server, seen = _cutting_server(payload, cut_at=30_000)
+    try:
+        part = tmp_path / "w.part"
+        rp._download_url(f"http://127.0.0.1:{server.server_port}/signed", part, None)
+    finally:
+        server.shutdown()
+    assert part.read_bytes() == payload
+    assert seen["ranges"] == [None, "bytes=30000-"]
+
+
+def test_download_starts_over_when_the_server_ignores_the_range(tmp_path):
+    payload = bytes(range(256)) * 400
+    server, seen = _cutting_server(payload, cut_at=30_000, honour_range=False)
+    try:
+        part = tmp_path / "w.part"
+        rp._download_url(f"http://127.0.0.1:{server.server_port}/signed", part, None)
+    finally:
+        server.shutdown()
+    assert part.read_bytes() == payload
+
+
+def test_download_that_never_advances_gives_up(tmp_path):
+    """Sem progresso o download para; quem chamou acusa o tamanho errado."""
+    payload = bytes(range(256)) * 400
+    server, seen = _cutting_server(payload, cut_at=0, always_cut=True)
+    try:
+        part = tmp_path / "w.part"
+        rp._download_url(f"http://127.0.0.1:{server.server_port}/signed", part, None, pause=0)
+    finally:
+        server.shutdown()
+    assert part.stat().st_size == 0
+    assert 2 <= len(seen["ranges"]) <= 6
+
+
 def test_tunnel_cell_ignores_the_cloudflare_api_address(tmp_path, monkeypatch):
     """Visto num Colab real: o log da Cloudflare cita a API antes do túnel."""
     nb = rp.generate_notebook(_config(
